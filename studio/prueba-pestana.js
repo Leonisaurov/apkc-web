@@ -134,7 +134,8 @@ async function conductor() {
     (creacion.error ? ", error del hospedador: " + creacion.error : "") + (creacion.arbolError ? ", error del arbol: " + creacion.arbolError : ""));
   const rutas = (creacion.nodos || []).filter((n) => !/\|dir$/.test(n)).map((n) => n.split("|")[0]);
   for (const esperado of ["/proyecto/AndroidManifest.xml", "/proyecto/src/com/myapp/MainActivity.java", "/proyecto/res/layout/main.xml"]) {
-    comprueba("create escribió " + esperado, rutas.includes(esperado), rutas.length + " ficheros en el árbol");
+    comprueba("create escribió " + esperado, rutas.includes(esperado),
+      rutas.length + " ficheros: " + rutas.slice(0, 6).join(", "));
   }
 
   // 2. el manifiesto que escribe apkc es el de sus plantillas, no otro

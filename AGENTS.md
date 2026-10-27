@@ -12,6 +12,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
+| `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
 | `studio/` | apkc-studio: genera proyectos apkc, traduce su salida para medir fricción **y hace correr `apkc.wasm` en la pestaña** (OPFS + worker) | `cd studio && APKC=<binario> sh e2e.sh`; la pestaña: `APKC_WASM=… node studio/prueba-pestana.js` |
 
 ## Reglas del repo
@@ -19,12 +20,14 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 1. **Un claim, una medición.** Una afirmación sobre coste, compatibilidad o formato que no traiga
    el comando que la reproduce no entra en `docs/evidencia.md`: va a `docs/plan.md` como hipótesis,
    marcada como tal. Es la razón de existir de este repo.
-2. **Sin binarios versionados.** `*.wasm` está ignorado: se construye desde `../apkc` con
+2. **Sin binarios versionados.** `*.wasm` está ignorado: se construye desde el fork `apkc/` con
    `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .`. Tampoco se
    versiona `shim/wasm_exec.js` (es del GOROOT de cada quien).
-3. **No se toca `../apkc` desde aquí.** La excepción son las fases que el plan marca como trabajo de la
-   herramienta (Fase 0 y las 2G/1G/3, que escriben el dexer, el compilador y los recursos en Go), y
-   cada cambio allende el muro entra con su propio commit, su test y su gate.
+3. **El código de la herramienta vive aquí, en `apkc/`.** Es un fork (MIT, `ajinasokan/apkc`) metido con
+   `git subtree add --prefix=apkc ../apkc master --squash` sobre el commit `a909214`, en la rama `web`:
+   el dexer, el compilador y los recursos se escriben **aquí**, no allende el muro. Un `git subtree pull`
+   desde `../apkc` sigue siendo posible porque hay historial compartido; si algún día se hace un merge
+   hacia arriba, se hace desde esta rama. Cada pieza entra con su commit, su test y su gate.
 4. **Sin conexión y sin runtimes de terceros** (decisión del usuario, 2026-10-27). Todo lo que
    compila, empaqueta y firma viaja en el propio origen de la página: ni CDN de una JVM wasm, ni
    telemetría, ni fuentes. Se comprueba conduciendo chromium y registrando cada petición
@@ -62,12 +65,12 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 ## Gate antes de dar nada por hecho
 
 ```sh
-# binario wasm y la suite en hospedador de navegador
-sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$PREFIX/tmp/apkc-test.wasm" .'
+# binario wasm y la suite en hospedador de navegador (todo desde el fork apkc/)
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$PREFIX/tmp/apkc-test.wasm" .'
 sh -c 'cd shim && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" . && node navegador-sim.js "$PREFIX/tmp/apkc-test.wasm"'
 
 # la firma, del lado del cliente: un apk real entra y sale verificado por los oráculos
-sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
 sh -c 'cd shim && node navegador-sim.js \
   --montar "$PREFIX/tmp/sign-probe/app/build/app.apk:/in.apk" \
   --montar "$HOME/.android/debug.keystore:/ks.p12" \
@@ -75,7 +78,7 @@ sh -c 'cd shim && node navegador-sim.js \
   "$PREFIX/tmp/apkc-wasm.wasm" sign --keystore /ks.p12 --out /out.apk /in.apk'
 
 # la página, de punta a punta (genera, compila de verdad, firma, verifica, y la conduce chromium)
-sh -c 'cd ../apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
+sh -c 'cd apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
 sh -c 'cd studio && APKC="$PREFIX/tmp/apkc-gate" APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" sh e2e.sh'
 ```
 

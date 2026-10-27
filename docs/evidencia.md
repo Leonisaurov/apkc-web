@@ -1,6 +1,9 @@
 # Evidencia
 
 Todo lo de aquí se midió en este teléfono (Termux/Android aarch64, Chromium y node 26 locales).
+Las mediciones del 2026-10-26 se hicieron contra `../apkc`; desde 2026-10-27 el código de la
+herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ../apkc` que aparecen
+abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
 ## 1. El código puro de apkc corre en un hospedador con forma de navegador
