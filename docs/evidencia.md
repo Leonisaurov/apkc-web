@@ -63,11 +63,22 @@ Imprime `[build] compiling resources` y muere. La causa es que **`aapt2` es un p
 `js/wasm` no tiene `fork/exec` (por eso también `watch` se autoclora: `proc_stub.go` lleva el texto
 `this build of apkc starts no external program, so there is nothing to rebuild on a change`).
 
-El fallo además **no dice nada**: el patrón `LogF("build", string(out))` descarta `err` en cuatro
-sitios (`build.go:450` en `compileRes`, `build.go:491` en `bundleRes`, `apk.go:25`, `apk.go:49`), y
-como el programa nunca arrancó, `out` está vacío. La línea que ve el usuario es `[build]  `. Está
-anotado en [plan.md](plan.md) como la primera corrección, porque sin ella cualquier diagnóstico en el
-navegador es mudo.
+El fallo además **no decía nada**: el patrón `LogF("build", string(out))` descartaba `err` en seis
+sitios (`build.go` en `compileRes`, `bundleRes`, el de `kotlinc`, el de `javac` y el de `d8`;
+`apk.go` en `alignAPK` y `signAPK`; `aab.go` en `runOrAbort`), y como el programa nunca arrancó,
+`out` estaba vacío: la línea que veía el usuario era `[build]  `.
+
+**Arreglado** en apkc `e7bfd01` (2026-10-26). El mismo comando, con el mismo binario wasm, ahora
+responde el motivo que solo estaba en `err`:
+
+```
+[build] compiling resources
+[build] aapt2 compile never started: pipe: not implemented on js
+```
+
+`pipe: not implemented on js` es la respuesta exacta de `os/exec` bajo `js/wasm`: no es que falte
+`aapt2`, es que **el hospedador no puede crear la tubería con la que se habla de un proceso**. Ese
+es el muro real de esta ambición, y ahora lo dice el propio apkc.
 
 ## 5. Fricción del entorno (Termux), para no perder tiempo dos veces
 

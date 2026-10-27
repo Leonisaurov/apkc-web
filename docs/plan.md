@@ -9,8 +9,10 @@ ambición de este repo puede morir en cualquier fase; lo que no puede es arrastr
 Mientras apkc y su página de fricción no hagan lo que deben, aquí no se toca código. Pendiente
 aceptado por el usuario:
 
-1. `LogF("build", string(out))` descarta `err` en cuatro sitios -> la línea sale vacía cuando el
-   programa ni arrancó. Sin esto, el navegador (y el teléfono) se quedan sin diagnóstico.
+1. ~~`LogF("build", string(out))` descarta `err`~~ **hecho** (apkc `e7bfd01`, 2026-10-26): los seis
+   sitios por los que pasa una herramienta externa usan `toolFailure`, que nombra la herramienta y
+   conserva el error cuando la salida está vacía. Medido contra el binario wasm:
+   `[build] aapt2 compile never started: pipe: not implemented on js`.
 2. `apkc sign` / `apkc verify` como comandos sobre un apk existente: la firma ya es Go, así que es
    **la única pieza de apkc que hoy funcionaría en el navegador**, y mientras viva dentro de `build`
    no hay nada que ejecutar del lado cliente.
