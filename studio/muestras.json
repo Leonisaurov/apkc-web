@@ -1,0 +1,38 @@
+[
+ {
+  "esperada": "sdk-java-home",
+  "texto": "\u001b[33m[doctor] ANDROID_HOME was not found in environment \u001b[0m\n\u001b[33m[doctor] SDK path unknown \u001b[0m\n\u001b[33m[doctor] JAVA_HOME was not found in environment \u001b[0m\n\u001b[33m[doctor] ANDROID_HOME was not found in environment \u001b[0m"
+ },
+ {
+  "esperada": "proyecto-incompleto",
+  "texto": "\u001b[31m[build] stat src: no such file or directory \u001b[0m"
+ },
+ {
+  "esperada": "proyecto-incompleto",
+  "texto": "\u001b[31m[build] there is no `AndroidManifest.xml`, `src` and `res` here, so this is not an apkc project: `apkc create .` starts one, and a build runs in the directory that holds the manifest \u001b[0m"
+ },
+ {
+  "esperada": "kotlinc",
+  "texto": "\u001b[33m[kotlinc] kotlinc is not on PATH (looked for as kotlinc) needed to compile 1 kotlin files \u001b[0m\n\u001b[33m[kotlinc] no kotlin-stdlib*.jar in jar/ needed to compile 1 kotlin files \u001b[0m"
+ },
+ {
+  "esperada": "keystore-password",
+  "texto": "\u001b[31m[build] /data/data/com.termux/files/home/.android/debug.keystore (PKCS#12): the keystore did not open with the given storepass: implausible CBC padding of 116 bytes (wrong storepass?); implausible CBC padding of 208 bytes (wrong storepass?) \u001b[0m"
+ },
+ {
+  "esperada": "herramienta-no-arranca",
+  "texto": "\u001b[31m[build] aapt2 compile never started: pipe: not implemented on js \u001b[0m"
+ },
+ {
+  "esperada": "duplicate-class",
+  "texto": "\u001b[31m[build] Type com.hola.apkcstudio.Dup in dup.jar is defined multiple times the project and jar/dup.jar both hold it \u001b[0m"
+ },
+ {
+  "esperada": "keystore-file-missing",
+  "texto": "\u001b[31m[sign] there is no keystore at /data/data/com.termux/files/home/nope.keystore - no package can be signed without it. apkc doctor prints the path in use, and --keystore takes another one \u001b[0m"
+ },
+ {
+  "esperada": "keystore-file-missing",
+  "texto": "Failed to load signer \"signer #1\"\njava.io.FileNotFoundException: /data/data/com.termux/files/home/nope.keystore (No such file or directory)\n\tat java.base/java.io.FileInputStream.open0(Native Method)\n\tat com.android.apksigner.ApkSignerTool.main(ApkSignerTool.java:94)"
+ }
+]

@@ -1,0 +1,89 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# punta a punta de la página: lo que apkc-studio genera tiene que compilar, firmar y verificar
+# con las herramientas de build-tools, no solo pasar el test de node. Sin esto, la página se
+# cree buena porque su propio test usa las mismas suposiciones que el código probado.
+#
+# uso: APKC=/ruta/apkc sh e2e.sh
+# sale 0 con el proyecto java y, si hay kotlinc y una stdlib a mano, con el de kotlin también.
+
+set -eu
+
+AQUI=$(cd "$(dirname "$0")" && pwd)
+TMP=${PREFIX:-/data/data/com.termux/files/usr}/tmp
+APKC=${APKC:?faltan las ganas y la variable APKC con el binario}
+SDK=${ANDROID_HOME:-$HOME/Android}
+BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)
+ZIPCHECK="$HOME/Develop/Go/apkc-harness/zipcheck.py"
+FALLOS=0
+
+avisa() { printf '  %s\n' "$*"; }
+falla() { FALLOS=$((FALLOS + 1)); avisa "FALLO: $*"; }
+
+# 1. el test propio de la página
+if ! node "$AQUI/prueba.js" >"$TMP/studio-prueba.log" 2>&1; then
+  falla "prueba.js"; cat "$TMP/studio-prueba.log"
+fi
+
+# 2. cada variante: zip -> unzip -> apkc build -> oráculos
+variancia() { # $1 nombre, $2 kotlin (0/1)
+  nombre=$1; kotlin=$2
+  carpeta=$TMP/studio-e2e-$nombre
+  rm -rf "$carpeta"; mkdir -p "$carpeta"
+
+  STUDIO_KOTLIN=$kotlin STUDIO_OUT=studio-$nombre.zip node "$AQUI/prueba.js" >/dev/null
+  unzip -q "$TMP/studio-$nombre.zip" -d "$carpeta"
+  proyecto=$(ls -d "$carpeta"/*/)
+  # la variante tiene que ser la que se pide: con STUDIO_KOTLIN="0" por verdad en JS, el test
+  # de "java" estaba compilando Kotlin y dando verde sin mirar el camino que decia mirar
+  if [ "$kotlin" = 1 ]; then
+    find "$proyecto/src" -name 'MainActivity.kt' | grep -q . || falla "$nombre: no hay MainActivity.kt"
+  else
+    find "$proyecto/src" -name 'MainActivity.java' | grep -q . || falla "$nombre: no hay MainActivity.java"
+    find "$proyecto/src" -name '*.kt' | grep -q . && falla "$nombre: tenia .kt siendo la variante java"
+  fi
+  cd "$proyecto"
+
+  if [ "$kotlin" = 1 ]; then
+    stdlib=$(find "$SDK" ~/Develop -name 'kotlin-stdlib-1*.jar' -o -name 'kotlin-stdlib-2*.jar' 2>/dev/null | head -1)
+    if [ -z "$stdlib" ]; then avisa "$nombre: sin kotlin-stdlib por ningun sitio, se omite"; return; fi
+    cp "$stdlib" jar/
+  fi
+
+  if ! tcr -j 1 -q -- "$APKC" build >"$TMP/studio-$nombre-build.log" 2>&1; then
+    falla "$nombre no compila"; tail -12 "$TMP/studio-$nombre-build.log"; return
+  fi
+  [ -f build/app.apk ] || { falla "$nombre: no hay build/app.apk"; return; }
+
+  # los oráculos no comparten código con apkc: si ellos aceptan el apk, existió
+  if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 build/app.apk >"$TMP/studio-$nombre-verify.log" 2>&1; then
+    falla "$nombre: apksigner no verifica"; head -6 "$TMP/studio-$nombre-verify.log"
+  fi
+  grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v1"
+  grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v2"
+  if ! python3 "$ZIPCHECK" build/app.apk >/dev/null 2>&1; then
+    falla "$nombre: zipcheck rechaza el paquete"; python3 "$ZIPCHECK" build/app.apk | head -5
+  fi
+  if unzip -l build/app.apk | grep -q 'LEEME'; then
+    falla "$nombre: un LEEME de la página acabó dentro del apk"
+  fi
+  avisa "$nombre: apk de $(wc -c <build/app.apk | tr -d ' ') bytes, verificado por apksigner y zipcheck"
+  cd "$AQUI"
+}
+
+variancia java 0
+variancia kotlin 1
+
+# 3. el navegador real, si esta y si no se pidio omitirlo: el DOM, el click de descarga y el
+#    localStorage bajo file:// son justo lo que node no puede ejercitar
+if [ -z "${STUDIO_NO_BROWSER:-}" ] && command -v chromium-browser >/dev/null 2>&1; then
+  if ! node "$AQUI/prueba-navegador.js" >"$TMP/studio-navegador.log" 2>&1; then
+    falla "la pagina en chromium"; tail -8 "$TMP/studio-navegador.log"
+  else
+    avisa "$(grep -m1 '^  analisis' "$TMP/studio-navegador.log")"
+  fi
+else
+  avisa "sin chromium (o STUDIO_NO_BROWSER puesto): la parte de DOM no se probo"
+fi
+
+if [ "$FALLOS" -gt 0 ]; then echo "e2e: $FALLOS problemas"; exit 1; fi
+echo "e2e: todo en orden"

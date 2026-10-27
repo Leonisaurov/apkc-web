@@ -18,10 +18,12 @@ puede arrancar porque no tiene `fork/exec`.
 
 | Fichero | Qué es |
 | --- | --- |
+| [AGENTS.md](AGENTS.md) | reglas del repo, entorno de Termux y el gate que hay que pasar antes de dar nada por hecho |
+| [docs/plan.md](docs/plan.md) | el plan detallado: fases, tareas con su criterio de aceptación, y lo que abandona cada una |
 | [docs/evidencia.md](docs/evidencia.md) | lo medido, con el comando que lo produce y la fecha |
 | [docs/bloqueos.md](docs/bloqueos.md) | las cuatro herramientas externas, qué existe hoy y qué costaría sustituir cada una |
-| [docs/plan.md](docs/plan.md) | los spikes, en orden, con el criterio que abandona cada uno |
 | [shim/navegador-sim.js](shim/navegador-sim.js) | el hospedador de forma-navegador (un `fs` en memoria con la API de Node) que hace correr `apkc.wasm` sin Node |
+| [studio/](studio/) | apkc-studio: genera proyectos de apkc, traduce su salida real y mide dónde se atasca quien lo usa |
 
 ## Reglas del repo
 
@@ -29,15 +31,17 @@ puede arrancar porque no tiene `fork/exec`.
   y se apuntan con `sh -c`. Mismo criterio que en apkc.
 - **Un claim, una medición.** Una afirmación sobre coste, compatibilidad o formato que no tenga el
   comando que la reprodujo no entra en `docs/evidencia.md`; va a `docs/plan.md` como hipótesis.
-- **La prioridad sigue en apkc.** Mientras la herramienta de línea de comandos y su página de
-  fricción ([`~/Develop/Web/apkc-studio`](../Web/apkc-studio), que se queda donde está porque mide
-  la herramienta real y no esta ambición) no hagan lo que deben, este repo está congelado.
+- **Todo lo relacionado con la web vive aquí.** La página de fricción viajó de `~/Develop/Web` a
+  [`studio/`](studio/) para eso: un solo sitio donde versionar, comprobar y romper lo del navegador.
+- **La prioridad sigue en apkc.** Mientras la herramienta de línea de comandos y su página no hagan
+  lo que deben, las fases 1 y siguientes de [docs/plan.md](docs/plan.md) no se empiezan.
 
 ## Empezar por aquí
 
 ```sh
 sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
-sh -c 'cd shim && node navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp'
+sh -c 'cd shim && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" . && node navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp'
+sh -c 'cd studio && APKC=<binario-de-apkc> sh e2e.sh'      # genera, compila de verdad, firma y conduce chromium
 ```
 
 El segundo comando imprime el árbol de 17 nodos que apkc escribió **en memoria**, dentro de un

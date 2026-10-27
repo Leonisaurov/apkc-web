@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>apkc studio — crear una app Android sin Gradle, y medir dónde duele</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>apkc studio</h1>
+  <p class="sub">
+    Genera un proyecto de app <em>de verdad</em> para <code>apkc</code> (sin Gradle),
+    te da los comandos, traduce lo que <code>apkc</code> responde y anota en qué paso
+    te atascaste. No compila aquí: <code>apkc</code> necesita <code>aapt2</code>,
+    <code>d8</code> y un JDK en la máquina que ejecuta, y eso no cabe en una página.
+  </p>
+</header>
+
+<main>
+  <section id="crear">
+    <h2><span class="paso">1</span> Crear el proyecto</h2>
+    <form id="form" class="grid">
+      <label>Nombre de la app <input name="name" value="Hola apkc" required></label>
+      <label>Package <input name="package" value="com.hola.apkcstudio" required
+             pattern="[a-z][a-z0-9_]*(\.[a-z0-9_]+)+" title="minúsculas, dos tramos como mínimo"></label>
+      <label>minSdkVersion <input name="minsdk" type="number" value="21" min="14" max="35"></label>
+      <label>targetSdkVersion <input name="targetsdk" type="number" value="33" min="14" max="36"></label>
+      <label>Texto en pantalla <input name="hello" value="Hello World!"></label>
+      <fieldset>
+        <legend>Qué metes dentro</legend>
+        <label><input type="checkbox" name="button" checked> un botón con menú y Toast</label>
+        <label>Texto del botón <input name="buttonLabel" value="Press me"></label>
+        <label>Mensaje del aviso <input name="toast" value="Clicked!"></label>
+        <label><input type="checkbox" name="kotlin"> en Kotlin (necesita <code>kotlinc</code> y <code>kotlin-stdlib</code> en <code>jar/</code>)</label>
+        <label><input type="checkbox" name="libs"> carpeta <code>jar/</code> para dependencias</label>
+        <label><input type="checkbox" name="native"> un <code>.so</code> con <code>extractNativeLibs="false"</code></label>
+        <label><input type="checkbox" name="assets"> carpeta <code>assets/</code></label>
+        <label><input type="checkbox" name="device" checked> tengo el teléfono conectable (adb o Shizuku)</label>
+      </fieldset>
+    </form>
+
+    <div class="acciones">
+      <button id="descargar" class="primario">descargar el proyecto (.zip)</button>
+      <button id="copiar-comandos">copiar los comandos</button>
+      <span id="estado-zip" class="nota"></span>
+    </div>
+
+    <details open>
+      <summary>lo que se genera</summary>
+      <pre id="arbol"></pre>
+    </details>
+    <details>
+      <summary>ficheros, uno por uno</summary>
+      <div id="ficheros"></div>
+    </details>
+  </section>
+
+  <section id="usar">
+    <h2><span class="paso">2</span> Ejecutarlo con apkc</h2>
+    <p class="nota">Estos son los comandos, en orden. Si uno falla, pega su salida abajo:
+      es donde está la información de verdad.</p>
+    <pre id="comandos"></pre>
+    <div class="checklist">
+      <p>Dónde suele romperse la primera vez — marca lo que te haya pasado a ti:</p>
+      <ul id="friccion"></ul>
+    </div>
+  </section>
+
+  <section id="analizar">
+    <h2><span class="paso">3</span> Qué dijo apkc</h2>
+    <textarea id="log" rows="10" spellcheck="false"
+      placeholder="$ apkc build --inc&#10;[doctor] SDK path unknown ..."></textarea>
+    <div class="acciones">
+      <button id="analizar" class="primario">traducir la salida</button>
+      <span class="nota">Se analiza aquí mismo; el texto no sale de este navegador.</span>
+    </div>
+    <div id="salida-analisis"></div>
+  </section>
+
+  <section id="informe">
+    <h2><span class="paso">4</span> El informe de fricción</h2>
+    <p class="nota">
+      La página guarda contadores locales: qué reglas de error aparecieron, en qué capa
+      (entorno, proyecto, herramienta, dispositivo) y cuántas veces. Con esto se ve si lo
+      que cuesta es instalar el SDK, entender un aviso o encontrar el flag correcto.
+    </p>
+    <div class="acciones">
+      <button id="ver-informe">ver el informe</button>
+      <button id="borrar-informe">borrar lo anotado</button>
+    </div>
+    <pre id="informe-out" hidden></pre>
+  </section>
+</main>
+
+<footer>
+  <p>Reglas del analizador: <span id="n-reglas"></span>, todas copiadas de cadenas que
+  <code>apkc</code> imprime de verdad. Plantillas: las de <code>apkc/template/*</code> del
+  repo. Si apkc cambia, esta página queda avisada a mano — es el único punto donde puede
+  desincronizarse.</p>
+</footer>
+
+<script src="app.js"></script>
+<script src="ui.js"></script>
+</body>
+</html>
