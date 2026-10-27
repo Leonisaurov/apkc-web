@@ -95,6 +95,14 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
 - **`apkc sign` existe** (apkc `a909214`) y **firma dentro de wasm**: 1,20 s para un apk de 9504
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
+- **`apkc dex` existe y corre dentro de wasm** (§23, rama `web`): `.class` -> `classes.dex` en Go, sin
+  `d8` ni proceso. Sobre el proyecto del studio: 2392 bytes (los 2844 de `d8` menos `debug_info`,
+  anotaciones y su marca de origen), con `type_ids`/`field_ids`/`method_ids` byte a byte iguales y los
+  nueve cuerpos con la misma secuencia de instrucciones, los mismos índices y el mismo número de
+  palabras. El oráculo que lo cierra: `d8` lee el dex que escribimos y lo re-dexa con `rc 0`, y el
+  fichero que sale del binario `GOOS=js` es **idéntico byte a byte** al del binario nativo.
+  Formato medido en §20, §21 y §22: cuatro afirmaciones que estaban mal en el §20 se corrigieron
+  comparando nuestro fichero con el de `d8`, no con un manual.
 - Al re-firmar un archivo que no hicimos nosotros hay dos reglas que **se leyeron de un oráculo**, no
   se adivinaron: los **directorios** viajan en el paquete y **fuera del manifiesto** (así lo hace
   `java.util.jar`, medido con `jarsigner`), y el firmante anterior se descarta **por sufijo** porque

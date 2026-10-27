@@ -814,3 +814,55 @@ binaria compilada con `GOOS=js` dentro del hospedador de navegador da **136 PASS
 trazas legibles), el bloque de anotaciones (si se quiere que `InnerClasses` sobreviva), y la Fase 3
 (`AXML` del `AndroidManifest.xml` y de los layouts, `resources.arsc` y la `R`), que es la que pone el
 `classes.dex` dentro de un archivo que el sistema instala. Ninguna de esas tres cambia lo medido aquí.
+
+## 23. `apkc dex`: la etapa, como comando, corriendo dentro de wasm
+
+El ensamblado de §22 no servía de nada mientras solo lo llamaran las pruebas. Ahora es una orden:
+
+```
+apkc dex [-o classes.dex] carpeta-con-class [mas-carpetas...]
+```
+
+Recorre el árbol, lee los `.class` con el lector del §17, interna, ordena y ensambla. Ignora los
+`META-INF` y el `module-info` (un jar de dependencia no es código nuestro). Rechaza por nombre todo lo
+que salga del subconjunto medido, y rechaza **antes** de escribir: `claseCabe` mira los `try` y el
+traductor mira los opcodes, así que un proyecto que necesite más formato se queda sin dex y con un
+mensaje, no con un dex a medias.
+
+Está cableado en el despachador de `main.go`, en la ayuda, y probado de dos maneras:
+
+- `TestDexEnDiscoLeeLosArbolesYArmaElFichero` levanta el árbol del studio en un `t.TempDir()`, mete
+  además un `META-INF/module-info.class` (que no debe contar) y comprueba que lo que sale se lee,
+  pasa `Integrity()` y son los 2392 bytes del ensamblado medido.
+- `TestElBinarioDexa` compila el paquete y ejecuta el binario de verdad: sin el caso `dex` en el
+  `switch` de `main`, el fichero no aparecería. En `GOOS=js` se salta esta, porque ahí no hay
+  proceso; la misma llamada la ejercitan el hospedador del navegador y la prueba de arriba.
+
+**Una decisión de interfaz que salió de medir**: primero se escribió `-o -` (el dex por stdout, para
+que la página lo recogiera de la salida del comando). Al probarlo con el binario, stdout devolvía
+**2426 bytes en vez de 2392**: el log de progreso y el `finished in …` de `main` viven en stdout, y
+34 bytes de charla se habrían colado dentro del dex. Se quitó el canal de stdout: la salida es un
+fichero, que es justo lo que el hospedador OPFS de la pestaña sabe leer y extraer.
+
+**Y la prueba que decide la fase** — la etapa entera corriendo en el binario wasm, en el hospedador
+con forma de navegador, con los seis `.class` montados en la memoria simulada:
+
+```sh
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+sh -c 'cd shim && node navegador-sim.js \
+  --montar "<seis .class del studio>:/in/com/hola/apkcstudio/<nombre>.class" (uno por clase) \
+  --exportar "/out/classes.dex:$PREFIX/tmp/dexwasm/nuestro-wasm.dex" \
+  "$PREFIX/tmp/apkc-wasm.wasm" dex -o /out/classes.dex /in'
+```
+
+**Resultado**: `rc 0`, **2392 bytes** en `/out/classes.dex`, y `cmp` con el dex que produce el binario
+nativo sobre las mismas clases: **idénticos, byte a byte** (`sha1 920c0f3e…`). Y `d8` vuelve a
+aceptarlo como entrada (`rc 0`), la misma comprobación del §22 pero sobre el fichero que salió de
+wasm. Con esto, la etapa de dex **no necesita el equipo**: corre donde corre la página.
+
+Suite nativa: **142 tests** (`--- FAIL` 0). La misma binaria en `GOOS=js` dentro del hospedador de
+navegador: **137 PASS más 5 SKIP, rc 0**. Los cinco que se saltan son siempre por lo mismo: los tres
+`TestSigningKey*` piden el keystore de debug del `HOME` real (en la memoria simulada no está),
+`TestKotlinShortcomings*` necesita ejecutar un fichero 0755, y `TestElBinarioDexa` compila y corre el
+binario: en `GOOS=js` no hay proceso, y lo que esa prueba comprueba lo comprueban arriba el hospedador
+de navegador y la prueba de disco.

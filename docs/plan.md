@@ -158,6 +158,17 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   a qué sección corresponde; se acepta diferencia documentada **solo si el apk se instala y arranca**.
 - **2G.5** La frontera declarada y probada por separado: lambdas, `invokedynamic`, default methods,
   y cualquier cosa que dependencias ajenas aporten. **Fuera del subconjunto**, con el motivo escrito.
+  **Hecha y probada** (§21 y §23): el lector de `.class` rechaza `invokedynamic`, `dynamic` y los
+  method handles por su nombre (`refuseOutsideSubset`), el caminante JVM se niega en el byte que no
+  conoce y el traductor rechaza `move-result` de un primitivo, el `invokespecial` de un método
+  privado, las llamadas de más de cinco argumentos y cualquier registro `v16` en un formato de cuatro
+  bits. `apkc dex` falla **antes** de escribir, nunca a medias. **Sin prueba en dispositivo**: eso
+  llega con la Fase 3, porque un dex suelto no se instala.
+
+- **2G.6** La etapa como comando y en wasm (**hecha**, §23): `apkc dex [-o classes.dex] carpeta…`
+  corre en el binario `GOOS=js` dentro del hospedador de navegador y su salida es **byte a byte
+  idéntica** a la del binario nativo sobre las mismas clases; `d8` la acepta como entrada (`rc 0`).
+  Con esto, el dex no necesita el equipo.
 
 **Mata la fase**: si tras emitir `string_ids`+`type_ids`+`class_defs` el dex resultante no lo lee el
 sistema (o `d8` no lo acepta como entrada en una ronda de ida y vuelta), no tiene sentido seguir: un

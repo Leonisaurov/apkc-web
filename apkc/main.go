@@ -31,6 +31,8 @@ func main() {
 		clean()
 	case "sign":
 		sign()
+	case "dex":
+		dex()
 	case "version":
 		// what a script asks when it has to know which apkc answered the rest
 		fmt.Println(buildStamp())
@@ -53,6 +55,9 @@ clean  - delete build/ dir
 sign   - put an existing apk under a v1+v2 signature of its own, with no zipalign, no
          apksigner and no external program at all (--keystore, --storepass,
          --keyalias, --out; without --out the package is signed in place)
+dex    - turn compiled .class files into a classes.dex in Go, with no d8 and no subprocess
+         (-o salida, y una o mas carpetas de entrada; es la etapa que puede correr en el
+         navegador, el resto del build todavia necesita aapt2 y javac)
 version - print the commit this binary was built from
 `)
 }
