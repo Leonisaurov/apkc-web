@@ -99,7 +99,8 @@ dentro de `build`. Sin comando suelto no hay nada ejecutable del lado cliente.
 
 **Decisión que cambia el plan** (indicación del usuario, registrada abajo): la compilación tiene que
 ocurrir **entera en el navegador, sin conexión y sin runtimes de terceros**. La ruta anterior —
-`javac` y `d8` prestando una JVM compilada a wasm— quedó cerrada por eso, no por su resultado: nunca
+prestar una JVM compilada a wasm para correr dentro de ella el `javac` y el `d8` reales— quedó
+cerrada por eso, no por su resultado: nunca
 se probó `d8` sobre una JVM wasm y ya no va a probarse así. Lo que queda es **que Go emita** lo que
 hoy emiten esas dos herramientas, y por eso el orden del plan se reescribe desde el riesgo real.
 
@@ -223,9 +224,9 @@ Solo si 1+2+3 vivieron.
 
 ## Decisiones registradas
 
-- **Sin conexión y sin runtimes de terceros** (decisión del usuario, 2026-10-27, que sustituye la
-  ruta `CheerpJ`/`GraalVM` de las fases 1 y 2): la compilación tiene que ocurrir entera en el
-  navegador. Lo que eso implica escrito: `javac` y `d8` no se prestan, **se emiten en Go**; y la
+- **Sin conexión y sin runtimes de terceros** (decisión del usuario, 2026-10-27, que cierra las
+  fases 1 y 2 tal como estaban escritas: prestar una JVM de terceros para correr `javac` y `d8`
+  dentro). La compilación tiene que ocurrir entera en el navegador. Lo que eso implica escrito: `javac` y `d8` no se prestan, **se emiten en Go**; y la
   sentencia anterior de este plan ("escribir un dexer en Go es otro proyecto de otra escala") queda
   matizada por una medición — el objetivo del `studio/` son 217 objetos (§13) — pero no refutada para
   el caso general, que sigue sin estar en el plan.

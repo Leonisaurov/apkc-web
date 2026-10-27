@@ -18,9 +18,9 @@ La interfaz hace falta aunque el navegador consiguiera las herramientas: `js/was
 - **Qué hace apkc con él**: fuente -> `.class`, con `-sourcepath src -implicit:class` y
   `android.jar` en el classpath. Ya lo hace en el sitio correcto (la closure de dependientes), desde
   el trabajo incremental.
-- **Qué existe fuera del árbol**: una JVM compilada a wasm (CheerpJ, GraalVM). **Fuera por decisión del
-  2026-10-27**: el uso gratuito obliga a cargar el runtime desde el CDN de un tercero, así que no
-  puede cumplir "sin conexión". No hay ruta de prestación.
+- **Qué existe fuera del árbol**: JVMs compiladas a wasm de proveedores que las sirven desde su propio
+  CDN. **Fuera por decisión del 2026-10-27**: ese uso gratuito exige red y dependencia de un tercero,
+  así que no puede cumplir "sin conexión". No hay ruta de prestación: se emite en Go.
 - **Qué queda**: emitir el bytecode desde Go, con `javap` como oráculo, **para el subconjunto que
   necesita el proyecto del `studio/`** y con la frontera escrita donde el subconjunto se acaba. La
   parte que no es traducción es la comprobación de tipos contra `android.jar`.
@@ -47,9 +47,9 @@ La interfaz hace falta aunque el navegador consiguiera las herramientas: `js/was
 - **Qué existe**: **nada fuera del árbol de Android**. `aapt2` es C++ (`frameworks/base/tools/aapt2`)
   y ni apktool lo reimplementa: invoca al binario. No hay biblioteca mantenida que escriba AXML +
   `resources.arsc`.
-- **Rutas**: (a) compilar `aapt2` a wasm con Cheerp/Emscripten — arrastra `libbase`, `libutils`,
-  `androidfw` y un build de Android completo, probablemente más trabajo que (b); (b) **escribir en Go
-  el subconjunto que apkc necesita**. Es la pieza cara y la que queda para siempre: formato AXML,
+- **Rutas**: (a) compilar `aapt2` a wasm con una cadena C->wasm autoalojable (Emscripten) — cumple lo
+  de sin conexión, pero arrastra `libbase`, `libutils`, `androidfw` y un build de Android completo;
+  probablemente más trabajo que (b); (b) **escribir en Go el subconjunto que apkc necesita**. Es la pieza cara y la que queda para siempre: formato AXML,
   tabla de recursos con sus config flags, tipos de referencia, y `R.java`. La ventaja es que apkc ya
   tiene medio camino hecho: lee y escribe formatos de bajo nivel propio (`classfile.go`,
   `zipwriter.go`, `apksig.go`) y tiene oráculo en el teléfono.
