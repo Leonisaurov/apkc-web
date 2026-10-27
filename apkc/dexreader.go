@@ -316,9 +316,11 @@ func (d *dexFile) resolveTypes() error {
 		}
 		p := dexProto{shorty: shorty, returnType: d.types[retIdx]}
 		if paramsOff != 0 {
+			// type_item es un ushort por parametro, packed: avanzar de a 4 leia el
+			// doble de lejos y devolvia descriptores que no existian
 			count := dexLittleEndian.Uint32(d.raw[paramsOff:])
 			for k := uint32(0); k < count; k++ {
-				tidx := binary.LittleEndian.Uint16(d.raw[paramsOff+4+k*4:])
+				tidx := binary.LittleEndian.Uint16(d.raw[paramsOff+4+k*2:])
 				p.params = append(p.params, d.types[tidx])
 			}
 		}

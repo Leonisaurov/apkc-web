@@ -110,7 +110,16 @@ async function ejecutar(argv, env) {
   let codigo = null;
   // run() espera _exitPromise y quien lo resuelve es la implementación POR DEFECTO de this.exit:
   // sustituir go.exit sin resolverla deja la promesa sin terminar (el mismo error que en el shim)
-  go.exit = (c) => { codigo = c; go._resolveExitPromise(); };
+  go.exit = (c) => {
+    codigo = c;
+    // descartar los temporizadores pendientes, como en el shim: reanidar un programa que ya
+    // salio lanza "Go program has already exited" dentro del worker
+    if (go._scheduledTimeouts) {
+      for (const id of go._scheduledTimeouts.values()) clearTimeout(id);
+      go._scheduledTimeouts.clear();
+    }
+    go._resolveExitPromise();
+  };
 
   if (!bytesModule) {
     const respuesta = await fetch("/apkc.wasm");

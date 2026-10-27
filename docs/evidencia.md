@@ -359,7 +359,7 @@ tres anidadas):
 
 | Qué | Cuánto |
 | --- | --- |
-| clases | 6 (mayor version del `.class`: 52, Java 8) |
+| clases | 6 (mayor version del `.class`: **65**, la que escribe este JDK por defecto; ver la corrección en §17) |
 | tipos referenciados | 12 (`android/app/Activity`, `android/view/Menu`, `android/view/MenuItem`, `android/view/MenuItem$OnMenuItemClickListener`, `android/widget/Toast`, `java/lang/Object` y las 6 propias) |
 | clases con `Code` | 9 métodos |
 | instrucciones de bytecode en total | **47** |
@@ -438,3 +438,106 @@ pinta de fichero malformed.
 
 Lo que el lector **todavía no lee**: `code_item` (instrucciones), `class_data_item` más allá de los
 cuatro recuentos, y las anotaciones. Se escriben cuando haga falta para comparar, no antes.
+
+## 17. La tabla de opcodes JVM, medida contra `javap` en vez de recordada
+
+El caminante de `apkc/jvmopcode.go` necesita la anchura de cada operación. Escribirla de memoria
+sobre JVMS es el tipo de claim que este repo no admite: una anchura mal no se nota en un resultado
+raro, se nota en que el caminante entra dentro de la instrucción siguiente y **el método parece
+parsear**. Así que se midió: para cada instrucción que `javap -v -c` lista, la anchura es
+`(pc siguiente - pc - 1)`, y el byte del cuerpo de código en ese `pc` es el opcode de ese nombre.
+
+```sh
+# 1. la lista del oráculo, sobre las seis clases que javac dejó en build/classes
+C=$(find "$PREFIX/tmp/studio-e2e-java" -type d -name classes | head -1); cd "$C"
+J=$PREFIX/lib/jvm/java-21-openjdk/bin
+CLASES=$(find . -name '*.class' | sed 's|^\./||; s|\.class$||; s|/|.|g' | tr '\n' ' ')
+$J/javap -v -c -p -classpath . $CLASES > "$PREFIX/tmp/javap-v.txt"
+
+# 2. la derivacion (los cuerpos de Code salen de los .class con un parser que SI resuelve los
+#    nombres de atributo contra el pool; el primer intento los adivinaba por forma y salia
+#    un "metodo" con max_stack=256, que es un StackMapTable disfrazado)
+CLASES="$C" JP="$PREFIX/tmp/javap-v.txt" python3 "$PREFIX/tmp/mideopcodes.py"
+```
+
+**Resultado: 16 opcodes medidos, ninguno con conflicto** (un mismo byte nunca apareció con dos
+anchuras distintas en los nueve cuerpos):
+
+```
+0x03 iconst_0/0     0x2a aload_0/0      0xb1 return/0          0xb8 invokestatic/2
+0x04 iconst_1/0     0x2b aload_1/0      0xb4 getfield/2        0xb9 invokeinterface/4
+0x12 ldc/1           0x57 pop/0         0xb5 putfield/2        0xbb new/2
+0x59 dup/0           0xac ireturn/0     0xb6 invokevirtual/2   0xb7 invokespecial/2
+```
+
+y el recuento por método, que es el que el test `TestReadClassFullAnswersWhatJavapCounted` exige:
+
+| método | stack | locals | bytes de Code | instrucciones |
+| --- | --- | --- | --- | --- |
+| `MainActivity$1.<init>` | 2 | 2 | 10 | 6 |
+| `MainActivity$1.onMenuItemClick` | 3 | 2 | 15 | 8 |
+| `MainActivity.<init>` | 1 | 1 | 5 | 3 |
+| `MainActivity.onCreate` | 2 | 2 | 12 | 7 |
+| `MainActivity.onCreateOptionsMenu` | 4 | 2 | 24 | 11 |
+| `R$id/R$layout/R$style/R .<init>` | 1 | 1 | 5 | 3 cada una |
+
+Total **47 instrucciones en 9 métodos con Code**, la misma cifra del §14 contada ahora por el
+caminante de Go: `go test -run "ReadClassFull|WalkJvm|ArgCount|DescriptorOf"` en verde.
+
+**Fuera de la tabla, a propósito**: `tableswitch`, `lookupswitch` y `wide` no tienen anchura fija y
+el subconjunto no los usa; el proyecto del studio no lleva `switch`. Nada en la tabla es un cálculo
+sin medición, y el caminante se niega por el byte que no conoce (`0x6a`, `baload`, en el test) en
+lugar de suponer.
+
+**Un claim que se corrigió midiendo**: el §14 decía que estas clases son *major version 52* (Java 8).
+Es **65**, lo dice `javap -v` ("major version: 65") y lo confirman los bytes del fichero
+(`cafebabe 0000 0041`); el 52 venía de un script descartable que leía mal la columna. El test del
+lector lleva ahora el número del oráculo.
+
+## 18. Otro fallo del hospedador, este lo destapó el timing
+
+La suite wasm del fork subió a **117 tests** y pasó entera, pero `node navegador-sim.js` terminaba
+con **rc 1**: al salir el programa quedaban `setTimeout` pendientes del *scheduling* de
+`wasm_exec.js`, y al disparar llamaban a `_resume()` sobre un programa ya muerto —
+`Error: Go program has already exited`. Como stdout va por tubería (buffer asincrónico) y stderr no,
+el log mostraba el `PASS` completo y el fallo parecía posterior: el verde estaba impreso y el
+proceso moría igual. La corrección es descartar `go._scheduledTimeouts` en el `exit` sustituido, tanto
+en el shim como en `studio/hospedador.js`; con eso `rc=0` otra vez.
+
+Lección escrita para no repetirla: **el código de salida del hospedador es parte de la prueba**. Un
+hospedador que imprime verde y sale 1 no es un verde con ruido, es un fallo de infraestructura que
+cualquier script de CI lee como fallo — con razón.
+
+## 19. Las tablas de índices que `d8` deriva de las mismas clases: tres reglas que se aprendieron midiendo
+
+`apkc/dextabla.go` interna tipos, protos, campos y métodos a partir de los seis `.class`, y el test
+los compara **enteros** con las tablas del `classes.dex` de `d8` (leyéndolas con el lector del §16).
+Al primer correr fallaron cuatro cosas; las cuatro eran reglas que este código no sabía, y las tres
+primeras se escribieron mal aquí, no en el formato:
+
+| Qué | Cómo se comportaba `d8` | Qué se hizo |
+| --- | --- | --- |
+| `type_list` de un proto | el lector avanzaba **4 bytes por parámetro** y devolvía descriptores que no existían (`makeText` salió con `(Context;I;Activity;)` en vez de `(Context;CharSequence;I)`) | el `type_item` es un `ushort`: stride **2**, medido contra las cadenas reales |
+| `method_ids` | `MainActivity` ordena `<init>`, `onCreate`, `onCreateOptionsMenu`, `setContentView` — o sea **clase, nombre, proto**, no clase, proto, nombre como cita la documentación del formato | orden corregido, con la observación escrita en el comentario |
+| `field_ids` | igual: clase, nombre, tipo | ya estaba bien |
+| tipos que faltaban | `d8` tiene cinco `Ldalvik/annotation/…` que ningún `.class` menciona: las anotaciones que **sintetiza** | se internan a partir de lo que el class file declara: un `InnerClasses` con `inner == this` y `name != ""` pide `InnerClass`; un miembro con nombre pide `EnclosingClass`; la anonima con `name == ""` pide `EnclosingMethod`; los `MemberClasses` salen de las entradas con `outer == this`; y `MethodParameters` aparece donde el class file lleva el atributo |
+
+Y un expectation mía que era falsa: el string `"Z"` de la tabla de `d8` **no** es un shorty, es el
+descriptor del `boolean` que devuelven los dos listeners. Nadie lo iba a saber mirando mi tabla de
+shorties, y el test lo dijo.
+
+Comprobación, con las tablas comparadas completas (no un muestreo):
+
+```sh
+sh -c 'cd apkc && go test -run "DexTables|SplitDescriptor|ReadClassFull|ReadDex|WriteStrings" -v .'
+```
+
+**Resultado**: en verde nativo; la suite wasm en el hospedador de navegador sube a **122 tests**
+(`--- PASS` 122, `--- FAIL` 0, rc 0). Después de esto, las cinco tablas de índices de lo que emite
+este fork son ** iguales en contenido y en orden** a las que `d8` escribió sobre las mismas clases, y
+la sección de cadenas ya lo era desde el §14-B (2G-B).
+
+Lo que queda para que el dex sea un fichero: `class_data_item`, `code_item` (traducción de las 16
+operaciones a registros dalvik), `debug_info_item`, y el ensamblado con `map_list`, cabecera y los
+dos checksums (2G-E y 2G-F). Lo que **no** entra: `invokedynamic`, lambdas y desugaring de
+dependencias (§14 y plan 2G.5).

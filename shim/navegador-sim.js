@@ -376,6 +376,14 @@ go.env = { HOME: "/home/usuario", ANDROID_HOME: "/android", JAVA_HOME: "/jvm" };
 // wasm_exec salta despues con "Go program has already exited".
 go.exit = (c) => {
   anotarSalida(c);
+  // y se descartan los temporizadores que Go tenia pendientes: wasm_exec reanuda el
+  // programa desde un setTimeout, y si el programa ya salio, _resume lanza
+  // "Go program has already exited" y node muere con rc 1 *despues* de que la suite
+  // pasara entera, que es el peor fallo posible porque el verde esta en el log
+  if (go._scheduledTimeouts) {
+    for (const id of go._scheduledTimeouts.values()) clearTimeout(id);
+    go._scheduledTimeouts.clear();
+  }
   go._resolveExitPromise();
 };
 
