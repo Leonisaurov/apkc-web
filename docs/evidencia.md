@@ -234,7 +234,9 @@ sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
   KS_EJEMPLO="$HOME/.android/debug.keystore" node prueba-pestana.js'
 ```
 
-**Resultado: 15 comprobaciones, 0 fallos**, todas dentro de chromium headless:
+**Resultado: 16 comprobaciones, 0 fallos**, todas dentro de chromium headless (15 en la
+corrida del 2026-10-26; la decimosexta es la de conexión, añadida el 2026-10-27 al exigirse "sin
+recurso a terceros"):
 
 1. `crossOriginIsolated` es `true` (lo mide la propia página).
 2. `apkc create /proyecto` en wasm sale 0 y escribe `AndroidManifest.xml`,
@@ -286,40 +288,111 @@ del `iniciar()`, el motivo de un import fallido se guarda (lo cuenta el `sondeo`
 9.458.093 bytes, más el `wasm_exec.js` del GOROOT. Sin `android.jar`, porque sin `javac` no hay nada
 que compilar todavía.
 
-## 13. La licencia de CheerpJ, leída antes de escribir ningún código de la Fase 1
+## 13. Cuánto hay que emitir: el `classes.dex` de un proyecto real, despiezado
 
-Regla 4 del repo. No es una medición de coste sino de permiso, así que va con su comando y sus
-citas textuales del proveedor:
+Decisión del 2026-10-27: **la compilación tiene que ocurrir entera en el navegador, sin conexión y
+sin runtimes de terceros**. Caída la idea de prestar una JVM, lo único que queda es que **Go emita**
+lo que hoy emiten `javac` y `d8`, así que la primera medición útil es *de qué tamaño es el objetivo*.
 
 ```sh
-curl -sSL https://cheerpj.com/docs/licensing -o "$PREFIX/tmp/cheerpj-licensing.html"
-python3 - <<'EOF'
-import html, re
-t = open("/data/data/com.termux/files/usr/tmp/cheerpj-licensing.html", encoding="utf-8").read()
-t = re.sub(r"(?is)<(script|style|noscript).*?</\1>", '', t); t = re.sub(r"(?s)<[^>]+>", ' ', t)
-print(re.sub(r"[ \t]+", ' ', html.unescape(t))[:6000])
+# el proyecto del studio, compilado con las herramientas reales (javac 4,3 s + d8 5,6 s)
+sh -c 'APKC="$PREFIX/tmp/apkc-gate" sh studio/e2e.sh'
+cd "$(dirname "$(find "$PREFIX/tmp/studio-e2e-java" -name classes.dex | head -1)")"
+unzip -o -q build/app.apk && python3 - <<'EOF'
+import struct
+d = open("classes.dex", "rb").read()
+print("magic", d[0:8], "| file_size", struct.unpack_from("<I", d, 32)[0])
+for i, n in enumerate(["string_ids","type_ids","proto_ids","field_ids","method_ids","class_defs","data"]):
+    print("   %-12s size=%-5d off=%d" % ((n,) + struct.unpack_from("<2I", d, 56 + i*8)))
+map_off = struct.unpack_from("<I", d, 52)[0]
+n, = struct.unpack_from("<I", d, map_off); o = map_off + 4
+for i in range(n):
+    t, unused, size, off = struct.unpack_from("<HHII", d, o); o += 12   # entradas de 12 bytes
+    print("   mapa tipo=%#-8x size=%-4d offset=%d" % (t, size, off))
 EOF
 ```
 
-Lo que dice, citado (2026-10-26):
+**Resultado sobre el proyecto completo del studio** (el de botón, `Toast` y menú): 6 ficheros
+`.class` (3333 bytes) entran, **2844 bytes de `classes.dex`** salen, con 17 tipos de sección en el
+`map_list` y estos recuentos de cabecera:
 
-- *"The CheerpJ Community License allows unlimited, unmetered use of CheerpJ from the
-  `cjrtnc.leaningtech.com` domain, such as its usage via npm package manager. For self-hosted
-  options, see the CheerpJ Commercial License."*
-- *"Commercial Licenses are available for any use that falls outside of the scope of the Community
-  License, including any business use (with exception of one-person companies), redistribution and
-  OEM use."*
-- En su tabla de casos: *"You are an individual using CheerpJ for a personal project (including one
-  generating revenue) → Give appropriate credits"*, y lo mismo para *"an individual developer
-  building a commercial project"* y *"a team using CheerpJ in a FOSS project"*.
-- *"If you wish to self-host CheerpJ, you will need a Commercial License."*
+| Sección | Objetos | | Sección | Objetos |
+| --- | --- | --- | --- | --- |
+| `string_ids` | 53 | | `code_item` | 9 |
+| `type_ids` | 23 | | `class_data_item` | 7 |
+| `proto_ids` | 9 | | `string_data_item` | 53 |
+| `field_ids` | 4 | | `type_list` / `type_item` | 8 / 8 |
+| `method_ids` | 17 | | `debug_info_item` | 6 |
+| `class_defs` | 6 | | anotaciones (`0x2005`, set, colección) | 3 / 5 / 6 |
 
-**Qué decide para este plan**: la fase no muere por licencia, pero **la página no puede ser offline**
-si usa CheerpJ: el uso gratuito exige cargar el runtime desde el dominio del proveedor (npm entra), y
-autoalojarlo es de pago. Eso choca con la definición de éxito de este repo si se lee "sin conexión";
-leída como está —"sin server, sin SDK y sin JDK instalados en la máquina del usuario"— sigue valiendo,
-porque el servidor de la JVM es de terceros y no hay backend propio. Queda escrito el condicionante
-(créditos + CDN del proveedor) antes de gastar ni una línea en la integración, y es lo que manda la
-regla 4.
+**217 objetos en total**, fuera cabecera y mapa. La lectura honesta, que contradice una línea de este
+mismo plan escrita el 2026-10-26 ("escribir un dexer en Go es otro proyecto de otra escala"): para el
+subconjunto que necesita una app mínima **el objetivo es finito y medible**; lo que no es un
+subconjunto es el desugaring de lambdas y de `invokedynamic` sobre dependencias ajenas, y eso sigue
+siendo la frontera. Las 6 clases de entrada son `MainActivity`, `MainActivity$1` (la clase anónima
+del botón) y `R`, `R$id`, `R$layout`, `R$style` — estas cuatro últimas las genera `aapt2`, así que el
+dexer de Go no existe sin la Fase 3 de recursos.
 
-No se ha descargado ni integrado nada del runtime: solo se leyó su página de licencia.
+Y una advertencia sobre el oráculo, medida aquí: el `map_list` del dex **no** tiene entradas de 16
+bytes sino de 12 (`ushort tipo, ushort unused, uint size, uint offset`). Un parser que se equivoque
+aquí lee 3486512 secciones y concluye cualquier cosa; a mí me pasó antes de escribir esto.
+
+## 14. El subconjunto que hay que emitir, enumerado con `javap` (Fase 2G.1 y 1G.1)
+
+La pregunta que decide si 2G/1G son semanas o un pozo sin fondo no se responde opinando: se responde
+leyendo los `.class` que el proyecto del `studio/` ya produce con las herramientas reales.
+
+```sh
+C=$(find "$PREFIX/tmp/studio-e2e-java" -type d -name classes | head -1); cd "$C"
+J=$PREFIX/lib/jvm/java-21-openjdk/bin
+CLASES=$(find . -name '*.class' | sed 's|^\./||; s|\.class$||; s|/|.|g' | tr '\n' ' ')
+$J/javap -v -c -p -classpath . $CLASES > "$PREFIX/tmp/javap-v.txt"
+grep -oE '^ +#[0-9]+ = [A-Za-z]+' "$PREFIX/tmp/javap-v.txt" | awk -F'= ' '{print $2}' | sort | uniq -c | sort -rn
+awk '/Code:/{d=1} d && /^ +[0-9]+: [a-z]/ {print $2}' "$PREFIX/tmp/javap-v.txt" | sort | uniq -c | sort -rn
+```
+
+**Resultado sobre las 6 clases del proyecto completo** (Activity, la interna del botón, `R` y sus
+tres anidadas):
+
+| Qué | Cuánto |
+| --- | --- |
+| clases | 6 (mayor version del `.class`: 52, Java 8) |
+| tipos referenciados | 12 (`android/app/Activity`, `android/view/Menu`, `android/view/MenuItem`, `android/view/MenuItem$OnMenuItemClickListener`, `android/widget/Toast`, `java/lang/Object` y las 6 propias) |
+| clases con `Code` | 9 métodos |
+| instrucciones de bytecode en total | **47** |
+| operaciones JVM distintas usadas | **16**: `aload_0` (11), `invokespecial` (8), `return` (7), `ldc` (3), `aload_1` (3), `invokevirtual` (2), `invokeinterface` (2), `iconst_1` (2), `ireturn` (2), `new`, `dup`, `pop`, `getfield`, `putfield`, `invokestatic`, `iconst_0` |
+| kinds de constant pool usadas | **8**: `Utf8` (119), `Class` (28), `NameAndType` (15), `Methodref` (11), `Integer` (4), `String` (2), `InterfaceMethodref` (2), `Fieldref` (1) |
+| atributos de miembro | `Code` (9); de clase: `MethodParameters` (1) |
+| descriptores de método | `()V` ×5, `(Landroid/os/Bundle;)V`, `(Landroid/view/Menu;)Z`, `(Landroid/view/MenuItem;)Z`, `(Lcom/hola/apkcstudio/MainActivity;)V` |
+
+**Lo que NO aparece y por tanto no está en el subconjunto** (medido por ausencia en el mismo `javap`):
+`Long`/`Double`/`Float` en el pool, `Type`/`Handle`/`Dynamic`/`InvokeDynamic`, `invokedynamic` en
+código, arrays, `MonitorEnter/Exit`, `jsr/ret`. Es decir: **ni lambdas ni `invokedynamic`**, que son
+justo lo que `d8` desugara y lo que este plan declara fuera de alcance (Fase 2G.5). Con esa
+restricción escrita, el trabajo de 2G es emitir 8 kinds de pool, 16 operaciones y 12 tipos: finito.
+
+Complemento del §13: esas 6 clases de entrada (47 instrucciones) producen 217 objetos de dex, o sea
+**~4,6 objetos de dex por instrucción de fuente**. Ese es el factor por el que el emisor de `.dex` se
+puede validar antes que el compilador Java: la entrada se puede tomar de `javac` nativo y comparar
+byte a byte contra `d8`, sin tocar el dispositivo.
+
+Y un aviso de método, porque me mordió dos veces escribiendo esto: parsear un `.class` a mano es fácil
+de equivocar. Mi primer parser saltó `interfaces_count` (y leyó descriptores imposibles, `desc=4112`),
+y el `map_list` del dex tiene entradas de **12** bytes, no de 16. Cuando existe un oráculo oficial
+aquí es `javap`, se usa el oráculo.
+
+## 15. La pestaña no habla con ningún sitio que no sea su propio origen
+
+El requisito de "sin conexión" necesita ser comprobable, no una intención. `Network.enable` por CDP
+registra cada petición que hace la página durante toda la prueba (crear, editar, recargar, firmar):
+
+```sh
+sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
+  APK_EJEMPLO=$(find "$PREFIX/tmp/studio-e2e-java" -name app.apk -path "*/build/*" | head -1) \
+  KS_EJEMPLO="$HOME/.android/debug.keystore" node prueba-pestana.js'
+```
+
+**Resultado: `16 comprobaciones bien, 0 mal`, y `10 peticiones, todas locales`** (`http://127.0.0.1`
+de `servidor.js`, más `data:`/`blob:` del propio origen). Ninguna a un CDN, ninguna a un dominio de
+runtime de terceros, ninguna de telemetría. Con esto el criterio de aceptación de la Fase 4 queda
+escrito como prueba: **una petición fuera del origen rompe `prueba-pestana.js`**.

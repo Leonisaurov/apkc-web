@@ -13,30 +13,30 @@ La interfaz hace falta aunque el navegador consiguiera las herramientas: `js/was
 `fork/exec`, así que "ejecutar un programa" no existe como operación. En el teléfono hoy
 `watch` se autoclora por eso mismo (`proc_stub.go`).
 
-## 1. `javac` — resuelto por otros, con coste
+## 1. `javac` — hay que escribirlo
 
 - **Qué hace apkc con él**: fuente -> `.class`, con `-sourcepath src -implicit:class` y
   `android.jar` en el classpath. Ya lo hace en el sitio correcto (la closure de dependientes), desde
   el trabajo incremental.
-- **Qué existe**: una demo oficial de GraalVM con **`javac` compilado a wasm con native-image** que
-  compila fuente Java a bytecode dentro de la página, y **CheerpJ 3.x**, JVM completa en wasm con
-  runtime OpenJDK.
-- **Qué costaría**: bajar y enlazar uno de los dos, y darle un `fs` compartido con el `apkc.wasm`.
-  Es integración, no escritura de compilador. CheerpJ es licencia comercial (free tier para
-  no-comercial): **hay que leer la licencia antes de meterlo en nada que se publique**.
+- **Qué existe fuera del árbol**: una JVM compilada a wasm (CheerpJ, GraalVM). **Fuera por decisión del
+  2026-10-27**: el uso gratuito obliga a cargar el runtime desde el CDN de un tercero, así que no
+  puede cumplir "sin conexión". No hay ruta de prestación.
+- **Qué queda**: emitir el bytecode desde Go, con `javap` como oráculo, **para el subconjunto que
+  necesita el proyecto del `studio/`** y con la frontera escrita donde el subconjunto se acaba. La
+  parte que no es traducción es la comprobación de tipos contra `android.jar`.
 
-## 2. `d8` — la incógnita que manda
+## 2. `d8` — la que decide, y ya tiene objetivo medido
 
 - **Qué hace**: `.class` -> `.dex`, y desugara según `--min-api`. apkc lo llama sobre el proyecto y
   sobre los cubos de dependencias, con estado propio en `build/dexcache`.
-- **Qué existe**: **nada portable**. `d8` es un jar de Android (fuente en `build/soong` y en R8). En
-  Go solo hay **analizadores** de dex (`dutchcoders/godex`), no escritores. Escribir un dexer en Go
-  es escribir un compilador: formato de dex + asignación de registros + desugaring de lambdas,
-  default methods y `invokedynamic`.
-- **Lo único razonable**: correr el jar sobre la JVM wasm del punto 1. **No está probado que d8
-  corra ahí** (usa `java.nio.file`, concurrencia y reflexiones sobre el classpath; las JVM wasm no
-  soportan todo). Este es el experimento que decide si la ambición vive o muere, y vale más que
-  cualquier otra línea de este repo.
+- **Qué existe**: **nada portable, y ya no se busca**. En Go solo hay **analizadores** de dex
+  (`dutchcoders/godex`), no escritores.
+- **El tamaño real del problema, medido** (`docs/evidencia.md` §13): el proyecto del `studio/` entra
+  como 6 `.class` (3333 bytes) y sale como **2844 bytes de dex con 217 objetos** en 17 tipos de
+  sección. Eso es lo que hay que emitir para una app mínima: un artifact finito y comparable byte a
+  byte contra `d8`.
+- **Donde sí es otro proyecto**: el desugaring de lambdas, `invokedynamic`, default methods y todo lo
+  que aporten dependencias ajenas. **Fuera del plan**, con el motivo escrito; no se promete.
 
 ## 3. `aapt2` — el que no tiene atajo
 
@@ -70,9 +70,15 @@ JCEKS, y un `minSdkVersion` < 18— que no son del navegador.
 
 ## Lo que la ambición no puede solucionar aunque porte todo
 
-- **Memoria y tamaño**: `android.jar` del API 34 pesa decenas de MB, la JVM wasm otros tantos, y los
-  demos reales de apkc son de 142 MB (un apk de `MnnChat`). Un build del proyecto Firebase (60 jars)
-  en una pestaña es otro planeta respecto al teléfono.
-- **El primer arranque**: el usuario de la página esperaría segundos, no la bajada de un runtime.
+- **Memoria y tamaño**: `android.jar` del API 34 pesa decenas de MB y los demos reales son de 142 MB
+  (un apk de `MnnChat`). Con la decisión de no prestar runtime, lo que baja a la pestaña es
+  `apkc.wasm` (9,46 MB medidos) más lo que se resuelva de SDK; un build del proyecto Firebase (60
+  jars) en una pestaña sigue siendo otro planeta respecto al teléfono.
+- **El primer arranque**: sin descarga de terceros, el coste es compilar e instanciar el wasm. Medido:
+  `create` ~1,3 s y `sign` ~1 s dentro de chromium, incluyendo la bajada local del binario.
 - **El `fs`**: hay que dar el `fs` de forma de Node (24 funciones) o reescribir la capa de ficheros
-  de apkc. La primera opción está demostrada aquí; la segunda toca todo el repo.
+  de apkc. La primera opción está demostrada dos veces: en el shim de node y en chromium con OPFS
+  (`docs/evidencia.md` §11).
+- **Lo que la decisión NO quita**: sigue sin haber quien escriba el `.dex`, el AXML y
+  `resources.arsc` por nosotros. Al negarnos el runtime prestado, el trabajo de las fases 2G, 1G y 3
+  pasa a ser entero nuestro; es más lento y es el único camino que cumple "sin conexión".

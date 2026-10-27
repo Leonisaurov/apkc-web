@@ -22,11 +22,15 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 2. **Sin binarios versionados.** `*.wasm` está ignorado: se construye desde `../apkc` con
    `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .`. Tampoco se
    versiona `shim/wasm_exec.js` (es del GOROOT de cada quien).
-3. **No se toca `../apkc` desde aquí.** La única excepción es la Fase 0 de `docs/plan.md`, y cada
-   cambio allende el muro entra con su propio commit, su test y su gate.
-4. **Licencias antes que código.** CheerpX/CheerpJ y cualquier runtime de terceros se leen **antes**
-   de integrarlos: CheerpJ es comercial con tier gratuito no-comercial. Si la licencia no permite el
-   uso, la fase muere y se escribe por qué.
+3. **No se toca `../apkc` desde aquí.** La excepción son las fases que el plan marca como trabajo de la
+   herramienta (Fase 0 y las 2G/1G/3, que escriben el dexer, el compilador y los recursos en Go), y
+   cada cambio allende el muro entra con su propio commit, su test y su gate.
+4. **Sin conexión y sin runtimes de terceros** (decisión del usuario, 2026-10-27). Todo lo que
+   compila, empaqueta y firma viaja en el propio origen de la página: ni CDN de una JVM wasm, ni
+   telemetría, ni fuentes. Se comprueba conduciendo chromium y registrando cada petición
+   (`studio/prueba-pestana.js`); **una petición fuera del origen rompe la prueba.** Si aun así se
+   evaluara un runtime ajeno, su licencia se lee **antes** de integrarla: si no permite el uso, la
+   fase muere y se escribe por qué.
 5. **Idioma.** Prosa y comentarios en español con la ortografía completa (tildes, ñ) y **cero
    caracteres de otros alfabetos**; pasar el chequeo antes de commitear. En `../apkc` los comentarios
    son en inglés (estilo del upstream): no arrastrar esa convención aquí, pero tampoco acentuar
@@ -84,7 +88,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `create`) **corre en hospedador tipo navegador**: 98/98 tests.
 - **Y corre en chromium de verdad**: `studio/` tiene hospedador con OPFS (worker de módulo + servidor
   sin dependencias con COOP/COEP) y editor de fuente; `create`, editar entre sesiones y `sign` funcionan
-  dentro de la pestaña, verificado por fuera (15 comprobaciones en `docs/evidencia.md` §11).
+  dentro de la pestaña, verificado por fuera (16 comprobaciones en `docs/evidencia.md` §11 y §15).
 - **`apkc sign` existe** (apkc `a909214`) y **firma dentro de wasm**: 1,20 s para un apk de 9504
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
@@ -94,5 +98,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   este keystore de debug hace que `apksigner` escriba `ANDROIDD.SF`, no `ANDROID.SF`.
 - `apkc build` en wasm responde `aapt2 compile never started: pipe: not implemented on js`: el muro
   es la ausencia de proceso, no una ruta mal. **Ningún flag lo arregla.**
-- `d8` sobre una JVM wasm **no está probado**; es el experimento que decide la ambición y va antes
-  de escribir cualquier compilador. Ver el orden en `docs/plan.md`.
+- **No se presta una JVM: se emite en Go** (decisión 2026-10-27, sin conexión y sin terceros). El
+  objetivo del dexer está medido (§13: 2844 bytes, 217 objetos para el proyecto del studio) y la
+  prueba de que la página no habla con ningún CDN está automatizada (§15). El orden ahora es
+  **2G -> 3 -> 1G**; ver `docs/plan.md`.
+- Una apk mínima no se puede firmar en el cliente sin `R`: las 4 clases `R*` del recuento las genera
+  `aapt2`, así que **2G y 3 van atadas** aunque se midan por separado.

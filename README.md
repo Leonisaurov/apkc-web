@@ -20,10 +20,12 @@ nada a ningún sitio: crear el proyecto, editarlo y conservarlo entre sesiones, 
 los oráculos externos aceptan. Lo que **no** se puede aún es `build`
 ([docs/evidencia.md](docs/evidencia.md) §11).
 
-Lo que falta para compilar del lado del cliente no es un flag: son **`aapt2`, `javac` y `d8`**, tres
-programas externos que `js/wasm` no puede arrancar porque no tiene `fork/exec`. La licencia del
-único runtime JVM con uso gratuito ya está leída (§13): permite la integración, pero obliga a cargar
-el runtime desde el CDN de terceros — la página dejaría de poder funcionar sin conexión.
+Lo que falta no es un flag: son **`aapt2`, `javac` y `d8`**, tres programas externos que `js/wasm` no
+puede arrancar porque no tiene `fork/exec`. **Desde 2026-10-27 la restricción dominante es otra: todo
+tiene que pasar en la pestaña, sin conexión y sin runtimes de terceros**, así que no se presta una JVM
+y hay que emitir en Go el bytecode, el `classes.dex` y los recursos. Se midió el objetivo: el proyecto
+del studio son **2844 bytes de dex y 217 objetos** ([docs/evidencia.md](docs/evidencia.md) §13), y la
+página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** (§15).
 
 ## Qué hay aquí
 

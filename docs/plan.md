@@ -3,8 +3,10 @@
 ## Objetivo y definición de éxito
 
 **Éxito**: abrir una página en el navegador, escribir o pegar el fuente de una app mínima
-(`Activity` + layout), y obtener un `app.apk` **instalable y verificado**, sin server, sin SDK y sin
-JDK instalados en la máquina del usuario. Se demuestra con tres hechos, todos comprobables con
+(`Activity` + layout), y obtener un `app.apk` **instalable y verificado**, sin server, sin SDK, sin
+JDK instalados en la máquina del usuario **y sin conexión**: todo lo que compila y empaqueta viaja en
+el propio origen de la página. Comprobable: ninguna petición fuera del origen (`evidencia.md` §15),
+ningún runtime de terceros. Se demuestra con tres hechos, todos comprobables con
 oráculos ajenos a apkc:
 
 1. `apksigner verify --verbose` (en otra máquina) dice v1 y v2 correctos.
@@ -17,9 +19,11 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 
 ## Reglas de orden (por qué este orden y no otro)
 
-- **Nada de la Fase 3 (recursos en Go) se empieza antes de que la Fase 2 diga que `d8` corre en
-  wasm.** Un compilador de recursos sin dexer no produce nada instalable: son semanas de trabajo
-  que dependen de un resultado que cabe en un experimento de días.
+- **El orden lo marca ahora el oráculo más barato, no la dependencia técnica.** 2G se puede validar
+  byte a byte contra `d8` sin teléfono y sin licencia; 3 se valida con `aapt2 dump` y con el
+  dispositivo; 1G con `javap`. Por eso 2G va primero.
+- **No se abre 1G hasta que 2G emita un dex que el sistema lea.** De nada sirve un compilador Java
+  cuyo output no se puede convertir en nada instalable.
 - **Nada de este repo entra en `../apkc`** salvo la Fase 0, que es trabajo de la herramienta en sí.
 - **Ninguna fase se declara "imposible" sin el texto del error y el comando que lo produjo.** El
   muro de esta ambición se encontró así: `aapt2 compile never started: pipe: not implemented on js`.
@@ -31,13 +35,14 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 0.1 mensajes de herramienta | **hecha** (apkc `e7bfd01`) | `[build] aapt2 compile never started: pipe: not implemented on js` |
 | 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
 | 0.2.2 `apkc verify` | pendiente | — |
-| 1 `javac` en wasm | **abierta por licencia, sin probar por tiempo**: la licencia de CheerpJ se leyó y **no mata la fase** (§ abajo, "Licencia leída") | licencia medida 2026-10-26 |
-| 2 `d8` sobre JVM wasm | **pendiente y decisiva** | — |
-| 3 recursos sin `aapt2` | bloqueada hasta que 2 viva | — |
+| 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
+| 2G | **la que decide ahora**: `classes.dex` escrito en Go sobre los `.class` del `studio/`, con `d8` de oráculo. Objetivo medido: 2844 bytes, 217 objetos | `docs/evidencia.md` §13 |
+| 3 recursos sin `aapt2` | necesaria: sin `R` no hay las 6 clases que dexar | — |
+| 1G | Java -> `.class` en Go, subconjunto del `studio/`, con `javap` de oráculo | — |
 | 4.1 etapas como interfaz | pendiente | — |
-| 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 15 comprobaciones) | `studio/prueba-pestana.js` |
-| 4.3 la página | **en marcha**: editor de fuente sobre OPFS, `create` y `sign` dentro de la pestaña; `build` sigue muriendo en el muro conocido | `docs/evidencia.md` §11 |
-| 4.4 empaque y tamaño | medida parcial: `apkc.wasm` 9,46 MB | — |
+| 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
+| 4.3 la página | **en marcha**: editor de fuente sobre OPFS, `create` y `sign` dentro de la pestaña, **sin conexión y sin CDN**; `build` sigue muriendo en el muro conocido | `docs/evidencia.md` §11 y §15 |
+| 4.4 empaque y tamaño | medida parcial: `apkc.wasm` 9,46 MB; el `android.jar` (25 MB) aún no hace falta porque no hay compilador | — |
 
 ---
 
@@ -90,60 +95,68 @@ dentro de `build`. Sin comando suelto no hay nada ejecutable del lado cliente.
 
 ---
 
-## Fase 1 — `javac` dentro del navegador
+## Fase 1 y 2, reescritas el 2026-10-27
 
-**Qué prueba**: que un `MainActivity.java` de un proyecto apkc se convierta en `.class` en la
-pestaña, sin nada instalado.
+**Decisión que cambia el plan** (indicación del usuario, registrada abajo): la compilación tiene que
+ocurrir **entera en el navegador, sin conexión y sin runtimes de terceros**. La ruta anterior —
+`javac` y `d8` prestando una JVM compilada a wasm— quedó cerrada por eso, no por su resultado: nunca
+se probó `d8` sobre una JVM wasm y ya no va a probarse así. Lo que queda es **que Go emita** lo que
+hoy emiten esas dos herramientas, y por eso el orden del plan se reescribe desde el riesgo real.
 
-- **1.1** Bajar la demo de GraalVM (`javac` con native-image a wasm) y CheerpJ 3.x. Registrar
-  tamaño descargado, tiempo del primer compile y del segundo.
-- **1.2** Leer la licencia **antes** de cualquier integración. Si el uso previsto no está permitido,
-  la fase se cierra aquí con el motivo escrito.
-
-  **Leída el 2026-10-26** (texto y comando en `docs/evidencia.md` §13). Veredicto: **la licencia no
-  mata la fase, pero cambia el diseño de la página**. El uso gratuito (Community License) lo permite
-  un particular incluso en un proyecto que genere ingresos y una empresa de una sola persona, con
-  créditos; pero **prohibe autoalojar el runtime** — el uso gratuito es solo cargando desde el dominio
-  del proveedor. Consecuencia: la Fase 1 no puede prometer "sin conexión". Sigue sin haber backend
-  propio, pero sí hace falta red para bajar la JVM de terceros (y el `android.jar`, otros 25 MB por
-  ahí). CheerpJ no es código abierto: es licencia propia, y la integración queda condicionada a esas
-  dos cosas (su CDN y los créditos).
-- **1.3** Compilar el proyecto del `studio/` con el `javac` wasm y comparar con el nativo:
-  `javap -c -p -classpath build/classes ...` sobre los mismos `.class`, operación por operación.
-  Diferencia tolerada: ninguna que afecte al bytecode; se documenta cada una.
-- **1.4** Pasar el `android.jar` del API 34 como classpath al runtime wasm (25 MB: medir qué tal le
-  sienta a la pestaña, y si hace falta recortarlo).
-
-**Mata la fase**: licencia, o un tiempo que haga el flujo inusable (umbral honesto: > 60 s para un
-proyecto de un fichero en el teléfono).
-
-**Coste**: días.
+Consecuencia de método: cada etapa nueva entra en `../apkc` con su propio commit, su test y su gate
+(regla 3 del repo), y **nada se declara capaz de un subconjunto que no haya emitido**. Se escribe el
+subconjunto del `studio/`, no "Java".
 
 ---
 
-## Fase 2 — `d8` sobre la JVM wasm (la que decide todo)
+## Fase 2G — `classes.dex` en Go (la que decide todo ahora)
 
-**Qué prueba**: que el `d8` real de `build-tools/34.0.0` corra sobre el runtime de la Fase 1 y
-produzca un `classes.dex` **idéntico byte a byte** al del `d8` nativo.
+**Qué prueba**: que Go escriba un `classes.dex` a partir de los `.class` del proyecto del `studio/`,
+con `d8` nativo como oráculo, y que ese dex quepa en un apk que se instala y arranca.
 
-**Protocolo del experimento** (escrito para que otro lo repita sin preguntarme nada):
+Objetivo medido (`docs/evidencia.md` §13): 6 `.class` (3333 bytes) -> **2844 bytes de dex**, 17 tipos
+de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 métodos, 6 class defs,
+9 code items, 7 class data, 6 debug info, 21 de anotaciones).
 
-1. Con los `.class` de la Fase 1.3 —los mismos, no una recompilación—, correr
-   `d8 --min-api 21 --output <dir> <los .class>` nativo. Guardar `classes.dex` y su sha256.
-2. Correr el mismo jar bajo el runtime wasm, con el mismo `--min-api` y las mismas entradas.
-3. Comparar sha256. Si difiere, `xxd` las primeras 16 bytes de diferencia y escribir a qué sección
-   del dex corresponde (`map_list`, `string_ids`, orden de `class_defs`...).
-4. Medir: tiempo, memoria máxima de la pestaña, y si `d8` necesita algo que el runtime no
-   implementa (`java.nio.file`, concurrencia, `invokedynamic` en su propio código).
-5. Repetir con un jar de dependencia real (un `androidx` pequeño) para ver cómo se comporta el
-   desugaring sobre entradas ajenas al proyecto.
+- **2G.1** Lector de `.class` sobre `classfile.go` (ya existe para incremental): qué hace falta para
+  listar constant pool, métodos, descriptores y atributos de las 6 clases del `studio/`. Oráculo:
+  `javap -c -p`, operación por operación.
+- **2G.2** Escritor de secciones: `string_ids`/`type_ids`/`proto_ids`/`field_ids`/`method_ids`, orden
+  canónico (los índices salen de `d8`, no de un capricho nuestro) y `map_list`.
+- **2G.3** `class_data_item`, `code_item` y `debug_info_item`: la codificación de instrucciones en sí.
+- **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. Si difiere, `xxd` y escribir
+  a qué sección corresponde; se acepta diferencia documentada **solo si el apk se instala y arranca**.
+- **2G.5** La frontera declarada y probada por separado: lambdas, `invokedynamic`, default methods,
+  y cualquier cosa que dependencias ajenas aporten. **Fuera del subconjunto**, con el motivo escrito.
 
-**Resultados posibles y qué hace cada uno**: idéntico -> Fase 3 tiene sentido y se abre. Diferente
-pero instalable (el apk resultante se instala y arranca) -> se acepta con la diferencia documentada y
-la prueba de dispositivo manda. No corre -> **la ambición muere aquí** y este repo pasa a archivo con
-el intento escrito; escribir un dexer en Go es otro proyecto de otra escala y hay que decirlo así.
+**Mata la fase**: si tras emitir `string_ids`+`type_ids`+`class_defs` el dex resultante no lo lee el
+sistema (o `d8` no lo acepta como entrada en una ronda de ida y vuelta), no tiene sentido seguir: un
+dex escrito a medias no es un compilador.
 
-**Coste**: días, y es lo primero que se hace después de la Fase 1.
+**Coste**: semanas, pero acotadas por el recuento medido. Es la primera que se abre ahora.
+
+---
+
+## Fase 1G — Java -> `.class` en Go, para el subconjunto del `studio/`
+
+**Qué prueba**: que el `MainActivity.java` que genera la página se convierta en `.class` en la pestaña,
+sin `javac` y sin conexión. Oráculo: `javap -c -p` sobre los `.class` que produce el `javac` nativo del
+JDK 21 del teléfono, método por método e instrucción por instrucción.
+
+- **1G.1** Qué Java necesita de verdad el proyecto del `studio/`: el árbol de sintaxis que cubre
+  (declaraciones, `@Override`, `new View.OnClickListener() { ... }`, llamadas, cadenas, `R.id.*`).
+  Se lista **leyendo la plantilla**, no adivinando, y se escribe la lista antes del código.
+- **1G.2** Comprobación de tipos mínima contra el `android.jar` del API 34 — aquí está la parte que no
+  es un traductor: hace falta resolver símbolos contra las firmas de 25 MB de SDK. Medir si conviene
+  recortar el `android.jar` (y qué se pierde).
+- **1G.3** Emisión del bytecode: `method_info`, `Code`, tabla de excepciones, atributos que `d8` mira.
+- **1G.4** El `android.jar` entero viaja a la pestaña o se recorta: decisión con su número (fase 4.4).
+
+**Mata la fase**: el momento en que el subconjunto deje de ser un subconjunto honesto: si para
+aceptar el fuente hay que implementar la semántica completa de Java (sobrecarga, inferencia,
+jerarquías), esto deja de ser una fase y pasa a ser otro proyecto. Eso se escribe, no se disimula.
+
+**Coste**: semanas. Va **después** de 2G y de 3 porque 2G tiene oráculo byte a byte sin dispositivo.
 
 ---
 
@@ -199,8 +212,10 @@ Solo si 1+2+3 vivieron.
 
 - **Memoria**: los demos reales pesan 142 MB (assets) y 60 jars de dependencias. El plan solo
   promete el proyecto mínimo del `studio/`; decir más sin medirlo sería mentir.
-- **Licencias**: CheerpX/CheerpJ es comercial. `d8` y `aapt2` son Apache-2.0 del árbol de Android,
-  pero un derivado en Go mantiene la atribución.
+- **Licencias**: la ruta de un runtime de terceros está cerrada por decisión, así que no hay nada
+  que licenciar. Lo que queda: `d8` y `aapt2` son Apache-2.0 del árbol de Android y un derivado en Go
+  mantiene la atribución; `android.jar` es de la SDK, cuya licencia no permite redistribuirlo como si
+  fuera propio — hay que medir qué se lleva la pestaña y cómo.
 - **Mantenimiento eterno**: la Fase 3 es format reverse-engineered. Cada versión nueva del formato
   puede romper lo que escribamos, y no hay upstream que nos avise.
 - **Falsa verdes**: la lección del `studio/` (seis fallos que su test de node veía correctos) se
@@ -208,6 +223,12 @@ Solo si 1+2+3 vivieron.
 
 ## Decisiones registradas
 
+- **Sin conexión y sin runtimes de terceros** (decisión del usuario, 2026-10-27, que sustituye la
+  ruta `CheerpJ`/`GraalVM` de las fases 1 y 2): la compilación tiene que ocurrir entera en el
+  navegador. Lo que eso implica escrito: `javac` y `d8` no se prestan, **se emiten en Go**; y la
+  sentencia anterior de este plan ("escribir un dexer en Go es otro proyecto de otra escala") queda
+  matizada por una medición — el objetivo del `studio/` son 217 objetos (§13) — pero no refutada para
+  el caso general, que sigue sin estar en el plan.
 - La página de fricción **vive dentro de este repo** (`studio/`), no en `~/Develop/Web`: todo lo
   relacionado con web va aquí, por indicación del usuario de 2026-10-26.
 - El orden 1 -> 2 -> 3 es por riesgo, no por dependencia técnica: la Fase 2 puede matar la ambición en

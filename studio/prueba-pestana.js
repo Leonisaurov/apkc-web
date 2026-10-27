@@ -97,17 +97,23 @@ async function conductor() {
     esperar(ms).then(() => { throw new Error("plazo de " + ms + " ms agotado en: " + de); }),
   ]);
   const evaluar = (expression) => conPlazo(evaluarSinPlazo(expression), 150000, expression.slice(0, 70).replace(/\s+/g, " "));
+  const peticiones = [];
+  ws.addEventListener("message", (ev) => {
+    const m = JSON.parse(ev.data);
+    if (m.method === "Network.requestWillBeSent") peticiones.push(m.params.request.url);
+  });
+  await exec("Network.enable");
   await exec("Runtime.enable");
   for (let i = 0; i < 60; i++) {
     try { if (await evaluar("!!document.getElementById('codigo') && typeof correr === 'function'")) break; } catch (e) { /* */ }
     await esperar(300);
   }
-  return { exec, evaluar, ws };
+  return { exec, evaluar, ws, peticiones };
 }
 
 // --- la prueba ----------------------------------------------------------------------------
 (async () => {
-  const { evaluar, exec, ws } = await conductor();
+  const { evaluar, exec, ws, peticiones } = await conductor();
   const fuera = path.join(TMP, "pestana-apk");
   fs.mkdirSync(fuera, { recursive: true });
 
@@ -208,6 +214,12 @@ async function conductor() {
   comprueba("apkc build en wasm dice el motivo, no se calla", build.codigo !== 0 &&
     /never started|not implemented on js/.test(String(build.consola)),
     JSON.stringify(build).slice(0, 320));
+
+  // requisito del proyecto, escrito como comprobación: la pestaña no puede pedir nada fuera de
+  // su origen. Ni un CDN de un runtime de terceros, ni telemetría, ni una fuente.
+  const ajenas = peticiones.filter((u) => !u.startsWith("http://127.0.0.1:" + PUERTO) && !u.startsWith("data:") && !u.startsWith("blob:"));
+  comprueba("la pestaña no pide nada fuera de su origen (" + peticiones.length + " peticiones)",
+    ajenas.length === 0, ajenas.length ? "fuera del origen: " + ajenas.slice(0, 4).join(", ") : peticiones.length + " peticiones, todas locales");
 
   ws.close();
   console.log("\n" + hechos + " comprobaciones bien, " + fallos + " mal");
