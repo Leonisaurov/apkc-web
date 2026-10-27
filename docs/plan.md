@@ -31,13 +31,13 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 0.1 mensajes de herramienta | **hecha** (apkc `e7bfd01`) | `[build] aapt2 compile never started: pipe: not implemented on js` |
 | 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
 | 0.2.2 `apkc verify` | pendiente | — |
-| 1 `javac` en wasm | pendiente (riesgo bajo, es integración) | — |
+| 1 `javac` en wasm | **abierta por licencia, sin probar por tiempo**: la licencia de CheerpJ se leyó y **no mata la fase** (§ abajo, "Licencia leída") | licencia medida 2026-10-26 |
 | 2 `d8` sobre JVM wasm | **pendiente y decisiva** | — |
 | 3 recursos sin `aapt2` | bloqueada hasta que 2 viva | — |
 | 4.1 etapas como interfaz | pendiente | — |
-| 4.2 hospedador de navegador | **a medias**: el de node ya monta y exporta ficheros reales (§8); falta OPFS y Chromium | — |
-| 4.3 la página | bloqueada hasta 1+2+3 para *compilar*; lo que sí puede hacer hoy es crear el proyecto y firmar | — |
-| 4.4 empaque y tamaño | medida parcial: `apkc.wasm` 9,4 MB | — |
+| 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 15 comprobaciones) | `studio/prueba-pestana.js` |
+| 4.3 la página | **en marcha**: editor de fuente sobre OPFS, `create` y `sign` dentro de la pestaña; `build` sigue muriendo en el muro conocido | `docs/evidencia.md` §11 |
+| 4.4 empaque y tamaño | medida parcial: `apkc.wasm` 9,46 MB | — |
 
 ---
 
@@ -99,6 +99,15 @@ pestaña, sin nada instalado.
   tamaño descargado, tiempo del primer compile y del segundo.
 - **1.2** Leer la licencia **antes** de cualquier integración. Si el uso previsto no está permitido,
   la fase se cierra aquí con el motivo escrito.
+
+  **Leída el 2026-10-26** (texto y comando en `docs/evidencia.md` §13). Veredicto: **la licencia no
+  mata la fase, pero cambia el diseño de la página**. El uso gratuito (Community License) lo permite
+  un particular incluso en un proyecto que genere ingresos y una empresa de una sola persona, con
+  créditos; pero **prohibe autoalojar el runtime** — el uso gratuito es solo cargando desde el dominio
+  del proveedor. Consecuencia: la Fase 1 no puede prometer "sin conexión". Sigue sin haber backend
+  propio, pero sí hace falta red para bajar la JVM de terceros (y el `android.jar`, otros 25 MB por
+  ahí). CheerpJ no es código abierto: es licencia propia, y la integración queda condicionada a esas
+  dos cosas (su CDN y los créditos).
 - **1.3** Compilar el proyecto del `studio/` con el `javac` wasm y comparar con el nativo:
   `javap -c -p -classpath build/classes ...` sobre los mismos `.class`, operación por operación.
   Diferencia tolerada: ninguna que afecte al bytecode; se documenta cada una.

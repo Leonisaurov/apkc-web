@@ -13,8 +13,17 @@ keystores PKCS#12 y JKS, generación de proyecto) **ya corre en un hospedador co
 navegador**: 98/98 tests, `apkc create` completo y **`apkc sign` firmando un apk de verdad en 1,20 s
 dentro de wasm**, verificado después por `apksigner`, `zipalign` y `jarsigner`
 ([docs/evidencia.md](docs/evidencia.md) §7 y §8, medido el 2026-10-26).
-Lo que falta no es un flag: son **`aapt2`, `javac` y `d8`**, tres programas externos que `js/wasm` no
-puede arrancar porque no tiene `fork/exec`.
+
+Y **en chromium, con el proyecto en OPFS**: [`studio/`](studio/) tiene un hospedador de verdad
+(worker + servidor sin dependencias) y un editor de fuente. Hoy se puede, en la pestaña y sin subir
+nada a ningún sitio: crear el proyecto, editarlo y conservarlo entre sesiones, y firmar una apk que
+los oráculos externos aceptan. Lo que **no** se puede aún es `build`
+([docs/evidencia.md](docs/evidencia.md) §11).
+
+Lo que falta para compilar del lado del cliente no es un flag: son **`aapt2`, `javac` y `d8`**, tres
+programas externos que `js/wasm` no puede arrancar porque no tiene `fork/exec`. La licencia del
+único runtime JVM con uso gratuito ya está leída (§13): permite la integración, pero obliga a cargar
+el runtime desde el CDN de terceros — la página dejaría de poder funcionar sin conexión.
 
 ## Qué hay aquí
 

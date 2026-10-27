@@ -12,7 +12,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
-| `studio/` | apkc-studio: genera proyectos apkc y traduce su salida para medir fricción | `cd studio && APKC=<binario> sh e2e.sh` |
+| `studio/` | apkc-studio: genera proyectos apkc, traduce su salida para medir fricción **y hace correr `apkc.wasm` en la pestaña** (OPFS + worker) | `cd studio && APKC=<binario> sh e2e.sh`; la pestaña: `APKC_WASM=… node studio/prueba-pestana.js` |
 
 ## Reglas del repo
 
@@ -49,6 +49,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 - Oráculos que no comparten código con apkc: `apksigner verify --verbose`, `jarsigner -verify`,
   `zipalign -c -p`, `~/Develop/Go/apkc-harness/zipcheck.py`, `javap` (no `dexdump`, que en este
   teléfono no es ejecutable).
+- **Trampas de OPFS/cromium ya conocidas** (detalle completo con síntoma en `docs/evidencia.md` §12):
+  `navigator.storage` no existe dentro del worker (la raíz baja desde la página por `postMessage`);
+  `crypto`/`performance` son de solo lectura en un worker de módulo; `entries()` rinde
+  `[nombre, mango]` y el tipo es `mango.kind`; `createSyncAccessHandle()` es **asíncrona** aunque sus
+  métodos sean sincrónicos; y sin COOP/COEP no hay `crossOriginIsolated` ni handle sincrónico.
 
 ## Gate antes de dar nada por hecho
 
@@ -67,7 +72,7 @@ sh -c 'cd shim && node navegador-sim.js \
 
 # la página, de punta a punta (genera, compila de verdad, firma, verifica, y la conduce chromium)
 sh -c 'cd ../apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
-sh -c 'cd studio && APKC="$PREFIX/tmp/apkc-gate" sh e2e.sh'
+sh -c 'cd studio && APKC="$PREFIX/tmp/apkc-gate" APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" sh e2e.sh'
 ```
 
 `studio/e2e.sh` es innegociable antes de decir "la página funciona": su test de node solo veía
@@ -77,6 +82,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
 
 - El bloque de apkc que no lanza procesos (escritor con alineado, firma v1+v2, lectores de keystore,
   `create`) **corre en hospedador tipo navegador**: 98/98 tests.
+- **Y corre en chromium de verdad**: `studio/` tiene hospedador con OPFS (worker de módulo + servidor
+  sin dependencias con COOP/COEP) y editor de fuente; `create`, editar entre sesiones y `sign` funcionan
+  dentro de la pestaña, verificado por fuera (15 comprobaciones en `docs/evidencia.md` §11).
 - **`apkc sign` existe** (apkc `a909214`) y **firma dentro de wasm**: 1,20 s para un apk de 9504
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.

@@ -213,3 +213,113 @@ segundos después, el temporizador de scheduling del propio `wasm_exec` salta co
 `Error: Go program has already exited`. Con el `setTimeout` fijo de la versión anterior del shim el
 síntoma era invisible. La corrección es resolver `go._resolveExitPromise()` desde el `exit`
 sustituido; el texto de arriba (`--montar`/`--exportar` funcionando con rc 0 y resumen) es la prueba.
+
+## 11. El hospedador de navegador DE VERDAD: chromium, OPFS y worker (no node)
+
+`shim/navegador-sim.js` prueba la API; lo que faltaba era el navegador. `studio/` tiene ahora un
+hospedador que corre en Chromium con los ficheros detrás de OPFS:
+
+| Pieza | Qué es |
+| --- | --- |
+| `studio/servidor.js` | servidor http sin dependencias: da COOP/COEP (sin eso `crossOriginIsolated` es falso y el access handle sincrónico no existe), sirve `/apkc.wasm` desde la variable de entorno y `/wasm_exec.js` desde el GOROOT |
+| `studio/fs-fragmento.js` | las 24 funciones de `fs_js.go` con la memoria por delante y OPFS detrás (escritura espejada, lectura perezosa) |
+| `studio/hospedador.js` | `DedicatedWorker` de tipo módulo: recibe el mango de OPFS desde la página, da el `fs`/`path`/`process` a Go y ejecuta **un comando cada vez** |
+| `studio/pestana.js` | editor de fuente (textarea + capa resaltada, sin dependencias) y los botones que hablan con el worker |
+| `studio/prueba-pestana.js` | conduce chromium por CDP y **verifica por fuera** la apk que salió de la pestaña |
+
+```sh
+sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
+  APK_EJEMPLO="$PREFIX/tmp/sign-probe/app/build/app.apk" \
+  KS_EJEMPLO="$HOME/.android/debug.keystore" node prueba-pestana.js'
+```
+
+**Resultado: 15 comprobaciones, 0 fallos**, todas dentro de chromium headless:
+
+1. `crossOriginIsolated` es `true` (lo mide la propia página).
+2. `apkc create /proyecto` en wasm sale 0 y escribe `AndroidManifest.xml`,
+   `src/com/myapp/MainActivity.java` y `res/layout/main.xml` — 5 ficheros en el árbol del worker.
+3. El manifest que se lee de OPFS contiene `package="com.myapp"`: lo escribió Go, no lo simula la
+   página.
+4. Lo editado en el editor **llega a OPFS byte a byte** (el test compara el texto exacto).
+5. El resaltador pinta palabra clave y comentario; los números de línea siguen al contenido.
+6. **Tras `Page.navigate` (recargar de verdad) el fuente editado sigue ahí e idéntico.** Eso es OPFS
+   frente a `localStorage`, y la razón de montar el worker.
+7. `apkc sign` dentro de chromium: sale 0 en ~1 s y devuelve 9504 bytes con magic `PK`.
+8. `apkc build` en wasm dice el muro con las palabras exactas que ya se conocían:
+   `[build] aapt2 compile never started: pipe: not implemented on js`.
+
+Y la apk que salió de la pestaña se verificó fuera, con los oráculos de siempre:
+
+```sh
+apksigner verify --verbose --min-sdk-version 21 "$PREFIX/tmp/pestana-apk/pestanera.apk"
+# Verifies / v1 true / v2 true, rc 0
+zipalign -c -p 4 "$PREFIX/tmp/pestana-apk/pestanera.apk"     # rc 0
+jarsigner -verify "$PREFIX/tmp/pestana-apk/pestanera.apk"    # jar verified. rc 0
+python3 ~/Develop/Go/apkc-harness/zipcheck.py "$PREFIX/tmp/pestana-apk/pestanera.apk"
+# 7 entries, every record agrees with itself
+```
+
+**Hoy, en una pestaña y sin subir nada a ningún sitio: crear el proyecto, editar el fuente,
+conservarlo entre sesiones y firmar una apk que `apksigner` acepta.** Lo que sigue sin poder hacer
+en el cliente es `build`: mientras `aapt2`/`javac`/`d8` sean procesos, no hay dex ni recursos.
+
+## 12. Cuatro cosas del navegador que se rompieron antes de funcionar
+
+Cada una con su síntoma, para quien repita el camino:
+
+| Qué | Síntoma en chromium | Quién lo causaba |
+| --- | --- | --- |
+| `navigator.storage` | `este navegador no expone OPFS`, dentro del worker | OPFS vive en el hilo principal; en el worker `navigator.storage` es **undefined**. La raíz se baja en la página y se pasa por `postMessage` (structured clone) |
+| `globalThis.crypto = crypto` | `Cannot set property crypto of #<WorkerGlobalScope> which has only a getter` | en un worker de módulo `performance` y `crypto` ya son globales de solo lectura; hay que **no** tocarlos (el shim de node sí necesita ponerlos) |
+| `FileSystemDirectoryHandle.entries()` | tras recargar, `/proyecto` era un **fichero de 0 bytes** y `apkc build` decía `mkdir build: Not a directory` | rinde `[nombre, mango]`, **no** `[nombre, "directory"]`: el tipo es `mango.kind`. Comparar la segunda posición contra una cadena convierte cada directorio en fichero |
+| `createSyncAccessHandle()` | los ficheros se leían vacíos y nada quedaba espejado | es **asíncrona** (lo sincrónico son sus métodos: `read`, `write`, `getSize`, `flush`). Guardar la promesa sin `await` dejaba el acceso inservible y el `try/catch` se lo comía en silencio |
+
+Se suman dos fallos del propio hospedador, ya corregidos: `sistema` se asignaba **antes** de importar
+`wasm_exec.js`, así que un arranque a medias quedaba tapado y el aviso real aparecía veinte mensajes
+después como `Go is not defined`; y un fallo de la cola de tareas se respondía como si fueran bytes,
+lo que se convertía en un `TypeError` de `TextDecoder` sin nombre. Ahora el estado se asigna al final
+del `iniciar()`, el motivo de un import fallido se guarda (lo cuenta el `sondeo`), y la cola responde
+`{tipo:"error"}`.
+
+**Tamaño de lo que hay que bajar a la pestaña** (medida parcial de la fase 4.4): `apkc.wasm`
+9.458.093 bytes, más el `wasm_exec.js` del GOROOT. Sin `android.jar`, porque sin `javac` no hay nada
+que compilar todavía.
+
+## 13. La licencia de CheerpJ, leída antes de escribir ningún código de la Fase 1
+
+Regla 4 del repo. No es una medición de coste sino de permiso, así que va con su comando y sus
+citas textuales del proveedor:
+
+```sh
+curl -sSL https://cheerpj.com/docs/licensing -o "$PREFIX/tmp/cheerpj-licensing.html"
+python3 - <<'EOF'
+import html, re
+t = open("/data/data/com.termux/files/usr/tmp/cheerpj-licensing.html", encoding="utf-8").read()
+t = re.sub(r"(?is)<(script|style|noscript).*?</\1>", '', t); t = re.sub(r"(?s)<[^>]+>", ' ', t)
+print(re.sub(r"[ \t]+", ' ', html.unescape(t))[:6000])
+EOF
+```
+
+Lo que dice, citado (2026-10-26):
+
+- *"The CheerpJ Community License allows unlimited, unmetered use of CheerpJ from the
+  `cjrtnc.leaningtech.com` domain, such as its usage via npm package manager. For self-hosted
+  options, see the CheerpJ Commercial License."*
+- *"Commercial Licenses are available for any use that falls outside of the scope of the Community
+  License, including any business use (with exception of one-person companies), redistribution and
+  OEM use."*
+- En su tabla de casos: *"You are an individual using CheerpJ for a personal project (including one
+  generating revenue) → Give appropriate credits"*, y lo mismo para *"an individual developer
+  building a commercial project"* y *"a team using CheerpJ in a FOSS project"*.
+- *"If you wish to self-host CheerpJ, you will need a Commercial License."*
+
+**Qué decide para este plan**: la fase no muere por licencia, pero **la página no puede ser offline**
+si usa CheerpJ: el uso gratuito exige cargar el runtime desde el dominio del proveedor (npm entra), y
+autoalojarlo es de pago. Eso choca con la definición de éxito de este repo si se lee "sin conexión";
+leída como está —"sin server, sin SDK y sin JDK instalados en la máquina del usuario"— sigue valiendo,
+porque el servidor de la JVM es de terceros y no hay backend propio. Queda escrito el condicionante
+(créditos + CDN del proveedor) antes de gastar ni una línea en la integración, y es lo que manda la
+regla 4.
+
+No se ha descargado ni integrado nada del runtime: solo se leyó su página de licencia.
