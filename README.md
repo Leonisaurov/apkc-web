@@ -52,7 +52,7 @@ página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** 
 ## Empezar por aquí
 
 ```sh
-sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
 sh -c 'cd shim && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" . && node navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp'
 sh -c 'cd studio && APKC=<binario-de-apkc> sh e2e.sh'      # genera, compila de verdad, firma y conduce chromium
 ```

@@ -32,7 +32,7 @@ OPFS y el worker como hospedador. No hay backend: `servidor.js` solo sirve está
 cabeceras COOP/COEP que OPFS exige (por `file://` no arranca ni el worker de módulo).
 
 ```sh
-sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
 sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" node servidor.js'   # http://127.0.0.1:8787/
 # y la prueba que lo conduce todo, con una apk y un keystore de ejemplo:
 sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
