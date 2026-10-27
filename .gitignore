@@ -2,6 +2,10 @@
 *.wasm
 *.o
 *.obj
+# el `go build .` dentro de apkc/ deja un ELF de 7.8 MB con el nombre del modulo: eso es lo que se
+# col6 en el commit 1f04ff1, y la regla 2 del repo lo prohibe
+apkc/apkc
+apkc/apkc.exe
 
 # wasm_exec.js viene del GOROOT de quien lo corre: cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" shim/
 shim/wasm_exec.js
