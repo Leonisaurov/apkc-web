@@ -1,0 +1,11 @@
+# binarios: se construyen, nunca se versionan (mismo criterio que en ../apkc)
+*.wasm
+*.o
+*.obj
+
+# wasm_exec.js viene del GOROOT de quien lo corre: cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" shim/
+shim/wasm_exec.js
+
+node_modules/
+.DS_Store
+*.log
