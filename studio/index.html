@@ -12,8 +12,11 @@
   <p class="sub">
     Genera un proyecto de app <em>de verdad</em> para <code>apkc</code> (sin Gradle),
     te da los comandos, traduce lo que <code>apkc</code> responde y anota en qué paso
-    te atascaste. No compila aquí: <code>apkc</code> necesita <code>aapt2</code>,
-    <code>d8</code> y un JDK en la máquina que ejecuta, y eso no cabe en una página.
+    te atascaste. Y desde la sección 2 <strong>ejecuta apkc aquí dentro</strong>:
+    <code>apkc.wasm</code> con el proyecto en OPFS, sin server. Lo que sigue sin poder
+    hacerse en el navegador es <code>build</code> — <code>aapt2</code>, <code>javac</code> y
+    <code>d8</code> son programas externos y <code>js/wasm</code> no tiene
+    <code>fork/exec</code>; el botón lo muestra tal cual.
   </p>
 </header>
 
@@ -56,8 +59,59 @@
     </details>
   </section>
 
+  <section id="pestana">
+    <h2><span class="paso">2</span> Editar y firmar en la pestaña (apkc en wasm)</h2>
+    <p class="nota">
+      Aquí el que escribe ficheros es <code>apkc</code>, corriendo como <code>apkc.wasm</code>
+      dentro del navegador: sin server, sin SDK y sin JDK. El árbol vive en OPFS
+      (<a href="#" id="recargar-arbol">recargar</a>, aislamiento cross-origin:
+      <span id="aislacion">?</span>), así que lo que escribas sobrevive a recargar la página.
+      <strong>Lo que no puede hacer todavía es compilar</strong>: <code>aapt2</code>,
+      <code>javac</code> y <code>d8</code> son programas externos y <code>js/wasm</code> no tiene
+      <code>fork/exec</code>. Prueba el botón para ver el muro tal cual lo dice apkc.
+    </p>
+    <div class="acciones">
+      <button id="crear-aqui">crear el proyecto aquí (apkc create)</button>
+      <button id="nuevo-fichero">fichero nuevo</button>
+      <button id="guardar-fichero">guardar (Ctrl+S)</button>
+      <button id="compilar-aqui">intentar compilar (falla hoy)</button>
+      <span id="estado-pestana" class="nota"></span>
+      <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
+    </div>
+    <p class="nota"><code>~/proyecto</code> — editando: <code id="fichero-abierto">(nada)</code>,
+      último código de salida <code id="ultimo-codigo">—</code></p>
+    <div class="pestana">
+      <aside id="arbol-pestana" class="arbol-pestana"></aside>
+      <div class="editor">
+        <pre id="numeros" class="numeros" aria-hidden="true"></pre>
+        <div class="capas">
+          <pre id="resalto" class="resalto" aria-hidden="true"></pre>
+          <textarea id="codigo" spellcheck="false" wrap="off"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <details open>
+      <summary>firmar una apk con tu propio keystore, aquí dentro</summary>
+      <p class="nota">
+        <code>apkc sign</code> reempaqueta y escribe v1+v2 sin levantar <code>zipalign</code> ni
+        <code>apksigner</code>; en wasm tarda ~1,2 s para una apk mínima. El keystore se elige de tu
+        disco y <strong>no sale de esta pestaña</strong>: no hay clave en ningún servidor porque no
+        hay servidor.
+      </p>
+      <label>keystore (.p12 o .jks) <input type="file" id="keystore" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+      <label>apk de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
+      <div class="acciones">
+        <button id="firmar-aqui" class="primario">firmar aquí (apkc sign)</button>
+        <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>
+      </div>
+    </details>
+
+    <pre id="consola-pestana" class="consola" aria-live="polite"></pre>
+  </section>
+
   <section id="usar">
-    <h2><span class="paso">2</span> Ejecutarlo con apkc</h2>
+    <h2><span class="paso">3</span> Ejecutarlo con apkc</h2>
     <p class="nota">Estos son los comandos, en orden. Si uno falla, pega su salida abajo:
       es donde está la información de verdad.</p>
     <pre id="comandos"></pre>
@@ -68,7 +122,7 @@
   </section>
 
   <section id="analizar">
-    <h2><span class="paso">3</span> Qué dijo apkc</h2>
+    <h2><span class="paso">4</span> Qué dijo apkc</h2>
     <textarea id="log" rows="10" spellcheck="false"
       placeholder="$ apkc build --inc&#10;[doctor] SDK path unknown ..."></textarea>
     <div class="acciones">
@@ -79,7 +133,7 @@
   </section>
 
   <section id="informe">
-    <h2><span class="paso">4</span> El informe de fricción</h2>
+    <h2><span class="paso">5</span> El informe de fricción</h2>
     <p class="nota">
       La página guarda contadores locales: qué reglas de error aparecieron, en qué capa
       (entorno, proyecto, herramienta, dispositivo) y cuántas veces. Con esto se ve si lo
@@ -101,6 +155,7 @@
 </footer>
 
 <script src="app.js"></script>
+<script src="pestana.js"></script>
 <script src="ui.js"></script>
 </body>
 </html>

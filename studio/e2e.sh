@@ -85,5 +85,26 @@ else
   avisa "sin chromium (o STUDIO_NO_BROWSER puesto): la parte de DOM no se probo"
 fi
 
+# 4. la pestaña con apkc.wasm dentro de chromium: crea, edita en OPFS, sobrevive a recargar y
+#    firma. Solo se prueba si hay binario wasm; sin él esta parte queda avisada, no dada por buena.
+APK_FIXTURE=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1)
+if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && command -v chromium-browser >/dev/null 2>&1; then
+  if ! APKC_WASM="$APKC_WASM" APK_EJEMPLO="$APK_FIXTURE" KS_EJEMPLO="${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
+       node "$AQUI/prueba-pestana.js" >"$TMP/studio-pestana.log" 2>&1; then
+    falla "la pestaña con apkc.wasm"; tail -12 "$TMP/studio-pestana.log"
+  else
+    firmada="$TMP/pestana-apk/pestanera.apk"
+    if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$firmada" >"$TMP/studio-pestana-verify.log" 2>&1; then
+      falla "la apk firmada en la pestaña no verifica"
+    fi
+    grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-verify.log" || falla "apk de pestaña sin v1"
+    grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-verify.log" || falla "apk de pestaña sin v2"
+    if ! python3 "$ZIPCHECK" "$firmada" >/dev/null 2>&1; then falla "zipcheck rechaza la apk de la pestaña"; fi
+    avisa "pestaña: $(grep -c '^  ok' "$TMP/studio-pestana.log") comprobaciones, apk firmada dentro de chromium de $(wc -c <"$firmada" | tr -d ' ') bytes y verificada"
+  fi
+else
+  avisa "sin APKC_WASM, sin fixture o sin chromium: la pestaña con wasm no se probo"
+fi
+
 if [ "$FALLOS" -gt 0 ]; then echo "e2e: $FALLOS problemas"; exit 1; fi
 echo "e2e: todo en orden"

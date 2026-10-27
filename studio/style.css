@@ -66,3 +66,44 @@ details summary { cursor: pointer; font-size: .9rem; margin: .5rem 0; }
 
 footer { border-top: 1px solid var(--linea); margin-top: 1.5rem; padding-top: 1rem;
          font-size: .82rem; color: var(--tx-suave); }
+
+/* ---- la pestaña: editor de código y árbol en OPFS -------------------------------------- */
+/* Las dos capas del editor tienen que medir exacto lo mismo (fuente, interlineado, padding,
+   tabulación): si difieren, el resaltado se desalinea del cursor y el editor es peor que un
+   textarea sin color. */
+.pestana { display: flex; gap: .7rem; align-items: stretch; }
+.arbol-pestana {
+  flex: 0 0 14rem; max-height: 24rem; overflow: auto; font-size: .78rem;
+  border: 1px solid var(--linea); border-radius: 6px; padding: .5rem .6rem; background: var(--fondo-suave);
+}
+.arbol-pestana a { display: inline-block; color: var(--marca); text-decoration: none; word-break: break-all; }
+.arbol-pestana a.dir { color: var(--tx-suave); }
+
+.editor { --alto: 24rem; flex: 1 1 auto; display: flex; gap: .4rem;
+          border: 1px solid var(--linea); border-radius: 6px; background: #fff; overflow: hidden; }
+.numeros { flex: 0 0 auto; margin: 0; padding: .6rem 0 .6rem .5rem; border: 0; background: transparent;
+           color: var(--tx-suave); text-align: right; overflow: hidden; height: var(--alto); width: 3.2ch;
+           font: .84rem/1.45 ui-monospace, "SF Mono", Menlo, monospace; }
+.capas { position: relative; flex: 1 1 auto; height: var(--alto); }
+#codigo, .resalto {
+  position: absolute; inset: 0; margin: 0; padding: .6rem .7rem; border: 0;
+  font: .84rem/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre; tab-size: 4; overflow: auto;
+}
+#codigo { z-index: 2; background: transparent; color: transparent; caret-color: var(--tx);
+          resize: none; min-height: 0; width: 100%; }
+#codigo:focus { outline: none; }
+.capas:focus-within { box-shadow: 0 0 0 2px var(--linea); }
+.resalto { z-index: 1; pointer-events: none; overflow: hidden; transform-origin: 0 0; min-height: 0; }
+.resalto .palabra { color: #7a3ba0; }
+.resalto .cadena { color: #a2622b; }
+.resalto .comentario { color: #6b7480; font-style: italic; }
+.resalto .etiqueta { color: #2f6f4f; }
+.resalto .atributo { color: #326fa8; }
+
+.consola { max-height: 14rem; overflow: auto; background: #14171a; color: #e6edf3;
+           border-color: #14171a; white-space: pre-wrap; }
+input.ruta { width: 22rem; }
+.boton-enlace { display: inline-block; padding: .45rem .9rem; border: 1px solid var(--linea);
+                border-radius: 6px; text-decoration: none; color: var(--tx); background: #fff; font-size: .9rem; }
+@media (max-width: 44rem) { .pestana { flex-direction: column; } .arbol-pestana { flex-basis: auto; max-height: 9rem; } }
