@@ -121,7 +121,7 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
 
 - **2G.1** Lector del `.class` y del `.dex`. **Hecha la mitad del dex** (apkc-web `18c9773`):
   `apkc/dexreader.go` lee cabecera, `map_list`, las cinco tablas de índices y `class_defs`, con el
-  `classes.dex` real de `d8` de fixture y sus cuentas como aserciones (`docs/evidencia.md` §16; 98→105
+  `classes.dex` real de `d8` de fixture y sus cuentas como aserciones (`docs/evidencia.md` §16; 98 a 105
   tests). Queda pendiente leer `code_item` e instrucciones, que hará falta para la comparación fina.
 - **2G.2** Escritor de secciones: `string_ids`/`type_ids`/`proto_ids`/`field_ids`/`method_ids`, orden
   canónico (los índices salen de `d8`, no de un capricho nuestro) y `map_list`.
