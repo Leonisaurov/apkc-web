@@ -126,8 +126,19 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   los recuentos por clase casan con `javap`.
 - **2G.2** Escritor de secciones: `string_ids`/`type_ids`/`proto_ids`/`field_ids`/`method_ids`, orden
   canónico (los índices salen de `d8`, no de un capricho nuestro) y `map_list`.
-  **La mitad de las tablas está hecha y medida**: internadas desde los `.class`, son iguales en
-  contenido y en orden a las de `d8` (§19). De la cabecera y el `map_list`, pendiente.
+  **Hecho y medido**: internadas desde los `.class`, las tablas son iguales en contenido y en orden a
+  las de `d8` (§19), y el fichero completo lo ensambla `apkc/dexarma.go` con su `map_list`, su firma
+  `sha1` y su `adler32` (§22).
+- **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. **Medida sección por
+  sección** (§22): `type_ids`, `field_ids` y `method_ids` salen byte a byte iguales; `proto_ids`
+  difiere solo en los offsets absolutos; cada `string_data_item` es idéntico. El fichero entero son
+  2392 bytes contra los 2844 de `d8`, y la diferencia está nombrada: no emitimos `debug_info_item`,
+  ni el bloque de anotaciones, ni la cadena con la que `d8` se firma a sí misma. En los cuerpos la
+  secuencia de instrucciones, los índices y el número de palabras coinciden en los nueve métodos;
+  seis de nueve salen idénticos hasta los números de registro (§21). **El oráculo que cierra el
+  paso**: `d8` lee el dex que escribimos y lo re-dexa sin un solo error (`rc 0`), y sobreviven las
+  seis clases, los nueve cuerpos y las tres constantes de `R` leídas de nuestro `static_values`.
+  Falta la prueba de dispositivo, que necesita la Fase 3 (un dex suelto no se instala).
 - **2G.3** `class_data_item`, `code_item` y `debug_info_item`: la codificación de instrucciones en sí.
   **Leídos y casados con `javap`** (§20): la cabecera del `code_item` son dieciséis bytes y las
   instrucciones empiezan en +16, con `ins_size` igual al `args_size` de `javap` en los nueve métodos,

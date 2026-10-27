@@ -128,9 +128,9 @@ type classData struct {
 type encodedField struct {
 	fieldIdx    uint32
 	accessFlags uint32
-	// the constant, when the field is static and carries one: valueType is the low five bits of
-	// the byte stored above bit 16 of accessFlags, and value is the following bytes, truncated
-	// little endian
+	// la constante de un campo estatico no vive aqui: viaja en el encoded_array_item que anuncia
+	// class_defs.static_values_off (medido en §22). El par (valueType, value) lo llena
+	// valoresEstaticos, no el recorrido del class_data.
 	valueType byte
 	value     uint64
 }
@@ -221,26 +221,11 @@ func (d *dexFile) readEncodedField(at, prev uint32) (encodedField, uint32, error
 		return f, at, err
 	}
 	f.fieldIdx = prev + diff
-	// Un valor solo lo trae un campo ESTATICO, y su byte (tipo en bits 0..4, tamano en 5..7)
-	// empieza en el BIT 16 de access_flags: los bytes crudos del class_data_item de R$id lo
-	// muestran, y leerlo desde el bit 4 convertia ACC_FINAL (0x10) en "valor de tipo 1", con lo
-	// que la lectura de la clase entera se descentraba.
-	if f.accessFlags&0x08 != 0 {
-		if vf := f.accessFlags >> 16; vf != 0 {
-			f.valueType = byte(vf & 0x1f)
-			ancho := anchoValor(byte(vf))
-			if ancho < 0 {
-				return f, at, fmt.Errorf("field constant of type %#x is not read by this fork yet", f.valueType)
-			}
-			if int(at)+ancho > len(d.raw) {
-				return f, at, fmt.Errorf("the field value claims %d bytes past the end of the file", ancho)
-			}
-			for i := 0; i < ancho; i++ {
-				f.value |= uint64(d.raw[at]) << (8 * i) // little endian, truncado como el formato
-				at++
-			}
-		}
-	}
+	// El encoded_field NO lleva el valor en este dex. Medido sobre el fichero de d8 (§22): el campo
+	// estatico de R$id son los dos bytes `01 19` (diff y access_flags) y la constante esta en el
+	// encoded_array_item que anuncia class_defs.static_values_off. La lectura que plegaba el byte
+	// del valor en los bits 16 de access_flags era un artefacto de como escribiamos nosotros, y
+	// hacia crecer access_flags cinco ordenes de magnitud.
 	return f, at, nil
 }
 
@@ -270,7 +255,56 @@ func (d *dexFile) methodsDeCadaClase() (map[string]classData, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", c.name, err)
 		}
+		if c.staticValuesOff != 0 {
+			valores, err := d.valoresEstaticos(c.staticValuesOff)
+			if err != nil {
+				return nil, fmt.Errorf("%s: static values: %w", c.name, err)
+			}
+			// el encoded_array_item va en el orden de la lista de campos estaticos; si la cuenta
+			// no cuadra, el fichero esta roto y se dice, no se rellena con ceros
+			if len(valores) != len(cd.staticFields) {
+				return nil, fmt.Errorf("%s: %d static values for %d static fields",
+					c.name, len(valores), len(cd.staticFields))
+			}
+			for i := range cd.staticFields {
+				cd.staticFields[i].valueType = valores[i].valueType
+				cd.staticFields[i].value = valores[i].value
+			}
+		}
 		out[c.name] = cd
+	}
+	return out, nil
+}
+
+// valoresEstaticos lee un encoded_array_item. El tamano esta medido como uleb128, no como u32:
+// las tres areas de R empiezan en 2465, 2471 y 2477, seis bytes cada una, y un `uint size` de
+// cuatro mas el VALUE_INT de cuatro ocuparian nueve. Con el u32 el primer item diria que tiene
+// 25601 valores, que es la senal de que la lectura es otra (§22).
+func (d *dexFile) valoresEstaticos(off uint32) ([]encodedField, error) {
+	n, at, err := d.uleb(off)
+	if err != nil {
+		return nil, fmt.Errorf("array size: %w", err)
+	}
+	out := []encodedField{}
+	for i := uint32(0); i < n; i++ {
+		if int(at) >= len(d.raw) {
+			return nil, fmt.Errorf("value #%d runs past the end of the file", i)
+		}
+		vf := d.raw[at]
+		at++
+		f := encodedField{valueType: vf & 0x1f}
+		ancho := anchoValor(vf)
+		if ancho < 0 {
+			return nil, fmt.Errorf("value #%d of type %#x is not read by this fork yet", i, f.valueType)
+		}
+		if int(at)+ancho > len(d.raw) {
+			return nil, fmt.Errorf("value #%d claims %d bytes past the end of the file", i, ancho)
+		}
+		for k := 0; k < ancho; k++ {
+			f.value |= uint64(d.raw[at]) << (8 * k) // little endian, truncado como el formato
+			at++
+		}
+		out = append(out, f)
 	}
 	return out, nil
 }

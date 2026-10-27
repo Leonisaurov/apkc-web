@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/adler32"
+	"sort"
 )
 
 const (
@@ -105,6 +106,10 @@ type dexClass struct {
 	// where this class's own data starts, so the reader of class_data_item can be pointed at
 	// it without the caller recomputing the offset of the entry
 	dataOff uint32
+
+	// the encoded_array_item with the constants of the static fields. Measured on d8's file:
+	// the R constants live HERE (2465, 2471, 2477), not inline in the encoded_field
+	staticValuesOff uint32
 }
 
 // dexFile is a parsed classes.dex: the index tables resolved to strings, which is the form a
@@ -187,6 +192,48 @@ func (d *dexFile) readInts() error {
 		}
 		d.maps = append(d.maps, dexMapEntry{kind: kind, size: size, offset: off})
 		o += dexMapEntrySize
+	}
+	// el map_list se le tal como viene; ordenarlo por offset es lo que permite decir donde TERMINA
+	// un area, y por tanto recortar sus bytes para compararlos con los de otro fichero. Sin esa
+	// cuenta, una seccion "hasta el final" se solapa con la siguiente y cualquier diff miente.
+	sort.Slice(d.maps, func(i, j int) bool { return d.maps[i].offset < d.maps[j].offset })
+	return nil
+}
+
+// offDe responde dónde empieza una sección según el map_list, y cero si el mapa no la declara.
+func (d *dexFile) offDe(kind dexKind) uint32 {
+	for _, e := range d.maps {
+		if e.kind == kind {
+			return e.offset
+		}
+	}
+	return 0
+}
+
+// seccion corta los bytes de un área del fichero: desde el offset que declara el mapa hasta el de
+// la siguiente área. Para las secciones de tamaño fijo el propio mapa dice cuántas hay, así que la
+// cuenta es exacta sin depender del vecino.
+func (d *dexFile) seccion(kind dexKind) []byte {
+	off := d.offDe(kind)
+	if off == 0 {
+		return nil
+	}
+	if u := dexItemStride(kind); u > 0 {
+		for _, e := range d.maps {
+			if e.kind == kind {
+				return d.raw[off : off+uint32(e.size)*u]
+			}
+		}
+	}
+	for i, e := range d.maps {
+		if e.kind != kind {
+			continue
+		}
+		fin := uint32(len(d.raw))
+		if i+1 < len(d.maps) {
+			fin = d.maps[i+1].offset
+		}
+		return d.raw[off:fin]
 	}
 	return nil
 }
@@ -342,7 +389,11 @@ func (d *dexFile) resolveMembers() error {
 		base := foff + i*dexFieldIDSize
 		cls := binary.LittleEndian.Uint16(d.raw[base:])
 		typ := binary.LittleEndian.Uint16(d.raw[base+2:])
-		name := dexLittleEndian.Uint32(d.raw[base+4:])
+		// name_idx es un ushort: los dos bytes que siguen son relleno, y el item mide 8 no 6. Leer
+		// el u32 pasaba con d8 porque su relleno es cero; con nuestro propio fichero, donde el
+		// relleno lo escribe quien sea, el u32 se llevaba los bytes de delante y el indice salia
+		// de rango. Medido: 524 + 4*8 = 556, que es exactamente donde esta method_ids.
+		name := uint32(binary.LittleEndian.Uint16(d.raw[base+4:]))
 		s, err := d.stringAt(name)
 		if err != nil {
 			return fmt.Errorf("field_ids #%d: %w", i, err)
@@ -356,7 +407,7 @@ func (d *dexFile) resolveMembers() error {
 		base := moff + i*dexMethodIDSize
 		cls := binary.LittleEndian.Uint16(d.raw[base:])
 		proto := binary.LittleEndian.Uint16(d.raw[base+2:])
-		name := dexLittleEndian.Uint32(d.raw[base+4:])
+		name := uint32(binary.LittleEndian.Uint16(d.raw[base+4:])) // igual que field_ids: u16 y dos de relleno
 		s, err := d.stringAt(name)
 		if err != nil {
 			return fmt.Errorf("method_ids #%d: %w", i, err)
@@ -378,10 +429,12 @@ func (d *dexFile) resolveClasses() error {
 		access := dexLittleEndian.Uint32(d.raw[base+4:])
 		super := dexLittleEndian.Uint32(d.raw[base+8:])
 		classDataOff := dexLittleEndian.Uint32(d.raw[base+24:])
+		staticValuesOff := dexLittleEndian.Uint32(d.raw[base+28:])
 		if int(cidx) >= len(d.types) || int(super) >= len(d.types) {
 			return fmt.Errorf("class_defs #%d names type %d or %d out of range", i, cidx, super)
 		}
-		c := dexClass{name: d.types[cidx], super: d.types[super], access: access, dataOff: classDataOff}
+		c := dexClass{name: d.types[cidx], super: d.types[super], access: access, dataOff: classDataOff,
+			staticValuesOff: staticValuesOff}
 		if classDataOff != 0 {
 			// class_data_item: sizes first as uleb128 (static fields, instance fields,
 			// direct methods, virtual methods); only the two method counts are needed here

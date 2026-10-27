@@ -643,10 +643,11 @@ keystore de debug del `HOME` real, y `TestKotlinShortcomings*`, que necesita eje
 0755: en `GOOS=js` no hay proceso, así que el test se salta y lo dice).
 
 **Dos cosas que se rompieron por no leer antes con cuidado**, escritas para que no se repitan con
-otro fichero: el tipo de valor de un campo estático empieza en el **bit 16** de `access_flags`, no
-en el 4 (leerlo desde el 4 convertía `ACC_FINAL` en un "valor de tipo 1" y descentraba la clase
-entera), y un campo solo puede traer valor si es **estático**. Y el desplazamiento dentro de
-`type_list` era de 2 bytes por `type_item`, no de 4.
+otro fichero: **la primera es de esta sección y se corrigió en el §22** — ahí afirmé que el tipo de
+valor de un campo estático empieza en el bit 16 de `access_flags`; era un artefacto de mi propio
+escritor, y `d8` guarda las constantes en `static_values`, no dentro del `encoded_field`. Las otras
+dos sí se sostienen: un campo solo puede traer valor si es **estático**, y el desplazamiento dentro
+de `type_list` es de 2 bytes por `type_item`, no de 4.
 
 **Lo que sigue sin medir**: las tablas de `try_item`/`encoded_catch_handler` que van detrás del
 código, porque ninguno de los nueve métodos las tiene. `tamanoEnBytes` lo dice en el comentario y
@@ -727,3 +728,89 @@ caso real antes de emitirlo.
 
 Suite nativa después de esto: **135 tests** (`--- PASS` 135, `--- FAIL` 0); la misma binaria en
 `GOOS=js` dentro del hospedador de navegador: **131 PASS más 4 SKIP, rc 0**.
+
+## 22. El `classes.dex` completo, escrito en Go: cuatro cosas que se arreglaron leyendo los bytes, y un oráculo que lo acepta
+
+`apkc/dexarma.go` ensambla el fichero entero (cabecera, las cinco tablas, `class_defs`, los
+`code_item`, las `type_list`, los `class_data_item`, los `encoded_array_item` de las constantes, el
+área de cadenas y el `map_list`, con `sha1` y `adler32` al final). Los offsets se calculan en orden
+de dependencia, sin iterar. Sobre las seis clases del proyecto del studio salen **2392 bytes contra
+los 2844 de `d8`**, y la diferencia tiene nombre: no emitimos `debug_info_item` (1160..1192, 7
+objetos) ni el bloque de anotaciones (`annotation_item` 2311, `class_annotation_set_item` 2484,
+`annotations_directory_item` 2548, 21 objetos en total), y tampoco la marca de origen con la que
+`d8` se firma: la cadena `~~D8{"backend":"dex",…}` es suya, y copiarla sería mentir sobre quién
+compiló. Con esas tres ausencias explicadas, las tablas que sí emitimos salen **byte a byte como las
+de `d8`** (`type_ids`, `field_ids`, `method_ids` idénticos; `proto_ids` idénticos salvo el
+`parameters_off`, que es un offset absoluto; y cada `string_data_item` idéntico, recortado por su
+terminador cero y no "hasta la siguiente entrada del mapa", que era un error: detrás del última
+cadena viene otra sección).
+
+Cuatro afirmaciones que tenía escritas en el §20 eran falsas, y las destapó comparar lo que **nosotros
+escribíamos** contra lo que **`d8` escribió**, no contra un manual:
+
+- **La constante de un campo estático no viaja dentro del `encoded_field`.** Los bytes crudos de
+  `d8` para `R$id` son `01 19` (índice por diferencia y `access_flags`) y nada más: el valor está en
+  el `encoded_array_item` que anuncia `class_defs.static_values_off`, en 2465, 2471 y 2477. La
+  lectura que plegaba el byte del valor en los bits 16 de `access_flags` era un artefacto de mi
+  propio escritor: hacía leer `access_flags = 0x640019` donde `d8` tiene `0x19`. El §20 dijo lo
+  contrario durante una revisión entera; queda corregido aqui, no borrado.
+- **El tamaño de un `encoded_array_item` no es un `uint` de cuatro bytes.** Los tres items de `R`
+  están a seis bytes de distancia; con `uint` cada uno ocuparía nueve (4 de tamaño + 4 de `VALUE_INT`
+  + 1 del tipo). Con `uint`, el primero diría que tiene 25601 valores. Es `uleb128`.
+- **`field_id_item` y `method_id_item` miden ocho bytes, no seis.** Comprobado con las offsets del
+  mapa: `524 + 4·8 = 556`, que es exactamente dónde `d8` pone `method_ids`, y `556 + 17·8 = 692`,
+  dónde están los `class_defs`. Los tres campos son `ushort` (`class_idx`, `type_idx`/`proto_idx`,
+  `name_idx`) y quedan **dos bytes de relleno**. El lector los leía como `u32` y pasaba con el
+  fichero de `d8` porque su relleno es cero; con el nuestro devolvía índices absurdos (`index out of
+  range [51] with length 23`).
+- **`ACC_SUPER` no llega al `class_def` y `<init>` sí lleva `ACC_CONSTRUCTOR`.** `javac` escribe
+  `0x31` en `R$id` y `d8` deja `0x11`; la anónima sale `0x20` en el `.class` y `0x0` en el dex. Y los
+  nueve constructores llevan el bit 16: `public <init>` = `0x10001`, el `<init>` sin modificador de
+  la anónima = `0x10000`.
+
+También se corrigió el internado de cadenas: un atributo `InnerClasses` menciona también las clases
+que se *usan* (`MainActivity$1` lista `android/view/MenuItem$OnMenuItemClickListener` con su nombre
+simple), y yo internaba ese nombre. `d8` solo internan los nombres de las entradas que hablan de la
+clase propia, así que el nombre del interfaz sobraba y, en cambio, faltaba `"value"`, el miembro de
+`@MemberClasses`. Con la condición puesta, las 52 cadenas que emitimos son exactamente las 53 de `d8`
+sin su marca.
+
+**El oráculo.** `dexdump` no es ejecutable en este teléfono, así que se usó el propio `d8` como
+lector: un `.dex` también entra en `d8`, y si la estructura estuviera mal, R8 lo diría.
+
+```sh
+# primero se vuelca el dex que escribe este fork (una prueba temporal con APKC_VOLCAR, ya borrada)
+java -cp ~/Android/build-tools/34.0.0/lib/d8.jar com.android.tools.r8.D8 \
+  --min-api 21 --release --output out in/classes.dex
+```
+
+**Resultado**: `rc 0`, y `out/classes.dex` son 2076 bytes que este mismo lector vuelve a leer enteros.
+Lo que sobrevivió a la ida y vuelta por R8 es lo que importa:
+
+| qué | nuestro dex | re-dex de `d8` |
+| --- | --- | --- |
+| clases | 6 | 6 |
+| métodos con cuerpo | 9 | 9 |
+| `field_ids` / `method_ids` / `protos` | 4 / 17 / 9 | 4 / 17 / 9 |
+| `pulsar`, `main`, `AppTheme` | 2130771968, 2130837504, 2130903040 | los mismos tres valores, leídos de **nuestro** `static_values` |
+| cadenas / tipos | 52 / 23 | 40 / 18 |
+
+La última fila es el detalle interesante: `d8` **poda** al re-dexar. Los cinco tipos
+`Ldalvik/annotation/…` y sus cadenas viajan en nuestro fichero porque los internamos para el caso de
+las anotaciones, pero como no emitimos las anotaciones que los usan, R8 los considera inalcanzables y
+los quita. Es la prueba de que el internado del §19 es más amplio que lo que hace falta cuando no hay
+anotaciones, y de que un dex puede ser correcto y más pequeño que lo que su productor escribió.
+
+Comprobación automatizada (nada de esto depende de tener el JDK):
+
+```sh
+sh -c 'cd apkc && go test -run "DexArmado|CadenasDelDex|TablasFijas|ClassDefs|CodeItemsEscritos|ClassDataEscrito" -v .'
+```
+
+**Resultado**: seis pruebas en verde. La suite nativa sube a **140 tests** (`--- FAIL` 0) y la misma
+binaria compilada con `GOOS=js` dentro del hospedador de navegador da **136 PASS más 4 SKIP, rc 0**.
+
+**Lo que falta para que esto sea un apk instalable**, por orden: el `debug_info_item` (si se quieren
+trazas legibles), el bloque de anotaciones (si se quiere que `InnerClasses` sobreviva), y la Fase 3
+(`AXML` del `AndroidManifest.xml` y de los layouts, `resources.arsc` y la `R`), que es la que pone el
+`classes.dex` dentro de un archivo que el sistema instala. Ninguna de esas tres cambia lo medido aquí.

@@ -145,7 +145,12 @@ func (t *dexTables) collectClasses(classes []classFull) error {
 		for _, in := range cf.Inners {
 			t.internType(in.inner)
 			t.internType(in.outer)
-			if in.name != "" {
+			// el nombre simple del miembro SOLO se internan cuando la entrada habla de esta
+			// clase. Un InnerClasses de un .class menciona también las clases que se usan
+			// (MainActivity$1 lista android/view/MenuItem$OnMenuItemClickListener con su
+			// nombre), y d8 no escribe ese nombre como cadena: medido, nuestra tabla tenia
+			// "OnMenuItemClickListener" de mas y le faltaba "value"
+			if in.name != "" && (in.inner == cf.Name || in.outer == cf.Name) {
 				t.internString(in.name)
 			}
 			if in.inner == cf.Name {
