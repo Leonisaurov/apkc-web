@@ -657,3 +657,73 @@ También queda anotado el modo de trabajo: a media fase 2G estuve parcheando est
 scripts de `python` en vez de la herramienta de edición, y salieron duplicados (`anchoValor` dos
 veces), tipos borrados de un tajo y comentarios rotos. Con lectura previa y `Edit` se ve lo que se
 toca; con `sed` no.
+
+## 21. Las palabras dalvik, una por una: qué formato tiene cada instrucción y con qué criterio lo eligió `d8`
+
+El paso entre leer un `code_item` y escribirlo es saber **qué palabra significa qué**. Volqué las
+palabras de los nueve cuerpos junto a las instrucciones JVM de los mismos `.class` (un test
+descartable que imprimía `walkJvmCode` al lado de `readCodeItem`, más `javap -c` de comprobación), y
+de ahí salieron quince formatos. Cada fila de la tabla es una palabra que está en el fichero de
+`d8`, no una que yo recordara:
+
+| palabra de `d8` | qué dice ser | de dónde se saca |
+| --- | --- | --- |
+| `0x000e` | `return-void` (10x) | el final de los cuatro constructores de `R` |
+| `0x030f` | `return v3` (11x: registro en la mitad alta) | el `iconst_1; ireturn` de `onMenuItemClick` |
+| `0x020c` | `move-result-object v2` (11x) | el `Menu.add(...)` que sigue usando el resultado |
+| `0x0112` / `0x1312` | `const/4 v1, 0` / `const/4 v3, 1` (11n: valor con signo en el nibble alto, registro en el bajo) | los dos `iconst_*` |
+| `0x0115` + `0x7f02` | `const/high16 v1` (21c: registro abajo, mitad alta del valor arriba) | `R.layout.main` = `0x7f020000`, y **no** es un `string@` |
+| `0x001a` + `0x0002` | `const-string v0, string@2` (21c) | el `"Clicked!"` |
+| `0x0022` + `0x0008` | `new-instance v0, type@8` (21c) | el `new MainActivity$1(...)` |
+| `0x2354` + `0x0000` | `iget-object v3, v2, field@0` (22c: destino en el nibble bajo, fuente en el alto, índice en la segunda unidad) | leer el `this$0` |
+| `0x015b` + `0x0000` | `iput-object v1, v0, field@0` (22c) | escribir el `this$0` en el constructor |
+| `0x1070 0x0010 0x0000` | `invoke-direct {v0}, method@16` (35c: `op`, luego recuento en los bits 4..7 y G en los 0..3, luego el **índice**, luego los registros en nibbles) | `Object.<init>` |
+| `0x206f 0x0001 0x0010` | `invoke-super {v0, v1}, method@1` | el `super.onCreate(bundle)` |
+| `0x2072 0x0003 0x0002` | `invoke-interface {v2, v0}, method@3` | `MenuItem.setOnMenuItemClickListener` |
+| `0x3071 0x0004 0x0103` | `invoke-static {v3, v0, v1}, method@4` | `Toast.makeText` |
+| `0x206e 0x000b 0x0010` | `invoke-virtual {v0, v1}, method@11` | `setContentView` |
+
+Tres reglas de elección que tampoco estaban en ninguna parte y salieron comparando:
+
+- **`invokespecial` no es siempre `invoke-direct`**: los `<init>` salen como `0x70`, pero el
+  `invokespecial` de `super.onCreate` sale como **`invoke-super` (`0x6f`)**. El reparto depende del
+  destino, no del opcode JVM.
+- **Un `pop` justo después de una llamada se traga el `move-result-object`**: `d8` emite
+  `invoke-interface` y sigue con `const/4`, sin palabra de resultado, porque el `MenuItem` devuelto
+  no se usa. Emitir el `move-result` sería una palabra de más (y así lo detectó el test: 17 palabras
+  contra las 16 de `d8`).
+- **El entero se elige por su forma**: `0` y `1` van en `const/4`; `0x7f020000` va en
+  `const/high16` (la mitad baja es cero) y no en `const/16`.
+
+Con eso escrito, `apkc/dexinstr.go` traduce y `apkc/dexcode.go` desmonta. La comparación, método por
+método y palabra por palabra:
+
+```sh
+sh -c 'cd apkc && go test -run "Traduce|Cabecera|Rechaza" -v .'
+```
+
+**Resultado**: los nueve cuerpos emiten **la misma secuencia de instrucciones, sobre los mismos
+índices y con el mismo número de palabras** que `d8` (14, 6, 16, 4, 9, 4, 4, 4, 4). **Seis de nueve
+salen idénticos hasta los números de registro** — los cuatro `R.<init>`, el de `MainActivity` y el de
+la anónima con su `this$0`. Los tres restantes difieren solo en cómo se numeran los registros y
+piden **a lo sumo un registro más** (`onMenuItemClick` 5 contra 4, `onCreateOptionsMenu` 4 contra 3,
+`onCreate` 3 contra 2): `d8` reutiliza el registro de un argumento muerto, y este traductor no hace
+análisis de vida. Es una diferencia de tamaño de marco, no de contenido: `registers_size` es un `u2`
+de la cabecera y no cuesta ni un byte ni una palabra.
+
+Y un detalle de la numeración que el test fija: los parámetros **no** empiezan en `v0`, sino en
+`registers_size - ins_size` (§20). Con un marco de 4 y `ins_size` 2, el `this` es `v2`. Escribir
+`{v0, v1}` ahí funciona solo por casualidad, y esa casualidad es la que hace que un verifier rechace
+la clase.
+
+**Lo que el traductor rechaza por nombre, sin emitirlo** (cada uno con su test en
+`TestRechazaLoQueNoEstaMedido` o su mensaje en el código): cualquier opcode fuera de las dieciséis
+medidas de §17 (lo dice con el byte, no con un misterio), `move-result` de un primitivo (devolver un
+`int` desde una llamada: hace falta un fixture que lo escriba), un `invokespecial` que no sea
+constructor ni llamada al super (método privado: sin medir), una llamada de más de cinco argumentos
+(`invoke/range`), y cualquier registro `v16` o mayor en un formato de cuatro bits (las formas
+`/from16` y `/range`). El subconjunto cubre la plantilla que genera la página; lo otro se mide con un
+caso real antes de emitirlo.
+
+Suite nativa después de esto: **135 tests** (`--- PASS` 135, `--- FAIL` 0); la misma binaria en
+`GOOS=js` dentro del hospedador de navegador: **131 PASS más 4 SKIP, rc 0**.

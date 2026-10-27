@@ -133,13 +133,16 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   instrucciones empiezan en +16, con `ins_size` igual al `args_size` de `javap` en los nueve métodos,
   `registers_size` siempre por encima de sus `locals`, `outs_size` siempre por debajo de su
   `max_stack`, `tries_size` cero (ninguno tiene tabla de excepciones) y el `u32` de +8 cayendo dentro
-  del área `debug_info_item` que declara el `map_list`. Dos cosas quedan para escribir: **la
-  traducción de las 16 operaciones JVM a sus formatos dalvik** (registros, y no literalidades — cada
-  formato tiene su propia cuenta de operandos), y **los `debug_info_item` compartidos**: nueve
-  métodos usan siete, porque `d8` deduplica los cuerpos con las mismas líneas; emitir uno por método
-  dará un dex más grande sin estar mal.
-  **Sin medir a propósito**: `try_item` y `encoded_catch_handler`, porque ninguno de los nueve metodos
-  del fixture los tiene; hara falta un fichero con `try` antes de escribirlos.
+  del área `debug_info_item` que declara el `map_list`. **Hecha también la traducción de las dieciséis
+  operaciones JVM a sus quince formatos dalvik** (§21): los nueve cuerpos emiten la misma secuencia de
+  instrucciones, sobre los mismos índices y con el mismo número de palabras que `d8`, y seis de nueve
+  salen idénticos hasta los números de registro. Lo que queda para escribir aquí es el
+  **`debug_info_item` compartido**: nueve métodos usan siete, porque `d8` deduplica los cuerpos con
+  las mismas líneas; emitir uno por método dará un dex más grande sin estar mal.
+  **Sin medir a propósito**: `try_item` y `encoded_catch_handler`, porque ninguno de los nueve métodos
+  del fixture los tiene; hará falta un fichero con `try` antes de escribirlos. Lo mismo con
+  `move-result` de un primitivo, los métodos privados llamados con `invokespecial` y cualquier forma
+  `/range` o `/from16`: el traductor los rechaza por nombre en vez de adivinar la palabra.
 - **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. Si difiere, `xxd` y escribir
   a qué sección corresponde; se acepta diferencia documentada **solo si el apk se instala y arranca**.
 - **2G.5** La frontera declarada y probada por separado: lambdas, `invokedynamic`, default methods,

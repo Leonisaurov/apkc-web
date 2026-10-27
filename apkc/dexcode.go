@@ -274,3 +274,111 @@ func (d *dexFile) methodsDeCadaClase() (map[string]classData, error) {
 	}
 	return out, nil
 }
+
+// desmontaPalabras convierte las palabras de un code_item en instrucciones legibles. Nace de la
+// misma medicion que el traductor (docs/evidencia.md §21): solo conoce los quince formatos que
+// d8 escribio sobre el proyecto del studio, y un opcode fuera de esa lista es un error con nombre,
+// no un misterio. Es lo que permite decir "nuestras palabras y las de d8 son las mismas
+// instrucciones sobre los mismos ids" sin comparar registros, que es donde un asignador distinto
+// separa (documentado en el plan 2G.4).
+func desmontaPalabras(palabras []uint16) ([]string, error) {
+	out := []string{}
+	for i := 0; i < len(palabras); {
+		u := palabras[i]
+		op := byte(u)
+		alta := uint8(u >> 8)
+		nombre, formato, ok := formatoDalvik(op)
+		if !ok {
+			return nil, fmt.Errorf("at word %d: opcode %#02x is outside the fifteen formats measured on d8's file", i, op)
+		}
+		switch formato {
+		case '0': // 10x: sin operandos
+			out = append(out, nombre)
+			i++
+		case 'x': // 11x: vAA
+			out = append(out, fmt.Sprintf("%s v%d", nombre, alta))
+			i++
+		case 'n': // 11n: vAA, #+B (el registro en el nibble bajo, el valor con signo en el alto)
+			out = append(out, fmt.Sprintf("%s v%d, %d", nombre, alta&0xf, int(int8(alta)>>4)))
+			i++
+		case '2': // 12x: vA, vB
+			out = append(out, fmt.Sprintf("%s v%d, v%d", nombre, alta&0xf, alta>>4))
+			i++
+		case 'c': // 21c: vAA, indice
+			if i+1 >= len(palabras) {
+				return nil, fmt.Errorf("at word %d: %s wants its index word and the item ends", i, nombre)
+			}
+			out = append(out, fmt.Sprintf("%s v%d, %d", nombre, alta, palabras[i+1]))
+			i += 2
+		case 'f': // 22c: vA, vB, indice
+			if i+1 >= len(palabras) {
+				return nil, fmt.Errorf("at word %d: %s wants its index word and the item ends", i, nombre)
+			}
+			out = append(out, fmt.Sprintf("%s v%d, v%d, %d", nombre, alta&0xf, alta>>4, palabras[i+1]))
+			i += 2
+		case 'i': // 35c: conteo y registros repartidos, con el indice en medio
+			if i+2 >= len(palabras) {
+				return nil, fmt.Errorf("at word %d: %s wants three words and the item ends", i, nombre)
+			}
+			n := int(alta >> 4)
+			regs := []int{}
+			u2 := palabras[i+2]
+			for k := 0; k < n && k < 4; k++ {
+				regs = append(regs, int((u2>>(4*k))&0xf))
+			}
+			if n == 5 {
+				regs = append(regs, int(alta&0xf))
+			}
+			texto := ""
+			for k, r := range regs {
+				if k > 0 {
+					texto += ", "
+				}
+				texto += fmt.Sprintf("v%d", r)
+			}
+			out = append(out, fmt.Sprintf("%s {%s}, %d", nombre, texto, palabras[i+1]))
+			i += 3
+		}
+	}
+	return out, nil
+}
+
+// formatoDalvik da el nombre y la forma de los quince opcodes medidos en el fichero de d8. El
+// nombre es el que usa la herramienta, para que un diff se lea sin tabla al lado.
+func formatoDalvik(op byte) (string, byte, bool) {
+	switch op {
+	case 0x0e:
+		return "return-void", '0', true
+	case 0x0c:
+		return "move-result-object", 'x', true
+	case 0x0f:
+		return "return", 'x', true
+	case 0x12:
+		return "const/4", 'n', true
+	case 0x13:
+		return "const/16", 'c', true
+	case 0x15:
+		return "const/high16", 'c', true
+	case 0x1a:
+		return "const-string", 'c', true
+	case 0x22:
+		return "new-instance", 'c', true
+	case 0x52:
+		return "iget", 'f', true
+	case 0x54:
+		return "iget-object", 'f', true
+	case 0x5b:
+		return "iput-object", 'f', true
+	case 0x6e:
+		return "invoke-virtual", 'i', true
+	case 0x6f:
+		return "invoke-super", 'i', true
+	case 0x70:
+		return "invoke-direct", 'i', true
+	case 0x71:
+		return "invoke-static", 'i', true
+	case 0x72:
+		return "invoke-interface", 'i', true
+	}
+	return "", 0, false
+}

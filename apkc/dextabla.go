@@ -235,7 +235,8 @@ func (t *dexTables) followConstant(x poolIndex, idx int) {
 // orderTables puts every table in the order the format asks for. Each sort below was checked
 // against the tables d8 wrote: the string order by utf-16 units (measured in 2G-B), types by their
 // descriptor's position in the string table, protos by shorty then return then parameter list,
-// fields by class then type then name, methods by class then proto then name.
+// fields by class then name then type, and methods by class then NAME then proto: ese ultimo orden
+// es el que sale del fichero de d8 (§19), no el que cita la documentación del formato.
 func (t *dexTables) orderTables() {
 	sortByMUTF8(t.strings)
 	for i, s := range t.strings {
