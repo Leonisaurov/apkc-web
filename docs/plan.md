@@ -36,7 +36,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
 | 0.2.2 `apkc verify` | pendiente | — |
 | 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
-| 2G | **la que decide ahora**: `classes.dex` escrito en Go sobre los `.class` del `studio/`, con `d8` de oráculo. Objetivo medido: 2844 bytes, 217 objetos | `docs/evidencia.md` §13 |
+| 2G | **empezada**: lector de dex hecho (`18c9773`), escritor pendiente. Objetivo medido: 2844 bytes, 217 objetos | `docs/evidencia.md` §13 y §16 |
 | 3 recursos sin `aapt2` | necesaria: sin `R` no hay las 6 clases que dexar | — |
 | 1G | Java -> `.class` en Go, subconjunto del `studio/`, con `javap` de oráculo | — |
 | 4.1 etapas como interfaz | pendiente | — |
@@ -119,9 +119,10 @@ Objetivo medido (`docs/evidencia.md` §13): 6 `.class` (3333 bytes) -> **2844 by
 de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 métodos, 6 class defs,
 9 code items, 7 class data, 6 debug info, 21 de anotaciones).
 
-- **2G.1** Lector de `.class` sobre `classfile.go` (ya existe para incremental): qué hace falta para
-  listar constant pool, métodos, descriptores y atributos de las 6 clases del `studio/`. Oráculo:
-  `javap -c -p`, operación por operación.
+- **2G.1** Lector del `.class` y del `.dex`. **Hecha la mitad del dex** (apkc-web `18c9773`):
+  `apkc/dexreader.go` lee cabecera, `map_list`, las cinco tablas de índices y `class_defs`, con el
+  `classes.dex` real de `d8` de fixture y sus cuentas como aserciones (`docs/evidencia.md` §16; 98→105
+  tests). Queda pendiente leer `code_item` e instrucciones, que hará falta para la comparación fina.
 - **2G.2** Escritor de secciones: `string_ids`/`type_ids`/`proto_ids`/`field_ids`/`method_ids`, orden
   canónico (los índices salen de `d8`, no de un capricho nuestro) y `map_list`.
 - **2G.3** `class_data_item`, `code_item` y `debug_info_item`: la codificación de instrucciones en sí.

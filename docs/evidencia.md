@@ -399,3 +399,42 @@ sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
 de `servidor.js`, más `data:`/`blob:` del propio origen). Ninguna a un CDN, ninguna a un dominio de
 runtime de terceros, ninguna de telemetría. Con esto el criterio de aceptación de la Fase 4 queda
 escrito como prueba: **una petición fuera del origen rompe `prueba-pestana.js`**.
+
+## 16. El lector de `classes.dex`, con el dex de `d8` como fixture (Fase 2G, primera pieza)
+
+Escrito en el fork (`apkc/dexreader.go`, rama `web`). Se empieza por leer y no por escribir porque
+la comparación byte a byte contra `d8` solo responde "distinto"; hace falta quien responda
+"**en qué sección**". comando de la prueba:
+
+```sh
+sh -c 'cd apkc && go test -run "Dex|MUTF8" -v .'
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$PREFIX/tmp/apkc-test.wasm" .
+         cd ../shim && node navegador-sim.js "$PREFIX/tmp/apkc-test.wasm" -test.v'
+```
+
+**Resultado**: 7 tests nuevos en verde; la suite nativa pasa y **la wasm en hospedador de navegador
+sube de 98 a 105** (`--- PASS` 105, `--- FAIL` 0, rc 0). Lo que se comprueba:
+
+- El fixture es el `classes.dex` **real** de `d8 9.2.4-dev` sobre el proyecto del studio: 2844 bytes,
+  pineado en base64 (el repo no versiona binarios). Su tamaño, su versión `035` y los recuentos
+  (53 / 23 / 9 / 4 / 17 / 6 y 17 secciones) son exactamente los del §13: la medición queda convertida
+  en test, así que un cambio de formato salta aquí y no en un teléfono.
+- **Integridad, no solo parseo**: el lector verifica el `adler32` y el `sha-1` que la propia cabecera
+  declara. Un byte cambiado dentro de la sección `data` hace que `Integrity()` nombre el checksum que
+  rompió — y si el fichero llega a parser, la prueba lo acepta como negativa igualmente: lo que no
+  puede pasar es que se acepte.
+- **MUTF-8** tiene su propio test: `U+0000` escrito `C0 80` (el motivo de la forma: un terminador nunca
+  aparece dentro de una cadena) y el par de sustitutos CESU-8 recompuesto a un carácter de plano 1,
+  porque el orden del `string_ids` se define por **unidades UTF-16** y un emisor que compare por
+  runes ordena distinto.
+- La marca `~~D8{...}` del pool se lee: si el lector se parara antes del final de las cadenas, esa
+  aserción es la que lo avisa.
+
+Tres cosas que salieron mal antes de salir bien, escritas porque cuestan menos repetidas:
+`fmt.Sprintf("%#04x", k)` sobre un tipo con `String()` es una llamada **recursiva** (lo detecta
+`go vet`, no el compilador); no se pueden añadir métodos a `uint16`, hace falta un tipo nombrado; y
+mezclar `uint32` con el `int` que devuelve un buscador de bytes es un `panic` fuera de rango con
+pinta de fichero malformed.
+
+Lo que el lector **todavía no lee**: `code_item` (instrucciones), `class_data_item` más allá de los
+cuatro recuentos, y las anotaciones. Se escriben cuando haga falta para comparar, no antes.
