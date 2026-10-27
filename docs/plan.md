@@ -29,11 +29,15 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | Fase | Estado | Evidencia |
 | --- | --- | --- |
 | 0.1 mensajes de herramienta | **hecha** (apkc `e7bfd01`) | `[build] aapt2 compile never started: pipe: not implemented on js` |
-| 0.2 `apkc sign` / `apkc verify` | pendiente | — |
+| 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
+| 0.2.2 `apkc verify` | pendiente | — |
 | 1 `javac` en wasm | pendiente (riesgo bajo, es integración) | — |
 | 2 `d8` sobre JVM wasm | **pendiente y decisiva** | — |
 | 3 recursos sin `aapt2` | bloqueada hasta que 2 viva | — |
-| 4 costura y página | bloqueada hasta 1+2+3 | — |
+| 4.1 etapas como interfaz | pendiente | — |
+| 4.2 hospedador de navegador | **a medias**: el de node ya monta y exporta ficheros reales (§8); falta OPFS y Chromium | — |
+| 4.3 la página | bloqueada hasta 1+2+3 para *compilar*; lo que sí puede hacer hoy es crear el proyecto y firmar | — |
+| 4.4 empaque y tamaño | medida parcial: `apkc.wasm` 9,4 MB | — |
 
 ---
 
@@ -62,7 +66,21 @@ dentro de `build`. Sin comando suelto no hay nada ejecutable del lado cliente.
     harness.
   - Esfuerzo: una sesión. Es mover llamadas existentes a un comando, no escribir formato.
 
-- **0.2.2 `apkc verify <apk>`**
+**Hecha (apkc `a909214`), y tres cosas salieron distintas de como estaban escritas aquí:**
+
+- El riesgo concreto del plegado de 72 bytes no reapareció: el re-firmado conserva las entradas
+  originales y el manifiesto se comprueba nombre a nombre contra lo que se lee del archivo (test
+  propio), que es la misma defensa que el build.
+- Hay una regla nueva que el plan no preveía: **los directorios viajan en el paquete y fuera del
+  manifiesto**, leída de `jarsigner` (§9 de evidencia). Un apk de otra procedencia siempre los
+  lista; un plan de build nunca.
+- Y otra: **el nombre del firmante no es `ANDROID`**, este keystore de debug hace escribir
+  `ANDROIDD.SF` a `apksigner` (§9). Descartar la firma anterior por el nombre que apkc usa dejaría
+  dos firmantes en un paquete.
+- Criterio de aceptación cumplido, con un número que no estaba en el plan: **1,20 s firmando dentro
+  de wasm** frente a 30 ms nativo, en el hospedador de forma-navegador (§8).
+
+### 0.2.2 `apkc verify <apk>`
   - Qué: lee el APK Signing Block, comprueba los digests de las entradas y la firma v2 contra el
     certificado; imprime quién firmó y hasta cuándo es válido.
   - Aceptación: los tres apks de demostración dan el mismo resultado que `apksigner verify

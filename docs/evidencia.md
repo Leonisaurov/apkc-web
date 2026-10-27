@@ -107,3 +107,109 @@ Medido sobre el proyecto de prueba que genera la página, con `tcr -j 1` y el ba
 La lectura honesta: **la firma ya es Go**, así que no hay nada que portar ahí; el peso del build
 está en `javac` y `d8`, que son precisamente las dos piezas que no se pueden sustituir en Go sin
 escribir un compilador.
+
+## 7. `apkc sign`: la firma como comando suelto, con los tres oráculos (apkc `a909214`)
+
+Es el paso que convierte "la firma es Go" en "la firma se puede pedir desde una pestaña". Dentro de
+`build` no existía como operación: había que pasar antes por `aapt2`, `javac` y `d8`.
+
+```sh
+sh -c 'cd ../apkc && go build -o "$PREFIX/tmp/apkc-sign" .'
+# un apk firmado por el apksigner de verdad, no por apkc:
+sh -c 'cd ../apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
+mkdir -p "$PREFIX/tmp/sign-probe" && cd "$PREFIX/tmp/sign-probe" && $PREFIX/tmp/apkc-gate create app
+cd app && tcr -j 1 -q -- $PREFIX/tmp/apkc-gate build --signer=jvm
+$PREFIX/tmp/apkc-sign sign --out ../apkc-signed.apk build/app.apk
+```
+
+**Resultado** (apk de 9504 bytes, 4 entradas de contenido). Comandos y respuesta de cada oráculo:
+
+| Oráculo | Comando | Respuesta |
+| --- | --- | --- |
+| `apksigner` | `build-tools/34.0.0/apksigner verify --verbose --min-sdk-version 21 apkc-signed.apk` | `Verifies`, `v1 scheme: true`, `v2 scheme: true`, `Number of signers: 1`, rc 0 |
+| `zipalign` | `build-tools/34.0.0/zipalign -c -p 4 apkc-signed.apk` | rc 0 (y `-c -v 4`: `Verification successful`) |
+| `jarsigner` | `$PREFIX/lib/jvm/java-21-openjdk/bin/jarsigner -verify apkc-signed.apk` | `jar verified.` rc 0 |
+| andamiaje estricto | `python3 ~/Develop/Go/apkc-harness/zipcheck.py apkc-signed.apk` | `7 entries, every record agrees with itself` |
+
+Las advertencias de `jarsigner` ("self-signed", "no timestamp", "Manifest is missing when reading
+via JarInputStream") **son idénticas en el apk firmado por `apksigner`**: se compararon las dos
+salidas y no hay ninguna diferencia entre lo que dice el oráculo sobre el trabajo de apkc y sobre el
+de la herramienta oficial. Eso es lo que hace servir `jarsigner` como oráculo y no como juez.
+
+**Control negativo**, alterar un byte del contenido almacenado de `resources.arsc` (empieza en 1772,
+lo dijo `zipalign -c -v`):
+
+```sh
+python3 - apkc-signed.apk tampered2.apk <<'EOF'
+import sys
+datos = bytearray(open(sys.argv[1], "rb").read()); datos[1772 + 5] ^= 0xFF
+open(sys.argv[2], "wb").write(datos)
+EOF
+apksigner verify --min-sdk-version 21 tampered2.apk   # DOES NOT VERIFY: CHUNKED_SHA256 digest mismatch
+jarsigner -verify tampered2.apk                       # SecurityException: SHA-256 digest error for resources.arsc, rc 1
+```
+
+Los dos esquemas detectan el byte: v2 por el digest troceado del fichero entero, v1 por el digest de
+la entrada. `apksigner` corta al primer fallo y no llega a nombrar v1, así que la prueba de v1 se
+hizo con el JDK.
+
+**Coste**: 30 ms nativo para re-firmar el apk de 9504 bytes.
+
+## 8. La firma dentro de wasm, en el hospedador con forma de navegador
+
+El hospedador no podía ni recibir un fichero real ni devolver el resultado; ahora puede
+(`--montar real:ruta`, `--exportar ruta:real`, y el código de salida de apkc es el del proceso).
+
+```sh
+sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+cd shim
+node navegador-sim.js \
+  --montar "$PREFIX/tmp/sign-probe/app/build/app.apk:/in.apk" \
+  --montar "$HOME/.android/debug.keystore:/ks.p12" \
+  --exportar "/out.apk:$PREFIX/tmp/sign-probe/wasm-signed.apk" \
+  "$PREFIX/tmp/apkc-wasm.wasm" sign --keystore /ks.p12 --out /out.apk /in.apk
+apksigner verify --verbose --min-sdk-version 21 "$PREFIX/tmp/sign-probe/wasm-signed.apk"
+```
+
+**Resultado**: `exportado /out.apk (9504 bytes)`, rc 0, **1,20 s dentro de wasm contra 30 ms
+nativo**; `apksigner` responde `Verifies` con v1 y v2 `true`, `zipalign -c -p 4` sale 0 y
+`zipcheck.py` no encuentra violaciones. **Un apk firmado enteramente dentro de un módulo wasm, sin
+server, sin SDK y sin JVM, verificado por la herramienta oficial.** La diferencia de coste está en
+la derivación de clave del keystore PKCS#12 (PBKDF2 en Go puro), no en el zip: el keystore se lee
+una vez por firma.
+
+Los 305 bytes en que difieren el apk firmado en wasm y el firmado nativo (`cmp -l`) son las fechas
+DOS y los campos de cabecera de las tres entradas de `META-INF`, que se escriben con la hora de la
+firma; las entradas de contenido son las mismas bytes.
+
+La suite completa, en el mismo hospedador: **98 tests** (`--- PASS` 98, `--- FAIL` 0, rc 0).
+
+## 9. Dos reglas de formato que se leyeron de un oráculo en vez de adivinarse
+
+**Los directorios no van al manifiesto v1.** Un apk re-firmado a partir de un archivo que lista sus
+directorios (algo que un plan de build no hace nunca, pero un `unzip` de cualquier sitio sí) podría
+escribir secciones para `res/`. Se preguntó al JDK:
+
+```sh
+$PREFIX/lib/jvm/java-21-openjdk/bin/jar cf app.jar AndroidManifest.xml res/   # con res/drawable/ dentro
+$PREFIX/lib/jvm/java-21-openjdk/bin/jarsigner -keystore ks.jks app.jar k
+unzip -l app.jar | grep '/$'          # res/ y res/drawable/ siguen en el archivo
+unzip -p app.jar META-INF/MANIFEST.MF # y no hay ninguna sección para ellos
+```
+
+`java.util.jar` los deja fuera. apkc hace lo mismo, con su test.
+
+**El nombre del firmante no es fijo.** `apkc` escribe `META-INF/ANDROID.SF`; el `apksigner` de
+build-tools 34 con el keystore de debug de este teléfono escribe **`ANDROIDD.SF`** (se ve en
+`unzip -l` del apk del punto 7). Por eso al re-firmar se descartan las entradas de la firma anterior
+**por sufijo** (`.SF .RSA .DSA .EC .MF`) y no por el nombre que apkc usa: si no, dos firmantes en un
+mismo paquete y el verificador lo cuenta como corrupción en vez de como firma vieja.
+
+## 10. Un fallo del hospedador que parecía de apkc
+
+Sustituir `go.exit` por uno mismo (para conocer el código de salida) corta el `_exitPromise` que
+`wasm_exec.js` usa para resolver `go.run()`: el `then` que exporta los ficheros nunca corre y, unos
+segundos después, el temporizador de scheduling del propio `wasm_exec` salta con
+`Error: Go program has already exited`. Con el `setTimeout` fijo de la versión anterior del shim el
+síntoma era invisible. La corrección es resolver `go._resolveExitPromise()` desde el `exit`
+sustituido; el texto de arriba (`--montar`/`--exportar` funcionando con rc 0 y resumen) es la prueba.

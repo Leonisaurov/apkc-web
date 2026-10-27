@@ -4,12 +4,42 @@
 //
 // necesita wasm_exec.js junto a este fichero (no se versiona, es de tu GOROOT):
 //   cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
-// uso: node navegador-sim.js <apkc.wasm> <comando de apkc...>   (ej.: create /miapp)
+// uso: node navegador-sim.js [opciones] <apkc.wasm> <comando de apkc...>
+//   --montar <fichero real>:<ruta dentro del fs simulado>   (repetible)
+//   --exportar <ruta simulada>:<fichero real>                (repetible)
+// Ejemplo, firmar un apk sin ningún programa externo y sin server:
+//   node navegador-sim.js --montar build/app.apk:/in.apk --montar ~/.android/debug.keystore:/ks.p12 \
+//     --exportar /out.apk:/tmp/signed.wasm.apk "$PREFIX/tmp/apkc-wasm.wasm" \
+//     sign --keystore /ks.p12 --out /out.apk /in.apk
 // ver ../README.md y ../docs/evidencia.md para lo que medido y lo que todavia bloquea.
 const fs = require("fs");
+const os = require("os");
 // los flujos reales hay que capturarlos antes de sustituir globalThis.process: si no, la
 // salida de apkc se escribe contra el process falso y no la ve nadie
-const procReal = { stdout: process.stdout, stderr: process.stderr };
+const procReal = { stdout: process.stdout, stderr: process.stderr, exit: (c) => process.exit(c) };
+
+// --- las opciones del hospedador ---------------------------------------------------------
+// van antes del camino al wasm, porque lo que viene despues es el argv de apkc y el shim
+// no tiene nada que opinar sobre ello
+const montaje = [], exportacion = [];
+const argvOpciones = process.argv.slice(2);
+for (let i = 0; i < argvOpciones.length; ) {
+  const arg = argvOpciones[i];
+  if (arg === "--montar" || arg === "--exportar") {
+    const destino = arg === "--montar" ? montaje : exportacion;
+    const valor = argvOpciones[i + 1];
+    if (!valor || !valor.includes(":")) {
+      procReal.stderr.write(`${arg} pide <real>:<simulado> o <simulado>:<real>\n`);
+      procReal.exit(2);
+    }
+    const corte = valor.indexOf(":");
+    destino.push([valor.slice(0, corte), valor.slice(corte + 1)]);
+    argvOpciones.splice(i, 2);
+    continue;
+  }
+  if (arg === "--") { argvOpciones.splice(i, 1); break; }
+  i++;
+}
 
 // --- el sistema de ficheros en memoria -------------------------------------------------
 const raiz = new Map();
@@ -67,6 +97,13 @@ function resolverAbierto(calle) {
 
 let proximoFd = 10;
 const descriptores = new Map();
+
+// el código con el que se va el programa dentro del hospedador: lo anotan las dos salidas
+// que existen (process.exit y la que informa wasm_exec), y solo una de las dos gana
+let codigoDeSalida = null;
+function anotarSalida(c) {
+  if (codigoDeSalida === null) codigoDeSalida = (c === undefined ? 0 : c);
+}
 
 // stdin, stdout y stderr viven en el objeto fs, no en el árbol: sin esto la salida de apkc
 // se pierde en un EBADF mudo y el experimento parece callar cuando es el shim el que calla
@@ -278,7 +315,7 @@ const pathSim = {
 };
 
 // experimento: argv y cwd REALES, antes de sustituir globalThis.process por el falso
-const argvReal = process.argv.slice();
+const argvReal = argvOpciones;
 const cwdReal = process.cwd();
 
 globalThis.fs = fsSim;
@@ -291,7 +328,7 @@ globalThis.process = {
   getuid: () => 1000, getgid: () => 1000, geteuid: () => 1000, getegid: () => 1000,
   getgroups: () => [], umask: () => 0o22,
   platform: "browser", arch: "wasm",
-  on: () => {}, exit: (c) => { console.log("apkc salio con", c); },
+  on: () => {}, exit: (c) => { anotarSalida(c); },   // la anota; exportarYResumir decide cuándo se va node
 };
 globalThis.TextEncoder = TextEncoder;
 globalThis.TextDecoder = TextDecoder;
@@ -300,17 +337,68 @@ globalThis.crypto = crypto;
 globalThis.require = require;                    // la sigue necesitando wasm_exec.js
 globalThis.__fsSim = () => raiz;                 // para inspeccionar el resultado desde fuera
 
+// --- montar ficheros reales y exportar los producidos -------------------------------------
+// Sin esto el hospedador solo puede crear, no leer lo que alguien ya tiene: firmar un apk
+// exige meter el apk y el keystore en el árbol simulado y sacar el resultado fuera.
+function expandir(ruta) {
+  if (ruta === "~") return os.homedir();
+  if (ruta.startsWith("~/")) return os.homedir() + ruta.slice(1);
+  return ruta.startsWith("/") ? ruta : cwdReal + "/" + ruta;
+}
+function asegurarDirectorios(a) {
+  const tramos = a.split("/").filter(Boolean);
+  tramos.pop();                                  // el último es el fichero
+  let actual = "/";
+  for (const t of tramos) {
+    actual = actual === "/" ? "/" + t : actual + "/" + t;
+    if (!raiz.get(actual)) nuevoNodo(actual, true);
+  }
+}
+
+for (const [real, destino] of montaje) {
+  const a = absoluta(expandir(destino));
+  const contenido = fs.readFileSync(expandir(real));   // throws: el fichero que falta es un error del hospedador
+  asegurarDirectorios(a);
+  const n = nuevoNodo(a, false);
+  n.data = new Uint8Array(contenido);
+  procReal.stdout.write(`[shim] montado ${real} en ${a} (${n.data.length} bytes)\n`);
+}
+
 require("./wasm_exec.js");
 const go = new Go();
-go.argv = ["apkc", ...argvReal.slice(3)];
+// argvReal ya viene recortado (empieza en el camino al wasm), así que el argv de apkc
+// es todo lo que viene despues, no lo que viene a partir del tercero
+go.argv = ["apkc", ...argvReal.slice(1)];
 go.env = { HOME: "/home/usuario", ANDROID_HOME: "/android", JAVA_HOME: "/jvm" };
-go.exit = (c) => { console.log("(apkc devolvio", c, ")"); };
-WebAssembly.instantiate(fs.readFileSync(argvReal[2]), go.importObject)
-  .then((r) => go.run(r.instance))
-  .catch((e) => console.log("FALLO al instanciar:", e.message));
+// wasm_exec.js: run() espera this._exitPromise, y quien lo resuelve es la implementación
+// POR DEFECTO de this.exit. Sustituir go.exit sin resolverla deja el promise de run() sin
+// terminar: la exportación nunca corre y el temporizador de scheduling del propio
+// wasm_exec salta despues con "Go program has already exited".
+go.exit = (c) => {
+  anotarSalida(c);
+  go._resolveExitPromise();
+};
 
-setTimeout(() => {
-  const tree = [...raiz.keys()].filter((k) => k !== "/").sort();
-  console.log("--- ficheros creados en la memoria simulada:", tree.length);
-  for (const k of tree.slice(0, 25)) console.log("   ", k, raiz.get(k).dir ? "<dir>" : raiz.get(k).data.length + " bytes");
-}, 4000);
+function exportarYResumir() {
+  for (const [origen, real] of exportacion) {
+    const a = absoluta(expandir(origen));
+    const n = raiz.get(a);
+    if (!n || n.dir) {
+      procReal.stderr.write(`[shim] nada que exportar en ${a}\n`);
+      if (codigoDeSalida === null || codigoDeSalida === 0) codigoDeSalida = 1;
+      continue;
+    }
+    fs.writeFileSync(expandir(real), Buffer.from(n.data));
+    procReal.stdout.write(`[shim] exportado ${a} a ${real} (${n.data.length} bytes)\n`);
+  }
+  const arbol = [...raiz.keys()].filter((k) => k !== "/" && !raiz.get(k).dir).sort();
+  procReal.stdout.write(`--- ficheros en la memoria simulada: ${arbol.length}\n`);
+  for (const k of arbol.slice(0, 25)) procReal.stdout.write(`    ${k} ${raiz.get(k).data.length} bytes\n`);
+  if (codigoDeSalida !== 0) procReal.stdout.write(`(apkc devolvio ${codigoDeSalida})\n`);
+  procReal.exit(codigoDeSalida === null ? 1 : codigoDeSalida);
+}
+
+WebAssembly.instantiate(fs.readFileSync(argvReal[0]), go.importObject)
+  .then((r) => go.run(r.instance))
+  .then(exportarYResumir)
+  .catch((e) => { procReal.stderr.write("FALLO al instanciar o ejecutar: " + e.message + "\n"); procReal.exit(2); });

@@ -10,7 +10,9 @@ que funciona hoy.
 
 La parte de apkc que **no lanza programas** (escritor de zip con alineado, firma v1+v2, lectura de
 keystores PKCS#12 y JKS, generación de proyecto) **ya corre en un hospedador con forma de
-navegador**: 88/88 tests y `apkc create` completo, medido el 2026-10-26 ([docs/evidencia.md](docs/evidencia.md)).
+navegador**: 98/98 tests, `apkc create` completo y **`apkc sign` firmando un apk de verdad en 1,20 s
+dentro de wasm**, verificado después por `apksigner`, `zipalign` y `jarsigner`
+([docs/evidencia.md](docs/evidencia.md) §7 y §8, medido el 2026-10-26).
 Lo que falta no es un flag: son **`aapt2`, `javac` y `d8`**, tres programas externos que `js/wasm` no
 puede arrancar porque no tiene `fork/exec`.
 

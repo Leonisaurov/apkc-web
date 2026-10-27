@@ -11,7 +11,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/evidencia.md` | lo medido, cada afirmación con su comando | leerlo |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
-| `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
+| `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `studio/` | apkc-studio: genera proyectos apkc y traduce su salida para medir fricción | `cd studio && APKC=<binario> sh e2e.sh` |
 
 ## Reglas del repo
@@ -57,6 +57,14 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$PREFIX/tmp/apkc-test.wasm" .'
 sh -c 'cd shim && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" . && node navegador-sim.js "$PREFIX/tmp/apkc-test.wasm"'
 
+# la firma, del lado del cliente: un apk real entra y sale verificado por los oráculos
+sh -c 'cd ../apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
+sh -c 'cd shim && node navegador-sim.js \
+  --montar "$PREFIX/tmp/sign-probe/app/build/app.apk:/in.apk" \
+  --montar "$HOME/.android/debug.keystore:/ks.p12" \
+  --exportar "/out.apk:$PREFIX/tmp/sign-probe/wasm-signed.apk" \
+  "$PREFIX/tmp/apkc-wasm.wasm" sign --keystore /ks.p12 --out /out.apk /in.apk'
+
 # la página, de punta a punta (genera, compila de verdad, firma, verifica, y la conduce chromium)
 sh -c 'cd ../apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
 sh -c 'cd studio && APKC="$PREFIX/tmp/apkc-gate" sh e2e.sh'
@@ -68,7 +76,14 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
 ## Lo que ya se sabe, para no reabrirlo
 
 - El bloque de apkc que no lanza procesos (escritor con alineado, firma v1+v2, lectores de keystore,
-  `create`) **corre en hospedador tipo navegador**: 88/88 tests.
+  `create`) **corre en hospedador tipo navegador**: 98/98 tests.
+- **`apkc sign` existe** (apkc `a909214`) y **firma dentro de wasm**: 1,20 s para un apk de 9504
+  bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
+  `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
+- Al re-firmar un archivo que no hicimos nosotros hay dos reglas que **se leyeron de un oráculo**, no
+  se adivinaron: los **directorios** viajan en el paquete y **fuera del manifiesto** (así lo hace
+  `java.util.jar`, medido con `jarsigner`), y el firmante anterior se descarta **por sufijo** porque
+  este keystore de debug hace que `apksigner` escriba `ANDROIDD.SF`, no `ANDROID.SF`.
 - `apkc build` en wasm responde `aapt2 compile never started: pipe: not implemented on js`: el muro
   es la ausencia de proceso, no una ruta mal. **Ningún flag lo arregla.**
 - `d8` sobre una JVM wasm **no está probado**; es el experimento que decide la ambición y va antes
