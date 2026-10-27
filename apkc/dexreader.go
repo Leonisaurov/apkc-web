@@ -232,6 +232,26 @@ func (d *dexFile) readStringData() error {
 	return nil
 }
 
+// stringItemBytes is the whole string_data_item as the file holds it: the uleb128 count, the
+// modified utf-8 and the terminator. The writer compares against these bytes, which is the only
+// way to know that a count we chose is the count the format asked for.
+func (d *dexFile) stringItemBytes(i int) []byte {
+	if i < 0 || i >= len(d.strings) {
+		return nil
+	}
+	off := dexLittleEndian.Uint32(d.raw[d.tableOff["string_ids"][1]+uint32(i)*4:])
+	_, body, err := d.uleb(off)
+	if err != nil {
+		return nil
+	}
+	inicio := int(body)
+	end := byteIndex(d.raw[inicio:], 0)
+	if end < 0 {
+		return nil
+	}
+	return d.raw[int(off) : inicio+end+1]
+}
+
 func (d *dexFile) uleb(at uint32) (uint32, uint32, error) {
 	var value uint32
 	var shift uint

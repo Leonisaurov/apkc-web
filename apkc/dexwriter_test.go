@@ -169,3 +169,67 @@ func readSleb(b []byte) (int32, bool) {
 	}
 	return 0, false
 }
+
+// TestWriteStringsReproducesD8sStringArea byte for byte: the 53 strings of the fixture, fed in
+// reverse so the sorting has to do the work, must come back as the bytes d8 wrote. This is the
+// first place where the writer is measured against the tool it replaces rather than against
+// itself, and it checks two things at once: the code-unit order and the uleb128 counts.
+func TestWriteStringsReproducesD8sStringArea(t *testing.T) {
+	d, err := readDex(fixtureDex(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	alreves := append([]string{}, d.strings...)
+	for i, j := 0, len(alreves)-1; i < j; i, j = i+1, j-1 {
+		alreves[i], alreves[j] = alreves[j], alreves[i]
+	}
+
+	producido := writeStrings(alreves)
+
+	esperado := []byte{}
+	for i := range d.strings {
+		item := d.stringItemBytes(i)
+		if len(item) == 0 {
+			t.Fatalf("string #%d has no bytes to compare against", i)
+		}
+		esperado = append(esperado, item...)
+	}
+
+	if !bytes.Equal(producido, esperado) {
+		t.Errorf("the string area differs from d8's: %d bytes written against %d", len(producido), len(esperado))
+		// donde empieza a diferir, porque un offset de mas o de menos lo desplaza todo
+		for i := 0; i < len(producido) && i < len(esperado); i++ {
+			if producido[i] != esperado[i] {
+				fino := i
+				for fino > 0 && producido[fino-1] != esperado[fino-1] {
+					fino--
+				}
+				t.Errorf("first difference at byte %d: % x against % x", fino,
+					producido[fino:intMin(fino+16, len(producido))], esperado[fino:intMin(fino+16, len(esperado))])
+				break
+			}
+		}
+	}
+
+	// la concatenacion solo equivale al area si los items vienen detras unos de otros: si d8
+	// hubiera dejado padding entre cadenas, comparar bytes sueltos no diria nada. Cada offset
+	// tiene que ser el final del item anterior, y eso es lo que se comprueba aqui.
+	base := dexLittleEndian.Uint32(d.raw[d.tableOff["string_ids"][1]:])
+	anterior := base
+	for i := range d.strings {
+		off := dexLittleEndian.Uint32(d.raw[d.tableOff["string_ids"][1]+uint32(i)*4:])
+		if off != anterior {
+			t.Errorf("string #%d starts at %d and the previous item ended at %d: the area is not contiguous", i, off, anterior)
+			break
+		}
+		anterior = off + uint32(len(d.stringItemBytes(i)))
+	}
+}
+
+func intMin(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

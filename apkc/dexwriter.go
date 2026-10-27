@@ -116,6 +116,23 @@ func mutf8OrderLess(a, b string) bool {
 	return len(ua) < len(ub)
 }
 
+// writeStrings lays a set of strings out as the string_data_item area of a dex: in code-unit
+// order, each one preceded by its utf-16 unit count and terminated by a zero byte, with no
+// padding between them (the format gives the items no alignment, which is what makes the
+// concatenation comparable).
+func writeStrings(items []string) []byte {
+	orden := append([]string{}, items...)
+	sortByMUTF8(orden)
+	out := []byte{}
+	for _, s := range orden {
+		enc := encodeMUTF8(s)
+		out = putUleb(out, uint32(utf16Len(s)))
+		out = append(out, enc...)
+		out = append(out, 0)
+	}
+	return out
+}
+
 // sortByMUTF8 puts a slice of strings in the order the string_ids table requires, in place.
 func sortByMUTF8(s []string) {
 	sort.Slice(s, func(i, j int) bool { return mutf8OrderLess(s[i], s[j]) })
