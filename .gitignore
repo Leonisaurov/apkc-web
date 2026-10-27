@@ -7,8 +7,10 @@
 apkc/apkc
 apkc/apkc.exe
 
-# wasm_exec.js viene del GOROOT de quien lo corre: cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" shim/
+# wasm_exec.js viene del GOROOT de quien lo corre: cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" …
+# (shim/ lo monta el gate y studio/ la prueba de pestana; ninguno de los dos lo versiona)
 shim/wasm_exec.js
+studio/wasm_exec.js
 
 node_modules/
 .DS_Store
