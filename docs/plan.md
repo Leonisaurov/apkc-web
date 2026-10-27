@@ -122,10 +122,24 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
 - **2G.1** Lector del `.class` y del `.dex`. **Hecha la mitad del dex** (apkc-web `18c9773`):
   `apkc/dexreader.go` lee cabecera, `map_list`, las cinco tablas de índices y `class_defs`, con el
   `classes.dex` real de `d8` de fixture y sus cuentas como aserciones (`docs/evidencia.md` §16; 98 a 105
-  tests). Queda pendiente leer `code_item` e instrucciones, que hará falta para la comparación fina.
+  tests). **Hecha también la lectura de `code_item`** y del `class_data_item` (§20): los nueve cuerpos y
+  los recuentos por clase casan con `javap`.
 - **2G.2** Escritor de secciones: `string_ids`/`type_ids`/`proto_ids`/`field_ids`/`method_ids`, orden
   canónico (los índices salen de `d8`, no de un capricho nuestro) y `map_list`.
+  **La mitad de las tablas está hecha y medida**: internadas desde los `.class`, son iguales en
+  contenido y en orden a las de `d8` (§19). De la cabecera y el `map_list`, pendiente.
 - **2G.3** `class_data_item`, `code_item` y `debug_info_item`: la codificación de instrucciones en sí.
+  **Leídos y casados con `javap`** (§20): la cabecera del `code_item` son dieciséis bytes y las
+  instrucciones empiezan en +16, con `ins_size` igual al `args_size` de `javap` en los nueve métodos,
+  `registers_size` siempre por encima de sus `locals`, `outs_size` siempre por debajo de su
+  `max_stack`, `tries_size` cero (ninguno tiene tabla de excepciones) y el `u32` de +8 cayendo dentro
+  del área `debug_info_item` que declara el `map_list`. Dos cosas quedan para escribir: **la
+  traducción de las 16 operaciones JVM a sus formatos dalvik** (registros, y no literalidades — cada
+  formato tiene su propia cuenta de operandos), y **los `debug_info_item` compartidos**: nueve
+  métodos usan siete, porque `d8` deduplica los cuerpos con las mismas líneas; emitir uno por método
+  dará un dex más grande sin estar mal.
+  **Sin medir a propósito**: `try_item` y `encoded_catch_handler`, porque ninguno de los nueve metodos
+  del fixture los tiene; hara falta un fichero con `try` antes de escribirlos.
 - **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. Si difiere, `xxd` y escribir
   a qué sección corresponde; se acepta diferencia documentada **solo si el apk se instala y arranca**.
 - **2G.5** La frontera declarada y probada por separado: lambdas, `invokedynamic`, default methods,

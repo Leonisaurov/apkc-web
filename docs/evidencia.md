@@ -541,3 +541,119 @@ Lo que queda para que el dex sea un fichero: `class_data_item`, `code_item` (tra
 operaciones a registros dalvik), `debug_info_item`, y el ensamblado con `map_list`, cabecera y los
 dos checksums (2G-E y 2G-F). Lo que **no** entra: `invokedynamic`, lambdas y desugaring de
 dependencias (§14 y plan 2G.5).
+
+## 20. La cabecera del `code_item`, palabra por palabra, casada con `javap` y con el `map_list`
+
+Aquí es donde la precaución de no fiarse de la memoria pagó dos veces. Primero, porque la lectura
+canónica que yo recordaba (doce bytes antes de las instrucciones) **no cuadra con el fichero que
+escribió `d8 9.2.4-dev`**: seguirla da un `tries_size` de 1170 o un `code_item` que pide 452998451
+palabras. Después, porque cuando escribí "lo que este fork no sabe" todavía no había casado las
+cuatro palabras bajas con nada, y el `map_list` que usaba de referencia tenía dos etiquetas
+cruzadas (`0x2000`/`0x2003`), con lo que cualquier conclusión sobre *dónde vive cada área* salía con
+sentido pero falsa. Corregido el mapa, las seis palabras se nombran solas.
+
+Los bytes del fixture (`R$<init>;` en el offset 1064): el opcode `0x70` (`invoke-direct`) está en
+**+16**, la palabra `0x000e` (`return-void`) en **+22**, y el `u16` en **+12** vale **4**, que es
+justo las palabras de `invoke-direct {v0}, Object.<init>` (3) y `return-void` (1). La comprobación
+global que cierra el asunto: con ese desplazamiento, los nueve `code_item` **balacean** el área de
+código sin solaparse, cada uno ocupa `16 + 2·unidades` y el hueco hasta el siguiente es de a lo sumo
+3 bytes de alineado; el último termina antes de donde el mapa dice que empieza `debug_info_item`.
+
+El mapa del fixture, ordenado por offset (es lo que permite decir si un número es un offset de debug
+o una cantidad de palabras):
+
+| sección | offset | tamaño |
+| --- | --- | --- |
+| `header` | 0 | 1 |
+| `string_ids` | 112 | 53 |
+| `type_ids` | 324 | 23 |
+| `proto_ids` | 416 | 9 |
+| `field_ids` | 524 | 4 |
+| `method_ids` | 556 | 17 |
+| `class_defs` | 692 | 6 |
+| `code_item` | **884** | 9 |
+| `debug_info_item` | **1160** | 7 (el área acaba en 1192, donde empieza `type_list`) |
+| `type_list` | 1192 | 8 |
+| `string_data_item` | 1258 | 53 |
+| `annotation_item` | 2311 | 8 |
+| `class_data_item` | **2384** | 6 |
+| `encoded_array_item` | 2465 | 3 |
+| `class_annotation_set_item` | 2484 | 6 |
+| `annotations_directory_item` | 2548 | 5 |
+| `map` | 2636 | 1 |
+
+Y las palabras de cada cabecera, con al lado lo que `javap -v` midió sobre los mismos `.class`
+(§17):
+
+| método | off | +0 reg | +2 ins | +4 outs | +6 tries | +8 debug | +12 palabras | args | locals | max_stack | bytes Code |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `MainActivity$1.onMenuItemClick` | 884 | 4 | 2 | 3 | 0 | 1160 | 14 | 2 | 2 | 3 | 15 |
+| `MainActivity$1.<init>` | 928 | 2 | 2 | 1 | 0 | 1165 | 6 | 2 | 2 | 2 | 10 |
+| `MainActivity.onCreateOptionsMenu` | 956 | 3 | 2 | 2 | 0 | 1165 | 16 | 2 | 2 | 4 | 24 |
+| `MainActivity.<init>` | 1004 | 1 | 1 | 1 | 0 | 1170 | 4 | 1 | 1 | 1 | 5 |
+| `MainActivity.onCreate` | 1028 | 2 | 2 | 2 | 0 | 1174 | 9 | 2 | 2 | 2 | 12 |
+| `R$id.<init>` | 1064 | 1 | 1 | 1 | 0 | 1170 | 4 | 1 | 1 | 1 | 5 |
+| `R$layout.<init>` | 1088 | 1 | 1 | 1 | 0 | 1180 | 4 | 1 | 1 | 1 | 5 |
+| `R$style.<init>` | 1112 | 1 | 1 | 1 | 0 | 1184 | 4 | 1 | 1 | 1 | 5 |
+| `R.<init>` | 1136 | 1 | 1 | 1 | 0 | 1188 | 4 | 1 | 1 | 1 | 5 |
+
+Lo que se puede afirmar de la tabla, y está asertado en el test:
+
+- **+2 es `ins_size`**: coincide con `args_size` de `javap` en **nueve de nueve**. Es la única
+  coincidencia exacta entre las cuatro palabras bajas, y por eso fue la primera en tener nombre.
+- **+0 es `registers_size`**: nunca por debajo de los `locals` de `javap` (empata salvo donde el
+  método necesita temporales: 4 frente a 2 en `onMenuItemClick`, 3 frente a 2 en
+  `onCreateOptionsMenu`), y nunca por debajo de `ins_size` ni de `outs_size`.
+- **+4 es `outs_size`**, la llamada más ancha: en las nueve no pasa de `max_stack`, que es justo lo que
+  exige el hecho de que la pila de la JVM tuvo que sostener esos mismos argumentos antes del
+  `invoke`. Nótese que **no** es `max_stack`: `onCreateOptionsMenu` tiene pila 4 y `outs_size` 2.
+- **+6 es `tries_size`**: cero en las nueve, y `javap` no muestra `exception table` en ninguna. El
+  `u16` en **+14** también es cero, pero no por tries: es la mitad alta del `u32` de `insns_size`.
+- **+8 es `debug_info_off`**: los nueve valores caen dentro del área `debug_info_item` que declara
+  el mapa (1160..1192). Esto es lo que antes se leía mal — con `0x2003` etiquetado como
+  `class_data_item` parecía un valor "dentro del área de class_data, así que no puede ser un offset
+  de debug". Un mapa mal etiquetado hace decir cualquier cosa sobre dónde vive cada estructura.
+- **+12 es `insns_size`** como `u32`: `2·palabras` no baja de los bytes de `Code` en las nueve (una
+  instrucción JVM
+  se vuelve al menos una palabra dalvik y las hay de dos), y `16 + 2·palabras` es el item entero.
+
+Total de palabras: **65** para las 47 instrucciones JVM del §14, dentro del área 884..1160 (276
+bytes) que el mapa asigna a 9 `code_item`.
+
+**Otra cosa que solo se ve comparando**: los nueve métodos usan **siete** `debug_info_item`
+distintos — `d8` comparte el de `MainActivity.<init>` con el de `R$id.<init>` (1170) y el de
+`MainActivity$1.<init>` con `onCreateOptionsMenu` (1165). El escritor que emita un debug_info por
+método no será byte a byte igual que `d8` aunque cada item sea correcto; esto es lo que hay que
+deduplicar en 2G-F, no un error de codificación.
+
+Comprobación:
+
+```sh
+sh -c 'cd apkc && go test -run "ReadClassData|CodeItems" -v .'
+```
+
+**Resultado**: verde. `TestReadClassDataSplitsTheSixClassesTheWayJavacLeftThem` casa los recuentos
+del `class_data_item` con `javap` — `{1,2,0,0}` en `MainActivity`, `{1,1,0,1}` en la anónima (su
+`this$0`), `{1,0,1,0}` en cada `R*`, `{1,0,0,0}` en `R`, 9 métodos con cuerpo y 3 constantes
+estáticas — y `TestCodeItemsAddUpToTheFile` exige la tabla de arriba más el solape, el hueco de
+alineado, el `0x70` inicial y las relaciones con `javap` y con el área de debug. La suite nativa
+sube a **131 tests** (`--- PASS` 131, `--- FAIL` 0) y la misma binaria en el hospedador de navegador
+da **127 PASS más 4 SKIP, rc 0** (los cuatro que faltan son `TestSigningKey*`, que piden el
+keystore de debug del `HOME` real, y `TestKotlinShortcomings*`, que necesita ejecutar un fichero
+0755: en `GOOS=js` no hay proceso, así que el test se salta y lo dice).
+
+**Dos cosas que se rompieron por no leer antes con cuidado**, escritas para que no se repitan con
+otro fichero: el tipo de valor de un campo estático empieza en el **bit 16** de `access_flags`, no
+en el 4 (leerlo desde el 4 convertía `ACC_FINAL` en un "valor de tipo 1" y descentraba la clase
+entera), y un campo solo puede traer valor si es **estático**. Y el desplazamiento dentro de
+`type_list` era de 2 bytes por `type_item`, no de 4.
+
+**Lo que sigue sin medir**: las tablas de `try_item`/`encoded_catch_handler` que van detrás del
+código, porque ninguno de los nueve métodos las tiene. `tamanoEnBytes` lo dice en el comentario y
+`tries_size` distinto de cero se rechazaría, no se adivinaría; hará falta un fixture con `try` antes
+de escribir esas dos estructuras.
+
+También queda anotado el modo de trabajo: a media fase 2G estuve parcheando estos ficheros con
+scripts de `python` en vez de la herramienta de edición, y salieron duplicados (`anchoValor` dos
+veces), tipos borrados de un tajo y comentarios rotos. Con lectura previa y `Edit` se ve lo que se
+toca; con `sed` no.

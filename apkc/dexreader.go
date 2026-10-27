@@ -55,10 +55,13 @@ var dexMapKind = map[dexKind]string{
 	0x0000: "header", 0x0001: "string_ids", 0x0002: "type_ids", 0x0003: "proto_ids",
 	0x0004: "field_ids", 0x0005: "method_ids", 0x0006: "class_defs", 0x0007: "call_site_ids",
 	0x0008: "method_handle_ids", 0x1000: "map", 0x1001: "type_list", 0x1002: "annot_set_list",
-	0x1003: "class_annotation_set_item", 0x2000: "debug_info_item", 0x2001: "code_item",
-	0x2002: "string_data_item", 0x2003: "class_data_item", 0x2004: "type_item",
-	0x2005: "annot_item", 0x2006: "annot_set", 0x2007: "annotations_directory",
-	0x2008: "bytecode_data",
+	0x1003: "class_annotation_set_item",
+	// la banda 0x20xx: estos valores los tuve mal una revisión entera (0x2000 es class_data y no
+	// debug_info, 0x2003 es debug_info y no class_data), y un mapa mal etiquetado hace que
+	// cualquier conclusion sobre donde esta cada cosa salga con sentido pero falsa
+	0x2000: "class_data_item", 0x2001: "code_item", 0x2002: "string_data_item",
+	0x2003: "debug_info_item", 0x2004: "annotation_item", 0x2005: "encoded_array_item",
+	0x2006: "annotations_directory_item",
 }
 
 func (k dexKind) String() string {
@@ -93,12 +96,15 @@ type dexMethod struct {
 }
 
 type dexClass struct {
-	name       string
-	super      string
-	access     uint32
-	directs    int
-	virtuals   int
-	sourceName string
+	name     string
+	super    string
+	access   uint32
+	directs  int
+	virtuals int
+
+	// where this class's own data starts, so the reader of class_data_item can be pointed at
+	// it without the caller recomputing the offset of the entry
+	dataOff uint32
 }
 
 // dexFile is a parsed classes.dex: the index tables resolved to strings, which is the form a
@@ -190,7 +196,7 @@ func (d *dexFile) readInts() error {
 // length) answer 0 and are not checked by stride: their offset still has to be inside the file.
 func dexItemStride(kind dexKind) uint32 {
 	switch kind {
-	case 0x0001, 0x0002, 0x2004:
+	case 0x0001, 0x0002: // string_ids y type_ids: un u32 cada uno
 		return 4
 	case 0x0003:
 		return dexProtoSize
@@ -375,7 +381,7 @@ func (d *dexFile) resolveClasses() error {
 		if int(cidx) >= len(d.types) || int(super) >= len(d.types) {
 			return fmt.Errorf("class_defs #%d names type %d or %d out of range", i, cidx, super)
 		}
-		c := dexClass{name: d.types[cidx], super: d.types[super], access: access}
+		c := dexClass{name: d.types[cidx], super: d.types[super], access: access, dataOff: classDataOff}
 		if classDataOff != 0 {
 			// class_data_item: sizes first as uleb128 (static fields, instance fields,
 			// direct methods, virtual methods); only the two method counts are needed here
