@@ -18,6 +18,7 @@ import (
 // sale de los primeros bytes vistos con xxd. Todo lo demas esta deducido de los ficheros de aapt2,
 // como queda escrito en docs/evidencia.md §24.
 
+// los helpers de lectura que usan solo este instrumento de medicion
 func u16en(b []byte, i int) uint16 { return binary.LittleEndian.Uint16(b[i:]) }
 func u32en(b []byte, i int) uint32 { return binary.LittleEndian.Uint32(b[i:]) }
 
@@ -95,7 +96,7 @@ func recorre(b []byte, desde, hasta, nivel int, t *testing.T) {
 			paquete(b, off, hs, size, pad, t)
 			recorre(b, off+hs, off+size, nivel+1, t)
 		case 0x0201:
-			bloqueTipo(b, off, hs, size, pad, t)
+			volcarBloqueTipo(b, off, hs, size, pad, t)
 		}
 		off += size
 	}
@@ -158,12 +159,12 @@ func cadenas(b []byte, off int, pad string, t *testing.T) {
 	for i := 0; i < n; i++ {
 		o := off + hs + i*4
 		desde := inicio + int(u32en(b, o))
-		s := leeCadena(b, desde, off+size, flags&0x100 != 0)
+		s := leeCadenaCruda(b, desde, off+size, flags&0x100 != 0)
 		t.Logf("%s   [%2d] @%-4d %q", pad, i, desde, s)
 	}
 }
 
-func leeCadena(b []byte, desde, hasta int, esUTF8 bool) string {
+func leeCadenaCruda(b []byte, desde, hasta int, esUTF8 bool) string {
 	if desde >= hasta {
 		return ""
 	}
@@ -238,9 +239,9 @@ func paquete(b []byte, off, hs, size int, pad string, t *testing.T) {
 	}
 }
 
-// bloqueTipo: las entradas de un tipo, con su clave y su Res_value. Los offsets son RELATIVOS a
+// volcarBloqueTipo: las entradas de un tipo, con su clave y su Res_value. Los offsets son RELATIVOS a
 // entriesStart, no al principio del trozo: sumarlos a `off` da la cabecera del propio tipo.
-func bloqueTipo(b []byte, off, hs, size int, pad string, t *testing.T) {
+func volcarBloqueTipo(b []byte, off, hs, size int, pad string, t *testing.T) {
 	n := int(u32en(b, off+12))
 	entriesStart := int(u32en(b, off+16))
 	t.Logf("%s   offsets de entrada (entriesStart=%d, array en +%d):", pad, entriesStart, hs)

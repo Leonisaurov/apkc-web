@@ -1008,7 +1008,57 @@ fijadas y de las que corrieron dentro de wasm (`sha1 920c0f3ec828e835d7dc8f848be
 que el recuento del §14 y las pruebas fijadas en base64 describen el proyecto real, no una version
 suya.
 
-Esto cierra una duda que el metodo de fixtures dejaba abierta: que el pinado en base64 se hubiera
-quedado atras respecto a lo que producen hoy el `javac` y el `aapt2` del telefono. No: son los
+Esto cierra una duda que el método de fixtures dejaba abierta: que el pinado en base64 se hubiera
+quedado atrás respecto a lo que producen hoy el `javac` y el `aapt2` del teléfono. No: son los
 mismos bytes, y por eso la comparación contra `d8` del §21 y el byte a byte del §22 valen para el
 proyecto que genera la página, no solo para el fixture.
+
+## 26. Lector Go del AXML y de la tabla de recursos, con los ficheros de `aapt2` de fixture
+
+`apkc/recursos.go` lee las dos estructuras. Los ficheros contra los que se prueba son los de este
+teléfono, fijados en base64 en `apkc/recursosfixture_test.go` (2000 y 1088 bytes, `assert` de la
+longitud en el test). Es el mismo método del §16 con el dex: antes de escribir nada que el sistema
+tenga que aceptar, hay que poder leer lo que acepta hoy y decir en qué se diferencia.
+
+Lo que reprodujo el lector a la primera, tal como se midió en el §24: las 31 cadenas UTF-16 del
+manifiesto, los 12 ids del `XML_RESOURCE_MAP` (el primero `0x01010000`), los **16** trozos de nodo
+(dos de espacio de nombres y catorce de etiqueta), y los siete atributos de `<manifest>` **por su
+nombre** — `versionCode`, `versionName`, `compileSdkVersion`, `compileSdkVersionCodename`,
+`package`, `platformBuildVersionCode`, `platformBuildVersionName`, el mismo orden que imprime
+`aapt2 dump xmltree`, con `versionCode` en entero (`tipo 0x10, datos 1`) y `versionName` como
+referencia de cadena (`0x03`, que es `"0.1"`). En la tabla: pool global de una cadena en UTF-8
+(`res/layout/main.xml`), paquete 127 con su nombre, tres tipos y tres claves, cuatro bloques, la
+entrada `pulsar` con su clave, `main` apuntando a la pool global y el `ResTable_config` de 64 bytes.
+
+Tres cosas que antes no estaban medidas y salieron leyendo:
+
+- **La forma del valor complejo de un estilo.** La entrada declara 16 bytes: tamaño, banderas, clave,
+  y **dentro de esa cabecera** el id del padre (`0x0103012b`, un id de estilo del framework) y un
+  recuento. Detrás van registros de doce bytes: nombre `u32` + `Res_value` de ocho (`size=8`,
+  reserva, `dataType`, `datos`). Los cuatro del primer bloque son `0x01010054`, `0x01010056`,
+  `0x010102cd`, `0x01010451`, todos ids de atributo.
+- **El campo de recuento no se entiende todavía, y se dice.** Las dos configuraciones de `AppTheme`
+  declaran `4` registros y traen **4 y 5**: el bloque de la segunda termina con un registro más del
+  que anuncia su cabecera. El lector guarda los registros crudos, comprueba su forma (que cada
+  nombre empiece en `0x01…` y que cada valor mida 8) y no interpreta el conteo. Medirlo es lo
+  primero de 3-C, porque para **escribir** un estilo hay que saber qué número va ahí.
+- **Las banderas de `ResTable_entry` viajan crudas.** `pulsar` mide 8 con `flags 0x04`, `main` 8 con
+  `0x00`, `AppTheme` 16 con `0x01`. Qué bit significa "pública" y cuál "compleja" no se afirma aquí:
+  el lector usa `tam==16 && flags&1` porque es lo que separa el estilo de las simples en este
+  fichero, y lo demás se medirá al emitir.
+
+Y cinco rechazos probados, cada uno con un byte cambiado sobre el fixture: el `file_size` del XML,
+un offset de cadena fuera de su pool, un nombre de etiqueta fuera de la tabla, un `packageCount`
+distinto de uno, una cabecera de paquete con `headerSize` inventado, una clave fuera de la tabla y
+un valor complejo mal alineado. Ninguno se acepta; ninguno panica.
+
+```sh
+sh -c 'cd apkc && go test -run "Lector" -v .'
+```
+
+**Resultado**: tres pruebas en verde. La suite nativa sube a **145 tests** (`--- FAIL` 0) y la
+misma binaria en `GOOS=js` dentro del hospedador de navegador da **140 PASS más 6 SKIP, rc 0**.
+
+Con esto la Fase 3 ya tiene con que comparar: cuando el emisor escriba su `AndroidManifest.xml`, la
+comprobación es `leeAXML(lo nuestro)` contra `leeAXML(lo de aapt2)` y, por fuera, `aapt2 dump
+xmltree` sobre los dos.

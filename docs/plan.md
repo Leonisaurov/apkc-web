@@ -221,6 +221,16 @@ layout), nodo de 16 con su `attrExt` de 20 y atributos de 20, y en la tabla: `TA
 de entrada **relativos a `entriesStart`** y un `ResTable_config` de **64 bytes**. Los dos ficheros
 terminan clavados al tamano declarado, asi que no queda trozo sin explicar.
 
+**3-B HECHA** (§26): `apkc/recursos.go` lee las dos estructuras. Los ficheros de `aapt2` están
+fijados en base64 en `apkc/recursosfixture_test.go` (2000 y 1088 bytes, con la longitud asertada) y
+el lector reproduce las cuentas del §24: 31 cadenas UTF-16 y los 12 ids del manifiesto, sus
+**16** trozos de nodo y los siete atributos de `<manifest>` **por su nombre**, en el orden que
+imprime `aapt2 dump xmltree`. Salió además la forma del valor complejo de un estilo (cabecera de 16
+con padre `0x0103012b` y recuento dentro, y registros de doce bytes detrás) y **un hueco dicho con
+nombre**: las dos configuraciones de `AppTheme` declaran cuatro registros y traen cuatro y cinco, así
+que el conteo no se interpreta hasta medirlo en 3-C — escribir un estilo sin saber eso es escribir un
+`.arsc` que puede Installarse mal. Siete rechazos probados cambiando un byte del fixture.
+
 Por formato, cada uno con su oraculo y su test:
 
 - **3.1 AXML del layout** — binario de `res/layout/*.xml` (cabeceras, pool de strings, nodos,
