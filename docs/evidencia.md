@@ -981,3 +981,34 @@ Suite nativa con el instrumento del §24 dentro del repo: **142 PASS / 0 FAIL** 
 prueba se salta sin `APKC_ARBOLES`). La misma binaria en `GOOS=js` dentro del hospedador de
 navegador: **137 PASS más 6 SKIP, rc 0**, y el sexto salto es el propio volcado, que pide los
 ficheros del SDK que en wasm no existen.
+
+## 25. Las clases del disco real producen el mismo dex que las fijadas en base64
+
+El dexer estaba probado contra los `.class` del proyecto fijados en el test (§17). Quedaba por ver
+si lo mismo salía de un `apkc build` de verdad, con el `javac` y el `aapt2` de este teléfono, y no de
+una copia en base64. Se hizo con la medición del §24 (proyecto generado por la página, `build/`
+borrado antes de compilar para que no quedara nada viejo):
+
+```sh
+# el arbol limpio: seis .class y dos .flat, ni uno mas
+rm -rf build && apkc build
+find build/classes -name '*.class' | wc -l        # -> 6
+ls build/flats | wc -l                            # -> 2
+
+apkc dex -o /tmp/nuestro-real.dex build/classes
+java -cp ~/Android/build-tools/34.0.0/lib/d8.jar com.android.tools.r8.D8 \
+  --min-api 21 --release --output out /tmp/nuestro-real.dex    # -> rc 0
+cmp /tmp/nuestro-real.dex /tmp/nuestro-wasm.dex                 # -> identicales
+```
+
+**Resultado**: `2392 bytes`, **exactamente los mismos bytes** que el dex que sale de las clases
+fijadas y de las que corrieron dentro de wasm (`sha1 920c0f3ec828e835d7dc8f848be84b7ba25d7dd4`), y
+`d8` lo acepta como entrada con `rc 0`. Con un `build/` limpio no queda ni un `.class` de mas: la
+`R` que escribe `aapt2` son las cuatro clases ya contadas (`R`, `R$id`, `R$layout`, `R$style`), asi
+que el recuento del §14 y las pruebas fijadas en base64 describen el proyecto real, no una version
+suya.
+
+Esto cierra una duda que el metodo de fixtures dejaba abierta: que el pinado en base64 se hubiera
+quedado atras respecto a lo que producen hoy el `javac` y el `aapt2` del telefono. No: son los
+mismos bytes, y por eso la comparación contra `d8` del §21 y el byte a byte del §22 valen para el
+proyecto que genera la página, no solo para el fixture.

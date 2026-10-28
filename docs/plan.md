@@ -213,7 +213,7 @@ que es lo que hay que emitir. El dex ya sale de este fork (§22) y el zip con fi
 El `.flat` intermedio (1076 + 536) **no viaja en el apk**, así que 3.5 se resuelve en "no hay que
 emularlo" y se cierra.
 
-**3-A HECHA** (§24): la estructura está leda trozo a trozo desde los offsets que el propio fichero
+**3-A HECHA** (§24 y §25): la estructura está medida trozo a trozo desde los offsets que el propio fichero
 declara — encabezado comun de trozo, pool de cadenas en sus dos modos (UTF-16 en el manifiesto,
 UTF-8 en la tabla), `XML_RESOURCE_MAP` con los ids del framework (12 en el manifiesto, 6 en el
 layout), nodo de 16 con su `attrExt` de 20 y atributos de 20, y en la tabla: `TABLE` + pool global +
