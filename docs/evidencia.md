@@ -866,3 +866,118 @@ navegador: **137 PASS más 5 SKIP, rc 0**. Los cinco que se saltan son siempre p
 `TestKotlinShortcomings*` necesita ejecutar un fichero 0755, y `TestElBinarioDexa` compila y corre el
 binario: en `GOOS=js` no hay proceso, y lo que esa prueba comprueba lo comprueban arriba el hospedador
 de navegador y la prueba de disco.
+
+## 24. Fase 3 medida antes de escribir un byte: qué produce `aapt2` sobre el proyecto del studio
+
+Objetivo de la fase, en bytes y con el mando que los produce (el proyecto lo genera la propia
+página; la variable `STUDIO_OUT` es relativa a `$PREFIX/tmp`, que es donde el test escribe):
+
+```sh
+sh -c 'P=$PREFIX/tmp/fase3; rm -rf "$P"; mkdir -p "$P"; cd "$P" && \
+  STUDIO_KOTLIN=0 STUDIO_OUT=f3-proyecto.zip node '"$PWD"'/studio/prueba.js >/dev/null && \
+  unzip -q $PREFIX/tmp/f3-proyecto.zip -d "$P" && \
+  cd "$P"/com.hola.apkcstudio && $PREFIX/tmp/apkc-gate build'
+unzip -l build/app.apk
+```
+
+| qué | bytes | dónde |
+| --- | --- | --- |
+| `AndroidManifest.xml` binario | 2000 | en el apk y en `build/`, **idénticos** (`cmp`) |
+| `resources.arsc` | 1088 | idem |
+| `res/layout/main.xml` binario | 784 | el layout del apk también es AXML, no texto |
+| `classes.dex` | 2844 | lo que ya escribe este fork en 2392 (§22) |
+| `build/flats/*.flat` | 1076 + 536 | paso intermedio de `aapt2 compile`; **no** viaja en el apk |
+| firma v1 (`META-INF/*`) | 500 + 1221 + 376 | la escribe el escritor Go de este fork (§7) |
+
+O sea: **la Fase 3 tiene que emitir 3872 bytes de recursos binarios** (2000 + 1088 + 784) y nada más,
+porque el `.dex` ya sale y el zip+firma ya sale. El apk entero del studio son 10348 bytes.
+
+**El instrumento** se quedó en el repo: `apkc/recursos_dump_test.go` anda el fichero trozo a trozo
+desde los offsets que el propio fichero declara y se salta sin `APKC_ARBOLES`. Todo lo que sigue es
+lo que imprimió sobre los ficheros de la tabla de arriba.
+
+### El AXML (los tres ficheros binarios comparten forma)
+
+Encabezado común a todos los trozos, medido con `xxd -l 32`: `type` en 0..1, `headerSize` en 2..3,
+`size` en 4..7. Con eso el resto se lee solo:
+
+| trozo | tipo | cabecera | contenido medido |
+| --- | --- | --- | --- |
+| `XML` | 0x0003 | 8 | solo tamano total (2000); los hijos empiezan en +8 |
+| `STRING_POOL` | 0x0001 | 28 | `cadenas`(4) `estilos`(4) `flags`(4) `stringsStart`(4) `stylesStart`(4), y tras la cabecera un `u32` por cadena **relativo a `stringsStart`** |
+| `XML_RESOURCE_MAP` | 0x0180 | 8 | una lista de `u32` con los ids de atributo (`0x01010000`, `0x01010001`, …): el del manifiesto son 12 ids en 56 bytes |
+| `XML_START_NS` / `END_NS` | 0x0100 / 0x0101 | 16 | nodo de 16 (`chunk`+`linea`+`comentario`) y luego `ns`(4) + `nombre`(4): `ns=18` ("android"), `nombre=24` (la URI) |
+| `XML_START_TAG` | 0x0102 | 16 | nodo de 16 + `attrExt` de **20**: `ns`(4) `nombre`(4) `attrStart`(2) `attrSize`(2) `attrCount`(2) `idIndex`(2) `classIndex`(2) `styleIndex`(2); los atributos empiezan en `+16+attrStart` |
+| `XML_END_TAG` | 0x0103 | 16 | nodo de 16 + `ns`(4) + `nombre`(4) = 24 exactos |
+
+Cada atributo son 20 bytes: `ns`(4) `nombre`(4) `rawValue`(4) `size`(2) `res0`(1) `dataType`(1)
+`data`(4). Y el `dataType` es el del `Res_value` del arsc: `0x03` = cadena (los datos son un índice
+de la pool), `0x10` = entero decimal, `0x01` = referencia. Comprobado contra el manifiesto de texto:
+el `<manifest>` sale con 7 atributos y 176 bytes (`36 + 7·20`), y los dos primeros son
+`android:versionCode=1` (`tipo 0x10, datos 1`) y `android:versionName="0.1"` (`raw=13`, `datos=13`,
+que en la pool es la cadena `"0.1"`. La pool del manifiesto son **31 cadenas, `flags=0` o sea
+UTF-16**, sin ordenar (en orden de primer uso), y el fichero termina clavado: el último trozo
+(`END_NS` en 1976, 24 bytes) da exactamente 2000.
+
+### El `resources.arsc`
+
+```
+@0     TABLE       hs=12  size=1088  packageCount=1
+@12    STRING_POOL hs=28  size=56    1 cadena, flags=0x100 (UTF-8): "res/layout/main.xml"
+@68    PACKAGE     hs=288 size=1020  id=127  nombre="com.hola.apkcstudio"
+                          typeStrings=288  lastPublicType=0  keyStrings=368  lastPublicKey=0  typeIdOffset=0
+  @356   STRING_POOL 3 cadenas UTF-16: id, layout, style
+  @436   STRING_POOL 3 cadenas UTF-8:  pulsar, main, AppTheme
+  @504/@628/@752  TYPE_SPEC hs=16 size=20 (una por tipo)
+  @524  TYPE id=1 hs=84 size=104  1 entrada  clave=0 "pulsar"  valor tipo 0x12 datos 0
+  @648  TYPE id=2 hs=84 size=104  1 entrada  clave=1 "main"    valor tipo 0x03 datos 0 ("res/layout/main.xml")
+  @772  TYPE id=3 hs=84 size=152  1 entrada  clave=2 "AppTheme" valor complejo (padre 0x01000008)
+  @924  TYPE id=3 hs=84 size=164  segunda configuracion del mismo tipo
+```
+
+(El `0x12` de la primera fila es el byte `dataType` del `Res_value` de un recurso de tipo `id`, con
+`datos=0`: un `id` no lleva valor. Los otros dos que aparecen aqui son `0x03` = cadena y, en el
+estilo, un valor complejo; el `dataType` que usa el **manifiesto** para sus enteros es `0x10`
+(decimal), medido arriba. Qué significa cada número del framework no se afirma aqui: se mide al
+escribir el emisor, con `aapt2 dump resources` como oráculo.)
+
+Tres cosas que se aprendieron leyendo, no recordando: los offsets de entrada de un `TYPE` son
+**relativos a `entriesStart`** (sumarlos al principio del trozo devuelve la cabecera del propio
+tipo); `entriesStart` vale 88 con `headerSize` 84 porque entre medias están los `u32` de los offsets,
+uno por entrada; y el `ResTable_config` que lleva cada `TYPE` ocupa **64 bytes** en esta versión de
+`aapt2` (de ahí el `hs=84`). El fichero también termina clavado: el último `TYPE` (924 + 164) es
+1088.
+
+**Y el oráculo existe en este teléfono**, aunque `dexdump` no: `aapt2 dump xmltree` sí es ejecutable
+y su salida casa con lo leído de los bytes:
+
+```sh
+~/Android/build-tools/34.0.0/aapt2 dump xmltree --file AndroidManifest.xml build/app.apk
+```
+
+```
+N: android=http://schemas.android.com/apk/res/android (line=1)
+  E: manifest (line=1)
+    A: http://schemas.android.com/apk/res/android:versionCode(0x0101021b)=1
+    A: http://schemas.android.com/apk/res/android:versionName(0x0101021c)="0.1" (Raw: "0.1")
+    A: http://schemas.android.com/apk/res/android:compileSdkVersion(0x01010572)=34
+    A: http://schemas.android.com/apk/res/android:minSdkVersion(0x0101020c)=21
+```
+
+Los ids entre paréntesis son los del `XML_RESOURCE_MAP` (§24) y los números de línea, los del campo
+`lineNumber` de cada trozo: las dos lecturas —la del árbol y la de los bytes— coinciden. Eso cambia
+el plan de la fase: la comprobación de 3.1 a 3.3 puede ser byte a byte contra `aapt2 dump`, sin
+esperar a un dispositivo.
+
+**Lo que esto decide para la Fase 3**: hay que emitir dos estructuras (AXML y tabla de recursos) con
+sus pools de cadenas en los dos modos (UTF-16 en el manifiesto, UTF-8 en la tabla y en las claves),
+los ids de framework que lleva el `XML_RESOURCE_MAP` (12 en el manifiesto, 6 en el layout) y el
+valor complejo de un estilo, que es lo único que todavía no está despiezado del todo. **Queda fuera
+de esta medición** el `.flat` (no viaja en el apk) y cualquier recurso que no sea `id`/`layout`/
+`style` del subconjunto del studio: dibujos, cadenas de texto y `drawable` no aparecen en el
+recuento y no se emiten todavía.
+
+Suite nativa con el instrumento del §24 dentro del repo: **142 PASS / 0 FAIL** (no suma tests: la
+prueba se salta sin `APKC_ARBOLES`). La misma binaria en `GOOS=js` dentro del hospedador de
+navegador: **137 PASS más 6 SKIP, rc 0**, y el sexto salto es el propio volcado, que pide los
+ficheros del SDK que en wasm no existen.

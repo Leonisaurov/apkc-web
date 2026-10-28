@@ -206,7 +206,22 @@ jerarquías), esto deja de ser una fase y pasa a ser otro proyecto. Eso se escri
 **Qué prueba**: escribir en Go las cuatro salidas que apkc pide hoy a `aapt2`, para un proyecto con
 `<TextView>` y `<Button>`, y que el apk resultante se instale y muestre la pantalla.
 
-Por formato, cada uno con su oráculo y su test:
+**Objetivo medido antes de escribir nada** (`docs/evidencia.md` §24, e instrumento de medición en
+`apkc/recursos_dump_test.go`): sobre el proyecto que genera la página, `aapt2` deja en el apk
+**2000 bytes de AXML de manifiesto, 1088 de `resources.arsc` y 784 del layout binario**: 3872 bytes,
+que es lo que hay que emitir. El dex ya sale de este fork (§22) y el zip con firma también (§7).
+El `.flat` intermedio (1076 + 536) **no viaja en el apk**, así que 3.5 se resuelve en "no hay que
+emularlo" y se cierra.
+
+**3-A HECHA** (§24): la estructura está leda trozo a trozo desde los offsets que el propio fichero
+declara — encabezado comun de trozo, pool de cadenas en sus dos modos (UTF-16 en el manifiesto,
+UTF-8 en la tabla), `XML_RESOURCE_MAP` con los ids del framework (12 en el manifiesto, 6 en el
+layout), nodo de 16 con su `attrExt` de 20 y atributos de 20, y en la tabla: `TABLE` + pool global +
+`PACKAGE` de cabecera 288 con dos pools de nombres, tres `TYPE_SPEC` y cuatro `TYPE`, con los offsets
+de entrada **relativos a `entriesStart`** y un `ResTable_config` de **64 bytes**. Los dos ficheros
+terminan clavados al tamano declarado, asi que no queda trozo sin explicar.
+
+Por formato, cada uno con su oraculo y su test:
 
 - **3.1 AXML del layout** — binario de `res/layout/*.xml` (cabeceras, pool de strings, nodos,
   atributos con resource ids). Oráculo: `aapt2 dump xmltree` byte a byte contra nuestra salida sobre
@@ -217,13 +232,18 @@ Por formato, cada uno con su oráculo y su test:
   instalable, así que su prueba final es el teléfono.
 - **3.4 `R.java`** — apkc ya lo genera hoy a partir de lo que enlaza `aapt2`; hay que alimentarlo del
   mismo mapa de ids que escribamos en 3.3, con los mismos números.
-- **3.5 `aapt2 compile` -> `.flat`** — posiblemente se pueda **saltar**: es un formato intermedio cuyo
-  único consumidor es `aapt2 link`. Si hacemos el link, los `.flat` sobran, y con ello se quita una
-  dependencia de formato. Confirmar antes de escribir nada.
+- **3.5 `aapt2 compile` -> `.flat`** — **resuelto sin escribir código** (§24): los `.flat` no viajan
+  en el apk; su único consumidor es `aapt2 link`, y si este fork hace el link, sobran.
 
 **Criterio de abandono**: si tras 3.1 y 3.3 el apk no se instala y la diferencia no se localiza en
 dos intentos, se para y se documenta. El formato no tiene spec pública: se trabaja contra las
 fuentes de `frameworks/base/tools/aapt2` y contra el oráculo, y eso tiene un techo.
+
+**El oráculo sí corre en este teléfono** (medido hoy): `aapt2 dump xmltree --file AndroidManifest.xml
+build/app.apk` responde y casa con lo que se leyó de los bytes en §24 (`versionCode(0x0101021b)=1`,
+`versionName(0x0101021c)="0.1"`, `minSdkVersion(0x0101020c)=21`). Lo que no es ejecutable aquí es
+`dexdump` (sigue valiendo `d8` como lector del dex, §22). Así que la comprobación de 3.1 a 3.3 puede
+ser **byte a byte contra la salida de `aapt2 dump`**, sin esperar a un dispositivo.
 
 **Coste**: semanas. No se abre antes de que la Fase 2 viva.
 
