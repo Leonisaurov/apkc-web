@@ -297,6 +297,29 @@ Por formato, cada uno con su oraculo y su test:
   (`leeTabla`, `leeAXML`, `leeMarco` leían `u16re` dentro del mensaje de error).
   **Falta el último puente**: leer los XML **en texto** (`res/values/*.xml`, layout y manifiesto) y
   producir los modelos con este marco, que es lo que la página va a necesitar.
+- **3-G del texto al modelo** — **MITAD HECHA** (párrafo 35): `apkc/valores.go` lee un
+  `res/values/*.xml` en texto y produce la `tablaEscribir`; el modelo sale **igual campo a campo** que el
+  escrito a mano, los bytes que escribe `arscwriter.go` siguen siendo los 752 idénticos del fixture y la
+  `R` sigue siendo el texto de aapt2. Rechaza las siete formas no medidas (color que no es color, bool
+  que no es booleano, tipo de recurso desconocido, item que no es `android:`, padre inexistente,
+  `<string>` con hijos y referencia propia resuelta antes de numerar).
+  **Restricciones de la otra mitad**, razonadas antes de escribir código (un par de intentos salieron
+  ficheros que no compilaban; se deja aqui lo que cuesta):
+  - **Hace falta dos pasadas sí o sí**: un layout declara ids con `@+id/pulsar`, esos ids entran en la
+    tabla, y la tabla se numera por posición; por tanto las referencias (`@style/AppTheme`,
+    `@android:style/TextAppearance.Large`) solo se pueden escribir cuando la tabla ya está ordenada.
+    El orden de emision ya está medido (§29): tipos alfabéticos, claves por tipo y dentro del tipo por
+    nombre, entradas por nombre, registros de estilo por id de atributo.
+  - **La línea del nodo no la da el decodificador de Go**: `InputPos()` cae detrás del `>` cuando los
+    atributos ocupan varias líneas (en el manifiesto `<activity` abre en la 13 y cierra en la 17, y
+    aapt2 anota 13). Hay que localizar el `<nombre` siguiente a un cursor que solo avanza.
+  - Los `xmlns:` de un namespace que no es `…/apk/res/android` **no dejan huella** en el binario
+    (medido en el §30 con `tools:`), así que el lector los descarta al construir el modelo.
+  - El manifiesto **gana cuatro atributos** que no están en el fuente (§30), y el valor de
+    `platformBuildVersionName` sale como **entero**, no como cadena.
+  - El tipo de cada valor **no se deduce del texto, se pide al atributo del framework** (`wrap_content`
+    es entero -2, `center` es hexadecimal 0x11) — §34. Lo que no esté en los enum/flags del attr cae
+    por orden: referencia `@…`, booleano, color `#…`, entero, y si no cadena con su crudo.
 
 **Criterio de abandono**: si tras 3.1 y 3.3 el apk no se instala y la diferencia no se localiza en
 dos intentos, se para y se documenta. El formato no tiene spec pública: se trabaja contra las

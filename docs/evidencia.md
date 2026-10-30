@@ -1499,3 +1499,44 @@ el volcado de `aapt2 dump resources` (`layout_width/wrap_content` y `fill_parent
 
 **Resultado**: tres pruebas de marco en verde. Nativa **158 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js`
 dentro del hospedador de navegador **152 PASS + 9 SKIP, rc 0**.
+
+## 35. Del `res/values/styles.xml` en texto a la misma tabla y a la misma `R`
+
+Primera mitad del paso 3-G: `apkc/valores.go` lee un `res/values/*.xml` en texto con el decodificador
+de Go y produce el modelo `tablaEscribir`. El fuente queda fijado en base64 (423 bytes,
+`sha256 a490b9438728f1af…`) —el mismo `styles.xml` con el que aapt2 dejo los ficheros del §24— y la
+prueba no muestrea: compara el modelo contra el que escribió a mano `arscwriter_test.go`.
+
+Lo que se comprueba, en tres niveles:
+
+- El modelo sale **igual campo a campo** (`reflect.DeepEqual` en tipos, claves, pool global, y por cada
+  entrada su clave, sus banderas, su valor, su padre y sus cinco registros). Las claves salen en el
+  orden medido —`pulsar`, `main`, `AppTheme`—, los tipos alfabéticos con id por posición, los registros
+  del estilo ordenados por id de atributo (`0x01010054`, `0x01010056`, `0x010102cd`, `0x01010451`,
+  `0x010104e0`) y el padre `@android:style/Theme.DeviceDefault.Light` resuelto contra la tabla del jar a
+  `0x0103012b`, que es el número que está en los bytes de aapt2.
+- Escrito el modelo, **los bytes siguen siendo los del fixture**: 936 bytes y los primeros 752 idénticos
+  a los de aapt2 con los dos campos de tamaño sustituidos, la misma comprobación del §29.
+- La `R` que sale del mismo modelo **es el texto de aapt2**, el de 493 bytes del §31.
+
+Las formas de los valores no se inventan: `string` es `0x03` con el texto en el pool global, `color`
+`0x1d` con el ARGB, `bool` `0x12` con −1 o 0, `integer` `0x10`, `item type="id"` un booleano a cero con
+banderas `0x0004` en la entrada, y todo eso se vio en las variantes del §29. Un `<color>` cuyo texto no
+es color, un `<bool>` que no dice `true`/`false`, un `<integer>` que no es número, un tipo de recurso no
+medido (`dimen`, un `type=` raro), un item de estilo que no sea `android:`, un padre inexistente en el
+framework, un `<string>` con un hijo, o una referencia al paquete propio intentando resolverse antes de
+numerar la tabla: **los siete se rechazan con nombre y razón**, y eso es la segunda prueba del fichero.
+
+```sh
+go test -C apkc -count=1 -run "TestValores" -v .
+```
+
+**Resultado**: dos pruebas en verde. Nativa **160 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del
+hospedador de navegador **154 PASS + 9 SKIP, rc 0** —esta parte corre allí también porque el marco que
+necesita el estilo está reconstruido a mano en la prueba con los ids y valores que §33 y §34 copiaran de
+`aapt2 dump resources`, y el hospedador no tiene `android.jar`.
+
+**Lo que queda de 3-G**: la otra mitad, que es la que exige las dos pasadas —leer layouts y manifiesto a
+árbol, descubrir los `@+id/…` (que añaden entradas a la tabla), numerar, y entonces escribir los AXML con
+las referencias resueltas y los cuatro atributos que el manifiesto gana. Las restricciones están escritas
+en `docs/plan.md`.
