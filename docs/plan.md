@@ -242,7 +242,15 @@ Por formato, cada uno con su oraculo y su test:
 - **3.1 AXML del layout** — binario de `res/layout/*.xml` (cabeceras, pool de strings, nodos,
   atributos con resource ids). Oráculo: `aapt2 dump xmltree` byte a byte contra nuestra salida sobre
   el layout del `studio/`.
+  **HECHO** (párrafo 30): `apkc/axmlwriter.go` produce los **784 bytes** del layout del estudio
+  **idénticos byte a byte**, leídos de vuelta por el lector de la 3-B y con el volcado de `aapt2`
+  idéntico por fuera.
 - **3.2 AXML del `AndroidManifest.xml`** — lo anterior más el mapa de recursos del paquete.
+  **HECHO** (párrafo 30): los **2000 bytes** del manifiesto también salen idénticos. Queda medido y
+  dicho en ese párrafo: el orden del pool (atributos con id por id, resto por ASCII), que el campo
+  `ns` de nodo y atributo apunta al **URI**, los `idIndex`/`classIndex`/`styleIndex` como 1-based, que
+  el valor crudo solo existe para las cadenas, y que `aapt2` **tira los atributos de los namespaces
+  que no conoce** (`tools:` no llega al binario) — lo que se descarta lo decide el que enlaza.
 - **3.3 `resources.arsc`** — tabla de recursos: paquetes, tipos, entradas, config flags, y el pool de
   strings con sus variantes. Oráculo: `aapt2 dump resources`. Es el que decide si el apk es
   instalable, así que su prueba final es el teléfono.

@@ -1244,3 +1244,68 @@ pruebas de primer nivel la suite nativa está en **147 PASS / 0 FAIL / 1 SKIP** 
 **149 PASS / 1 SKIP**; la misma binaria en `GOOS=js` dentro del hospedador de navegador da **142 PASS
 + 6 SKIP, rc 0** (144 y 6 contando subpruebas). Queda dicho el modo de contar, porque los párrafos
 anteriores usaban el otro y en más de un sitio se leen dos unidades de diferencia.
+
+## 30. El AXML del layout y el del manifiesto, escritos en Go: byte a byte con `aapt2` en los dos
+
+`apkc/axmlwriter.go` escribe los binarios XML. La comparación es la misma que en el §29 pero aquí **no
+hay diferencia que declarar**: los 784 bytes del `res/layout/main.xml` y los 2000 del
+`AndroidManifest.xml` que produjo el SDK de este teléfono salen **idénticos byte a byte**. Los dos
+ficheros quedan fijados en base64 (`apkc/recursosfixture_test.go`, con sus longitudes asertadas) y la
+prueba recorre los dos casos.
+
+Lo que hubo que medir, porque el manual no lo dice o miente:
+
+- **El orden del pool**: primero los nombres de atributo **que tienen id de recurso, ordenados por ese
+  id** —que es exactamente el orden del `XML_RESOURCE_MAP`— y después el resto de las cadenas
+  ordenadas por valor ASCII, con las mayúsculas antes que las minúsculas. En el layout: 6 + 8; en el
+  manifiesto: 12 + 19. El orden del fuente no tiene nada que ver: en el fuente el `TextView` declara
+  `style` el primero y en el binario sale el último.
+- **Los atributos de un elemento salen reordenados**: los de namespace por su id y luego los sin
+  namespace por nombre. Medido en los cuatro del `LinearLayout` y en los siete de `<manifest>`.
+- **El campo `ns` de un atributo y de un elemento es la posición del URI, no la del prefijo.**
+  Medido con un layout de dos namespaces (`tools:` incluido): los trozos de namespace llevan
+  prefijo (3) y URI (4), y el atributo apunta a **4**.
+- **`idIndex`, `classIndex` y `styleIndex` son índices 1-based** dentro de la lista ya ordenada de
+  atributos del propio elemento, y 0 si no hay. Medido: `android:id` el primero del `Button` da 1, y
+  `style` el último del `TextView` da 4.
+- **El valor crudo solo existe para las cadenas**, y entonces crudo y datos apuntan a la MISMA cadena
+  del pool (`text="Hello World!"` → raw 7 y datos 7). En los tipos numérico, de referencia y de enum o
+  flags el crudo vale −1. Es el campo que me faltó en el primer intento: salían 2 bytes distintos en
+  el layout y 8 en el manifiesto, y los ocho eran siempre los cuatro bytes de `datos` de un valor de
+  tipo `0x03`.
+- **Los tipos de valor que usan los dos ficheros**, copiados crudos: `0x01` referencia, `0x03` cadena,
+  `0x10` entero decimal (con `0xffffffff` para −1 y `0xfffffffe` para −2, que son `match_parent` y
+  `wrap_content`), `0x11` entero hexadecimal (`gravity="center"` → 0x11), `0x12` booleano (`true` →
+  0xffffffff, `false` → 0).
+- **`aapt2` tira los atributos de los namespaces que no conoce.** Probado con `tools:ignore` y
+  `tools:visibility` sobre un `FrameLayout`: ni los atributos ni la declaración `xmlns:tools` llegan
+  al binario (el fichero de tres namespaces declarados tiene un solo `START_NAMESPACE` y cinco
+  cadenas). Así que la decisión de qué se descarta es del que enlaza, no del escritor.
+- **Cuatro atributos del manifiesto no están en el fuente**: `compileSdkVersion` (34),
+  `compileSdkVersionCodename` ("14"), `platformBuildVersionCode` (34) y `platformBuildVersionName`,
+  que sale como **entero** 14 con crudo −1, no como cadena.
+
+Comprobación:
+
+```sh
+go test -C apkc -run "EscribeAXML" -v .
+# y por fuera, con el oráculo que no comparte código con nosotros:
+env APKC_ESCRIBE_AXML=$PREFIX/tmp/axml-out go test -C apkc -run EscribeAXMLContraFixture .
+mkdir -p $PREFIX/tmp/axml-out/paquete/res/layout && cd $PREFIX/tmp/axml-out &&
+  cp AndroidManifest.xml paquete/ && cp main.xml paquete/res/layout/ &&
+  cp $PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio/build/resources.arsc paquete/
+(cd paquete && zip -X -0 -q ../nuestro.apk AndroidManifest.xml resources.arsc res/layout/main.xml)
+A=$HOME/Android/build-tools/34.0.0/aapt2
+for f in AndroidManifest.xml res/layout/main.xml; do
+  $A dump xmltree --file $f nuestro.apk > n.txt; $A dump xmltree --file $f .../build/app.apk > a.txt
+  diff n.txt a.txt
+done
+```
+
+**Resultado**: dos pruebas en verde (la byte a byte sobre los dos ficheros, con su lectura de vuelta
+por el lector de la 3-B, y la de los seis rechazos: atributo de namespace sin id, atributo sin
+namespace con id, prefijo no declarado, dos ids para el mismo nombre, documento sin raíz y declaración
+de namespace sin URI). El `aapt2 dump xmltree` responde rc 0 sobre nuestro paquete y su volcado es
+idéntico al del apk de aapt2 en los dos ficheros. Suite nativa: **149 PASS / 0 FAIL / 1 SKIP** de
+primer nivel (151 con subpruebas); la misma binaria en `GOOS=js` en el hospedador de navegador **144
+PASS + 6 SKIP, rc 0** (146 con subpruebas).
