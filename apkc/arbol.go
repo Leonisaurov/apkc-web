@@ -20,6 +20,10 @@ import (
 	"strings"
 )
 
+// uriDeRecursos es el namespace cuyos atributos van al binario con id de framework; los demas no dejan
+// huella (parrafo 30).
+const uriDeRecursos = "http://schemas.android.com/apk/res/android"
+
 // attrFuente es un atributo tal como esta escrito en el texto, sin resolver.
 type attrFuente struct {
 	// prefijo es el que escribio el fuente: "android" en android:text, "" en style.
@@ -81,18 +85,27 @@ func leerArbolDe(f fuenteXML) (*arbolFuente, error) {
 			nodo := &nodoFuente{nombre: v.Name.Local, linea: lineaDeApertura(v.Name.Local)}
 			for _, a := range v.Attr {
 				if a.Name.Space == "xmlns" {
-					// xmlns:android="…" : el prefijo es el nombre del atributo
-					if _, visto := salida.lineaDe[a.Name.Local]; !visto {
-						salida.prefijos[a.Value] = a.Name.Local
-						salida.lineaDe[a.Name.Local] = nodo.linea
+					// xmlns:android="…" : el prefijo es el nombre del atributo. Solo se guarda el del
+					// namespace de recursos: los demas no dejan huella en el binario (parrafo 30).
+					if a.Value == uriDeRecursos {
+						if _, visto := salida.lineaDe[a.Name.Local]; !visto {
+							salida.prefijos[a.Value] = a.Name.Local
+							salida.lineaDe[a.Name.Local] = nodo.linea
+						}
 					}
 					continue
 				}
-				if a.Name.Local == "xmlns" {
+				if a.Name.Local == "xmlns" && a.Value == uriDeRecursos {
 					if _, visto := salida.lineaDe[""]; !visto {
 						salida.prefijos[a.Value] = ""
 						salida.lineaDe[""] = nodo.linea
 					}
+					continue
+				}
+				// un atributo de un namespace que no es el de recursos no llega al binario: medido en
+				// el parrafo 30 con tools:ignore, que aapt2 descarta junto con su declaracion. Si aqui
+				// se dejara pasar, el escritor lo leeria como si no llevara prefijo.
+				if a.Name.Space != "" && a.Name.Space != uriDeRecursos {
 					continue
 				}
 				nodo.attrs = append(nodo.attrs, attrFuente{
@@ -101,9 +114,10 @@ func leerArbolDe(f fuenteXML) (*arbolFuente, error) {
 					texto:   a.Value,
 				})
 			}
-			if v.Name.Space != "" {
-				nodo.prefijo = salida.prefijos[v.Name.Space]
+			if v.Name.Space != "" && v.Name.Space != uriDeRecursos {
+				return nil, fmt.Errorf("%s: un elemento del namespace %q, y eso no esta medido", f.nombre, v.Name.Space)
 			}
+			nodo.prefijo = salida.prefijos[v.Name.Space]
 			if len(pila) == 0 {
 				if salida.raiz != nil {
 					return nil, fmt.Errorf("%s: dos raices en el documento", f.nombre)

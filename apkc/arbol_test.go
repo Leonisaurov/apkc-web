@@ -137,6 +137,43 @@ func TestArbolDelManifiesto(t *testing.T) {
 	}
 }
 
+// dosNamespacesFuente y su binario son el experimento del parrafo 30: un layout que declara android: y
+// tools:, y el fichero de 368 bytes que aapt2 dejo despues de TIRAR los atributos tools: y su
+// declaracion. Sirve para comprobar que el lector descarta lo mismo.
+const dosNamespacesFuente = "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiPz4KPEZyYW1lTGF5b3V0IHhtbG5zOmFuZHJvaWQ9Imh0dHA6Ly9zY2hlbWFzLmFuZHJvaWQuY29tL2Fway9yZXMvYW5kcm9pZCIKICAgIHhtbG5zOnRvb2xzPSJodHRwOi8vc2NoZW1hcy5hbmRyb2lkLmNvbS90b29scyIKICAgIGFuZHJvaWQ6bGF5b3V0X3dpZHRoPSJtYXRjaF9wYXJlbnQiCiAgICB0b29sczppZ25vcmU9Ik1pc3NpbmdDb25zdHJhaW50cyI+CiAgICA8VmlldwogICAgICAgIGFuZHJvaWQ6bGF5b3V0X3dpZHRoPSJ3cmFwX2NvbnRlbnQiCiAgICAgICAgdG9vbHM6dmlzaWJpbGl0eT0idmlzaWJsZSIgLz4KPC9GcmFtZUxheW91dD4K"
+
+func TestArbolDescartaLoQueAapt2Descarta(t *testing.T) {
+	f := decodifica(t, dosNamespacesFuente, "res/layout/dos.xml", 348)
+	a, err := leerArbolDe(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.lineaDe) != 1 {
+		nombres := []string{}
+		for p := range a.lineaDe {
+			nombres = append(nombres, p)
+		}
+		t.Errorf("quedaron %d declaraciones de namespace (%v), y en el binario solo hay una", len(a.lineaDe), nombres)
+	}
+	for _, ruta := range [][]string{{"FrameLayout"}, {"FrameLayout", "View"}} {
+		n := a.buscar(ruta...)
+		if n == nil {
+			t.Fatalf("falta %v", ruta)
+		}
+		for _, attr := range n.attrs {
+			if attr.nombre == "ignore" || attr.nombre == "visibility" {
+				t.Errorf("%v conserva el atributo tools:%s", ruta, attr.nombre)
+			}
+		}
+		if len(n.attrs) != 1 || n.attrs[0].prefijo != "android" || n.attrs[0].nombre != "layout_width" {
+			t.Errorf("%v con %d atributos; en el binario solo queda layout_width", ruta, len(n.attrs))
+		}
+	}
+	if a.raiz.linea != 2 || a.raiz.hijos[0].linea != 6 {
+		t.Errorf("lineas %d y %d, medidas 2 y 6 (el View abre en la sexta)", a.raiz.linea, a.raiz.hijos[0].linea)
+	}
+}
+
 func TestArbolRechaza(t *testing.T) {
 	casos := []struct {
 		nombre string
