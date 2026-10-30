@@ -272,6 +272,11 @@ Por formato, cada uno con su oraculo y su test:
   tipo y dentro del tipo por nombre, registros de estilo por `id` de atributo.
 - **3.4 `R.java`** — apkc ya lo genera hoy a partir de lo que enlaza `aapt2`; hay que alimentarlo del
   mismo mapa de ids que escribamos en 3.3, con los mismos números.
+  **HECHO** (párrafo 31): `apkc/r.go` saca la `R` del mismo `tablaEscribir` que alimenta al escritor de
+  la tabla, y el texto sale **idéntico byte a byte** a los 493 bytes que escribe `aapt2 link --java`
+  sobre el proyecto del studio. Medido además: el id usa el **índice de la entrada** dentro del tipo
+  (no un desplazamiento), los tipos van en orden alfabético y las entradas también, y todo carácter
+  fuera de `[A-Za-z0-9_$]` pasa a `_` en el identificador.
 - **3.5 `aapt2 compile` -> `.flat`** — **resuelto sin escribir código** (§24): los `.flat` no viajan
   en el apk; su único consumidor es `aapt2 link`, y si este fork hace el link, sobran.
 

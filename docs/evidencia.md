@@ -1309,3 +1309,48 @@ de namespace sin URI). El `aapt2 dump xmltree` responde rc 0 sobre nuestro paque
 idéntico al del apk de aapt2 en los dos ficheros. Suite nativa: **149 PASS / 0 FAIL / 1 SKIP** de
 primer nivel (151 con subpruebas); la misma binaria en `GOOS=js` en el hospedador de navegador **144
 PASS + 6 SKIP, rc 0** (146 con subpruebas).
+
+## 31. La `R` sale de nuestra propia tabla, y el texto es el mismo que escribe `aapt2 link --java`
+
+Paso 3.4: `apkc/r.go` genera `R.java` a partir del modelo que alimenta a `escribeTablaRecursos`, así
+que los números de la `R` y los del `resources.arsc` **son la misma cuenta**, no dos programas
+contándose el uno al otro.
+
+Medido sobre el proyecto del studio y sobre la variante con siete tipos (`link --java genD`):
+
+- El id es `número de paquete << 24 | id de tipo << 16 | INDICE de la entrada dentro del tipo`. Con
+  dos entradas por tipo: `id_bare=0x7f040000` y `pulsar=0x7f040001`; `AppTheme=0x7f070000` y
+  `StyBare=0x7f070001`. No es un desplazamiento en bytes: es la posición.
+- Las clases anidadas van en el orden de los tipos (alfabético por nombre de tipo, que es el orden en
+  que aapt2 los numera) y las entradas en el orden en que se emiten, también alfabético por nombre de
+  recurso: con `normal`, `con-guion.y.punto` y `str_simple` los ids 0x7f060000, 0x7f060001 y
+  0x7f060002 caen en ese orden.
+- El nombre se desfigura a identificador de Java: **`con-guion.y.punto` sale `con_guion_y_punto`** —
+  fuera de letras, dígitos, `_` y `$`, todo carácter pasa a `_`.
+- El texto, con `cat -A`: cabecera de siete líneas de comentario, línea en blanco, `package X;`,
+  línea en blanco, `public final class R {`, **dos espacios** por nivel, `= ` sin espacios alrededor
+  (`int pulsar=0x7f010000;`), y el fichero **termina en la llave de cierre sin salto de línea**: 493
+  bytes exactos para el proyecto del studio.
+- Confirmación cruzada del §29: `aapt2 dump resources` etiqueta **PUBLIC** a las entradas declaradas
+  con `<public>` — las que llevaban `0x0002` en `ResTable_entry` — y NO etiqueta a los estilos, que
+  llevaban `0x0001`. Así que el bit público es el `0x0002` y el `0x0001` de un valor complejo es otra
+  cosa; el escritor no lo interpreta, lo copia.
+
+Comprobación:
+
+```sh
+A=$HOME/Android/build-tools/34.0.0/aapt2; J=$HOME/Android/platforms/android-34/android.jar
+$A link -o out.apk -I $J --manifest AndroidManifest.xml --auto-add-overlay -R flats.zip \
+   --java genjava                       # y comparar genjava/…/R.java con lo que escribe r.go
+go test -C apkc -run "TestRLaMismaQueAapt2|TestRDesfiguraNombresYOrdena|TestRRechaza" -v .
+```
+
+**Resultado**: tres pruebas en verde — la R nuestra es idéntica byte a byte a los 493 bytes de aapt2,
+la de la variante de siete tipos casa con las líneas medidas, y rechaza clave inexistente, tipo sin
+nombre, entradas fuera de orden y dos nombres que chocan al desfigurarlos. Suite nativa **152 PASS /
+0 FAIL / 1 SKIP** de primer nivel (154 con subpruebas); la binaria `GOOS=js` en el hospedador de
+navegador, **rc 0** con 147 PASS + 6 SKIP de primer nivel (149 con subpruebas).
+
+Con esto la Fase 3 tiene escritas **las tres estructuras que produce `aapt2`** —tabla de recursos,
+AXML del manifiesto y AXML del layout— y la `R`, todas contra el oráculo: falta 3-E, que es
+empaquetarlas en un apk y verificarlo por fuera.
