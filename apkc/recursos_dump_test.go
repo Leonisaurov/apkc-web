@@ -141,6 +141,19 @@ func cabecera(b []byte, off int, tipo uint16, hs int) string {
 	case 0x0201:
 		return fmt.Sprintf("id=%d flags=%#x entradas=%d entriesStart=%d configSize=%d",
 			b[off+8], b[off+9], u32en(b, off+12), u32en(b, off+16), u32en(b, off+20))
+	case 0x0202:
+		// el u16 en +10 es el numero de bloques de tipo que siguen para este id (medido: vale 1 en
+		// `id` y `layout`, 2 en `style`, que es el unico con una configuracion -v23)
+		n := int(u32en(b, off+12))
+		if n < 0 || off+16+n*4 > off+int(u32en(b, off+4)) {
+			return fmt.Sprintf("id=%d banderas=%#x entradas=%d FUERA DEL TROZO", b[off+8], u16en(b, off+10), n)
+		}
+		flags := make([]string, n)
+		for i := 0; i < n; i++ {
+			flags[i] = fmt.Sprintf("%#08x", u32en(b, off+16+i*4))
+		}
+		return fmt.Sprintf("id=%d banderas=%#x entradas=%d flags de entrada=%v",
+			b[off+8], u16en(b, off+10), n, flags)
 	}
 	return ""
 }

@@ -231,9 +231,9 @@ dentro, y detrás exactamente esos registros de doce bytes (nombre `u32` + `Res_
 Medido con variantes sobre el proyecto de la página: 2 ítems dan recuento 2, 9 dan 9, y el proyecto
 original 4 y 5 en sus dos configuraciones. La lectura del parrafo 26 ("cuatro en ambas") estaba
 torcida una palabra y el lector exige ahora `registros == recuento` para que no vuelva a pasar. La
-unica discrepancia que qued6 (mismos bytes, dos lecturas del volcado) tenia causa en el instrumento —
-recorría hasta el final del bloque en vez de hasta la entrada siguiente— y esta cerrada en el
-parrafo 27. Siete rechazos probados cambiando un byte del fixture. Y algo que hace falta saber para comparar: el
+unica discrepancia que quedó (mismos bytes, dos lecturas del volcado) tenía causa en el instrumento —
+recorría hasta el final del bloque en vez de hasta la entrada siguiente— y está cerrada en el
+párrafo 27. Siete rechazos probados cambiando un byte del fixture. Y algo que hace falta saber para comparar: el
 `resources.arsc` (1088) y el `AndroidManifest.xml` (2000) que construye el SDK de este teléfono son
 **byte a byte iguales** a los del fixture (`4b2b7ec0…` y `31f39825…`), así que el oráculo es fijo.
 
@@ -252,6 +252,16 @@ Por formato, cada uno con su oraculo y su test:
   vale `0x00` y `0x17`, y el segundo trae el registro del atributo que nació en API 23). Se emite
   **una única configuración base** con todos los ítems; la diferencia queda en el número de
   configuraciones, no en ids, cadenas ni valores, y se comprueba con `aapt2 dump resources`.
+  **3-C HECHA para la tabla** (párrafo 29): `apkc/arscwriter.go` escribe la tabla entera —cabecera,
+  pool global, `PACKAGE` de 288 con sus dos pools, y por tipo un `TYPE_SPEC` de 16 + 4·entradas con su
+  `TYPE` de cabecera 84— y los **primeros 752 bytes del `resources.arsc` son idénticos a los de
+  `aapt2`** salvo los dos campos de tamaño que cambian al escribir una configuración en vez de dos.
+  Después de ese punto el estilo sale con los cinco registros en la base, y `aapt2 dump resources`
+  sobre nuestra tabla imprime el mismo listado que sobre la suya (`0x7f010000`, `0x7f020000`,
+  `0x7f030000`). Con las variantes del párrafo 29 quedó medida la regla de las banderas (`id` →
+  `0x0004`, estilo/attr → `0x0001`, `<public>` → `0x0002` y `0x40000000` en el spec, el `u16` del spec
+  en `+10` cuenta configuraciones) y el orden: tipos alfabéticos con `id` = posición + 1, claves por
+  tipo y dentro del tipo por nombre, registros de estilo por `id` de atributo.
 - **3.4 `R.java`** — apkc ya lo genera hoy a partir de lo que enlaza `aapt2`; hay que alimentarlo del
   mismo mapa de ids que escribamos en 3.3, con los mismos números.
 - **3.5 `aapt2 compile` -> `.flat`** — **resuelto sin escribir código** (§24): los `.flat` no viajan

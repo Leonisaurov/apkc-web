@@ -1146,3 +1146,101 @@ sh -c 'cd apkc && go test -run "Pool" -v .'
 
 **Resultado**: dos pruebas en verde. Nativa **147 PASS / 0 FAIL**; la misma binaria en `GOOS=js`
 en el hospedador de navegador **142 PASS + 6 SKIP, rc 0**.
+
+## 29. El cuerpo del `resources.arsc`, escrito en Go: byte a byte con `aapt2` salvo donde aapt2 abre
+## la tabla en dos configuraciones
+
+Primero hubo que cerrar una incógnita que el lector de la 3-B dejaba cruda: **qué significan las
+banderas de una entrada**. Para no adivinarla se reconstruyó el objetivo con el `aapt2` de este
+teléfono —los mismos bytes del fixture, `sha256 4b2b7ec0…`, comprobado— y se varió el `res/values`,
+volcando después cada `ResTable_typeSpec` y cada `ResTable_entry` con el instrumento del §24 (que
+hasta hoy no imprimía las banderas del spec; ya las imprime):
+
+```sh
+A=$HOME/Android/build-tools/34.0.0/aapt2; J=$HOME/Android/platforms/android-34/android.jar
+P=$PREFIX/tmp/flagprobe; rm -rf $P; mkdir -p $P/res/values $P/res/layout
+cp $PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio/{AndroidManifest.xml} $P/
+cp -r $PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio/res/layout $P/res/
+cp $PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio/res/values/styles.xml $P/res/values/
+cd $P && $A compile --dir res -o flats.zip
+$A link -o out.apk -I $J --manifest AndroidManifest.xml --auto-add-overlay -R flats.zip
+unzip -p out.apk resources.arsc | sha256sum          # 4b2b7ec08c98da92… el fixture, idéntico
+# variante A: + <item type=id>, <string>, <bool>, <color> y un segundo estilo sin atributo de API 23
+# variante B: el AppTheme sin windowLightStatusBar (el atributo que nació en API 23)
+# variante C: los mismos recursos con <public name=… type=…/> y un <declare-styleable>
+env APKC_ARBOLES="$P/xA/resources.arsc $PREFIX/tmp/flagprobe2/x/resources.arsc" \
+  go test -C apkc -run TestArbolDeTroz -v
+```
+
+Y la regla, medida sobre las tres variantes (no inferida del `header.h`):
+
+| qué | `ResTable_entry::flags` | `ResTable_typeSpec::entryFlags[i]` |
+| --- | --- | --- |
+| entrada de tipo `id` (declarada en `values` o con `@+id/` en un layout) | `0x0004` | `0x00000000` |
+| entrada de tipo `style` o `attr` (valor complejo) | `0x0001` | `0x00000000` |
+| entrada declarada con `<public>` | `0x0002` | `0x40000000` |
+| resto (`layout`, `string`, `bool`, `color`) | `0x0000` | `0x00000000` |
+| un estilo **partido por API** (el `AppTheme` con un atributo de API 23) | `0x0001` | `0x00000400` |
+
+Tres cosas más salieron de esas variantes, todas antes supuestas y ahora vistas:
+
+- El `u16` del spec en `+10` **es el número de bloques `RES_TABLE_TYPE` que siguen para ese id**: vale
+  `1` en `id`, `layout`, `bool`, `color`, `string` y `attr`, y `2` en `style` cuando el estilo se
+  parte. En la variante B (mismo estilo, sin el atributo de API 23) vuelve a `1` y la tabla mide 924
+  en vez de 1088: **exactamente un bloque de 164 bytes menos**.
+- Los tipos van **ordenados alfabéticamente por nombre** y el `id` de tipo es su posición más uno
+  (`attr, bool, color, id, layout, string, style` → `01..07`); las claves del pool siguen el mismo
+  orden (por tipo y dentro del tipo por nombre), y los registros de un estilo van ordenados por su
+  `id` de atributo.
+- `lastPublicType` y `lastPublicKey` del paquete valen **0 incluso declarando `<public>`**; el
+  `typeIdOffset` también. La cabecera del paquete son 288 bytes: 8 de trozo, 4 de **número** de
+  paquete (mide `0x7f`, no `0x7f000000` — los ids de recurso salen de desplazarlo 24), 256 de nombre
+  UTF-16 y cinco `u32` detrás.
+
+Con eso `apkc/arscwriter.go` escribe la tabla entera: cabecera, pool global, paquete con sus dos
+pools de nombres y, por tipo, un `RES_TABLE_TYPE_SPEC` de 16 + 4·entradas seguido de su
+`RES_TABLE_TYPE` de cabecera 84 (20 de campos + la configuración base de 64, cuyo único campo no nulo
+es su propio tamaño), con `entriesStart = 84 + 4·entradas` y los offsets relativos a él. Una
+configuración, como decidió el §28.
+
+La comparación es byte a byte, con las dos únicas diferencias anunciadas antes de medir:
+
+- Los primeros **752 bytes** —cabecera de tabla, pool global, paquete, los dos pools de nombres, y
+  los tipos `id` y `layout` enteros— son idénticos a los del fixture **salvo dos campos**: el
+  `file_size` de la tabla (en `+4`) y el del paquete (en `+72`), que cambian porque nosotros
+  escribimos una configuración en vez de dos. El test lo que hace es comprobar que el fixture anuncia
+  1088 y 1020 en esos dos sitios, sustituirlos por los nuestros, y comparar.
+- Después de `@752` el `AppTheme` sale distinto por diseño: `aapt2` emite base (4 registros) + `-v23`
+  (5) y nosotros un bloque con los **5** registros en la configuración base. Nuestra tabla mide 936
+  bytes = 1088 − 152 (el bloque base del estilo que no escribimos).
+
+Y el oráculo de verdad, que no es nuestro lector: metida nuestra tabla en un zip con forma de apk,
+`aapt2 dump resources` la lee y imprime **el mismo listado** que imprime para la tabla de `aapt2`, con
+`0x7f010000 id/pulsar`, `0x7f020000 layout/main`, `0x7f030000 style/AppTheme` y el estilo con
+`size=5 parent=0x0103012b` y sus cinco atributos (el de la fijación lista 4 en la base y 5 en la
+`-v23`). El aviso `no such path exists` que imprime nuestra variante es del zip de prueba —no metió
+`res/layout/main.xml`—, no de la tabla.
+
+```sh
+A=$HOME/Android/build-tools/34.0.0/aapt2
+env APKC_ESCRIBE_ARSBC=$PREFIX/tmp/flagprobe/nuestro.arsc \
+  go test -C apkc -run TestEscribeTablaContraFixture .
+mkdir -p $PREFIX/tmp/flagprobe/ours && cp $PREFIX/tmp/flagprobe/nuestro.arsc $PREFIX/tmp/flagprobe/ours/resources.arsc
+cp $PREFIX/tmp/flagprobe/x/AndroidManifest.xml $PREFIX/tmp/flagprobe/ours/
+(cd $PREFIX/tmp/flagprobe/ours && zip -X -0 -q ../nuestro.apk resources.arsc AndroidManifest.xml)
+$A dump resources $PREFIX/tmp/flagprobe/nuestro.apk   # y lo mismo sobre out.apk, para cotejar
+```
+
+Comprobación del escritor:
+
+```sh
+go test -C apkc -run "EscribeTabla" -v .
+```
+
+**Resultado**: dos pruebas en verde (la de byte a byte con el fixture y la de los seis rechazos:
+clave inexistente, `id` de tipo que no es su lugar, spec sin bandera por entrada, registro con nombre
+fuera del framework, nombre de paquete vacío y nombre de paquete de 128 caracteres). Contando solo
+pruebas de primer nivel la suite nativa está en **147 PASS / 0 FAIL / 1 SKIP** y con subpruebas en
+**149 PASS / 1 SKIP**; la misma binaria en `GOOS=js` dentro del hospedador de navegador da **142 PASS
++ 6 SKIP, rc 0** (144 y 6 contando subpruebas). Queda dicho el modo de contar, porque los párrafos
+anteriores usaban el otro y en más de un sitio se leen dos unidades de diferencia.
