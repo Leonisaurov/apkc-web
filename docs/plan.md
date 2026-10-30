@@ -246,6 +246,12 @@ Por formato, cada uno con su oraculo y su test:
 - **3.3 `resources.arsc`** — tabla de recursos: paquetes, tipos, entradas, config flags, y el pool de
   strings con sus variantes. Oráculo: `aapt2 dump resources`. Es el que decide si el apk es
   instalable, así que su prueba final es el teléfono.
+  **Decidido con medición** (parrafo 28): el pool de cadenas ya sale byte a byte; la tabla entera no
+  puede salir byte a byte con una configuración porque `aapt2` parte los ítems de un estilo por el
+  nivel de API del atributo (los dos bloques `id=3` difieren en un byte del `ResTable_config`: `+28`
+  vale `0x00` y `0x17`, y el segundo trae el registro del atributo que nació en API 23). Se emite
+  **una única configuración base** con todos los ítems; la diferencia queda en el número de
+  configuraciones, no en ids, cadenas ni valores, y se comprueba con `aapt2 dump resources`.
 - **3.4 `R.java`** — apkc ya lo genera hoy a partir de lo que enlaza `aapt2`; hay que alimentarlo del
   mismo mapa de ids que escribamos en 3.3, con los mismos números.
 - **3.5 `aapt2 compile` -> `.flat`** — **resuelto sin escribir código** (§24): los `.flat` no viajan
