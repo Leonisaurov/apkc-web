@@ -1059,7 +1059,7 @@ sh -c 'cd apkc && go test -run "Lector" -v .'
 **Resultado**: tres pruebas en verde. La suite nativa sube a **145 tests** (`--- FAIL` 0) y la
 misma binaria en `GOOS=js` dentro del hospedador de navegador da **140 PASS más 6 SKIP, rc 0**.
 
-## 27. El valor complejo de un estilo, medido con variantes; y una discrepancia que queda abierta
+## 27. El valor complejo de un estilo, medido con variantes; y la discrepancia que abrí y se cerró
 
 Para dejar de razonar sobre el estilo se varió `res/values/styles.xml` sobre el proyecto del studio y
 se reconstruyó con el `aapt2` de este teléfono (cada vez `rm -rf build`; el manifest no se toca,
@@ -1111,3 +1111,38 @@ FAIL**, `GOOS=js` en el hospedador de navegador **140 PASS + 6 SKIP, rc 0**.
 Con esto la Fase 3 ya tiene con que comparar: cuando el emisor escriba su `AndroidManifest.xml`, la
 comprobación es `leeAXML(lo nuestro)` contra `leeAXML(lo de aapt2)` y, por fuera, `aapt2 dump
 xmltree` sobre los dos.
+
+## 28. El escritor de tablas de cadenas de recursos, byte a byte contra `aapt2`, y lo que separa
+## nuestra tabla de la suya
+
+`apkc/poolrecurso.go` escribe un `RES_STRING_POOL`. La prueba no es un muestreo: se toman los tres
+pools del `resources.arsc` fijado (el global en `@12`, UTF-8, 56 bytes; el de nombres de tipo en
+`@356`, UTF-16, 80; el de claves en `@436`, UTF-8, 68), se leen con el lector de la 3-B para sacar
+las cadenas, y lo que produce el escritor se compara **byte a byte** con los bytes originales. Los
+tres salen idénticos.
+
+Lo que hubo que copiar de los bytes, porque el manual no lo deja claro: los offsets del array son
+**relativos al inicio de los datos** (no al del trozo), el modo UTF-8 lleva **dos** longitudes
+(bytes y unidades utf-16) y el UTF-16 **una**, cada cadena termina con un cero (dos bytes en
+UTF-16) y el área de datos se rellena hasta múltiplo de cuatro. Con una cadena de 200 caracteres y
+otra del plano suplementario la ida y vuelta por el lector cierra el resto.
+
+Y medida, para que nadie lo descubra escribiendo, la razón por la que la tabla de recursos **no**
+puede salir byte a byte con una sola configuración: los dos bloques `id=3` del `AppTheme` del
+proyecto difieren en **un byte** de su `ResTable_config` — el `+28` vale `0x00` en el primero y
+`0x17` (23) en el segundo — y el bloque con `23` es el que trae el registro extra
+(`0x010104e0`, un atributo que nació en API 23). Es decir: `aapt2` **parte los ítems de un estilo
+por el nivel de API en que se introdujo cada atributo**, y emite una configuración base y una
+`-v23`. Reproducir eso exige la tabla atributo a API del framework, que aquí no hay de dónde sacarla
+sin `android.jar` parseado. Así que el plan para 3-C es emisor de **una sola configuración base**
+con todos los ítems (válida, instalable, y comprobable con `aapt2 dump resources`), y diferencia
+documentada en el número de configuraciones — no en los ids, ni en las cadenas, ni en los valores.
+
+Comprobación:
+
+```sh
+sh -c 'cd apkc && go test -run "Pool" -v .'
+```
+
+**Resultado**: dos pruebas en verde. Nativa **147 PASS / 0 FAIL**; la misma binaria en `GOOS=js`
+en el hospedador de navegador **142 PASS + 6 SKIP, rc 0**.
