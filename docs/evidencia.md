@@ -1059,6 +1059,55 @@ sh -c 'cd apkc && go test -run "Lector" -v .'
 **Resultado**: tres pruebas en verde. La suite nativa sube a **145 tests** (`--- FAIL` 0) y la
 misma binaria en `GOOS=js` dentro del hospedador de navegador da **140 PASS más 6 SKIP, rc 0**.
 
+## 27. El valor complejo de un estilo, medido con variantes; y una discrepancia que queda abierta
+
+Para dejar de razonar sobre el estilo se varió `res/values/styles.xml` sobre el proyecto del studio y
+se reconstruyó con el `aapt2` de este teléfono (cada vez `rm -rf build`; el manifest no se toca,
+porque pide `@style/AppTheme` y si se renombra, `aapt2 link` falla con
+`resource style/AppTheme not found` — que es además una comprobación gratis de que el que manda es
+el manifest):
+
+| variante | ítems declarados | lo que salió en la tabla |
+| --- | --- | --- |
+| `AppTheme` con 2 ítems | 2 | `recuento=2`, dos registros de doce bytes |
+| `AppTheme` con 9 ítems | 9 | `recuento=9`, nueve registros |
+| tres estilos (5, 1 y 3 ítems) | 9 | tres entradas en el bloque `style`, con recuentos 5, 1 y 3 |
+| la original (5 ítems en un estilo) | 5 | recuentos **4 y 5** en los dos bloques de configuración |
+
+Con eso la forma queda medida, y **rectifica el §26**: la cabecera de una entrada compleja son 16
+bytes — `tam` (que vale 16), `flags` (`0x0001`), `clave`, **el id del padre** en `+8` y **el número
+de registros** en `+12`; después vienen exactamente `recuento` registros de doce bytes (nombre `u32`
++ `Res_value` de ocho: `tam=8`, reserva, `dataType`, `datos`). La lectura que en el §26 hacía decir
+"cuatro en ambas configuraciones" tomaba el campo **una palabra más arriba**, donde en realidad está
+la mitad baja del nombre del primer registro (`0x0054`), que es lo que yo había llamado `size=84` y
+no era un tamaño: el `Res_value` de un registro empieza en el byte 4 del registro, no en el 0.
+
+**Y la discrepancia que dejé escrita se cerró el mismo día, con causa y arreglo**: en dos volcados
+del `resources.arsc` de `build/` —sobre un proyecto cuyo sha256 es **idéntico al del fixture** (1088
+bytes, `4b2b7ec08c98da92…`; el manifiesto también: `31f398254cb8a31c…`)— el instrumento imprimió
+primero `4/4` y `5/5` y después `1/1`. Mismos bytes, dos lecturas. El culpable era el propio
+instrumento: su bucle de registros recorría **hasta el final del bloque** en vez de hasta la
+entrada siguiente, así que con varias entradas por bloque contaba las ajenas (por eso la variante de
+tres estilos llegó a imprimir "11 registros" para una entrada que declaraba 5) y con un `grep
+| sort -u` encima, las dos líneas idénticas se colapsaban en una. Puesta la cota —recorrer hasta el
+offset de la entrada siguiente— el mismo fichero da `recuento=4 registros=4` y `recuento=5
+registros=5`, que es lo que el lector de `recursos.go` venía exigiendo desde que lleva
+`registros == recuento` y falla si no. Lección para repetir: **cuando dos lecturas de los mismos
+bytes discrepan, el sospechoso es el que lee**, y un `sort -u` en el filtro es capaz de esconder una
+entrada de más.
+
+Lo que la Fase 3 puede usar como objetivo, medido y estable: el `AndroidManifest.xml` (2000) y el
+`resources.arsc` (1088) que construye el SDK de este teléfono son byte a byte los del fixture, así
+que el oráculo es fijo.
+
+```sh
+sh -c 'cd apkc && go test -run "Lector" -v .'   # y el volcado, con APKC_ARBOLES sobre build/
+```
+
+**Resultado**: las tres pruebas del lector siguen en verde y el recuento de la suite no cambia con el
+arreglo del instrumento, porque el recorrido acotado afecta solo al volcado: nativa **145 PASS / 0
+FAIL**, `GOOS=js` en el hospedador de navegador **140 PASS + 6 SKIP, rc 0**.
+
 Con esto la Fase 3 ya tiene con que comparar: cuando el emisor escriba su `AndroidManifest.xml`, la
 comprobación es `leeAXML(lo nuestro)` contra `leeAXML(lo de aapt2)` y, por fuera, `aapt2 dump
 xmltree` sobre los dos.

@@ -225,11 +225,17 @@ terminan clavados al tamano declarado, asi que no queda trozo sin explicar.
 fijados en base64 en `apkc/recursosfixture_test.go` (2000 y 1088 bytes, con la longitud asertada) y
 el lector reproduce las cuentas del §24: 31 cadenas UTF-16 y los 12 ids del manifiesto, sus
 **16** trozos de nodo y los siete atributos de `<manifest>` **por su nombre**, en el orden que
-imprime `aapt2 dump xmltree`. Salió además la forma del valor complejo de un estilo (cabecera de 16
-con padre `0x0103012b` y recuento dentro, y registros de doce bytes detrás) y **un hueco dicho con
-nombre**: las dos configuraciones de `AppTheme` declaran cuatro registros y traen cuatro y cinco, así
-que el conteo no se interpreta hasta medirlo en 3-C — escribir un estilo sin saber eso es escribir un
-`.arsc` que puede Installarse mal. Siete rechazos probados cambiando un byte del fixture.
+imprime `aapt2 dump xmltree`. Salió además la forma del valor complejo de un estilo, **corregida en
+el parrafo 27**: cabecera de 16 bytes con el id del padre (`0x0103012b`) y el **número de registros**
+dentro, y detrás exactamente esos registros de doce bytes (nombre `u32` + `Res_value` de ocho).
+Medido con variantes sobre el proyecto de la página: 2 ítems dan recuento 2, 9 dan 9, y el proyecto
+original 4 y 5 en sus dos configuraciones. La lectura del parrafo 26 ("cuatro en ambas") estaba
+torcida una palabra y el lector exige ahora `registros == recuento` para que no vuelva a pasar. La
+unica discrepancia que qued6 (mismos bytes, dos lecturas del volcado) tenia causa en el instrumento —
+recorría hasta el final del bloque en vez de hasta la entrada siguiente— y esta cerrada en el
+parrafo 27. Siete rechazos probados cambiando un byte del fixture. Y algo que hace falta saber para comparar: el
+`resources.arsc` (1088) y el `AndroidManifest.xml` (2000) que construye el SDK de este teléfono son
+**byte a byte iguales** a los del fixture (`4b2b7ec0…` y `31f39825…`), así que el oráculo es fijo.
 
 Por formato, cada uno con su oraculo y su test:
 

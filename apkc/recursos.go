@@ -3,8 +3,9 @@ package main
 // Lectura de lo que escribe `aapt2`: el AXML de los ficheros binarios XML y la tabla de recursos
 // `resources.arsc`. Nace de la medicion del parrafo 24 de docs/evidencia.md, donde cada campo que se
 // lee aqui esta sacado de los offsets que los propios ficheros declaran; nada de lo que hay debajo
-// de un encabezado se interpreta por recuerdo. Lo que el parrafo 26 encontro sin entender (el
-// recuento de un estilo) se guarda crudo y se dice, no se supone.
+// de un encabezado se interpreta por recuerdo. La forma del valor complejo de un estilo esta medida
+// sobre variantes del proyecto (parrafos 26 y 27); lo que sigue sin interpretarse es el
+// `ResTable_config` (64 bytes guardados crudos) y el significado de los bits de `flags`.
 //
 // El lector existe para que el escritor de la Fase 3 tenga con que compararse byte a byte: si lo que
 // emite este fork no se lee con esto, o se lee con otras cuentas, la diferencia esta senalada antes
@@ -454,19 +455,19 @@ func (tr *tablaRecursos) leeBloque(b []byte, off, hs, s int) (bloqueTipo, error)
 		// Medido en el fichero de aapt2: una entrada con valor simple declara 8 bytes y los flags
 		// 0x00 o 0x04; la del estilo declara 16 y flags 0x01. Que ese bit signifique "compleja" o
 		// "publica" no esta confirmado: se guarda la bandera cruda y la lectura de esos bits se
-		// medira al escribir (parrafo 26), no se supone del header de aapt2.
+		// medira al escribir (parrafos 26 y 27), no se supone del header de aapt2.
 		en.compleja = en.tam == 16 && en.flags&0x0001 != 0
 		if int(en.clave) >= len(tr.claves) {
 			return bl, fmt.Errorf("entry #%d names key %d and there are %d keys", i, en.clave, len(tr.claves))
 		}
 		v := e + en.tam
 		if en.compleja {
-			// Un valor complejo (los estilos) trae, dentro de la propia entrada, el id del padre y
-			// un recuento; despues vienen registros de doce bytes: nombre u32 y un Res_value de
-			// ocho. Medido sobre el estilo del studio, que sale dos veces con un recuento que dice 4
-			// y registros de 4 y de 5: el campo de recuento no se entiende todavia (parrafo 26),
-			// asi que aqui se guarda el bloque de registros crudo y se comprueba su forma, no su
-			// significado.
+			// Forma medida sobre el estilo del studio (parrafo 26, corregido hoy): la entrada
+			// compleja declara 16 bytes - tam, banderas, clave, el id del padre y EL RECUENTO DE
+			// REGISTROS - y detras vienen exactamente `recuentos` registros de doce bytes (nombre
+			// u32 + Res_value de ocho: tam 8, reserva, tipo, datos). Las dos configuraciones de
+			// AppTheme dicen 4 y 5 y traen 4 y 5. La lectura que hacia decir "cuatro en ambas"
+			// tomaba el campo una palabra mas arriba, donde en realidad esta el padre.
 			if en.tam != 16 || e+16 > off+s {
 				return bl, fmt.Errorf("entry #%d: a complex entry declares %d bytes, the measured header is 16", i, en.tam)
 			}
@@ -476,8 +477,10 @@ func (tr *tablaRecursos) leeBloque(b []byte, off, hs, s int) (bloqueTipo, error)
 			if len(en.crudo)%12 != 0 {
 				return bl, fmt.Errorf("entry #%d: %d bytes of records is not a whole number of twelve", i, len(en.crudo))
 			}
-			for k := 0; k+12 <= len(en.crudo); k += 12 {
-				// un registro es nombre u32 + Res_value de ocho (tam 8, reserva, tipo, datos)
+			if uint32(len(en.crudo)/12) != en.recuentos {
+				return bl, fmt.Errorf("entry #%d declares %d records and the block holds %d", i, en.recuentos, len(en.crudo)/12)
+			}
+			for k := 0; k < len(en.crudo); k += 12 {
 				if nombre := u32re(en.crudo, k); nombre&0xff000000 != 0x01000000 {
 					return bl, fmt.Errorf("entry #%d record at +%d names %#08x, which is not a resource id", i, k, nombre)
 				}

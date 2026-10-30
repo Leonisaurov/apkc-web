@@ -154,21 +154,24 @@ func TestLectorDeTablaReproduceLoMedido(t *testing.T) {
 	if cuatro.padre != 0x0103012b {
 		t.Errorf("the style's parent reads as %#08x, the bytes say 0x0103012b (an android style id)", cuatro.padre)
 	}
-	// El valor complejo NO se interpreta todavia: se guarda el bloque de registros de doce bytes y
-	// se compara su forma. Lo que queda por medir es el campo de recuento, que en los dos bloques
-	// dice 4 mientras el segundo trae cinco registros (parrafo 26).
-	if len(cuatro.crudo) != 48 || len(cuatro.crudo)/12 != 4 {
-		t.Errorf("the first style block carries %d bytes of records, the measured 48 (four of twelve)", len(cuatro.crudo))
-	}
-	if cuatro.recuentos != 4 {
-		t.Errorf("the declared count is %d, the file says 4", cuatro.recuentos)
+	// El valor complejo ya esta despiezado (parrafo 26 corregido): cabecera de 16 con padre y
+	// recuento, y `recuentos` registros de doce bytes. Las dos configuraciones del estilo dicen 4
+	// y 5, y traen 4 y 5.
+	if len(cuatro.crudo) != 48 || cuatro.recuentos != 4 {
+		t.Errorf("the first style block: %d bytes of records and count %d, measured 48 and 4",
+			len(cuatro.crudo), cuatro.recuentos)
 	}
 	segundo := tr.bloques[3].entradas[0]
-	if len(segundo.crudo) != 60 {
-		t.Errorf("the second style block carries %d bytes of records, §24 has 60 (five of twelve)", len(segundo.crudo))
+	if len(segundo.crudo) != 60 || segundo.recuentos != 5 {
+		t.Errorf("the second style block: %d bytes of records and count %d, measured 60 and 5",
+			len(segundo.crudo), segundo.recuentos)
 	}
-	t.Logf("AppTheme: dos configuraciones, %d y %d registros de 12; el recuento declarado es %d en ambas",
-		len(cuatro.crudo)/12, len(segundo.crudo)/12, cuatro.recuentos)
+	if segundo.padre != cuatro.padre || tr.clave(segundo) != tr.clave(cuatro) {
+		t.Errorf("the second configuration should be the same style: %q/%#08x against %q/%#08x",
+			tr.clave(segundo), segundo.padre, tr.clave(cuatro), cuatro.padre)
+	}
+	t.Logf("AppTheme: dos configuraciones de %d registros, padre %#08x; el recuento casa con los registros",
+		len(cuatro.crudo)/12, cuatro.padre)
 	if tr.bloques[3].nombre != "style" || tr.clave(tr.bloques[3].entradas[0]) != "AppTheme" {
 		t.Errorf("the fourth block should be the second configuration of the same style")
 	}

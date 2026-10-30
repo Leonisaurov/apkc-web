@@ -254,7 +254,27 @@ func volcarBloqueTipo(b []byte, off, hs, size int, pad string, t *testing.T) {
 		}
 		clave := u32en(b, e+4)
 		v := e + int(u16en(b, e))
-		t.Logf("%s   #%d @%-4d tam=%d flags=%#02x clave=%d value(tam=%d res0=%d tipo=%#02x datos=%#08x)",
-			pad, i, e, u16en(b, e), b[e+2], clave, u16en(b, v), b[v+2], b[v+3], u32en(b, v+4))
+		t.Logf("%s   #%d @%-4d tam=%d flags=%#04x clave=%d value(tam=%d res0=%d tipo=%#02x datos=%#08x)",
+			pad, i, e, u16en(b, e), u16en(b, e+2), clave, u16en(b, v), b[v+2], b[v+3], u32en(b, v+4))
+		// config del bloque: los primeros 12 bytes del ResTable_config (tamano, tipo, y el identificador
+		// de locale/densidad/API que ocupa 8)
+		t.Logf("%s     config: % x", pad, b[off+20:off+32])
+		if u16en(b, e) == 16 && u16en(b, e+2)&1 != 0 {
+			padre, cuenta := u32en(b, e+8), u32en(b, e+12)
+			// se recorre HASTA la siguiente entrada (o el final del bloque) y no hasta el final del
+			// bloque: con varias entradas en un tipo, el recorrido viejo contaba registros ajenos y
+			// imprimia "11 registros" para una entrada que declaraba 5 (parrafo 27)
+			fin := off + size
+			if n > 1 && i+1 < n {
+				fin = off + entriesStart + int(u32en(b, off+hs+(i+1)*4))
+			}
+			registros := []string{}
+			for k := e + 16; k+12 <= fin; k += 12 {
+				registros = append(registros, fmt.Sprintf("%#08x/t%#02x/%#08x",
+					u32en(b, k), b[k+7], u32en(b, k+8)))
+			}
+			t.Logf("%s     complejo: padre=%#08x recuento=%d registros=%d %v",
+				pad, padre, cuenta, len(registros), registros)
+		}
 	}
 }
