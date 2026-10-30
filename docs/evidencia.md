@@ -1354,3 +1354,62 @@ navegador, **rc 0** con 147 PASS + 6 SKIP de primer nivel (149 con subpruebas).
 Con esto la Fase 3 tiene escritas **las tres estructuras que produce `aapt2`** —tabla de recursos,
 AXML del manifiesto y AXML del layout— y la `R`, todas contra el oráculo: falta 3-E, que es
 empaquetarlas en un apk y verificarlo por fuera.
+
+## 32. Un apk hecho enteramente en Go: firma v1 y v2, alineado, y `aapt2 dump badging` lo entiende
+
+Paso 3-E: `apkc/empaquetar.go` reúne los artefactos que ya escriben este fork —el AXML del manifiesto,
+el del layout, la tabla de recursos y el `classes.dex` que saca el dexer de la Fase 2 de las seis
+clases de javac fijadas— y los mete en el apk con el **mismo** empaquetador y el **mismo** firmante que
+usa `apkc build --signer go` y `apkc sign`. No pasa `zipalign` ni pasa `apksigner`: la alineación se
+decide entrada a entrada (almacenada a cuatro, nativa a página) y la firma se calcula sobre lo que va
+saliendo.
+
+El resultado son **9868 bytes con siete entradas** y un `classes.dex` de 2392, que es el tamaño que el
+dexer viene dando desde el §22. Verificación con los oráculos que no comparten código con nosotros:
+
+```sh
+go test -C apkc -count=1 -run "TestApkCompiladoSinAapt2|TestEmpaquetaRechazaNombresDeRuta" -v .
+# deja el paquete si se le dice dónde escribirlo:
+env APKC_ESCRIBE_APK=$PREFIX/tmp/flagprobe/go-built.apk \
+  go test -C apkc -count=1 -run TestApkCompiladoSinAapt2 .
+BT=$HOME/Android/build-tools/34.0.0; A=$PREFIX/tmp/flagprobe/go-built.apk
+$BT/apksigner verify --verbose $A
+$BT/zipalign -c -p 4 $A
+$PREFIX/lib/jvm/java-21-openjdk/bin/jarsigner -verify $A
+python3 ~/Develop/Go/apkc-harness/zipcheck.py $A
+$BT/aapt2 dump resources $A
+$BT/aapt2 dump xmltree --file AndroidManifest.xml $A
+$BT/aapt2 dump xmltree --file res/layout/main.xml $A
+$BT/aapt2 dump badging $A
+```
+
+**Lo que devolvieron**:
+
+- `apksigner verify --verbose`: `Verifies`, **v1 true y v2 true** (v3 false, que es lo que firma este
+  firmante), un firmante con el certificado `CN=Android Debug`.
+- `zipalign -c -p 4`: rc 0, sin quejas. `zipcheck.py`: «7 entries, every record agrees with itself;
+  0 stored .so at a page boundary, **1 other stored entries at 4**» — la entrada almacenada es
+  `resources.arsc`, que es la que el sistema mapea.
+- `jarsigner -verify`: `jar verified.`
+- `aapt2 dump resources` lee nuestra tabla dentro del paquete (`0x7f010000 id/pulsar`,
+  `0x7f020000 layout/main`, el estilo con sus cinco ítems) y `aapt2 dump xmltree` lee los dos AXML.
+- `aapt2 dump badging` — que es el que dereferencia el manifiesto contra la tabla — responde
+  `package: name='com.hola.apkcstudio' versionCode='1' versionName='0.1'`, `minSdkVersion:'21'`,
+  `targetSdkVersion:'33'`, `application: label='Hola apkc'` y
+  `launchable-activity: name='com.hola.apkcstudio.MainActivity'`. Si el `@style/AppTheme` del
+  manifiesto no apuntara a un id que existe en nuestra tabla, aquí se quejaría.
+
+Por dentro, la prueba también comprueba lo que escribe el zip: `resources.arsc` viaja
+`zip.Store` y su dato empieza en múltiplo de cuatro, los dos AXML y la tabla se releen con nuestros
+lectores, y el dex conserva la cabecera `dex\n035`.
+
+**Comando de la suite**: nativa **154 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del hospedador de
+navegador **150 PASS + 7 SKIP, rc 0** —el apk se salta el caso firmado porque el hospedador no tiene
+`~/.android/debug.keystore`, igual que las otras cuatro pruebas que lo necesitan.
+
+Lo que **todavía no** está en Go, dicho para que no se lea como hecho: este apk se ensambla desde los
+**modelos** que escribieron las pruebas (los recursos del proyecto del studio ya traducidos a
+estructuras). Falta el paso que lee el `res/values/*.xml`, el layout y el manifiesto **en texto** y
+produce esos modelos, y la tabla de ids del framework —que hoy la da `android.jar`— para que un
+layout cualquiera use atributos que no estén entre los doce del estudio. Con esos dos puentes,
+`apkc build` deja de necesitar `aapt2`. Sigue quedando `javac` (Fase 1G) y la página.

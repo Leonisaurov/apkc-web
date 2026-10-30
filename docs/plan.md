@@ -279,6 +279,15 @@ Por formato, cada uno con su oraculo y su test:
   fuera de `[A-Za-z0-9_$]` pasa a `_` en el identificador.
 - **3.5 `aapt2 compile` -> `.flat`** — **resuelto sin escribir código** (§24): los `.flat` no viajan
   en el apk; su único consumidor es `aapt2 link`, y si este fork hace el link, sobran.
+- **3-E ensamblar y firmar** — **HECHO** (párrafo 32): `apkc/empaquetar.go` mete el AXML del
+  manifiesto, el del layout, la tabla de recursos y el dex del §22 en un apk con el empaquetador y el
+  firmante de apkc, sin `zipalign` ni `apksigner` por en medio. Son 9868 bytes con siete entradas que
+  `apksigner verify` acepta por v1 **y** por v2, `zipalign -c -p 4` aprueba, `jarsigner -verify`
+  verifica, `zipcheck.py` no encuentra ningún registro que se contradiga, y `aapt2 dump badging`
+  dereferencia el manifiesto contra nuestra tabla y devuelve la activity lanzable.
+  **Lo que falta para que `apkc build` prescinda de `aapt2`** está dicho en el mismo párrafo: leer el
+  `res/values/*.xml`, el layout y el manifiesto **en texto** para producir los modelos, y sacar de
+  `android.jar` la tabla de ids del framework (el lector de la 3-B hoy no anda paquetes múltiples).
 
 **Criterio de abandono**: si tras 3.1 y 3.3 el apk no se instala y la diferencia no se localiza en
 dos intentos, se para y se documenta. El formato no tiene spec pública: se trabaja contra las
