@@ -43,6 +43,15 @@ type marcoRecursos struct {
 	ids map[string]uint32
 	// tipos son los nombres de tipo en su orden, que es el que da el id de tipo (posicion + 1).
 	tipos []string
+	// porId es el mapa inverso, id -> "tipo/nombre": hace falta porque los items enum de un atributo
+	// se guardan con el NOMBRE referido como recurso de tipo `id` (medido: layout_width declara
+	// wrap_content como 0x010205af con datos 0xfffffffe, y gravity declara center como 0x01020240 con
+	// datos 0x11).
+	porId map[uint32]string
+	// valores son los items enum y flags de cada atributo, por su nombre sin prefijo.
+	valores map[string]map[string]valorEscribir
+	// pendientes son los items leidos antes de conocer el nombre del id al que apuntan.
+	pendientes []itemDeAtributo
 }
 
 // idDe da el id de recurso de un nombre dentro de un tipo.
@@ -89,7 +98,7 @@ func leeMarco(arsc []byte) (*marcoRecursos, error) {
 	if int(u32re(arsc, 4)) > len(arsc) {
 		return nil, fmt.Errorf("la tabla declara %d bytes y el fichero tiene %d", u32re(arsc, 4), len(arsc))
 	}
-	m := &marcoRecursos{ids: map[string]uint32{}}
+	m := &marcoRecursos{ids: map[string]uint32{}, porId: map[uint32]string{}, valores: map[string]map[string]valorEscribir{}}
 	off := 12
 	if off+8 > len(arsc) || u16re(arsc, off) != trozoPool {
 		return nil, fmt.Errorf("tras la cabecera se esperaba el pool global, en %d", off)
@@ -189,6 +198,7 @@ func (m *marcoRecursos) leePaquete(arsc []byte, off, hs, size int) error {
 	if len(leido) == 0 {
 		return fmt.Errorf("ningún bloque de tipo del paquete android cubrió el espacio de entradas de su spec")
 	}
+	m.resuelveItems()
 	return nil
 }
 
@@ -249,11 +259,79 @@ func (m *marcoRecursos) leeBloque(arsc []byte, off, hs, size int, claves []strin
 			return fmt.Errorf("la entrada %d del tipo %s nombra la clave %d y hay %d", i, nombre, clave, len(claves))
 		}
 		k := nombre + "/" + claves[int(clave)]
+		id := paqueteDelFramework<<24 | uint32(idTipo)<<16 | uint32(i)
 		if _, visto := m.ids[k]; !visto {
-			m.ids[k] = paqueteDelFramework<<24 | uint32(idTipo)<<16 | uint32(i)
+			m.ids[k] = id
+			m.porId[id] = k
+		}
+		if nombre != "attr" {
+			continue
+		}
+		// los items enum y flags de un atributo viven en el propio valor complejo del attr (medido en
+		// android.jar de API 34: layout_width trae cuatro registros, y el de wrap_content es
+		// nombre 0x010205af con datos 0xfffffffe). El primer registro no es un valor: es la mascara de
+		// formato del atributo, y su nombre vale 0x01000000, que no es un id de tipo `id`.
+		if u16re(arsc, e) != 16 {
+			continue
+		}
+		recuentos := int(u32re(arsc, e+12))
+		if recuentos <= 0 || e+16+12*recuentos > off+size {
+			continue
+		}
+		for r := 0; r < recuentos; r++ {
+			k := e + 16 + 12*r
+			nombreItem := u32re(arsc, k)
+			if nombreItem&0xff000000 != 0x01000000 {
+				continue // el primer registro del attr es la mascara de formato, no un valor
+			}
+			m.pendientes = append(m.pendientes, itemDeAtributo{
+				atributo: claves[int(clave)],
+				item:     nombreItem,
+				valor:    valorEscribir{tipo: arsc[k+7], datos: u32re(arsc, k+8)},
+			})
 		}
 	}
 	return nil
+}
+
+// itemDeAtributo es un enum o flag de un atributo, tal como lo guarda la tabla: el NOMBRE del valor
+// referido a un recurso de tipo `id` y el dato que hay que escribir. Se resuelve en una segunda
+// pasada, porque el tipo `attr` (id 1) se recorre antes que el tipo `id` (id 2) y su mapa inverso
+// todavia esta vacio.
+type itemDeAtributo struct {
+	atributo string
+	item     uint32
+	valor    valorEscribir
+}
+
+// resuelveItems convierte los nombres de enum referidos por id en el mapa nombre -> valor que usa el
+// enlazador. Un item cuyo id no esta en la tabla se descarta: no es un valor que nadie pueda escribir.
+func (m *marcoRecursos) resuelveItems() {
+	for _, it := range m.pendientes {
+		donde, ok := m.porId[it.item]
+		if !ok || !strings.HasPrefix(donde, "id/") {
+			continue
+		}
+		nombre := strings.TrimPrefix(donde, "id/")
+		if m.valores[it.atributo] == nil {
+			m.valores[it.atributo] = map[string]valorEscribir{}
+		}
+		m.valores[it.atributo][nombre] = it.valor
+	}
+	m.pendientes = nil
+}
+
+// valoresDeAtributo da los nombres enum o flags que acepta un atributo del framework, con el tipo y
+// los datos que hay que escribir por cada uno. Es lo que resuelve `wrap_content` como entero -2 y
+// `center` como hexadecimal 0x11, que es como salen en los ficheros de aapt2.
+func (m *marcoRecursos) valoresDeAtributo(nombre string) map[string]valorEscribir {
+	return m.valores[nombre]
+}
+
+// nombreDeId invierte el mapa: de 0x0103012b a "style/Theme.DeviceDefault.Light".
+func (m *marcoRecursos) nombreDeId(id uint32) (string, bool) {
+	k, ok := m.porId[id]
+	return k, ok
 }
 
 // marcoDeJar saca el resources.arsc de un android.jar y lo lee. El jar es un zip; la entrada puede

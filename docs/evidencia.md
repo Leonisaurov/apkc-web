@@ -1470,3 +1470,32 @@ lectores. Importa porque en la página el fichero lo sube el usuario.
 
 Suite: nativa **157 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del hospedador de navegador **152
 PASS + 8 SKIP, rc 0** (el marco se salta allí, porque el hospedador no tiene `android.jar`).
+
+## 34. Cómo define el framework un atributo: los `enum` y `flags` se guardan como recursos de tipo `id`
+
+Para resolver `wrap_content` o `center` sin `aapt2` hace falta saber qué valores admite cada atributo, y
+eso está dentro de la misma tabla del jar. Medido sobre `attr/layout_width` (entrada 0x0f4 del tipo
+`attr`) y `attr/gravity` (entrada 0x0af):
+
+- El valor de un `attr` es una **entrada compleja de 16 bytes** con `flags 0x0003`, `padre 0x00000000`
+  y un recuento, seguida de exactamente `recuento` registros de doce bytes: la misma forma del §27 para
+  los estilos.
+- **El primer registro no es un valor**: su nombre es `0x01000000` y sus datos son la máscara de formato
+  del atributo (`layout_width` lleva `0x00010040`). Se descarta por esa forma, no por posición.
+- Los registros de `enum` y `flags` llevan el **nombre referido como recurso de tipo `id`**, no como
+  cadena: `wrap_content` = `0x010205af`, `fill_parent` = `0x010202d7`, `center` = `0x01020240`,
+  `center_horizontal` = `0x01020243`. `aapt2 dump resources` lo confirma:
+  `0x01020240 id/center`, `0x010205af id/wrap_content`.
+- Los datos del registro son el valor que hay que escribir, **con el tipo que el framework eligió**:
+  `wrap_content` → `tipo 0x10` (entero decimal) `datos 0xfffffffe`; `center` → `tipo 0x11` (entero
+  hexadecimal) `datos 0x11`. Es decir: el tipo del `Res_value` no se decide en el enlazador, se copia
+  del atributo.
+
+`marco.go` lo expone en dos pasadas, porque el tipo `attr` (id 1) se recorre **antes** que el tipo `id`
+(id 2) y su mapa inverso aún está vacío: los registros se acumulan como `itemDeAtributo` y
+`resuelveItems()` los traduce al terminar el paquete. La prueba compara cuatro valores concretos contra
+el volcado de `aapt2 dump resources` (`layout_width/wrap_content` y `fill_parent`,
+`gravity/center`, `center_horizontal` y `center_vertical`) y el `nombreDeId` de `0x0103012b`.
+
+**Resultado**: tres pruebas de marco en verde. Nativa **158 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js`
+dentro del hospedador de navegador **152 PASS + 9 SKIP, rc 0**.

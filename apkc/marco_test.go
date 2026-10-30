@@ -128,3 +128,49 @@ func TestMarcoRechaza(t *testing.T) {
 		t.Error("un fichero vacio fue aceptado como tabla")
 	}
 }
+
+// Los items enum y flags de un atributo, medidos sobre el android.jar: son la unica forma de resolver
+// `wrap_content` o `center` sin aapt2.
+func TestMarcoValoresDeAtributo(t *testing.T) {
+	m, err := marcoDelAndroidJar(jarDelFramework(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	queremos := map[string]map[string]valorEscribir{
+		"layout_width": {
+			"wrap_content": {tipo: tipoEnteroDec, datos: 0xfffffffe},
+			"fill_parent":  {tipo: tipoEnteroDec, datos: 0xffffffff},
+		},
+		"gravity": {
+			"center":            {tipo: tipoEnteroHex, datos: 0x11},
+			"center_horizontal": {tipo: tipoEnteroHex, datos: 0x1},
+			"center_vertical":   {tipo: tipoEnteroHex, datos: 0x10},
+		},
+	}
+	for attr, items := range queremos {
+		got := m.valoresDeAtributo(attr)
+		if got == nil {
+			t.Errorf("%s no trae items", attr)
+			continue
+		}
+		for nombre, quieres := range items {
+			v, ok := got[nombre]
+			if !ok {
+				t.Errorf("%s no tiene %s; tiene %d items", attr, nombre, len(got))
+				continue
+			}
+			if v != quieres {
+				t.Errorf("%s/%s: leido {tipo %#02x datos %#08x}, aapt2 dice {tipo %#02x datos %#08x}",
+					attr, nombre, v.tipo, v.datos, quieres.tipo, quieres.datos)
+			}
+		}
+	}
+
+	k, ok := m.nombreDeId(0x0103012b)
+	if !ok || k != "style/Theme.DeviceDefault.Light" {
+		t.Errorf("0x0103012b devolvio %q, ok=%v", k, ok)
+	}
+	if _, ok := m.nombreDeId(0x01ffffff); ok {
+		t.Error("un id inventado devolvio nombre")
+	}
+}
