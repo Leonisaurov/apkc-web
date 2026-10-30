@@ -57,6 +57,10 @@ type buildOpts struct {
 	// signer picks who turns the plan into an apk: the JVM tools apkc has always
 	// shelled out to, or the packager inside this binary
 	signer string
+	// linker picks who turns res/ into the resource table and the binary XML: aapt2
+	// (the default, what apkc has always done) or the enlazador inside this binary,
+	// which is the piece the browser build needs because a process never starts there
+	linker string
 }
 
 // buildFlags are the command line switches that reach the stages. The three
@@ -72,6 +76,7 @@ type buildFlags struct {
 	keyAlias    *string
 	sigAlg      *string
 	signer      *string
+	linker      *string
 }
 
 func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
@@ -88,6 +93,7 @@ func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
 	f.keyAlias = set.String("keyalias", "androiddebugkey", "key alias to use")
 	f.sigAlg = set.String("sigalg", "SHA256withRSA", "signature algorithm to use")
 	f.signer = set.String("signer", signerDefault, "packaging and signing backend: auto (the default: go unless the project builds a bundle, uses a keystore format apkc cannot read, or targets a platform older than 4.3), go (zipalign and apksigner never start), jvm (zipalign and apksigner)")
+	f.linker = set.String("linker", "aapt2", "resource linker backend: aapt2 (the default: compile and link by running the SDK tool) or go (this binary writes the resource table, the binary XML and R.java; it refuses projects whose resources it has not been measured against, and needs android.jar for the framework ids)")
 	return f
 }
 
@@ -100,6 +106,7 @@ func (f buildFlags) opts() buildOpts {
 		keyAlias:    *f.keyAlias,
 		sigAlg:      *f.sigAlg,
 		signer:      *f.signer,
+		linker:      *f.linker,
 	}
 	if f.useAAB != nil {
 		o.useAAB = *f.useAAB
@@ -118,6 +125,9 @@ func build() {
 // build compiles all the source code and bundles into apk file with dependencies
 func _build(o buildOpts) {
 	defer timeIt("total")()
+	if o.linker != "aapt2" && o.linker != linkerGo {
+		LogF("build", "--linker %q: the resource linkers are aapt2 and go", o.linker)
+	}
 	prepare()
 
 	// d8 decides how much to desugar from this number, and without it it assumes
@@ -181,7 +191,7 @@ func _build(o buildOpts) {
 	// source that compiled but stayed unrecorded leaves its .class in build/ with
 	// nothing to prune it once the file is gone: that stale class then aborts every
 	// following build. Idle cycles still write nothing.
-	compRes := compileRes(o.incremental)
+	compRes := compileRes(o.incremental, o.linker)
 	if o.incremental && compRes {
 		saveTable()
 	}
@@ -191,7 +201,7 @@ func _build(o buildOpts) {
 		// dependency index below that sends the sources back, not this call. Marking
 		// every source here used to cost a whole javac pass over a resource that only
 		// added an id, and a copy of a value that did not move was never stale.
-		bundleRes(o.useAAB, o.incremental)
+		bundleRes(o.useAAB, o.incremental, o.linker)
 	}
 
 	// what the dependencies contribute to the dex is decided by their bytes, not by
@@ -434,8 +444,13 @@ func prepare() {
 }
 
 // compileRes compiles the xml files in res dir
-func compileRes(incremental bool) bool {
+func compileRes(incremental bool, linker string) bool {
 	defer timeIt("aapt2 compile")()
+	if linker == linkerGo {
+		// the Go linker reads res/*.xml directly: there is no flat file and nothing to
+		// compile, which is what the paragraph 24 measurement said (.flat only feeds aapt2 link)
+		return false
+	}
 	res, _ := getFiles("res", "", incremental)
 	if len(res) < 1 {
 		return false
@@ -459,8 +474,23 @@ func compileRes(incremental bool) bool {
 // writes into src/. It reports whether any of them actually changed, which is what
 // makes the sources that read those constants stale. Only the incremental build
 // cares: a plain one recompiles everything anyway and must not touch the state file.
-func bundleRes(useAAB bool, incremental bool) bool {
+func bundleRes(useAAB bool, incremental bool, linker string) bool {
 	defer timeIt("aapt2 link")()
+	if linker == linkerGo {
+		if useAAB {
+			LogF("build", "--linker go cannot write a bundle: aapt2 link --proto-format produces resources.pb, and this linker does not")
+		}
+		opts, err := opcionesDelProyecto(androidJar)
+		if err != nil {
+			LogF("build", err)
+		}
+		LogI("build", "linking resources with the Go linker")
+		changed, err := enlazarConGo(".", androidJar, opts)
+		if err != nil {
+			LogF("build", err)
+		}
+		return changed
+	}
 	flats, _ := getFiles("build/flats", ".flat", false)
 	if len(flats) < 1 {
 		return false

@@ -335,6 +335,14 @@ Por formato, cada uno con su oraculo y su test:
     es entero -2, `center` es hexadecimal 0x11) — §34. Lo que no esté en los enum/flags del attr cae
     por orden: referencia `@…`, booleano, color `#…`, entero, y si no cadena con su crudo.
 
+- **3-H enganche en `apkc build`** — **HECHO** (párrafo 38): `--linker go` sustituye a
+  `aapt2 compile` + `aapt2 link` dentro de la pipeline de siempre; escribe los cuatro productos que
+  `packagePlan` ya sabe tomar y deja el empaquetado y la firma intactos. Sobre el proyecto del studio
+  salen **idénticos byte a byte** el manifiesto (2000), el layout (784) y la `R` (493), idéntico el dex, y
+  el apk de 10194 bytes lo verifica `apksigner` por v1 y v2, lo aprueba `zipalign -c -p 4` y
+  `aapt2 dump badging` lo entiende. El portero rechaza con nombre lo no medido (cualquier calificador
+  como `res/layout-es`, drawables, subcarpetas, no-XML, `<permission>`, una API no medida).
+
 **Criterio de abandono**: si tras 3.1 y 3.3 el apk no se instala y la diferencia no se localiza en
 dos intentos, se para y se documenta. El formato no tiene spec pública: se trabaja contra las
 fuentes de `frameworks/base/tools/aapt2` y contra el oráculo, y eso tiene un techo.

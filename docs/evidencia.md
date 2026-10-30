@@ -1625,3 +1625,59 @@ pestaña conducida por chromium.
 Con esto **la Fase 3 queda cerrada de punta a punta**: texto del proyecto → tabla, dos AXML y `R`, y de ahí
 el apk firmado del §32. Lo que queda del objetivo declarado (compilar en la pestaña sin conexión) son dos
 piezas grandes: la Fase 1G, que es escribir el `javac` en Go, y el cableado de la página.
+
+## 38. `apkc build --linker go`: un apk real sin ejecutar aapt2, y sus productos comparados
+
+`apkc/linker.go` engancha el enlace de Go en la pipeline de siempre. `--linker` toma `aapt2` (el
+default, que es lo que apkc hizo toda su vida) o `go`; con `go`, `compileRes` no ejecuta nada —el `.flat`
+solo alimentaba a `aapt2 link`, y eso ya se dijo en el §24— y `bundleRes` escribe los cuatro productos que
+el plan del paquete (`packagePlan`) ya sabe tomar: `build/AndroidManifest.xml`, `build/resources.arsc`
+(almacenado, porque el sistema lo mapea), `build/res/layout/*.xml` y `src/<paquete>/R.java`. El empaquetado
+y la firma no se tocan.
+
+Corrido sobre el proyecto del studio en una copia limpia:
+
+```sh
+apkc build --linker go
+# [build] linking resources with the Go linker
+# [timing] aapt2 link 226ms  <- el enlace, con el nombre del tramo de siempre
+# [build] compiling java files / javac 3.77s
+# [build] bundling classes / d8 app 4.813s
+# [build] packaging and signing inside apkc
+```
+
+Contra los productos del proyecto enlazado con aapt2:
+
+| producto | aapt2 | go | resultado |
+| --- | --- | --- | --- |
+| `build/AndroidManifest.xml` | 2000 | 2000 | **idéntico byte a byte** |
+| `build/res/layout/main.xml` | 784 | 784 | **idéntico byte a byte** |
+| `src/…/R.java` | 493 | 493 | **idéntico byte a byte** |
+| `build/classes.dex` | 2392 | 2392 | **idéntico** (lo produce el dexer del §22, no cambió) |
+| `build/resources.arsc` | 1088 | 936 | distinto **por lo declarado en el §28**: una configuración base con los cinco ítems en vez de base + `-v23` |
+
+Y el apk resultante (10194 bytes) pasa los oráculos de siempre:
+
+```sh
+apksigner verify --verbose build/app.apk   # Verifies, v1 true, v2 true
+zipalign -c -p 4 build/app.apk             # rc 0
+python3 ~/Develop/Go/apkc-harness/zipcheck.py build/app.apk
+# 7 entries, every record agrees with itself; 1 other stored entries at 4
+aapt2 dump badging build/app.apk           # package, versiones, label, launchable-activity
+```
+
+**El portero, y un agujero que tapó el test.** `fuentesDelProyecto` rechaza con nombre lo que este enlace
+no sabe escribir: `res/drawable` y compañía (piden copiar ficheros y poner entradas con referencia de
+fichero), **cualquier calificador** —`res/layout-es`, `drawable-v21`, `values-land`— porque es una segunda
+configuración y aquí se emite una sola (§28), subcarpetas dentro de `values` o `layout`, recursos que no
+sean `.xml`, un manifiesto con `<permission>` (aapt2 escribe además un `Manifest.java` que aquí no se
+produce), un proyecto sin manifiesto, y una `android.jar` cuya versión no esté medida (`opcionesDelProyecto`
+saca 34 y "14" de la ruta del platform; API 21 se rechaza en vez de adivinar el codename). El agujero era
+precisamente el calificador: la primera versión partía el nombre por el guion y **dejaba pasar
+`res/layout-es`**, que habría producido un apk al que le faltaran los recursos de ese idioma sin decir
+nada. `TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar` exige ahora los seis rechazos y que cada mensaje
+nombre el motivo.
+
+**Resultado**: suite nativa **169 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del hospedador de
+navegador **163 PASS + 9 SKIP, rc 0**. `javac` y `d8` siguen ejecutándose en este camino: lo que ya no se
+ejecuta es `aapt2`.

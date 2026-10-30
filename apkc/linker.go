@@ -1,0 +1,194 @@
+package main
+
+// El enlazador de Go dentro de `apkc build`: la puerta que deja de ejecutar aapt2. Escribe los mismos
+// cuatro productos que la herramienta deja en el arbol del proyecto —build/AndroidManifest.xml,
+// build/resources.arsc, build/res/layout/*.xml y src/<paquete>/R.java— y con eso el empaquetado y la
+// firma de siempre siguen funcionando sin cambio: el plan del paquete (packagePlan) toma exactamente
+// esas rutas, y resources.arsc viaja almacenado porque lo mapea el sistema.
+//
+// Lo que este enlace NO hace, dicho con nombre en vez de hacerse el sueco:
+//   - proyectos con recursos que no sean valores y layouts. Un drawable, un mipmap, un raw o un font
+//     piden copiar ficheros y poner entradas con referencia de fichero en la tabla, y eso no esta
+//     medido. Se rechaza.
+//   - el formato proto de un bundle (useAAB), porque aapt2 escribe alli resources.pb y nosotros no.
+//   - los `resources.xml` con <public> ni los <declare-styleable>: medidos en el parrafo 29, no
+//     emitidos.
+//   - los <permission> del manifiesto, que aapt2 acompaña con un Manifest.java que aqui no se escribe.
+//
+// La regla del repo es un claim con su medicion: los bytes de este enlazador estan comprobados contra
+// los ficheros que aapt2 dejo sobre el proyecto del studio (parrafos 35, 36 y 37). Un proyecto con otra
+// forma de recursos no esta comprobado, y se dice en lugar de prometer.
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// linkerGo names the resource backend that does not start aapt2.
+const linkerGo = "go"
+
+// tiposDeResQueSeEnlazan: las dos carpetas cuyos ficheros se tradacen a modelos. Los demas nombres de
+// carpeta son recursos que este enlazador no sabe escribir.
+var tiposDeResQueSeEnlazan = map[string]bool{"values": true, "layout": true}
+
+// fuentesDelProyecto recoge el arbol de recursos: los values, los layouts y el manifiesto, todos en
+// texto. Rechaza lo que no se pueda enlazar, antes de escribir nada.
+func fuentesDelProyecto(raiz string) (valores, layouts []fuenteXML, manifiesto fuenteXML, err error) {
+	manifiesto = fuenteXML{nombre: "AndroidManifest.xml"}
+	manifiesto.contenido, err = os.ReadFile(filepath.Join(raiz, "AndroidManifest.xml"))
+	if err != nil {
+		return nil, nil, manifiesto, fmt.Errorf("el proyecto no tiene AndroidManifest.xml: %w", err)
+	}
+	if strings.Contains(string(manifiesto.contenido), "<permission") {
+		return nil, nil, manifiesto, fmt.Errorf("el manifiesto declara <permission>: aapt2 escribe ademas un Manifest.java y este enlace no lo escribe")
+	}
+
+	res := filepath.Join(raiz, "res")
+	entradas, err := os.ReadDir(res)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return valores, layouts, manifiesto, nil // un proyecto sin res/ no tiene recursos que enlazar
+		}
+		return nil, nil, manifiesto, err
+	}
+	for _, e := range entradas {
+		if !e.IsDir() {
+			return nil, nil, manifiesto, fmt.Errorf("res/%s no es una carpeta de recursos", e.Name())
+		}
+		if !tiposDeResQueSeEnlazan[e.Name()] {
+			// un nombre con calificador (layout-es, drawable-v21, values-land) es una SEGUNDA
+			// configuracion, y este enlace emite una sola: lo medido en el parrafo 28 dice que
+			// reproducir el reparto por configuracion exige la tabla atributo-a-API del framework
+			return nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe la carpeta values y la carpeta layout, sin calificador. Un nombre con guion es una configuracion anadida (idioma, densidad, version de API) y aqui se emite una unica configuracion base (parrafo 28); otro tipo de recurso (drawable, mipmap, raw, anim, font) pide copiar ficheros y aun no esta medido", e.Name())
+		}
+		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
+		if err != nil {
+			return nil, nil, manifiesto, err
+		}
+		for _, f := range nom {
+			if f.IsDir() {
+				return nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
+			}
+			if !strings.HasSuffix(f.Name(), ".xml") {
+				return nil, nil, manifiesto, fmt.Errorf("res/%s/%s: un recurso que no es .xml no se puede enlazar aqui", e.Name(), f.Name())
+			}
+			ruta := filepath.Join("res", e.Name(), f.Name())
+			contenido, err := os.ReadFile(filepath.Join(res, e.Name(), f.Name()))
+			if err != nil {
+				return nil, nil, manifiesto, err
+			}
+			fuente := fuenteXML{nombre: filepath.ToSlash(ruta), contenido: contenido}
+			if e.Name() == "values" {
+				valores = append(valores, fuente)
+				continue
+			}
+			layouts = append(layouts, fuente)
+		}
+	}
+	return valores, layouts, manifiesto, nil
+}
+
+// enlazarConGo es el sustituto de `aapt2 compile` y `aapt2 link` juntos. Escribe los productos en el
+// arbol del proyecto y dice si la R cambio, que es lo que necesita el paso incremental para saber si
+// hay que volver a pasar javac.
+func enlazarConGo(raiz, androidJar string, opts opcionesDeEnlace) (bool, error) {
+	valores, layouts, manifiesto, err := fuentesDelProyecto(raiz)
+	if err != nil {
+		return false, err
+	}
+	if len(valores) == 0 && len(layouts) == 0 {
+		return false, fmt.Errorf("el proyecto no tiene recursos que enlazar (ni res/values ni res/layout)")
+	}
+	m, err := marcoDelAndroidJar(androidJar)
+	if err != nil {
+		return false, fmt.Errorf("la tabla de ids del framework: %w", err)
+	}
+	enlazado, err := enlazarProyecto(valores, layouts, manifiesto, m, opts)
+	if err != nil {
+		return false, err
+	}
+
+	arsc, err := escribeTablaRecursos(enlazado.tabla)
+	if err != nil {
+		return false, err
+	}
+	manifiestoBinario, err := escribeAXML(enlazado.manifiesto)
+	if err != nil {
+		return false, err
+	}
+	// el mismo control que el enlace de aapt2: se vacia build/res antes de escribir, para que un
+	// recurso borrado no siga viajando en el paquete con una entrada que ya no existe en la tabla
+	if err := os.RemoveAll(filepath.Join(raiz, "build", "res")); err != nil {
+		return false, err
+	}
+	escrituras := []struct {
+		ruta      string
+		contenido []byte
+	}{
+		{filepath.Join(raiz, "build", "AndroidManifest.xml"), manifiestoBinario},
+		{filepath.Join(raiz, "build", "resources.arsc"), arsc},
+	}
+	for nombre, doc := range enlazado.layouts {
+		bin, err := escribeAXML(doc)
+		if err != nil {
+			return false, err
+		}
+		// el nombre dentro del apk es res/layout/x.xml y el producto en el arbol de build es el mismo
+		escrituras = append(escrituras, struct {
+			ruta      string
+			contenido []byte
+		}{filepath.Join(raiz, "build", filepath.FromSlash(nombre)), bin})
+	}
+	for _, e := range escrituras {
+		if err := os.MkdirAll(filepath.Dir(e.ruta), 0o755); err != nil {
+			return false, err
+		}
+		if err := os.WriteFile(e.ruta, e.contenido, 0o644); err != nil {
+			return false, err
+		}
+	}
+
+	ruta := filepath.Join(raiz, "src", strings.ReplaceAll(enlazado.tabla.nombrePaquete, ".", string(filepath.Separator)), "R.java")
+	antes, errLeer := os.ReadFile(ruta)
+	if err := os.MkdirAll(filepath.Dir(ruta), 0o755); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(ruta, []byte(enlazado.r), 0o644); err != nil {
+		return false, err
+	}
+	// la R vale para javac: si el contenido no cambio, los fuentes que leen esas constantes no se
+	// invalidan (la misma regla que comprueba el enlace de aapt2 con snapshotGenJava)
+	return errLeer != nil || string(antes) != enlazado.r, nil
+}
+
+// opcionesDelProyecto saca lo que aapt2 recibe por bandera y aqui se pasa a mano: la version de
+// compilacion, que es la del platform que se usa para enlazar, y su nombre en texto.
+func opcionesDelProyecto(androidJar string) (opcionesDeEnlace, error) {
+	base := filepath.Base(filepath.Dir(androidJar))
+	if !strings.HasPrefix(base, "android-") {
+		return opcionesDeEnlace{}, fmt.Errorf("%s: la ruta del android.jar no dice la version del platform", androidJar)
+	}
+	numero, err := strconv.Atoi(strings.TrimPrefix(base, "android-"))
+	if err != nil {
+		return opcionesDeEnlace{}, fmt.Errorf("%s: la version del platform no es un numero", base)
+	}
+	// medido sobre el android-34 de este telefono: compileSdkVersion 34 y codename "14", que es la
+	// version de Android; platformBuildVersionName sale del mismo numero entero (parrafo 37)
+	codename, ok := nombreDeVersionDeAndroid(numero)
+	if !ok {
+		return opcionesDeEnlace{}, fmt.Errorf("el nombre de la version de Android correspondiente a API %d no esta medido aqui", numero)
+	}
+	return opcionesDeEnlace{compileSdkVersion: numero, compileSdkCodename: codename}, nil
+}
+
+// versionesMedidasDeAndroid: API -> version de Android en texto. Solo la que se comprobado contra los
+// ficheros de aapt2; pedir otra es rechazar con nombre, no adivinar.
+func nombreDeVersionDeAndroid(api int) (string, bool) {
+	if api == 34 {
+		return "14", true
+	}
+	return "", false
+}

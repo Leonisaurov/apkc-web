@@ -120,6 +120,15 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   enum y flags de cada atributo) y `apkc/enlazar.go` + `arbol.go` + `valores.go` **enlazan el proyecto
   desde sus ficheros de texto**, sin `aapt2`. `apkc/empaquetar.go` ensambla un apk de 9868 bytes que
   `apksigner` verifica por v1 y v2, que `zipalign -c -p 4` aprueba y que `aapt2 dump badging` entiende.
-  **Quedan dos piezas para el objetivo**: la Fase 1G (escribir `javac` en Go) y el cableado de la página.
+- **`apkc build --linker go` enlaza sin `aapt2`** (§38): con esa bandera no se ejecuta `aapt2 compile` ni
+  `aapt2 link`; `apkc/linker.go` escribe `build/AndroidManifest.xml`, `build/resources.arsc`,
+  `build/res/layout/*.xml` y `src/<pkg>/R.java`, y el empaquetado y la firma de siempre los toma. Sobre el
+  proyecto del studio los tres AXML y la `R` salen **idénticos byte a byte** a los de aapt2, el dex
+  idéntico, y solo la tabla difiere por la única configuración base declarada en el §28; el apk (10194
+  bytes) lo verifica `apksigner` por v1 y v2, lo aprueba `zipalign -c -p 4` y `aapt2 dump badging` lo
+  entiende. El portero rechaza con nombre lo no medido: cualquier calificador (`res/layout-es`), recursos
+  que no sean values/layout, subcarpetas, no-XML, `<permission>` y una version de platform no medida.
+  **`javac` y `d8` sí se ejecutan** en ese camino: lo que ya no se ejecuta es aapt2.
+- **Quedan dos piezas para el objetivo**: la Fase 1G (escribir `javac` en Go) y el cableado de la página.
 - Una apk mínima no se puede firmar en el cliente sin `R`: las 4 clases `R*` del recuento las genera
   `aapt2`, así que **2G y 3 van atadas** aunque se midan por separado.
