@@ -288,6 +288,15 @@ Por formato, cada uno con su oraculo y su test:
   **Lo que falta para que `apkc build` prescinda de `aapt2`** está dicho en el mismo párrafo: leer el
   `res/values/*.xml`, el layout y el manifiesto **en texto** para producir los modelos, y sacar de
   `android.jar` la tabla de ids del framework (el lector de la 3-B hoy no anda paquetes múltiples).
+- **3-F ids del framework desde `android.jar`** — **HECHO** (párrafo 33): `apkc/marco.go` lee el
+  `resources.arsc` del SDK y da `nombre → id` del paquete `android`; los 28 ids copiados del volcado
+  de `aapt2 dump resources` coinciden. Quedó medido que el jar trae **cuatro paquetes con id 1** (se
+  corta en el primero), que el pool global trae 1.307 `styleCount` y no se materializa, que un tipo es
+  **muchos bloques** y solo cuenta el que iguala la cuenta de su spec, y que la entrada ausente se
+  marca con offset `0xFFFFFFFF`. De paso se arregló un panic de los tres lectores con ficheros cortos
+  (`leeTabla`, `leeAXML`, `leeMarco` leían `u16re` dentro del mensaje de error).
+  **Falta el último puente**: leer los XML **en texto** (`res/values/*.xml`, layout y manifiesto) y
+  producir los modelos con este marco, que es lo que la página va a necesitar.
 
 **Criterio de abandono**: si tras 3.1 y 3.3 el apk no se instala y la diferencia no se localiza en
 dos intentos, se para y se documenta. El formato no tiene spec pública: se trabaja contra las

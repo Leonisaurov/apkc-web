@@ -221,3 +221,24 @@ func TestLectoresRechazanBytesMal(t *testing.T) {
 		t.Error("an entry naming a key that is not in the table was accepted")
 	}
 }
+
+// Un fichero corto es entrada de fuera (la pagina sube lo que escriba el usuario), asi que los tres
+// lectores tienen que rechazarlo con un error y no con un panic: el mensaje de error leia u16re sobre
+// las primeras doce bytes antes de comprobar que estaban ahi.
+func TestLectoresRechazanFicheroCorto(t *testing.T) {
+	for _, n := range []int{0, 1, 7, 8, 11, 12, 27} {
+		corto := make([]byte, n)
+		if _, err := leeTabla(corto); err == nil {
+			t.Errorf("leeTabla acepto una tabla de %d bytes", n)
+		}
+		if _, err := leeAXML(corto); err == nil {
+			t.Errorf("leeAXML acepto un XML de %d bytes", n)
+		}
+		if _, err := leeMarco(corto); err == nil {
+			t.Errorf("leeMarco acepto un framework de %d bytes", n)
+		}
+		if _, err := leePool(corto, 0); err == nil {
+			t.Errorf("leePool acepto un pool de %d bytes", n)
+		}
+	}
+}

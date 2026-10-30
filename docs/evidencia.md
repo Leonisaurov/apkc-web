@@ -1413,3 +1413,60 @@ estructuras). Falta el paso que lee el `res/values/*.xml`, el layout y el manifi
 produce esos modelos, y la tabla de ids del framework —que hoy la da `android.jar`— para que un
 layout cualquiera use atributos que no estén entre los doce del estudio. Con esos dos puentes,
 `apkc build` deja de necesitar `aapt2`. Sigue quedando `javac` (Fase 1G) y la página.
+
+## 33. La tabla de ids del framework, leída de `android.jar` con nuestro propio lector
+
+El puente que faltaba para los atributos: `apkc/marco.go` anda el `resources.arsc` del SDK y saca el
+mapa `nombre → id` del paquete `android`, que es lo que `aapt2` presta hoy al resolver
+`android:layout_width` o `@style/TextAppearance.Large`.
+
+Lo medido sobre el `android.jar` de este teléfono (API 34, `resources.arsc` de 16.390.624 bytes):
+
+- La tabla declara **cuatro paquetes y los cuatro llevan id 1 y se llaman `android`**: el primero mide
+  5.355.916 bytes, trae **23 tipos** y **12.877 claves**; los otros tres (4.656, 7.604 y 13.276)
+  declaran 255, 223 y 221 tipos. **Los ids que imprime `aapt2 dump resources` son los del primero**;
+  leer los siguientes pisaba el mapa con índices de otro espacio, y eso fue exactamente lo que dio la
+  primera versión de este lector: 221 tipos y nombres como `?1`. Se corta en el primer paquete con
+  id 1.
+- El **pool global no se materializa**: 11.009.160 bytes con 152.615 cadenas y **1.307 estilos**
+  (`styleCount` distinto de cero, algo que los pools de una app nunca traen). Se salta por su tamaño
+  declarado; los dos pools de nombres del paquete sí se leen, y `leePool` devuelve ahora también el
+  `styleCount` para poder rechazar en vez de suponer.
+- Un tipo del framework **no es un bloque**: son muchos, uno por configuración, y solo uno cubre el
+  espacio de entradas que anuncia su `RES_TABLE_TYPE_SPEC` (el de `string` tiene un bloque de 2492
+  entradas y luego bloques de 1, 2, 3, 4, 9… con `flags 0x01`). Los índices de un bloque parcial **no
+  son el id**; el lector toma el primer bloque cuya cuenta iguale a la del spec.
+- Dentro de un bloque denso la entrada ausente se marca con **offset `0xFFFFFFFF`**, no con un bit de
+  cabecera: medido en la entrada #616 del tipo `attr`, con `flags 0x00` en el bloque. El índice sigue
+  siendo el lugar en el array, así que se salta la entrada y no la numeración.
+- El `u16` del spec en `+10` —el que en una app vale el número de configuraciones— vale **0** en el
+  framework, y las banderas de sus entradas `attr` valen `0x0003`.
+
+Comprobación contra el oráculo que no comparte código:
+
+```sh
+J=$HOME/Android/platforms/android-34/android.jar
+$HOME/Android/build-tools/34.0.0/aapt2 dump resources $J > marco.txt   # 240.637 lineas
+grep -oE "resource 0x[0-9a-f]{8} (attr|color|style|dimen)/[^ ]+" marco.txt | awk '{print $2, $3}' | sort -u
+go test -C apkc -count=1 -run TestMarco -v .
+```
+
+**Resultado**: los **28 ids** copiados del volcado de aapt2 coinciden con lo que lee `marco.go` —los
+veintidós atributos que usan los ficheros del studio (`attr/theme 0x01010000` …
+`attr/compileSdkVersionCodename 0x01010573`), `color/white 0x0106000b`, `color/black 0x0106000c`,
+`style/TextAppearance.Large 0x01030042`, `style/Theme.DeviceDefault.Light 0x0103012b` y
+`dimen/app_icon_size 0x01050000`—, el paquete da 23 tipos con `attr`, `id`, `style` como tres
+primeros (**el orden del framework no es alfabético: es el de `public.xml`**), el tipo `attr` aporta
+más de 1500 nombres y un nombre inventado se rechaza. Los rechazos probados: tabla sin paquete id 1
+(es nuestra propia tabla de app), primer trozo que no es tabla, `packageCount` mentiroso y fichero
+vacío.
+
+Arreglado de paso un **panic real** que encontró el test nuevo: `leeTabla`, `leeAXML` y `leeMarco`
+comprobaban el largo en la condición y **dentro del mensaje de error volvían a llamar a `u16re` sobre
+el fichero corto**, así que un XML o una tabla de pocos bytes producía `index out of range` en lugar
+de un rechazo. Los tres comprueban el tamaño antes de leer, y
+`TestLectoresRechazanFicheroCorto` pasa longitudes de 0, 1, 7, 8, 11, 12 y 27 bytes por los cuatro
+lectores. Importa porque en la página el fichero lo sube el usuario.
+
+Suite: nativa **157 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del hospedador de navegador **152
+PASS + 8 SKIP, rc 0** (el marco se salta allí, porque el hospedador no tiene `android.jar`).

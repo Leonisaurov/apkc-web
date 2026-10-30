@@ -41,6 +41,10 @@ type tablaCadenas struct {
 	cadenas []string
 	utf8    bool
 	tamaño  int
+	// estilos es el styleCount declarado. Los pools que se leen aqui son todos de 0; un pool con
+	// spans de estilo (el global del android.jar trae 1.307) tiene otra area de offsets y lee
+	// cadenas de otra manera, asi que se comprueba en vez de suponer.
+	estilos uint32
 }
 
 // leePool lee la tabla desde su offset y responde tambien cuanto ocupa. Un offset de cadena que se
@@ -63,7 +67,7 @@ func leePool(b []byte, off int) (tablaCadenas, error) {
 	if inicio > off+size {
 		return tablaCadenas{}, fmt.Errorf("the string pool at %d puts its data at %d, past its own end", off, inicio)
 	}
-	p := tablaCadenas{utf8: flags&0x100 != 0, tamaño: size}
+	p := tablaCadenas{utf8: flags&0x100 != 0, tamaño: size, estilos: u32re(b, off+12)}
 	for i := 0; i < n; i++ {
 		o := off + hs + i*4
 		if o+4 > off+size {
@@ -193,7 +197,10 @@ type axml struct {
 }
 
 func leeAXML(b []byte) (*axml, error) {
-	if len(b) < 8 || u16re(b, 0) != trozoXML {
+	if len(b) < 8 {
+		return nil, fmt.Errorf("a binary XML needs at least 8 bytes, this has %d", len(b))
+	}
+	if u16re(b, 0) != trozoXML {
 		return nil, fmt.Errorf("not a binary XML: first chunk is %#04x", u16re(b, 0))
 	}
 	size := int(u32re(b, 4))
@@ -322,7 +329,12 @@ type tablaRecursos struct {
 }
 
 func leeTabla(b []byte) (*tablaRecursos, error) {
-	if len(b) < 12 || u16re(b, 0) != trozoTabla {
+	// el tamano se comprueba antes de leer: el mensaje leia u16re sobre un fichero corto, y eso es un
+	// panic en lugar de un rechazo
+	if len(b) < 12 {
+		return nil, fmt.Errorf("a resource table needs at least 12 bytes, this has %d", len(b))
+	}
+	if u16re(b, 0) != trozoTabla {
 		return nil, fmt.Errorf("not a resource table: first chunk is %#04x", u16re(b, 0))
 	}
 	size := int(u32re(b, 4))
