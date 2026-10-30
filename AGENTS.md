@@ -113,12 +113,13 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   objetivo del dexer está medido (§13: 2844 bytes, 217 objetos para el proyecto del studio) y la
   prueba de que la página no habla con ningún CDN está automatizada (§15). El orden ahora es
   **2G -> 3 -> 1G**; ver `docs/plan.md`.
-- **La Fase 3 está escrita y cada pieza casa byte a byte con `aapt2`** (§29 a §32): `apkc/arscwriter.go`
-  emite la tabla de recursos (idéntica hasta donde aapt2 la parte en dos configuraciones por API),
-  `apkc/axmlwriter.go` emite **exactamente** los 784 bytes del layout y los 2000 del manifiesto,
-  `apkc/r.go` emite la misma `R.java` que `link --java`, y `apkc/empaquetar.go` ensambla un apk de
-  9868 bytes que `apksigner` verifica por v1 y v2, que `zipalign -c -p 4` aprueba y que
-  `aapt2 dump badging` entiende. **Faltan dos puentes para que `apkc build` no use `aapt2`**: leer los
-  XML de texto y producir esos modelos, y sacar de `android.jar` la tabla de ids del framework.
+- **La Fase 3 está cerrada, y enlazando desde texto** (§29 a §37): `apkc/arscwriter.go` emite la tabla de
+  recursos (idéntica hasta donde aapt2 la parte en dos configuraciones por API), `apkc/axmlwriter.go`
+  emite **exactamente** los 784 bytes del layout y los 2000 del manifiesto, `apkc/r.go` emite la misma
+  `R.java` que `link --java`, `apkc/marco.go` saca de `android.jar` los ids del framework (incluidos los
+  enum y flags de cada atributo) y `apkc/enlazar.go` + `arbol.go` + `valores.go` **enlazan el proyecto
+  desde sus ficheros de texto**, sin `aapt2`. `apkc/empaquetar.go` ensambla un apk de 9868 bytes que
+  `apksigner` verifica por v1 y v2, que `zipalign -c -p 4` aprueba y que `aapt2 dump badging` entiende.
+  **Quedan dos piezas para el objetivo**: la Fase 1G (escribir `javac` en Go) y el cableado de la página.
 - Una apk mínima no se puede firmar en el cliente sin `R`: las 4 clases `R*` del recuento las genera
   `aapt2`, así que **2G y 3 van atadas** aunque se midan por separado.

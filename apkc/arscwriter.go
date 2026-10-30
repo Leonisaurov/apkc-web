@@ -24,10 +24,13 @@ import (
 )
 
 // valorEscribir es un Res_value: ocho bytes — tam 8, reserva 0, el tipo de dato y los datos. Solo se
-// escribe el tam que se midio (8) y la reserva que sale a 0 en todos los casos vistos.
+// escribe el tam que se midio (8) y la reserva que sale a 0 en todos los casos vistos. `texto` no se
+// escribe: es el texto del valor cuando el tipo es una cadena (0x03), y lo que necesita el AXML para
+// ponerlo en su pool, porque en el binario los datos de una cadena son un indice del pool.
 type valorEscribir struct {
 	tipo  byte
 	datos uint32
+	texto string
 }
 
 // registroEscribir es uno de los doce bytes de un valor complejo: el id del atributo y su Res_value.

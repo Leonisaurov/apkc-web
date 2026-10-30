@@ -140,6 +140,7 @@ func TestMarcoValoresDeAtributo(t *testing.T) {
 		"layout_width": {
 			"wrap_content": {tipo: tipoEnteroDec, datos: 0xfffffffe},
 			"fill_parent":  {tipo: tipoEnteroDec, datos: 0xffffffff},
+			"match_parent": {tipo: tipoEnteroDec, datos: 0xffffffff},
 		},
 		"gravity": {
 			"center":            {tipo: tipoEnteroHex, datos: 0x11},

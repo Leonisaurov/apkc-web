@@ -310,6 +310,13 @@ Por formato, cada uno con su oraculo y su test:
   declaraciones, y rechaza seis formas rotas.
   **Falta el ultimo paso**: unir las dos mitades —descubrir los `@+id/…` del árbol, numerar la tabla con
   ellos, y escribir los dos AXML y la R a partir de lo materializado.
+  **HECHO, y con esto la Fase 3 se cierra** (párrafo 37): `apkc/enlazar.go` hace las dos pasadas y el
+  proyecto del studio enlazado **desde sus tres ficheros de texto** reproduce byte a byte los 784 bytes
+  del layout y los 2000 del manifiesto, la tabla con los 752 iniciales idénticos (la única diferencia es
+  el número de configuraciones declarado en el §28) y los 493 bytes de la `R`. Dos mediciones salieron de
+  las pruebas: `match_parent` es un item enum de `layout_width` con valor −1 (sin él el layout salía con
+  472 bytes distintos), y `platformBuildVersionName` es la **versión de Android** como entero (14), no la
+  API (34).
   **Restricciones de la otra mitad**, razonadas antes de escribir código (un par de intentos salieron
   ficheros que no compilaban; se deja aqui lo que cuesta):
   - **Hace falta dos pasadas sí o sí**: un layout declara ids con `@+id/pulsar`, esos ids entran en la

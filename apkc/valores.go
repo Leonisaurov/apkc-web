@@ -380,10 +380,20 @@ func valorDeTexto(atributo, clave, texto string, m *marcoRecursos) (valorEscribi
 	if v, err := colorDeTexto(texto); err == nil {
 		return v, nil
 	}
-	if n, err := strconv.ParseInt(texto, 10, 64); err == nil {
-		return valorEscribir{tipo: tipoEnteroDec, datos: uint32(int32(n))}, nil
+	if v, err := enteroDeTexto(texto); err == nil {
+		return v, nil
 	}
 	return valorEscribir{tipo: tipoCadena, datos: 0}, nil
+}
+
+// enteroDeTexto: un numero sale entero decimal (0x10) con los negativos tal cuales, que es como el
+// manifiesto y los layouts del parrafo 30 escriben versionCode, -1 y -2.
+func enteroDeTexto(texto string) (valorEscribir, error) {
+	n, err := strconv.ParseInt(texto, 10, 64)
+	if err != nil {
+		return valorEscribir{}, fmt.Errorf("no es entero")
+	}
+	return valorEscribir{tipo: tipoEnteroDec, datos: uint32(int32(n))}, nil
 }
 
 // colorDeTexto: #RGB, #RRGGBB y #AARRGGBB salen como ARGB8 (0x1d), el tipo que llevo statusBarColor

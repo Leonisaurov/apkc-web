@@ -1574,3 +1574,54 @@ go test -C apkc -count=1 -run "TestArbolDel|TestArbolRechaza" -v .
 
 **Resultado**: tres pruebas en verde. Nativa **163 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del
 hospedador de navegador **157 PASS + 9 SKIP, rc 0**.
+
+## 37. Enlazado: de los tres ficheros de texto a los tres binarios de aapt2, byte a byte
+
+`apkc/enlazar.go` junta las dos mitades del paso 3-G —`arbol.go` (layout y manifiesto en texto) y
+`valores.go` (los `res/values/*.xml`)—, descubre los `@+id/…` que el layout declara, numera la tabla con
+ellos y entonces materializa los modelos. Con eso el proyecto del studio se enlaza **sin `aapt2`** y lo
+que sale se compara contra los binarios fijados:
+
+| salida | contra lo que escribió aapt2 | resultado |
+| --- | --- | --- |
+| `res/layout/main.xml` (AXML) | los 784 bytes del fixture | **idéntico byte a byte** |
+| `AndroidManifest.xml` (AXML) | los 2000 bytes del fixture | **idéntico byte a byte** |
+| `resources.arsc` | los 1088 bytes del fixture | 936 escritos; los **primeros 752 idénticos** salvo los dos campos de tamaño, y la diferencia es la declarada en el §28 (una configuración en vez de dos) |
+| `R.java` | los 493 bytes de `link --java` | **idéntico byte a byte** |
+
+Ninguna de las cuatro comparaciones es contra un modelo propio: se compara contra **los ficheros que dejó
+la herramienta que este fork quiere sustituir**, fijados en base64.
+
+Dos fallos que encontraron estas pruebas y que valen como medición:
+
+- **`match_parent` no estaba en el marco de la prueba** y caía al último caso de `valorDeAtributo`, la
+  cadena: el layout salía con 15 cadenas en vez de 14, 20 bytes de más y **472 bytes distintos**. El §34
+  ya había medido que `layout_width` trae cuatro registros y que dos de ellos valen `0xffffffff`
+  (`fill_parent` en `0x010202d7` y otro en `0x010203a0`, que es `match_parent`); puesto el item, el layout
+  sale exacto. `TestMarcoValoresDeAtributo` exige ahora `match_parent` contra el jar, para que el marco
+  escrito a mano no pueda volver a quedarse corto.
+- **`platformBuildVersionName` vale 14, no 34.** El primer intento lo copiaba de `compileSdkVersion` y
+  daba un solo byte distinto en todo el manifiesto (el `#1368`: `0x22` contra `0x0e`). Los cuatro campos
+  que añade el enlace salen de dos números distintos: `compileSdkVersion` y `platformBuildVersionCode` son
+  la API (34) y `compileSdkVersionCodename` y `platformBuildVersionName` son la **versión de Android**
+  ("14" como texto y 14 como entero, con crudo −1). El enlace deriva el entero del codename y rechaza un
+  codename no numérico, en vez de inventarse la forma.
+
+Rechazos probados en el enlazador: manifiesto sin `package`, un atributo `android:` que no esté en la
+tabla del framework, una referencia `@style/NoExiste` del paquete propio, una referencia
+`@android:style/…` inexistente y una referencia mal formada.
+
+```sh
+go test -C apkc -count=1 -run "TestEnlazar|TestValores|TestArbol|TestMarco" -v .
+sh -c 'cd studio && APKC=$PREFIX/tmp/apkc-gate APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm sh e2e.sh'
+```
+
+**Resultado**: once pruebas en verde en ese conjunto. Nativa **166 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js`
+dentro del hospedador de navegador **160 PASS + 9 SKIP, rc 0** —el enlace corre allí también, con el marco
+reconstruido a mano sobre los números que §33 y §34 copiaran del jar—. Y el portero del repo, `sh e2e.sh`
+con el binario de este fork, sigue diciendo **`e2e: todo en orden`**, con sus 16 comprobaciones de la
+pestaña conducida por chromium.
+
+Con esto **la Fase 3 queda cerrada de punta a punta**: texto del proyecto → tabla, dos AXML y `R`, y de ahí
+el apk firmado del §32. Lo que queda del objetivo declarado (compilar en la pestaña sin conexión) son dos
+piezas grandes: la Fase 1G, que es escribir el `javac` en Go, y el cableado de la página.
