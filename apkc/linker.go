@@ -20,6 +20,7 @@ package main
 // forma de recursos no esta comprobado, y se dice en lugar de prometer.
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,6 +30,42 @@ import (
 
 // linkerGo names the resource backend that does not start aapt2.
 const linkerGo = "go"
+
+// `apkc link`: el enlace de recursos, suelto, sin aapt2. Es la puerta que puede correr del lado del
+// cliente —no levanta proceso y solo necesita los ficheros del proyecto y un android.jar—, y por eso va
+// separada de `apkc build`, que todavía ejecuta javac y d8.
+func link() {
+	set := flag.NewFlagSet("link", flag.ExitOnError)
+	set.Usage = func() {
+		fmt.Print(`usage: apkc link --android-jar android.jar [-o build]
+
+Links the resources of the project in the current directory, in Go, with no aapt2 and no
+subprocess anywhere: it reads AndroidManifest.xml and res/values/*.xml and res/layout/*.xml, and
+writes the binary manifest, resources.arsc, the compiled layouts and src/<package>/R.java under
+the output directory, exactly where the packager looks for them.
+
+The framework ids come from the android.jar passed in, read by this binary itself. Only values and
+layouts without a qualifier are linked: a res/layout-es or a res/drawable stops the command with its
+name, because those need a second configuration or a file copy, and neither is measured here.
+`)
+	}
+	jar := set.String("android-jar", androidJar, "the android.jar whose resource table holds the framework ids")
+	out := set.String("o", ".", "where the linked products go")
+	version := set.Int("sdk-version", 0, "the API level of the platform being linked; by default it is read from the android.jar path")
+	codename := set.String("codename", "", "the Android version name of that platform (\"14\" for API 34); by default it is read from --sdk-version when it is measured")
+	if err := set.Parse(os.Args[2:]); err != nil {
+		LogF("link", err.Error())
+	}
+	opts, err := opcionesDelProyecto(*jar, *version, *codename)
+	if err != nil {
+		LogF("link", err.Error())
+	}
+	cambiada, err := enlazarConGo(*out, *jar, opts)
+	if err != nil {
+		LogF("link", err.Error())
+	}
+	LogI("link", "recursos enlazados en Go; la R", map[bool]string{true: "cambio", false: "quedo igual"}[cambiada])
+}
 
 // tiposDeResQueSeEnlazan: las dos carpetas cuyos ficheros se tradacen a modelos. Los demas nombres de
 // carpeta son recursos que este enlazador no sabe escribir.
@@ -164,24 +201,35 @@ func enlazarConGo(raiz, androidJar string, opts opcionesDeEnlace) (bool, error) 
 	return errLeer != nil || string(antes) != enlazado.r, nil
 }
 
-// opcionesDelProyecto saca lo que aapt2 recibe por bandera y aqui se pasa a mano: la version de
-// compilacion, que es la del platform que se usa para enlazar, y su nombre en texto.
-func opcionesDelProyecto(androidJar string) (opcionesDeEnlace, error) {
-	base := filepath.Base(filepath.Dir(androidJar))
-	if !strings.HasPrefix(base, "android-") {
-		return opcionesDeEnlace{}, fmt.Errorf("%s: la ruta del android.jar no dice la version del platform", androidJar)
+// opcionesDelProyecto saca lo que aapt2 recibe por bandera y aqui se pasa a mano. La version se puede
+// decir con --sdk-version y --codename; si no se dice, se lee de la ruta del platform, que en el SDK
+// instalado es platforms/android-34/android.jar. En la pagina el jar se monta donde quiere el usuario,
+// por eso la bandera existe.
+func opcionesDelProyecto(androidJar string, version int, codename string) (opcionesDeEnlace, error) {
+	if codename != "" {
+		if version == 0 {
+			return opcionesDeEnlace{}, fmt.Errorf("--codename pide tambien --sdk-version")
+		}
+		return opcionesDeEnlace{compileSdkVersion: version, compileSdkCodename: codename}, nil
 	}
-	numero, err := strconv.Atoi(strings.TrimPrefix(base, "android-"))
-	if err != nil {
-		return opcionesDeEnlace{}, fmt.Errorf("%s: la version del platform no es un numero", base)
+	if version == 0 {
+		base := filepath.Base(filepath.Dir(androidJar))
+		if !strings.HasPrefix(base, "android-") {
+			return opcionesDeEnlace{}, fmt.Errorf("%s: la ruta del android.jar no dice la version del platform; digala con --sdk-version", androidJar)
+		}
+		numero, err := strconv.Atoi(strings.TrimPrefix(base, "android-"))
+		if err != nil {
+			return opcionesDeEnlace{}, fmt.Errorf("%s: la version del platform no es un numero", base)
+		}
+		version = numero
 	}
 	// medido sobre el android-34 de este telefono: compileSdkVersion 34 y codename "14", que es la
 	// version de Android; platformBuildVersionName sale del mismo numero entero (parrafo 37)
-	codename, ok := nombreDeVersionDeAndroid(numero)
+	nombrePlataforma, ok := nombreDeVersionDeAndroid(version)
 	if !ok {
-		return opcionesDeEnlace{}, fmt.Errorf("el nombre de la version de Android correspondiente a API %d no esta medido aqui", numero)
+		return opcionesDeEnlace{}, fmt.Errorf("el nombre de la version de Android correspondiente a API %d no esta medido aqui; de-lo con --codename", version)
 	}
-	return opcionesDeEnlace{compileSdkVersion: numero, compileSdkCodename: codename}, nil
+	return opcionesDeEnlace{compileSdkVersion: version, compileSdkCodename: nombrePlataforma}, nil
 }
 
 // versionesMedidasDeAndroid: API -> version de Android en texto. Solo la que se comprobado contra los

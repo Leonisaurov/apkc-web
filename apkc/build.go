@@ -480,7 +480,7 @@ func bundleRes(useAAB bool, incremental bool, linker string) bool {
 		if useAAB {
 			LogF("build", "--linker go cannot write a bundle: aapt2 link --proto-format produces resources.pb, and this linker does not")
 		}
-		opts, err := opcionesDelProyecto(androidJar)
+		opts, err := opcionesDelProyecto(androidJar, 0, "")
 		if err != nil {
 			LogF("build", err)
 		}

@@ -14,7 +14,15 @@ func main() {
 		return
 	}
 
-	findSDKs()
+	// findSDKs probes the SDK and the JDK to set the paths the stages shell out to. The
+	// two commands this fork runs without a subprocess anywhere -dex and link- do not
+	// need that probe, and inside a browser-shaped host there is no SDK to find: the
+	// probe used to end the command before it started.
+	switch os.Args[1] {
+	case "dex", "link":
+	default:
+		findSDKs()
+	}
 
 	switch os.Args[1] {
 	case "doctor":
@@ -33,6 +41,8 @@ func main() {
 		sign()
 	case "dex":
 		dex()
+	case "link":
+		link()
 	case "version":
 		// what a script asks when it has to know which apkc answered the rest
 		fmt.Println(buildStamp())

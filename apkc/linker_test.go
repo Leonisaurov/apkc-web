@@ -107,7 +107,7 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 }
 
 func TestOpcionesDelProyecto(t *testing.T) {
-	opts, err := opcionesDelProyecto("/x/platforms/android-34/android.jar")
+	opts, err := opcionesDelProyecto("/x/platforms/android-34/android.jar", 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,10 +115,23 @@ func TestOpcionesDelProyecto(t *testing.T) {
 		t.Errorf("las opciones salen %+v, medidas 34 y \"14\"", opts)
 	}
 	// una version no medida se rechaza con nombre, no se adivina el codename
-	if _, err := opcionesDelProyecto("/x/platforms/android-21/android.jar"); err == nil {
+	if _, err := opcionesDelProyecto("/x/platforms/android-21/android.jar", 0, ""); err == nil {
 		t.Error("API 21 fue aceptado sin haber medido su nombre de version")
 	}
-	if _, err := opcionesDelProyecto("/x/no-android.jar"); err == nil {
-		t.Error("una ruta que no dice la version fue aceptada")
+	// y la ruta puede ser cualquiera si se dice la version: en la pagina el jar se monta donde quiere
+	// el usuario, y ahi la ruta no informa nada
+	pedidas, err := opcionesDelProyecto("/montado/apk-sdk.jar", 34, "")
+	if err != nil || pedidas.compileSdkVersion != 34 || pedidas.compileSdkCodename != "14" {
+		t.Errorf("--sdk-version sin ruta informativa: %+v, %v", pedidas, err)
+	}
+	if _, err := opcionesDelProyecto("/x/no-android.jar", 0, ""); err == nil {
+		t.Error("una ruta que no dice la version y sin bandera fue aceptada")
+	}
+	codigos, err := opcionesDelProyecto("/x/no-android.jar", 21, "12")
+	if err != nil || codigos.compileSdkVersion != 21 || codigos.compileSdkCodename != "12" {
+		t.Errorf("--codename con su version: %+v, %v", codigos, err)
+	}
+	if _, err := opcionesDelProyecto("/x/no-android.jar", 0, "12"); err == nil {
+		t.Error("un codename sin version fue aceptado")
 	}
 }

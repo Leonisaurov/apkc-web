@@ -1681,3 +1681,60 @@ nombre el motivo.
 **Resultado**: suite nativa **169 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del hospedador de
 navegador **163 PASS + 9 SKIP, rc 0**. `javac` y `d8` siguen ejecutándose en este camino: lo que ya no se
 ejecuta es `aapt2`.
+
+## 39. `apkc link` dentro del hospedador con forma de navegador: los recursos, compilados del lado del cliente
+
+Tercer comando del fork que no levanta proceso (después de `dex` y de `sign`): `apkc link` hace **solo el
+enlace de recursos**, con `--android-jar` apuntando al jar del SDK y `-o` al directorio del proyecto. Se
+midió corriéndolo en `shim/navegador-sim.js` —el hospedador con forma de navegador, un `fs` en memoria,
+sin red y sin proceso—, con el `android.jar` montado como un fichero más:
+
+```sh
+sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o $PREFIX/tmp/apkc-link.wasm .'
+sh -c 'cd shim && node navegador-sim.js \
+  --montar $P/AndroidManifest.xml:/proyecto/AndroidManifest.xml \
+  --montar $P/res/values/styles.xml:/proyecto/res/values/styles.xml \
+  --montar $P/res/layout/main.xml:/proyecto/res/layout/main.xml \
+  --montar $HOME/Android/platforms/android-34/android.jar:/sdk/android.jar \
+  --exportar /proyecto/build/AndroidManifest.xml:$O/AndroidManifest.xml \
+  --exportar /proyecto/build/resources.arsc:$O/resources.arsc \
+  --exportar /proyecto/build/res/layout/main.xml:$O/main.xml \
+  --exportar /proyecto/src/com/hola/apkcstudio/R.java:$O/R.java \
+  $PREFIX/tmp/apkc-link.wasm link --android-jar /sdk/android.jar --sdk-version 34 -o /proyecto'
+```
+
+**Resultado**: `3,22 s` (leer el jar de 26 MB y andar su tabla de 16,39 MB, todo en el hospedador) y los
+cuatro productos exportados: **`AndroidManifest.xml` idéntico byte a byte al de aapt2, `main.xml` idéntico,
+`R.java` idéntica**, y `resources.arsc` de 936 bytes frente a los 1088 de aapt2 por la única configuración
+base declarada en el §28.
+
+Tres cosas que esta corrida obligó a arreglar, y que en el teléfono no habrían aparecido:
+
+- **`main()` sondaba el SDK antes de despachar cualquier orden** (`findSDKs`), y en el hospedador eso
+  terminaba el comando con `[doctor] open /android/build-tools: No such file or directory` antes de
+  empezar. `link` y `dex`, que son los dos que no levantan proceso, quedan fuera de ese sondeo:
+  `default: findSDKs()`.
+- **La versión del platform se leía de la ruta del jar** (`platforms/android-34/android.jar`). En la
+  pestaña el usuario monta el jar donde quiere y la ruta no informa nada, así que `--sdk-version` y
+  `--codename` existen; la ruta sigue siendo el defecto cómodo para `apkc build`. Un `--codename` sin
+  `--sdk-version`, o una versión cuyo nombre no esté medido (API 21, por ejemplo), se rechazan con nombre.
+- **El orden de argumentos del hospedador**: `navegador-sim.js <wasm> <orden> …`, la orden primero. Llamado
+  con la ruta delante, `apkc` interpretaba `/proyecto` como el nombre del comando y no pasaba de ahí.
+
+El control de que los rechazos del nuevo portero no son un error que rechace todo sigue en
+`linker_test.go`, y la suite nativa y la del hospedador (las 163 + 9 del §38) no cambiaron con el arreglo.
+
+**Y el portero del studio, con una nota sobre su intermitencia.** `sh e2e.sh` con el binario nuevo dijo
+**`e2e: todo en orden`** (16 comprobaciones de la pestaña, apk de 10348 bytes firmado dentro de chromium y
+verificado por fuera). En una corrida anterior, con el mismo binario, habia fallado tres: la que
+sobrevivía al filtro imprimía
+
+```
+--- nodos tras recargar: ["/proyecto:dir","/proyecto/AndroidManifest.xml:0b","/proyecto/res/layout:dir","/proyecto/src:dir"]
+```
+
+o sea que al recargar la pestaña el árbol persistido en OPFS estaba **ahi pero con ficheros de cero
+bytes**. Eso cambia el diagnóstico que estaba escrito (`create` falla a veces): el fallo no esta en lo que
+genera el proyecto, esta en el **persistido** —se consulta el árbol antes de que el contenido este
+escrito—, y por eso es intermitente y por eso la comprobacion falla al recargar y no al crear. Queda
+anotado con su salida, no como sospecha; reproduce una de cada varias corridas y pasa en la siguiente.
