@@ -303,6 +303,13 @@ Por formato, cada uno con su oraculo y su test:
   `R` sigue siendo el texto de aapt2. Rechaza las siete formas no medidas (color que no es color, bool
   que no es booleano, tipo de recurso desconocido, item que no es `android:`, padre inexistente,
   `<string>` con hijos y referencia propia resuelta antes de numerar).
+  **Y el árbol ya esta hecho** (párrafo 36): `apkc/arbol.go` lee layout y manifiesto en texto con nombres,
+  **líneas**, prefijos y orden de hijos; comprueba las siete líneas del binario del manifiesto (la del
+  `activity` es la 13, y el decodificador de Go informa la 17 porque `InputPos()` cae detrás del `>`),
+  guarda los prefijos en las dos direcciones porque Go da el URI en los atributos y el prefijo en las
+  declaraciones, y rechaza seis formas rotas.
+  **Falta el ultimo paso**: unir las dos mitades —descubrir los `@+id/…` del árbol, numerar la tabla con
+  ellos, y escribir los dos AXML y la R a partir de lo materializado.
   **Restricciones de la otra mitad**, razonadas antes de escribir código (un par de intentos salieron
   ficheros que no compilaban; se deja aqui lo que cuesta):
   - **Hace falta dos pasadas sí o sí**: un layout declara ids con `@+id/pulsar`, esos ids entran en la

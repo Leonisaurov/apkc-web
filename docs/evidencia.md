@@ -1540,3 +1540,37 @@ necesita el estilo está reconstruido a mano en la prueba con los ids y valores 
 árbol, descubrir los `@+id/…` (que añaden entradas a la tabla), numerar, y entonces escribir los AXML con
 las referencias resueltas y los cuatro atributos que el manifiesto gana. Las restricciones están escritas
 en `docs/plan.md`.
+
+## 36. El árbol en texto: las líneas que anota aapt2 no son las que da el decodificador de Go
+
+`apkc/arbol.go` convierte el layout y el manifiesto en texto en un árbol con nombres, **líneas**,
+prefijos y orden de hijos. Es la pieza que faltaba para la segunda mitad de 3-G, y trae una medición
+sobre la propia librería de Go, que es la que decide su forma:
+
+- Sondeado con `encoding/xml` (el programa está en `$PREFIX/tmp/probeXML/sondeo.go`, 24 líneas): en una
+  declaración `xmlns:android="…"` el decodificador responde `Space="xmlns"` y `Local="android"`, o sea
+  **el prefijo**; en un atributo `android:orientation` responde `Space="http://schemas.android.com/apk/res/android"`,
+  o sea **el URI ya resuelto**. El binario quiere el prefijo en el nodo y el URI en el campo `ns`, así
+  que se guarda el mapa en las dos direcciones.
+- Y la que no se veía venir: **`InputPos()` cae detrás del `>` de la etiqueta de apertura**. En el
+  manifiesto del studio `<activity` abre en la línea 13, sus cuatro atributos ocupan hasta la 17, y el
+  decodificador informa 17. `aapt2` anota **13** (medido sobre el binario con el instrumento del §24, y
+  vuelto a medir en el §30). La línea se busca entonces en el texto con un cursor que solo avanza,
+  buscando el `<nombre` siguiente. La prueba `TestArbolDelManifiesto` comprueba las siete líneas del
+  binario: manifiesto 1, uses-sdk 6, application 10, **activity 13**, intent-filter 19, action 20,
+  category 21.
+- El orden de los atributos en el árbol es el del **fuente**, no el del binario: en el `TextView` el
+  `style` sin prefijo es el primero leído y aapt2 lo escribe el último. Eso es materia del escritor de
+  AXML (que ya ordena como aapt2, §30), y se comprueba aquí para que el lector no lo pierda.
+
+Rechazos probados sobre el propio lector: documento sin raíz, dos raíces, cierre mal anidado, elemento
+sin cerrar, texto suelto dentro de un elemento, y un comentario entre dos raíces. La forma buena
+(declaración `<?xml …?>`, `xmlns:android` y un hijo) se acepta como control de que los cinco rechazos no
+son un error que rechace todo.
+
+```sh
+go test -C apkc -count=1 -run "TestArbolDel|TestArbolRechaza" -v .
+```
+
+**Resultado**: tres pruebas en verde. Nativa **163 PASS / 0 FAIL / 1 SKIP**; en `GOOS=js` dentro del
+hospedador de navegador **157 PASS + 9 SKIP, rc 0**.
