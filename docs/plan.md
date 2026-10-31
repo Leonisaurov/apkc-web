@@ -38,7 +38,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
 | 2G | **hecha** (rama `web`): lector y escritor de dex en Go. El objetivo medido eran 2844 bytes de `d8`; nuestro dex sobre los mismos `.class` sale **byte a byte igual** al de javac-d8 salvo el `debug_info` (motivo escrito), y `d8` lee el nuestro y lo re-dexa con `rc 0` | `docs/evidencia.md` §13, §20 a §23, §41, §42 |
 | 3 recursos sin `aapt2` | **hecha**: `arscwriter.go`, `axmlwriter.go`, `r.go`, `marco.go`, `enlazar.go` + `arbol.go` + `valores.go` enlazan desde los ficheros de texto; `build --linker go` produce un apk que `apksigner`, `zipalign`, `zipcheck.py` y `aapt2 dump` aprueban | `docs/evidencia.md` §28 a §38 |
-| 1G Java -> `.class` en Go | **hecha para el subconjunto del `studio/`**: `javafuente.go`, `javaemisor.go`, `compilar.go`; oráculo doble (`javap -c -p` y el dex idéntico) y rechazo por nombre de lo no medido | `docs/evidencia.md` §40 a §43 |
+| 1G Java -> `.class` en Go | **hecha para el subconjunto del `studio/` y algo más**: `javafuente.go`, `javaemisor.go`, `compilar.go`; oráculo doble (`javap -c -p` y el dex idéntico) y rechazo por nombre de lo no medido. El subconjunto llega a campos con modificadores, variables locales, `checkcast`, aritmética entera y el `if`/`else` | `docs/evidencia.md` §40 a §43 y §49 a §52 |
 | 4.1 etapas como interfaz | **logrado por otro camino**: no hay interfaz con dos implementaciones, hay banderas (`--linker go`, `--compiler go`) que eligen el módulo de Go en vez del proceso, y `sinProcesos()` se salta el sondeo del SDK. El `os/exec` de siempre sigue ahí para el camino nativo, que es el que funciona con SDK completo | `docs/evidencia.md` §38, §44, §45 |
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
@@ -233,9 +233,18 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   a byte sobre nuestras clases que sobre las de javac (1960 bytes). End-to-end en Go: 834 ms y un apk de 9555
   bytes que `apksigner`, `zipalign`, `zipcheck`, `aapt2` y `apkc verify` aprueban, y cuyo dex relee `d8` con
   `rc 0`.
-- **1G.6 PENDIENTE, con su motivo**: el `if` (hacen falta los anchos de las branquias y sus formas dalvik,
-  medidos), la concatenación de cadenas en versión 52 (cadena de `StringBuilder.append`), arreglos y bucles.
-  Hasta entonces el portero los rechaza por nombre; no se abre ninguna de estas puertas "de paso".
+- **1G.6 HECHA — el `if` y su `else`** (§52): los anchos de las branquias del JVMS, las cuatro formas
+  dalvik (`10t`, `21t`, `22t`, y el `22s` que el anteojo leía mal), la inversión de la condición que hace
+  javac y el `goto` que solo aparece cuando el cuerpo no sale por su cuenta. Medido dos veces: `javap
+  -p -c -l` idéntico línea por línea contra javac 21 (100 y 81 líneas en las dos sondas, 78 en el
+  `MainActivity` de la página), y `apkc dex` dando el mismo fichero byte a byte sobre nuestras clases que
+  sobre las de javac (1440 y 1684 bytes). Contra `d8`: doce de los dieciséis cuerpos salen iguales
+  instrucción por instrucción y con el mismo desplazamiento; los cuatro que no son tres optimizaciones
+  suyas (plegado de `<clinit>`, fusión de colas idénticas, propagación de copias) y todos nuestros dex
+  los relee con `rc 0`.
+- **1G.7 PENDIENTE, con su motivo**: la concatenación de cadenas en versión 52 (cadena de
+  `StringBuilder.append`), arreglos y bucles. Hasta entonces el portero los rechaza por nombre; no se
+  abre ninguna de estas puertas "de paso".
 
 **Cerrada la Fase 1G y el cableado**: `create`, editar, compilar recursos, compilar Java, dexar, empaquetar,
 firmar y verificar ocurren dentro de la pestaña, sin conexión y sin un solo proceso. El emisor y el enlazador

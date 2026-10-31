@@ -2353,6 +2353,16 @@ badging`; el del proyecto generado de 9832 bytes **igual entrada por entrada al 
 por `d8` con `rc 0`; y el cotejo del verificador propio contra `apksigner` — `bueno: si/si`,
 `con-v3: si/si`, `bloque-alterado: no/no`.
 
+**Otra cosa que sí se puede comprobar por fuera, sin teléfono**: `aapt2 dump xmltree --file AndroidManifest.xml`
+sobre el apk que escribió la pestaña imprime, dentro del `<activity>` de la línea 12,
+`android:exported(0x01010010)=true` junto al `name=".MainActivity"`, y más abajo los dos
+`android:name` del filtro (`android.intent.action.MAIN` y `android.intent.category.LAUNCHER`), con
+`targetSdkVersion=33` en el `<uses-sdk>`. El atributo `exported` es el que la plataforma empezó a exigir en
+las actividades con filtro de intención a partir de API 31; no lo medimos aquí instalando nada, pero su
+ausencia habría sido un motivo conocido de rechazo en el `pm install`, y está. Que lo escriba nuestro
+`axmlwriter` saliendo del texto del `studio/app.js` es mérito del enlazador del §37, que copia el atributo
+como los demás.
+
 **El límite de esta comprobación, dicho sin adornos**: `strings` sobre el dex prueba que el *tipo* existe y
 que la *referencia* a la interfaz del framework está escrita. No prueba que el cargador de ART la resuelva
 contra el `framework.jar` del aparato ni que `onCreate` sobreviva a la inflación del layout. Eso último es
@@ -2554,4 +2564,108 @@ dex con `rc 0`. En nativo, `apkc compile` tardó 42 ms sobre esos dos fuentes.
 Es el cierre del §44 al §50 en una frase: **la página compila un fuente que alguien escribió, y el
 resultado es el mismo que daría `javac` + `d8` hasta donde este subconjunto llega**. Lo del teléfono sigue
 siendo el hecho 2 del objetivo: instalar y ver la ventana.
+
+## 52. El `if`, medido dos veces: la inversión de javac en el `.class` y las cuatro formas de rama en el dex
+
+El `if` era la pieza que el §50 dejaba fuera: un fuente con condicionales no se podía escribir en la página.
+Se midió en dos tramos, con dos oráculos que no comparten código con este fork —`javap` sobre las clases de
+javac 21 y las palabras de `d8`— y con una sonda de doce métodos, en `$PREFIX/tmp/e52/p`:
+
+```java
+public int igual(int a, int b) { if (a == b) { return 1; } return 0; }
+public int mayorcero(int a) { if (a > 0) { return 2; } return 3; }
+public int nulo(Object o) { if (o == null) { return 4; } return 5; }
+public int elseCorto(int a) { if (a == 0) { return 6; } else { return 7; } }
+public int conElse(int a) { if (a == 0) { shared = 1; } else { shared = 2; } return shared; }
+public int plegable(int a) { if (a == 0) { a = 1; } else { a = 2; } return a; }
+public int anidadaConElse(int a, int b) { if (a == b) { if (a > 0) { shared = 1; } else { shared = 2; } } else { shared = 3; } return shared; }
+public int tresNiveles(int a, int b) { if (a == b) { if (a > 0) { if (b > 0) { return 1; } } } return 2; }
+```
+
+**Primera medición — el `.class`.** `javac --release 8` y `apkc compile --android-jar android-34/android.jar`
+sobre el mismo fuente, y `javap -p -c -l` a los dos lados: **idéntico línea por línea**, 186 líneas para
+`Branquias` (doce métodos con `if`, tres de ellos anidados) y 81 para `Saltos`. Lo que se leyó:
+
+- **javac emite la condición invertida**, y la tabla salió de esas 186 líneas, no del manual:
+  `==`→`if_icmpne`, `!=`→`if_icmpeq`, `<`→`if_icmpge`, `>=`→`if_icmplt`, `>`→`if_icmple`, `<=`→`if_icmpgt`;
+  contra cero, con una sola palabra en la pila simulada: `==0`→`ifne`, `!=0`→`ifeq`, `<0`→`ifge`,
+  `>=0`→`iflt`, `>0`→`ifle`, `<=0`→`ifgt`; contra null: `==null`→`ifnonnull`, `!=null`→`ifnull`.
+  `0 == a` no se dobla: javac escribe el literal primero (`iconst_0; iload_1; if_icmpne`).
+- **el `goto` solo aparece si el `then` no sale por su cuenta**: `if (a == b) { return 1; } return 0;` no
+  lleva ninguno, y `conElse` lleva `8: goto 15`. Un `if` sin `else` cuyo cuerpo sí cae al final tampoco lo
+  lleva: el `else` vacío y el final son la misma posición.
+- **el desplazamiento se cuenta desde el opcode**, no desde el operando: `2: if_icmpne 7` tiene por operando
+  `00 05`. Todas las branquias miden tres bytes, así que el ancho de la tabla de caminantes (`jvmMeasured`)
+  es 2 operandos para las quince formas nuevas.
+- **la `LineNumberTable` de un método escrito en una línea tiene una sola fila** (`line 12: 0` en
+  `anidadaConElse`), aunque el cuerpo tenga cuatro saltos.
+
+**Segunda medición — las palabras de `d8`.** Cuatro formatos nuevos, leídos de sus ficheros
+(`--release --min-api 21 --lib android.jar`) sobre las clases de javac, y verificados contra los nuestros:
+
+| qué | d8 | el nuestro |
+| --- | --- | --- |
+| `if (a == b)` → `if-ne v1, v2, +4` | `2133 0004` | `4333 0004` |
+| `if (a > 0)` → `if-lez v1, +4` | `013d 0004` | `033d 0004` |
+| `if (o == null)` → `if-nez v1, +4` | `0139 0004` | `0339 0004` |
+| `if (o != null)` → `if-eqz v1, +5` | `0138 0005` | `0338 0005` |
+| `goto` → `+2` | `0228` | `0228` |
+
+El `22t` (dos registros) reparte los registros en nibbles igual que el `22c` y lleva el desplazamiento con
+signo en la segunda unidad; el `21t` (contra cero y contra null) usa un byte entero para el registro y el
+segundo para el desplazamiento; el `10t` es una sola unidad con ocho bits con signo en la mitad alta. El
+desplazamiento va **en unidades de código y desde la propia instrucción**, igual que en el JVMS pero con la
+unidad de dos bytes. El null es cero para dalvik, así que `ifnull`/`ifnonnull` bajan a `if-eqz`/`if-nez`.
+
+**Dos defectos reales salieron a buscar, y los dos estaban en código que ya pasaba sus tests.**
+
+1. El emisor escribía `13: goto 20` donde javac escribe `13: goto 27`. En la posición 20 no había ninguna
+   instrucción antes de otro `goto`: era una etiqueta vacia. javac encadena el salto por encima, y el
+   emisor ahora hace lo mismo (`encadenaGotos`, pasada final antes de cerrar el atributo `Code`). Con
+   esto el `javap` de los tres métodos anidados sale idéntico; sin esto se habría colado un dex que no es
+   el que escribiría javac, que es justo lo que el §49 prometía no volver a hacer.
+2. `desmontaPalabras` —el lector con el que se comparan nuestras palabras y las de `d8`— no conocía ni las
+   branquias ni `sget`, `sput`, `iput`, `check-cast`, `return-object` (nueve opcodes que el §50 ya escribía)
+   ni la familia `/lit8` con su `add-int/lit16` (seis que escribía `d8` y había que leer para comparar). Ahora
+   conoce veintinueve mas, repartidos en cuatro casos nuevos de formato (`10t`, `21t`, `22t` y el `22s`).
+   Y el `22s` **no** es un `22c`: la palabra de d8 `00d8 0100` es
+   `add-int/lit8 v0, v0, 1` —registro de ocho bits en el byte alto de la primera unidad, literal con signo
+   en el byte alto de la segunda y `vBB` en el nibble bajo—. La primera versión lo leía como el `22c` e
+   imprimía `add-int/lit8 v, v, 256`, un número que ningún literal de ocho bits puede tener: esa absurdez
+   fue la señal.
+
+**Cotejo con `d8` sobre los veintiún cuerpos del par** (las dos sondas, instrucciones desmontadas sin
+números de registro): **quince salen iguales instrucción por instrucción y con el mismo desplazamiento**,
+incluido `tresNiveles` (`if-ne +8 | if-lez +6 | if-lez +4 | const/4 1 | return | const/4 2 | return`, palabra
+por palabra la de d8 salvo el registro). Los seis restantes difieren por tres optimizaciones de d8, cada
+una con su nombre:
+
+- los dos `<clinit>`: d8 deja `return-void` (pliega la constante estática `shared = 5`); nosotros escribimos
+  el `const/4` + `sput` que escribió javac;
+- `conElse`, `anidadaConElse`, `enElElse`: d8 fusiona las colas idénticas (un solo `sput` al final, con
+  saltos que a veces van hacia atrás); nosotros conservamos la forma de javac, con un `sput` por rama;
+- `plegable`: d8 propaga las copias (`istore`+`iload` se convierten en `return`); nosotros no.
+
+Ninguna de las tres es una diferencia de semántica que nos toque decidir: el dex que escribimos **lo relee
+`d8` y lo re-dexa con `rc 0`** en los dos casos, y `apkc dex` da **el mismo fichero byte a byte** sobre las
+clases de javac que sobre las nuestras (1796 bytes la sonda entera, 1684 el `MainActivity` de la página), que
+es la prueba de que el traductor no distingue quién escribió el `.class`.
+
+**Lo que se rechaza por nombre**, porque no lo midió ninguna sonda: una condición que no sea comparación (el
+booleano suelto, donde javac usa `ifeq` sobre el valor), el `null` a la izquierda, dos referencias comparadas
+entre sí, los tipos de dos huecos en una comparación, una rama **hacia atrás** (un bucle: el reparto de
+registros en el punto de fusión no está medido; `d8` lo calcula con análisis de viveza), y un `goto` que pase
+de 127 unidades (`goto/16`, 0x29, sin medir).
+
+**Y en la página**: `studio/prueba-pestana.js` sobrescribe el fuente con dos branquias
+(`if (pulsos > 2) { total = total * 2; } else { total = total + 1; }` y `if (raiz != null) { raiz.setVisibility(0); }`),
+compila entero en chromium con `build --linker go --compiler go` y saca **un apk de 9477 bytes** que la
+pestaña verifica sola (v1 `ok`, v2 `ok`) sin hacer ninguna petición fuera de su origen. Fuera de la pestaña,
+`studio/e2e.sh` (bloque 4d) le pasa los mismos oráculos de siempre y **el nuevo**: `d8` relee el `classes.dex`
+que escribió el navegador con las branquias dentro, `rc 0`.
+
+Tests permanentes: `TestEmisorBranquiasContraJavap` (siete sucesiones con sus destinos, dos de ellas
+anidadas), `TestTraduceBranquiasContraLasPalabrasDeD8` (seis cuerpos, con los desplazamientos que escribió
+d8) y `TestRechazaUnaRamaHaciaAtras` (el `while` que no se acepta). Suite: **199 PASS + 2 SKIP** nativa y
+**181 PASS + 20 SKIP** en el hospedador con forma de navegador.
 

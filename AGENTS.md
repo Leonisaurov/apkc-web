@@ -163,9 +163,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   (`add-int/2addr 0xb0` y su familia, medida sobre palabras que escribió `d8`). Un proyecto con
   `private int pulsos = 0`, `Button b = (Button) findViewById(R.id.pulsar)` y `total * 2` compila entero en
   Go: **834 ms y un apk de 9555 bytes** frente a 10,1 s con `javac`+`d8`; `apksigner` (v1+v2), `zipalign`,
-  `zipcheck`, `aapt2 dump badging` y `apkc verify` lo aprueban, y `d8` releee nuestro dex con `rc 0`. El
-  portero sigue: `if`, concatenación de cadenas, arreglos y bucles se rechazan por nombre hasta que estén
-  medidos, y hay una forma de `d8` para `a*b` (dos unidades, `0x0192` + `0x0201`) que aún no desciframos.
+  `zipcheck`, `aapt2 dump badging` y `apkc verify` lo aprueban, y `d8` releee nuestro dex con `rc 0`.
+- **El `if` entró en el subconjunto medido, no adivinado** (§52): javac emite la **condición invertida**
+  (`a == b` sale `if_icmpne`, `a > 0` sale `ifle`, `o == null` sale `ifnonnull`) y el desplazamiento se cuenta
+  **desde el opcode**; el `goto` solo aparece cuando el `then` no sale por su cuenta; un método de una línea
+  lleva **una** fila en la `LineNumberTable`. En dalvik son cuatro formas (`10t`, `21t`, `22t`, y el `22s` de
+  los literales, que el lector confundía con el `22c`), todas medidas contra las palabras de `d8`. Dos defectos
+  reales salieron de la comparación: un `goto` que no encadenaba por encima de una etiqueta vacía (javac escribe
+  `13: goto 27`, no `13: goto 20`) y el formato `22s` mal leído. Quedan rechazados por nombre: la rama **hacia
+  atrás** (un bucle, cuyo punto de fusión de registros no está medido), `goto/16`, el booleano suelto como
+  condición y el `null` a la izquierda. Lo que sigue fuera del subconjunto: concatenación de cadenas en
+  versión 52 y arreglos; y queda una forma de `d8` para `a*b` (dos unidades, `0x0192` + `0x0201`) que aún no
+  desciframos — nosotros emitimos `mul-int/2addr` y `d8` lee el resultado.
 - **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
   arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
@@ -185,9 +194,10 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **190 PASS + 2 SKIP** nativa y **182 PASS + 10 SKIP**
-  en el hospedador, con los doce tests de Java y los cinco del verificador pasando dentro. El portero
-  rechaza con nombre lo no medido: `if`, anónima sobre una clase o dentro de otra o en un método `static`,
+  idénticos a los del binario nativo (§43). Suite actual: **199 PASS + 2 SKIP** nativa y **181 PASS + 20 SKIP**
+  en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
+  hospedador no lleva `android.jar` montado. El portero
+  rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
   tipos de dos huecos, anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
