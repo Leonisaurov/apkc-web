@@ -1,0 +1,1237 @@
+package main
+
+// La Fase 1G, primera pieza: leer el Java que escribe la pagina y dejarlo en un arbol. El objetivo medido
+// es la plantilla que genera `apkc create` (apkc/template/MainActivity.java), cuyo oráculo es javap sobre
+// el .class que deja el javac nativo del telefono (docs/evidencia.md 40): dos metodos, `ldc` de la
+// constante inlinada de `R.layout.main`, `invokespecial` al super y `invokevirtual` al metodo heredado.
+//
+// La regla de este fichero es la del repo: lo que no se ha medido NO se acepta en silencio. Cada forma de
+// Java que el parser no sabe emitir —y por lo tanto el emisor no puede comprobar contra javap— se rechaza
+// con el nombre de lo que aparece, igual que hace el dexer con los opcodes que no verifico. La lista crece
+// con su medicion: un constructo entra cuando entra su prueba contra `javap -c -p`, no antes.
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
+
+// pos es una posicion en el fuente, para los mensajes y para la LineNumberTable que escribe el emisor.
+type pos struct {
+	linea int
+}
+
+// jexpr es una expresion del subconjunto.
+type jexpr interface{ jexprPuede() }
+
+// jlit es un literal: cadena, entero, booleano o nulo.
+type jlit struct {
+	tipoJ    byte // 's' cadena, 'i' entero, 'b' booleano, 'n' nulo
+	texto    string
+	entero   int32
+	booleano bool
+	donde    pos
+}
+
+func (jlit) jexprPuede() {}
+
+// jthis: `this`, y `Tipo.this` cuando nombre no esta vacio (captura del exterior en una interna).
+type jthis struct {
+	nombre string
+	donde  pos
+}
+
+func (jthis) jexprPuede() {}
+
+// jacceso: un acceso a campo, con la base vacia si es un nombre suelto (`R`, `menu`, `MainActivity`).
+type jacceso struct {
+	base   jexpr
+	nombre string
+	donde  pos
+}
+
+func (jacceso) jexprPuede() {}
+
+// jllamada: una invocacion. `super.` va en receptorNil con super puesto a verdadero; con base vacia el
+// receptor es `this`, que es lo que javac anota como clase actual (parrafo 40: setContentView sale
+// Methodref contra MainActivity, no contra Activity, aunque se declare en Activity).
+type jllamada struct {
+	base   jexpr
+	super  bool
+	nombre string
+	args   []jexpr
+	donde  pos
+}
+
+func (jllamada) jexprPuede() {}
+
+// jcast: un molde entre parentesis. Solo se acepta sobre un tipo que el emisor conoce.
+type jcast struct {
+	tipo   string
+	dentro jexpr
+	donde  pos
+}
+
+func (jcast) jexprPuede() {}
+
+// jnuevo: `new Tipo(args)` y, si cuerpo no es nil, la clase anonima `new Tipo(args) { ... }`.
+type jnuevo struct {
+	tipo   string
+	args   []jexpr
+	cuerpo *jclas
+	donde  pos
+}
+
+func (jnuevo) jexprPuede() {}
+
+// jstmt es una sentencia del subconjunto.
+type jstmt interface{ jstmtPuede() }
+
+type jstmtExpr struct{ e jexpr }
+
+func (jstmtExpr) jstmtPuede() {}
+
+type jretorno struct {
+	e     jexpr
+	donde pos
+}
+
+func (jretorno) jstmtPuede() {}
+
+// jdecl: declaracion de variable local, con inicializador opcional.
+type jdecl struct {
+	tipo   string
+	nombre string
+	valor  jexpr
+	donde  pos
+	final  bool
+}
+
+func (jdecl) jstmtPuede() {}
+
+// jasign: asignacion a una variable local o a un campo (`t = ...`, `this.x = ...`).
+type jasign struct {
+	destino jexpr
+	valor   jexpr
+	donde   pos
+}
+
+func (jasign) jstmtPuede() {}
+
+type jbloque struct {
+	sentencias []jstmt
+	donde      pos
+}
+
+func (jbloque) jstmtPuede() {}
+
+type jif struct {
+	cond     jexpr
+	entonces jstmt
+	siNo     jstmt
+	donde    pos
+}
+
+func (jif) jstmtPuede() {}
+
+// jparam, jcampo y jmetodo son las partes declarativas.
+type jparam struct {
+	tipo   string
+	nombre string
+	donde  pos
+}
+
+type jcampo struct {
+	nombre     string
+	tipo       string
+	esEstatico bool
+	esFinal    bool
+	esPublico  bool
+	valor      jexpr
+	donde      pos
+}
+
+type jmetodo struct {
+	nombre     string
+	retorno    string // "" si constructor
+	params     []jparam
+	cuerpo     []jstmt
+	esEstatico bool
+	esPublico  bool
+	esFinal    bool
+	linea      int
+}
+
+// jclas es una clase, anidada o no. interior guarda las anidadas en el orden del fuente, y nombreExterno
+// el prefijo con el que javac las nombra en el binario (R y R$layout).
+type jclas struct {
+	nombre        string
+	super         string
+	implementa    []string
+	campos        []jcampo
+	metodos       []jmetodo
+	interior      []*jclas
+	abstracta     bool
+	final         bool
+	esPublica     bool
+	linea         int
+	paquete       string
+	imports       []string
+	nombreExterno string
+}
+
+// archivoJava es un fuente entero: el paquete, los imports y la clase principal con sus anidadas.
+type archivoJava struct {
+	paquete string
+	imports []string
+	clases  []*jclas
+}
+
+// ----- el léxico -----
+
+// tokenJava es una unidad léxica. valor trae el texto de identificadores, literales y operadores.
+type tokenJava struct {
+	kind  byte // 'i' identificador, 'n' numero, 's' cadena, 'k' palabra clave, 'p' puntuacion, 'f' fin
+	valor string
+	donde pos
+}
+
+// palabrasJava: las que este parser reconoce. Lo demas es identificador, y si aparece donde va una
+// declaracion el parser lo nombra y rechaza.
+var palabrasJava = map[string]bool{
+	"package": true, "import": true, "public": true, "private": true, "protected": true, "static": true,
+	"final": true, "class": true, "interface": true, "extends": true, "implements": true, "abstract": true,
+	"void": true, "return": true, "if": true, "else": true, "new": true, "this": true, "super": true,
+	"true": true, "false": true, "null": true, "for": true, "while": true, "try": true, "catch": true,
+	"boolean": true, "int": true, "long": true, "float": true, "double": true, "byte": true, "short": true,
+	"char": true, "switch": true, "case": true, "break": true, "continue": true, "throw": true, "native": true,
+	"synchronized": true, "volatile": true, "transient": true, "instanceof": true, "do": true,
+}
+
+// simbolesJava, de mas largo a mas corto para que `>>` no se lea como dos `>`.
+var simbolesJava = []string{
+	"...", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", ">>", "<<",
+	"{", "}", "(", ")", "[", "]", ";", ",", ".", "=", ">", "<", "!", "+", "-", "*", "/", "&", "|", "^", ":", "@", "%",
+}
+
+// tokenizarJava parte el fuente. Hay una garantia en el final del bucle: si una vuelta no consumio
+// bytes, se rechaza. Sin esa garantia un byte multibyte que no es letra ASCII (un `¥`, que es un
+// simbolo monetario y no una letra) hacia append de un identificador vacio sin avanzar y el bucle
+// exterior no paraba nunca: memoria hasta que el kernel mataba el proceso.
+func tokenizarJava(fuente string) ([]tokenJava, error) {
+	out := []tokenJava{}
+	linea := 1
+	i := 0
+	for i < len(fuente) {
+		antes := i
+		c := fuente[i]
+		switch {
+		case c == '\n':
+			linea++
+			i++
+		case c == ' ' || c == '\t' || c == '\r':
+			i++
+		case c == '/' && i+1 < len(fuente) && fuente[i+1] == '/':
+			for i < len(fuente) && fuente[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(fuente) && fuente[i+1] == '*':
+			i += 2
+			for i+1 < len(fuente) && !(fuente[i] == '*' && fuente[i+1] == '/') {
+				if fuente[i] == '\n' {
+					linea++
+				}
+				i++
+			}
+			if i+1 >= len(fuente) {
+				return nil, fmt.Errorf("linea %d: un comentario de bloque sin cerrar", linea)
+			}
+			i += 2
+		case c == '"':
+			texto, nuevo, err := leerCadenaJava(fuente, i, linea)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, tokenJava{kind: 's', valor: texto, donde: pos{linea}})
+			i = nuevo
+		case c == '\'':
+			return nil, fmt.Errorf("linea %d: un literal de char no esta medido en este compilador", linea)
+		case esLetraJava(c) || c == '_' || c == '$':
+			// ASCII solo: Java permite letras de otros alfabetos en un identificador, pero la
+			// plantilla de la pagina y los fuentes que genera son ASCII, y leer un byte suelto de una
+			// secuencia multibyte como si fuera un caracter es lo que hacia girar a este bucle.
+			desde := i
+			for i < len(fuente) && (esLetraJava(fuente[i]) || esDigito(fuente[i]) || fuente[i] == '_' || fuente[i] == '$') {
+				i++
+			}
+			palabra := fuente[desde:i]
+			kind := byte('i')
+			if palabrasJava[palabra] {
+				kind = 'k'
+			}
+			out = append(out, tokenJava{kind: kind, valor: palabra, donde: pos{linea}})
+		case esDigito(c):
+			desde := i
+			for i < len(fuente) && (fuente[i] >= '0' && fuente[i] <= '9' || fuente[i] == 'x' || fuente[i] == 'X' ||
+				fuente[i] == 'a' || fuente[i] == 'b' || fuente[i] == 'c' || fuente[i] == 'd' || fuente[i] == 'e' || fuente[i] == 'f' ||
+				fuente[i] == 'A' || fuente[i] == 'B' || fuente[i] == 'C' || fuente[i] == 'D' || fuente[i] == 'E' || fuente[i] == 'F' ||
+				fuente[i] == '_') {
+				i++
+			}
+			if i < len(fuente) && (fuente[i] == 'L' || fuente[i] == 'l') {
+				i++
+			}
+			out = append(out, tokenJava{kind: 'n', valor: fuente[desde:i], donde: pos{linea}})
+		default:
+			encontrado := ""
+			for _, s := range simbolesJava {
+				if strings.HasPrefix(fuente[i:], s) {
+					encontrado = s
+					break
+				}
+			}
+			if encontrado == "" {
+				r, _ := utf8.DecodeRuneInString(fuente[i:])
+				return nil, fmt.Errorf("linea %d: el caracter %q no es de este subconjunto", linea, r)
+			}
+			out = append(out, tokenJava{kind: 'p', valor: encontrado, donde: pos{linea}})
+			i += len(encontrado)
+		}
+		if i == antes {
+			// la garantia de que este bucle avanza: si una vuelta no consumio nada, esto era un bucle
+			// infinito comiéndose memoria
+			r, _ := utf8.DecodeRuneInString(fuente[i:])
+			return nil, fmt.Errorf("linea %d: el caracter %q no es de este subconjunto", linea, r)
+		}
+	}
+	out = append(out, tokenJava{kind: 'f', donde: pos{linea}})
+	return out, nil
+}
+
+// esLetraJava y esDigito: ASCII, que es lo que cabe en este subconjunto.
+func esLetraJava(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func esDigito(c byte) bool { return c >= '0' && c <= '9' }
+
+// leerCadenaJava: una cadena con sus escapes. \u no se interpreta: las cadenas que emite la pagina son
+// ASCII y el parrafo 40 lo deja medido asi.
+func leerCadenaJava(fuente string, i, linea int) (string, int, error) {
+	sb := strings.Builder{}
+	i++ // la comilla de apertura
+	for i < len(fuente) {
+		c := fuente[i]
+		if c == '"' {
+			return sb.String(), i + 1, nil
+		}
+		if c == '\n' {
+			return "", 0, fmt.Errorf("linea %d: una cadena sin cerrar", linea)
+		}
+		if c != '\\' {
+			sb.WriteByte(c)
+			i++
+			continue
+		}
+		i++
+		if i >= len(fuente) {
+			return "", 0, fmt.Errorf("linea %d: un escape a medio escribir", linea)
+		}
+		switch fuente[i] {
+		case 'n':
+			sb.WriteByte('\n')
+		case 't':
+			sb.WriteByte('\t')
+		case 'r':
+			sb.WriteByte('\r')
+		case '"':
+			sb.WriteByte('"')
+		case '\'':
+			sb.WriteByte('\'')
+		case '\\':
+			sb.WriteByte('\\')
+		default:
+			return "", 0, fmt.Errorf("linea %d: el escape \\%c no esta medido en este subconjunto", linea, fuente[i])
+		}
+		i++
+	}
+	return "", 0, fmt.Errorf("linea %d: una cadena sin cerrar", linea)
+}
+
+// ----- el parser -----
+
+// analizadorJava lleva la posicion de lectura y el archivo que va armando. anonima cuenta las clases
+// internas anonimas del fuente, que javac numera por orden de aparicion (MainActivity$1).
+type analizadorJava struct {
+	toks     []tokenJava
+	i        int
+	fuente   string
+	paquete  string
+	imports  []string
+	anonima  int
+	exterior string // nombre interno de la clase de primera nivel, para nombrar a sus anonimas
+}
+
+func (a *analizadorJava) actual() tokenJava { return a.toks[a.i] }
+
+func (a *analizadorJava) avanzar() tokenJava {
+	t := a.toks[a.i]
+	if t.kind != 'f' {
+		a.i++
+	}
+	return t
+}
+
+func (a *analizadorJava) es(kind byte, valor string) bool {
+	t := a.actual()
+	return t.kind == kind && t.valor == valor
+}
+
+func (a *analizadorJava) comer(kind byte, valor string) error {
+	if !a.es(kind, valor) {
+		return fmt.Errorf("linea %d: se esperaba %q y hay %q", a.actual().donde.linea, valor, a.actual().valor)
+	}
+	a.avanzar()
+	return nil
+}
+
+func (a *analizadorJava) comerSimbolo(v string) error { return a.comer('p', v) }
+
+func (a *analizadorJava) comerPalabra(v string) error { return a.comer('k', v) }
+
+// parsearJava lee un fuente completo. Devuelve el archivo con sus clases, en el orden del fuente.
+func parsearJava(fuente string) (*archivoJava, error) {
+	toks, err := tokenizarJava(fuente)
+	if err != nil {
+		return nil, err
+	}
+	a := &analizadorJava{toks: toks, fuente: fuente}
+	salida := &archivoJava{}
+	for a.es('k', "package") {
+		a.avanzar()
+		nombre, err := a.nombrePunto()
+		if err != nil {
+			return nil, err
+		}
+		a.paquete, salida.paquete = nombre, nombre
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, err
+		}
+	}
+	for a.es('k', "import") {
+		a.avanzar()
+		nombre, err := a.nombreImport()
+		if err != nil {
+			return nil, err
+		}
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, err
+		}
+		a.imports = append(a.imports, nombre)
+	}
+	salida.imports = a.imports
+	for a.actual().kind == 'k' || a.actual().kind == 'i' {
+		c, err := a.clase(nil)
+		if err != nil {
+			return nil, err
+		}
+		salida.clases = append(salida.clases, c)
+	}
+	if len(salida.clases) == 0 {
+		return nil, fmt.Errorf("el fuente no declara ninguna clase")
+	}
+	return salida, nil
+}
+
+// nombrePunto: `android.view.View`, `R.layout`, con los puntos que hagan falta.
+func (a *analizadorJava) nombrePunto() (string, error) {
+	sb := strings.Builder{}
+	for {
+		t := a.actual()
+		if t.kind != 'i' && !(t.kind == 'k' && esNombreDeTipo(t.valor)) {
+			return "", fmt.Errorf("linea %d: se esperaba un nombre y hay %q", t.donde.linea, t.valor)
+		}
+		sb.WriteString(t.valor)
+		a.avanzar()
+		if !a.es('p', ".") {
+			return sb.String(), nil
+		}
+		a.avanzar()
+		sb.WriteString(".")
+	}
+}
+
+// nombreImport lee el nombre de un import, que es un nombrePunto y puede terminar en `.*`.
+func (a *analizadorJava) nombreImport() (string, error) {
+	sb := strings.Builder{}
+	for {
+		t := a.actual()
+		if t.kind != 'i' && !(t.kind == 'k' && esNombreDeTipo(t.valor)) {
+			return "", fmt.Errorf("linea %d: se esperaba un nombre de import y hay %q", t.donde.linea, t.valor)
+		}
+		sb.WriteString(t.valor)
+		a.avanzar()
+		if !a.es('p', ".") {
+			return sb.String(), nil
+		}
+		a.avanzar()
+		if a.es('p', "*") {
+			a.avanzar()
+			return sb.String() + ".*", nil
+		}
+		sb.WriteString(".")
+	}
+}
+
+// esNombreDeTipo: `int`, `boolean` y compañía son palabras clave pero van en un nombre de tipo.
+func esNombreDeTipo(v string) bool {
+	switch v {
+	case "int", "boolean", "long", "float", "double", "byte", "short", "char", "void":
+		return true
+	}
+	return false
+}
+
+// clase lee una declaracion de clase, con sus anidadas.
+func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
+	c := &jclas{paquete: a.paquete, linea: a.actual().donde.linea}
+	for {
+		t := a.actual()
+		switch {
+		case a.es('k', "public"):
+			c.esPublica = true
+		case a.es('k', "static"):
+			// una clase anidada estatica se emite igual que una de primera nivel: lo que cambia
+			// son los flags, y aun no esta medido contra javap
+			return nil, fmt.Errorf("linea %d: una clase anidada con `static` no esta medida en este compilador", t.donde.linea)
+		case a.es('k', "final"):
+			c.final = true
+		case a.es('k', "abstract"):
+			c.abstracta = true
+		case a.es('k', "private"):
+			return nil, fmt.Errorf("linea %d: un miembro `private` escrito aqui no esta medido; falta comparar sus flags con javap", t.donde.linea)
+		case a.es('k', "protected"):
+			return nil, fmt.Errorf("linea %d: `protected` no esta medido en este compilador", t.donde.linea)
+		case a.es('k', "class"):
+			a.avanzar()
+			goto nombre
+		case a.es('k', "interface"):
+			return nil, fmt.Errorf("linea %d: una `interface` escrita a mano no esta medida (la del source generado si: se implementa con una clase anonima, parrafo 41)", t.donde.linea)
+		case a.es('p', "@"):
+			if err := a.anotacion(); err != nil {
+				return nil, err
+			}
+			continue
+		default:
+			return nil, fmt.Errorf("linea %d: %q no es un modificador que este parser conozca", t.donde.linea, t.valor)
+		}
+		a.avanzar()
+	}
+nombre:
+	{
+		t := a.actual()
+		if t.kind != 'i' {
+			return nil, fmt.Errorf("linea %d: la clase no tiene nombre", t.donde.linea)
+		}
+		c.nombre = t.valor
+		if exteriores != nil {
+			c.nombre = exteriores.nombre + "$" + t.valor
+		} else {
+			a.exterior = t.valor // las anonimas de esta clase se llaman Nombre$1, como las nombra javac
+		}
+		a.avanzar()
+	}
+	if a.es('k', "extends") {
+		a.avanzar()
+		nombre, err := a.nombrePunto()
+		if err != nil {
+			return nil, err
+		}
+		c.super = nombre
+	}
+	if a.es('k', "implements") {
+		a.avanzar()
+		for {
+			nombre, err := a.nombrePunto()
+			if err != nil {
+				return nil, err
+			}
+			c.implementa = append(c.implementa, nombre)
+			if !a.es('p', ",") {
+				break
+			}
+			a.avanzar()
+		}
+	}
+	if err := a.comerSimbolo("{"); err != nil {
+		return nil, err
+	}
+	for !a.es('p', "}") {
+		if a.es('p', ";") { // un punto y coma suelto dentro de la clase es legal en Java
+			a.avanzar()
+			continue
+		}
+		linea := a.actual().donde.linea
+		miembro, err := a.miembroDeClase(c, linea)
+		if err != nil {
+			return nil, err
+		}
+		if miembro == nil {
+			continue
+		}
+		if m, esMetodo := miembro.(jmetodo); esMetodo {
+			c.metodos = append(c.metodos, m)
+			continue
+		}
+		if campo, esCampo := miembro.(jcampo); esCampo {
+			c.campos = append(c.campos, campo)
+			continue
+		}
+		if anidada, esClase := miembro.(*jclas); esClase {
+			anidada.paquete = c.paquete
+			c.interior = append(c.interior, anidada)
+		}
+	}
+	a.avanzar() // el } final
+	return c, nil
+}
+
+// miembroDeClase lee un campo, un metodo o una clase anidada.
+func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error) {
+	esEstatico, esFinal, esPublico, esAbstracta := false, false, false, false
+	for {
+		switch {
+		case a.es('k', "static"):
+			esEstatico = true
+		case a.es('k', "final"):
+			esFinal = true
+		case a.es('k', "public"):
+			esPublico = true
+		case a.es('k', "abstract"):
+			esAbstracta = true
+		case a.es('k', "private"), a.es('k', "protected"):
+			return nil, fmt.Errorf("linea %d: el modificador %q en un miembro no esta medido contra javap", linea, a.actual().valor)
+		case a.es('p', "@"):
+			if err := a.anotacion(); err != nil {
+				return nil, err
+			}
+			continue
+		case a.es('k', "class"), a.es('k', "interface"):
+			if esAbstracta {
+				return nil, fmt.Errorf("linea %d: una clase anidada abstracta no esta medida", linea)
+			}
+			anidada, err := a.clase(c)
+			return anidada, err
+		default:
+			goto cuerpo
+		}
+		a.avanzar()
+	}
+cuerpo:
+	_ = esAbstracta
+	if a.es('k', "void") {
+		a.avanzar()
+		return a.metodo(c, "void", esEstatico, esFinal, esPublico, linea)
+	}
+	// un constructor: `Nombre(`
+	if a.actual().kind == 'i' && a.actual().valor == sinPaquete(c.nombre) && a.pegaParentesis() {
+		a.avanzar()
+		return a.metodo(c, c.nombre, esEstatico, esFinal, esPublico, linea)
+	}
+	tipo, err := a.tipo()
+	if err != nil {
+		return nil, err
+	}
+	if a.actual().kind != 'i' {
+		return nil, fmt.Errorf("linea %d: se esperaba un nombre de miembro y hay %q", a.actual().donde.linea, a.actual().valor)
+	}
+	if a.pegaParentesis() {
+		return a.metodo(c, tipo, esEstatico, esFinal, esPublico, linea)
+	}
+	nombre := a.avanzar().valor
+	campo := jcampo{nombre: nombre, tipo: tipo, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico, donde: pos{linea}}
+	// un campo con inicializador: `public static final int main=0x7f020000;`, que es justo la forma en
+	// que el enlazador de la Fase 3 escribe la R.java que despues hay que compilar
+	if a.es('p', "=") {
+		a.avanzar()
+		e, err := a.expresion()
+		if err != nil {
+			return nil, err
+		}
+		campo.valor = e
+	}
+	if err := a.comerSimbolo(";"); err != nil {
+		return nil, err
+	}
+	return campo, nil
+}
+
+// metodo lee la firma y el cuerpo. `retorno` viene vacio para el constructor.
+func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, esPublico bool, linea int) (jmetodo, error) {
+	m := jmetodo{retorno: retorno, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico, linea: linea}
+	if retorno == c.nombre {
+		m.nombre = "<init>"
+		a.avanzar() // el nombre, que ya sabemos cual es
+	} else {
+		m.nombre = a.avanzar().valor
+	}
+	if err := a.comerSimbolo("("); err != nil {
+		return m, err
+	}
+	if !a.es('p', ")") {
+		for {
+			tipo, err := a.tipo()
+			if err != nil {
+				return m, err
+			}
+			if a.actual().kind != 'i' {
+				return m, fmt.Errorf("linea %d: un parametro necesita nombre", a.actual().donde.linea)
+			}
+			m.params = append(m.params, jparam{tipo: tipo, nombre: a.avanzar().valor, donde: pos{linea}})
+			if !a.es('p', ",") {
+				break
+			}
+			a.avanzar()
+		}
+	}
+	if err := a.comerSimbolo(")"); err != nil {
+		return m, err
+	}
+	if a.es('k', "throws") {
+		return m, fmt.Errorf("linea %d: un `throws` no esta medido: cambia el atributo Exceptions del method_info", a.actual().donde.linea)
+	}
+	if a.es('p', ";") { // un metodo abstracto o de interface: sin cuerpo
+		a.avanzar()
+		return m, nil
+	}
+	cuerpo, err := a.bloque()
+	if err != nil {
+		return m, err
+	}
+	m.cuerpo = cuerpo
+	return m, nil
+}
+
+// pegaParentesis: si despues del token actual viene `(`, esto es un metodo y no un campo.
+func (a *analizadorJava) pegaParentesis() bool {
+	return a.i+1 < len(a.toks) && a.toks[a.i].kind == 'i' && a.toks[a.i+1].valor == "("
+}
+
+// anotacion consume `@Nombre(...)` o `@Nombre`. Solo se tolera @Override, y por un motivo medido: el
+// javap -v del parrafo 40 sobre la plantilla no muestra ningun atributo de anotaciones en la clase ni en
+// sus metodos (attributes: 2, SourceFile e InnerClasses), o sea que esa anotacion no deja huella en el
+// .class. Las demas si la dejan, en un atributo que este emisor todavia no escribe: se rechazan por
+// nombre en vez de tirarlas.
+func (a *analizadorJava) anotacion() error {
+	linea := a.actual().donde.linea
+	a.avanzar() // @
+	nombre := ""
+	if a.actual().kind == 'i' {
+		nombre, _ = a.nombrePunto()
+	}
+	if a.es('p', "(") {
+		profundidad := 0
+		for {
+			t := a.actual()
+			if t.kind == 'f' {
+				break
+			}
+			if t.valor == "(" {
+				profundidad++
+			}
+			if t.valor == ")" {
+				profundidad--
+			}
+			a.avanzar()
+			if profundidad == 0 {
+				break
+			}
+		}
+	}
+	if nombre == "Override" || nombre == "java.lang.Override" {
+		return nil
+	}
+	return fmt.Errorf("linea %d: la anotacion @%s deja huella en el .class y este emisor no la escribe; solo se tolera @Override (parrafo 40)", linea, nombre)
+}
+
+// tipo lee un nombre de tipo con sus corchetes. Un array no esta medido en el emisor.
+func (a *analizadorJava) tipo() (string, error) {
+	nombre, err := a.nombrePunto()
+	if err != nil {
+		return "", err
+	}
+	for a.es('p', "[") {
+		return "", fmt.Errorf("linea %d: un tipo de array (%s[]) no esta medido en este compilador", a.actual().donde.linea, nombre)
+	}
+	return nombre, nil
+}
+
+// bloque lee `{ ... }` y devuelve sus sentencias.
+func (a *analizadorJava) bloque() ([]jstmt, error) {
+	if err := a.comerSimbolo("{"); err != nil {
+		return nil, err
+	}
+	out := []jstmt{}
+	for !a.es('p', "}") {
+		if a.es('p', ";") {
+			a.avanzar()
+			continue
+		}
+		antes := a.i
+		s, producida, err := a.sentencia()
+		if err != nil {
+			return nil, err
+		}
+		if a.i == antes {
+			// una sentencia que no consume nada seria un bucle infinito: se prefiere el mensaje
+			return nil, fmt.Errorf("linea %d: no se sabe leer lo que sigue de %q", a.actual().donde.linea, a.actual().valor)
+		}
+		if !producida {
+			continue
+		}
+		out = append(out, s)
+	}
+	a.avanzar()
+	return out, nil
+}
+
+// sentencia lee una sentencia. El segundo valor dice si produjo una: `if` sin cuerpo devuelve false
+// despues de haber consumido, y el bloque no anade nada.
+func (a *analizadorJava) sentencia() (jstmt, bool, error) {
+	linea := a.actual().donde.linea
+	switch {
+	case a.es('k', "{"):
+		b, err := a.bloque()
+		return jbloque{sentencias: b, donde: pos{linea}}, err == nil, err
+	case a.es('k', "return"):
+		a.avanzar()
+		if a.es('p', ";") {
+			a.avanzar()
+			return jretorno{donde: pos{linea}}, true, nil
+		}
+		e, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jretorno{e: e, donde: pos{linea}}, true, nil
+	case a.es('k', "if"):
+		a.avanzar()
+		if err := a.comerSimbolo("("); err != nil {
+			return nil, false, err
+		}
+		cond, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(")"); err != nil {
+			return nil, false, err
+		}
+		entonces, _, err := a.sentencia()
+		if err != nil {
+			return nil, false, err
+		}
+		siNo := jstmt(nil)
+		if a.es('k', "else") {
+			a.avanzar()
+			s, _, err := a.sentencia()
+			if err != nil {
+				return nil, false, err
+			}
+			siNo = s
+		}
+		return jif{cond: cond, entonces: entonces, siNo: siNo, donde: pos{linea}}, true, nil
+	case a.es('k', "for"), a.es('k', "while"), a.es('k', "do"), a.es('k', "switch"), a.es('k', "try"):
+		return nil, false, fmt.Errorf("linea %d: la sentencia %q no esta medida en este compilador", linea, a.actual().valor)
+	}
+	// declaracion local o expresion
+	tipoActual := a.actual()
+	if (tipoActual.kind == 'i' || (tipoActual.kind == 'k' && esNombreDeTipo(tipoActual.valor))) && !a.es('k', "void") {
+		if a.pareceDeclaracion() {
+			tipo, err := a.tipo()
+			if err != nil {
+				return nil, false, err
+			}
+			final := esFinalDeClaracion(tipo)
+			if a.actual().kind != 'i' {
+				return nil, false, fmt.Errorf("linea %d: la declaracion no tiene nombre", a.actual().donde.linea)
+			}
+			nombre := a.avanzar().valor
+			d := jdecl{tipo: tipo, nombre: nombre, donde: pos{linea}, final: final}
+			if a.es('p', "=") {
+				a.avanzar()
+				e, err := a.expresion()
+				if err != nil {
+					return nil, false, err
+				}
+				d.valor = e
+			}
+			if a.es('p', ",") {
+				return nil, false, fmt.Errorf("linea %d: varias variables en una misma declaracion no estan medidas", linea)
+			}
+			if err := a.comerSimbolo(";"); err != nil {
+				return nil, false, err
+			}
+			return d, true, nil
+		}
+	}
+	e, err := a.expresion()
+	if err != nil {
+		return nil, false, err
+	}
+	if a.es('p', "=") {
+		a.avanzar()
+		valor, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jasign{destino: e, valor: valor, donde: pos{linea}}, true, nil
+	}
+	if a.es('p', "+") || a.es('p', "-") {
+		if a.i+1 < len(a.toks) && a.toks[a.i+1].valor == "=" {
+			return nil, false, fmt.Errorf("linea %d: un `+=` o `-=` no esta medido en este compilador", linea)
+		}
+	}
+	if err := a.comerSimbolo(";"); err != nil {
+		return nil, false, err
+	}
+	return jstmtExpr{e: e}, true, nil
+}
+
+func esFinalDeClaracion(tipo string) bool { return strings.HasPrefix(tipo, "final ") }
+
+// pareceDeclaracion: `Tipo nombre` (dos identificadores seguidos) o `final Tipo nombre`.
+func (a *analizadorJava) pareceDeclaracion() bool {
+	i := a.i
+	if a.toks[i].kind == 'k' && a.toks[i].valor == "final" {
+		i++
+	}
+	primer := a.toks[i]
+	if primer.kind != 'i' && !(primer.kind == 'k' && esNombreDeTipo(primer.valor)) {
+		return false
+	}
+	i++
+	// un `[` despues del tipo es una declaracion de array: se deja pasar para que el mensaje lo
+	// nombre el lector de tipos, que es donde esta medida la negativa
+	if i < len(a.toks) && a.toks[i].kind == 'i' {
+		return true
+	}
+	if i < len(a.toks) && a.toks[i].valor == "[" {
+		return true
+	}
+	return false
+}
+
+// expresion lee una expresion con su cadena de accesos y llamadas.
+func (a *analizadorJava) expresion() (jexpr, error) {
+	return a.expresionBinaria(0)
+}
+
+// precedencias: las que usa este subconjunto, medidas con el emisor.
+var precedenciasJava = map[string]int{"||": 1, "&&": 2, "==": 3, "!=": 3, "<": 4, ">": 4, "<=": 4, ">=": 4, "+": 5, "-": 5, "*": 6, "/": 6}
+
+func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
+	izq, err := a.expresionUnaria()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		t := a.actual()
+		op := ""
+		if t.kind == 'p' {
+			op = t.valor
+		}
+		p, esOp := precedenciasJava[op]
+		if !esOp || p < min {
+			return izq, nil
+		}
+		a.avanzar()
+		der, err := a.expresionBinaria(p + 1)
+		if err != nil {
+			return nil, err
+		}
+		izq = joperador{izq: izq, op: op, der: der, donde: t.donde}
+	}
+}
+
+func (a *analizadorJava) expresionUnaria() (jexpr, error) {
+	if a.es('p', "!") {
+		donde := a.actual().donde
+		a.avanzar()
+		e, err := a.expresionUnaria()
+		if err != nil {
+			return nil, err
+		}
+		return jnegacion{dentro: e, donde: donde}, nil
+	}
+	if a.es('p', "(") {
+		donde := a.actual().donde
+		a.avanzar()
+		tipo, err := a.tipo()
+		if err != nil {
+			return nil, err
+		}
+		if !a.es('p', ")") {
+			return nil, fmt.Errorf("linea %d: entre parentesis se esperaba un molde (Tipo) y no una expresion", a.actual().donde.linea)
+		}
+		a.avanzar()
+		e, err := a.expresionUnaria()
+		if err != nil {
+			return nil, err
+		}
+		return jcast{tipo: tipo, dentro: e, donde: donde}, nil
+	}
+	e, err := a.atomo()
+	if err != nil {
+		return nil, err
+	}
+	for {
+		switch {
+		case a.es('p', "."):
+			a.avanzar()
+			t := a.actual()
+			if t.kind != 'i' {
+				return nil, fmt.Errorf("linea %d: tras el punto se esperaba un nombre y hay %q", t.donde.linea, t.valor)
+			}
+			a.avanzar()
+			if a.es('p', "(") {
+				args, err := a.argumentos()
+				if err != nil {
+					return nil, err
+				}
+				e = jllamada{base: e, nombre: t.valor, args: args, donde: t.donde}
+				continue
+			}
+			e = jacceso{base: e, nombre: t.valor, donde: t.donde}
+		case a.es('p', "("):
+			args, err := a.argumentos()
+			if err != nil {
+				return nil, err
+			}
+			base := jexpr(nil)
+			if acc, esAcceso := e.(jacceso); esAcceso {
+				base = acc.base
+				e = jllamada{base: base, nombre: acc.nombre, args: args, donde: acc.donde}
+				continue
+			}
+			return nil, fmt.Errorf("linea %d: solo se mide llamar a un metodo por nombre o por acceso", a.actual().donde.linea)
+		default:
+			return e, nil
+		}
+	}
+}
+
+// argumentos lee `(a, b, c)`.
+func (a *analizadorJava) argumentos() ([]jexpr, error) {
+	if err := a.comerSimbolo("("); err != nil {
+		return nil, err
+	}
+	out := []jexpr{}
+	if a.es('p', ")") {
+		a.avanzar()
+		return out, nil
+	}
+	for {
+		e, err := a.expresion()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+		if !a.es('p', ",") {
+			break
+		}
+		a.avanzar()
+	}
+	if err := a.comerSimbolo(")"); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// atomo lee un literal, this, super, un nombre o un `new`.
+func (a *analizadorJava) atomo() (jexpr, error) {
+	t := a.actual()
+	switch {
+	case t.kind == 's':
+		a.avanzar()
+		return jlit{tipoJ: 's', texto: t.valor, donde: t.donde}, nil
+	case t.kind == 'n':
+		a.avanzar()
+		n, err := enteroJava(t.valor)
+		if err != nil {
+			return nil, fmt.Errorf("linea %d: %w", t.donde.linea, err)
+		}
+		return jlit{tipoJ: 'i', entero: n, donde: t.donde}, nil
+	case a.es('k', "true"):
+		a.avanzar()
+		return jlit{tipoJ: 'b', booleano: true, donde: t.donde}, nil
+	case a.es('k', "false"):
+		a.avanzar()
+		return jlit{tipoJ: 'b', booleano: false, donde: t.donde}, nil
+	case a.es('k', "null"):
+		a.avanzar()
+		return jlit{tipoJ: 'n', donde: t.donde}, nil
+	case a.es('k', "this"):
+		a.avanzar()
+		if a.es('p', ".") && a.i+1 < len(a.toks) && a.toks[a.i+1].kind == 'i' {
+			// `this.x`: acceso al campo propio
+			a.avanzar()
+			nombre := a.avanzar().valor
+			return jacceso{base: jthis{donde: t.donde}, nombre: nombre, donde: t.donde}, nil
+		}
+		return jthis{donde: t.donde}, nil
+	case a.es('k', "super"):
+		a.avanzar()
+		if !a.es('p', ".") {
+			return nil, fmt.Errorf("linea %d: `super` solo se usa para llamar a un metodo del padre", t.donde.linea)
+		}
+		a.avanzar()
+		nombre := a.avanzar().valor
+		if !a.es('p', "(") {
+			return nil, fmt.Errorf("linea %d: `super.%s` sin llamada no esta medida", t.donde.linea, nombre)
+		}
+		args, err := a.argumentos()
+		if err != nil {
+			return nil, err
+		}
+		return jllamada{super: true, nombre: nombre, args: args, donde: t.donde}, nil
+	case a.es('k', "new"):
+		a.avanzar()
+		tipo, err := a.nombrePunto()
+		if err != nil {
+			return nil, err
+		}
+		if !a.es('p', "(") {
+			return nil, fmt.Errorf("linea %d: un `new %s` sin constructor no esta medido", t.donde.linea, tipo)
+		}
+		args, err := a.argumentos()
+		if err != nil {
+			return nil, err
+		}
+		cuerpo := (*jclas)(nil)
+		if a.es('p', "{") {
+			// la clase anonima: javac la emite como Tipo$N y aqui se nombra igual, con el indice
+			// que le toca en el orden de aparicion (parrafo 41)
+			a.anonima++
+			cuerpo, err = a.claseAnonima(tipo)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return jnuevo{tipo: tipo, args: args, cuerpo: cuerpo, donde: t.donde}, nil
+	}
+	if t.kind == 'i' {
+		a.avanzar()
+		nombre := t.valor
+		if a.es('p', ".") {
+			// R.layout.main: se lee como acceso y el emisor decide si es una constante inlinable.
+			// MainActivity.this: la captura del exterior, que javac baja a un campo this$0.
+			base := jexpr(jacceso{nombre: nombre, donde: t.donde})
+			for a.es('p', ".") {
+				a.avanzar()
+				if a.es('k', "this") {
+					a.avanzar()
+					if acc, esAcceso := base.(jacceso); esAcceso && acc.base == nil {
+						return jthis{nombre: acc.nombre, donde: t.donde}, nil
+					}
+					return nil, fmt.Errorf("linea %d: `.this` solo se mide detras de un nombre de clase suelto", t.donde.linea)
+				}
+				siguiente := a.actual()
+				if siguiente.kind != 'i' {
+					return nil, fmt.Errorf("linea %d: tras el punto se esperaba un nombre", siguiente.donde.linea)
+				}
+				a.avanzar()
+				base = jacceso{base: base, nombre: siguiente.valor, donde: siguiente.donde}
+			}
+			return base, nil
+		}
+		return jacceso{nombre: nombre, donde: t.donde}, nil
+	}
+	if t.kind == 'k' && esNombreDeTipo(t.valor) {
+		return nil, fmt.Errorf("linea %d: el tipo %q no va suelto en una expresion", t.donde.linea, t.valor)
+	}
+	return nil, fmt.Errorf("linea %d: %q no es una expresion que este parser reconozca", t.donde.linea, t.valor)
+}
+
+// claseAnonima lee el cuerpo de un `new Interface() { ... }`. Lo que no sea implementar metodos no esta
+// medido: javac le pone el campo this$0 y el constructor con la captura, y eso se comprueba aparte.
+func (a *analizadorJava) claseAnonima(nombre string) (*jclas, error) {
+	c := &jclas{
+		nombre:     a.exterior + "$" + strconv.Itoa(a.anonima),
+		implementa: []string{nombre},
+		paquete:    a.paquete,
+		linea:      a.actual().donde.linea,
+	}
+	if err := a.comerSimbolo("{"); err != nil {
+		return nil, err
+	}
+	for !a.es('p', "}") {
+		linea := a.actual().donde.linea
+		miembro, err := a.miembroDeClase(c, linea)
+		if err != nil {
+			return nil, err
+		}
+		switch v := miembro.(type) {
+		case jmetodo:
+			c.metodos = append(c.metodos, v)
+		case jcampo:
+			c.campos = append(c.campos, v)
+		case nil:
+		default:
+			return nil, fmt.Errorf("linea %d: dentro de una clase anonima solo se miden metodos", linea)
+		}
+	}
+	a.avanzar()
+	return c, nil
+}
+
+// joperador y jnegacion: las expresiones binarias y la negacion, que el emisor baja a if_icmpne / ifne.
+type joperador struct {
+	izq, der jexpr
+	op       string
+	donde    pos
+}
+
+func (joperador) jexprPuede() {}
+
+type jnegacion struct {
+	dentro jexpr
+	donde  pos
+}
+
+func (jnegacion) jexprPuede() {}
+
+// sinPaquete quita el paquete a un nombre de clase interno (com/miapp/R$layout -> R$layout).
+func sinPaquete(nombre string) string {
+	if i := strings.LastIndex(nombre, "/"); i >= 0 {
+		nombre = nombre[i+1:]
+	}
+	if i := strings.LastIndex(nombre, "."); i >= 0 {
+		nombre = nombre[i+1:]
+	}
+	return nombre
+}
+
+// enteroJava: los literales numericos del subconjunto, con hexo y con la L de long rechazada si no cabe.
+func enteroJava(texto string) (int32, error) {
+	limpio := strings.ReplaceAll(texto, "_", "")
+	if strings.HasSuffix(limpio, "L") || strings.HasSuffix(limpio, "l") {
+		return 0, fmt.Errorf("un literal long (%s) no esta medido en el emisor", texto)
+	}
+	base := 10
+	if strings.HasPrefix(limpio, "0x") || strings.HasPrefix(limpio, "0X") {
+		base = 16
+		limpio = limpio[2:]
+	}
+	n, err := strconv.ParseInt(limpio, base, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s no es un entero de 32 bits", texto)
+	}
+	return int32(n), nil
+}
