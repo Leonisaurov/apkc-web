@@ -36,13 +36,14 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
 | 0.2.2 `apkc verify` | pendiente | — |
 | 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
-| 2G | **empezada**: lector de dex hecho (`18c9773`), escritor pendiente. Objetivo medido: 2844 bytes, 217 objetos | `docs/evidencia.md` §13 y §16 |
-| 3 recursos sin `aapt2` | necesaria: sin `R` no hay las 6 clases que dexar | — |
-| 1G | Java -> `.class` en Go, subconjunto del `studio/`, con `javap` de oráculo | — |
+| 2G | **hecha** (rama `web`): lector y escritor de dex en Go. El objetivo medido eran 2844 bytes de `d8`; nuestro dex sobre los mismos `.class` sale **byte a byte igual** al de javac-d8 salvo el `debug_info` (motivo escrito), y `d8` lee el nuestro y lo re-dexa con `rc 0` | `docs/evidencia.md` §13, §20 a §23, §41, §42 |
+| 3 recursos sin `aapt2` | **hecha**: `arscwriter.go`, `axmlwriter.go`, `r.go`, `marco.go`, `enlazar.go` + `arbol.go` + `valores.go` enlazan desde los ficheros de texto; `build --linker go` produce un apk que `apksigner`, `zipalign`, `zipcheck.py` y `aapt2 dump` aprueban | `docs/evidencia.md` §28 a §38 |
+| 1G Java -> `.class` en Go | **hecha para el subconjunto del `studio/`**: `javafuente.go`, `javaemisor.go`, `compilar.go`; oráculo doble (`javap -c -p` y el dex idéntico) y rechazo por nombre de lo no medido | `docs/evidencia.md` §40 a §43 |
 | 4.1 etapas como interfaz | pendiente | — |
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
-| 4.3 la página | **en marcha**: editor de fuente sobre OPFS, `create` y `sign` dentro de la pestaña, **sin conexión y sin CDN**; `build` sigue muriendo en el muro conocido | `docs/evidencia.md` §11 y §15 |
-| 4.4 empaque y tamaño | medida parcial: `apkc.wasm` 9,46 MB; el `android.jar` (25 MB) aún no hace falta porque no hay compilador | — |
+| 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
+| 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
+| el apk en un teléfono real (hecho 2 del objetivo) | **pendiente de dispositivo**: sin `adb` conectado; el apk de la pestaña ya lo aprueban `apksigner` (v1+v2), `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump badging`, falta `install` y ver la actividad arrancar | — |
 
 ---
 
