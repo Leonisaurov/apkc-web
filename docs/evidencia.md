@@ -2510,3 +2510,48 @@ cadenas (que en la versión 52 es una cadena de `StringBuilder.append`), arreglo
 anotaciones que no sean `@Override` y cualquier miembro cuyo `private`/`protected` no hayamos leído en un
 `javap`.
 
+## 51. El fuente se escribe en la página: campos, cadena de llamadas y cuentas, compilados y verificados en chromium
+
+Lo que prometía el objetivo con las palabras «escribir o pegar el fuente» no era recompilar la plantilla,
+sino que alguien cambiara el `.java` desde el editor y siguiera teniendo apk. Con los dos párrafos anteriores
+eso ya se puede comprobar dentro del navegador, y `studio/prueba-pestana.js` lo hace (comprobación 11, que
+sube la prueba a **39**): se sobrescribe `/proyecto/src/com/myapp/MainActivity.java` con un fuente que la
+página no genera,
+
+```java
+public class MainActivity extends Activity {
+    private int pulsos = 0;
+    static int total = 5;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        View raiz = getWindow().getDecorView();
+        pulsos = pulsos + 1;
+        total = total * 2;
+        raiz.setVisibility(0);
+        Toast.makeText(this, "cuenta", Toast.LENGTH_SHORT).show();
+    }
+}
+```
+
+se pulsa el mismo camino del botón (`compilarDelTodo()`, o sea `build --linker go --compiler go` con el jar
+de OPFS) y sale **un apk de 9459 bytes con `ultimo-codigo` 0**; la pestaña lo verifica sola (`apkc verify` →
+v1 `ok`, 4 entradas, y v2 `ok`, 7 entradas) y ninguna de las **18** peticiones sale de su origen.
+
+**Lo mismo, medido fuera de la pestaña sobre ese mismo fichero** (`studio/e2e.sh`, bloque 4d): `apksigner
+verify --verbose --min-sdk-version 21` → v1 `true` y v2 `true`; `zipalign -c -p 4` → `rc 0`; `zipcheck.py` →
+las entradas coherentes; `aapt2 dump badging` → `launchable-activity: name='com.myapp.MainActivity'`, y en
+el `classes.dex` que escribió el navegador están la clase, los dos nombres de campo (`pulsos`, `total`) y
+el método del framework al que enlaza la cadena de llamadas (`setVisibility`).
+
+**Y la igualdad con la cadena de siempre, otra vez byte a byte**: el mismo fuente, compilado con `javac
+--release 8` y con nuestro emisor, da `javap -p -c -l` **idéntico línea por línea**; `apkc dex` sobre las
+clases de javac y sobre las nuestras produce **el mismo fichero de 1656 bytes** (`cmp` mudo), y `d8` lee ese
+dex con `rc 0`. En nativo, `apkc compile` tardó 42 ms sobre esos dos fuentes.
+
+Es el cierre del §44 al §50 en una frase: **la página compila un fuente que alguien escribió, y el
+resultado es el mismo que daría `javac` + `d8` hasta donde este subconjunto llega**. Lo del teléfono sigue
+siendo el hecho 2 del objetivo: instalar y ver la ventana.
+

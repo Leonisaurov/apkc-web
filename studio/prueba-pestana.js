@@ -424,6 +424,58 @@ async function conductor() {
     comprueba("apkc verify rechaza el apk con un byte cambiado dentro de chromium",
       alterado.codigo !== 0 && alterado.v1mal === true && alterado.v2mal === true,
       "codigo " + alterado.codigo + ", " + JSON.stringify(String(alterado.detalle).slice(-220)));
+
+    // 11. y se puede ESCRIBIR un fuente propio, no solo el que genera la página: campos con
+    // modificadores, una cadena de llamadas y cuentas enteras (lo que midieron los párrafos 49 y 50)
+    const fuenteEscrita = [
+      "package com.myapp;",
+      "",
+      "import android.app.*;",
+      "import android.os.*;",
+      "import android.view.*;",
+      "import android.widget.*;",
+      "",
+      "public class MainActivity extends Activity {",
+      "    private int pulsos = 0;",
+      "    static int total = 5;",
+      "",
+      "    @Override",
+      "    public void onCreate(Bundle savedInstanceState) {",
+      "        super.onCreate(savedInstanceState);",
+      "        setContentView(R.layout.main);",
+      "        View raiz = getWindow().getDecorView();",
+      "        pulsos = pulsos + 1;",
+      "        total = total * 2;",
+      "        raiz.setVisibility(0);",
+      "        Toast.makeText(this, \"cuenta\", Toast.LENGTH_SHORT).show();",
+      "    }",
+      "}",
+      "",
+    ].join("\n");
+    const escrito = await evaluar(`(async () => {
+      await hospedador.escribir("/proyecto/src/com/myapp/MainActivity.java",
+        new TextEncoder().encode(${JSON.stringify(fuenteEscrita)}));
+      await hospedador.limpiar("/proyecto/build");
+      await compilarDelTodo();
+      const r = await correr(["verify", "build/app.apk"]);
+      const texto = String(r.consola || "").replace(/\\u001b\\[[0-9]*m/g, "");
+      const datos = await hospedador.bytes("/proyecto/build/app.apk");
+      return {
+        codigo: document.getElementById("ultimo-codigo").textContent,
+        bytes: datos ? Array.from(datos) : null,
+        clases: /-> (\\d+) clases/.exec(String(r.consola || "")),
+        v1: texto.includes("v1 (JAR signing): ok"), v2: texto.includes("v2 (APK Signature Scheme v2): ok"),
+        detalle: texto.split("\\n").filter(Boolean).slice(0, 2).join(" | "),
+      };
+    })()`);
+    const apkEscrita = Buffer.from(escrito.bytes || [], "uint8");
+    comprueba("un fuente escrito a mano compila entero en la pestaña", escrito.codigo === "0" && apkEscrita.length > 5000,
+      "codigo " + escrito.codigo + ", " + apkEscrita.length + " bytes, consola: " + JSON.stringify(String(escrito.detalle).slice(-180)));
+    comprueba("y su apk verifica igual que el generado", escrito.v1 === true && escrito.v2 === true,
+      JSON.stringify(String(escrito.detalle).slice(-180)));
+    fs.writeFileSync(path.join(fuera, "pestanera-escrita.apk"), apkEscrita);
+    console.log("  --- el apk del fuente escrito a mano, compilado en la pestaña, es " +
+      path.join(fuera, "pestanera-escrita.apk"));
   } else {
     console.log("  --- sin ANDROID_JAR en el entorno: no se prueba el build completo en la pestaña");
   }

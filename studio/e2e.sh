@@ -135,8 +135,8 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       avisa "sin ANDROID_JAR en el entorno: la pestaña no llego a compilar el proyecto entero"
     fi
 
-    # 4c. el proyecto que la pagina GENERA (clase anonima, @+id y style incluidos), compilado por
-    #     la pestaña, frente al mismo proyecto compilado aqui fuera con el mismo camino todo-en-Go
+    # 4c. el proyecto que la página GENERA (clase anónima, `@+id` y `style` incluidos), compilado por
+    #     la pestaña, frente al mismo proyecto compilado aquí fuera con el mismo camino todo-en-Go
     estudio="$TMP/pestana-apk/pestanera-estudio.apk"
     if [ -f "$estudio" ] && [ -n "${ANDROID_JAR:-}" ]; then
       base=$TMP/studio-e46; rm -rf "$base"; mkdir -p "$base"
@@ -190,6 +190,29 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         avisa "pestaña con el proyecto generado: apk de $(wc -c <"$estudio" | tr -d ' ') bytes, igual entrada por entrada al nativo, dex releido por d8"
       fi
       cd "$AQUI"
+    fi
+
+    # 4d. el fuente ESCRITO A MANO en la pestaña (campos con modificadores, cadena de llamadas y
+    #     cuentas enteras, párrafos 49 y 50): los mismos oráculos que a cualquier apk
+    escrita="$TMP/pestana-apk/pestanera-escrita.apk"
+    if [ -f "$escrita" ]; then
+      if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$escrita" >"$TMP/studio-pestana-escrita.log" 2>&1; then
+        falla "el apk del fuente escrito a mano no verifica"
+      fi
+      grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-escrita.log" || falla "apk escrito a mano sin v1"
+      grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-escrita.log" || falla "apk escrito a mano sin v2"
+      "$BUILD_TOOLS/zipalign" -c -p 4 "$escrita" || falla "zipalign rechaza el apk del fuente escrito a mano"
+      python3 "$ZIPCHECK" "$escrita" >/dev/null 2>&1 || falla "zipcheck rechaza el apk del fuente escrito a mano"
+      "$BUILD_TOOLS/aapt2" dump badging "$escrita" >"$TMP/studio-pestana-escrita-badging.log" 2>&1 ||
+        falla "aapt2 no entiende el apk del fuente escrito a mano"
+      lanzable=$(sed -n "s/^launchable-activity: name='\([^']*\)'.*\$/\1/p" "$TMP/studio-pestana-escrita-badging.log" | head -1)
+      [ "com.myapp.MainActivity" = "$lanzable" ] ||
+        falla "el apk del fuente escrito declara $lanzable y se esperaba com.myapp.MainActivity"
+      for nombre in 'Lcom/myapp/MainActivity;' pulsos total setVisibility; do
+        unzip -p "$escrita" classes.dex | strings | grep -q "$nombre" ||
+          falla "el dex del fuente escrito no trae $nombre"
+      done
+      avisa "fuente escrito a mano: apk de $(wc -c <"$escrita" | tr -d ' ') bytes con $lanzable en su dex, verificado por apksigner, zipalign, zipcheck y aapt2"
     fi
   fi
 else
