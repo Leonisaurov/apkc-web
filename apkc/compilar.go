@@ -16,6 +16,11 @@ import (
 	"strings"
 )
 
+// compilerGo es el valor de `--compiler` que convierte las dos etapas de codigo de `apkc build` en este
+// mismo binario: javac y d8 dejan de ejecutarse, y con `--linker go` tampoco se ejecuta aapt2. Es el camino
+// que puede correr dentro de la pestaña, porque alli no arranca ningun proceso.
+const compilerGo = "go"
+
 func compilar() {
 	set := flag.NewFlagSet("compile", flag.ExitOnError)
 	set.Usage = func() {
@@ -116,4 +121,69 @@ func fuentesJava(raices []string) ([]fuenteJava, error) {
 		}
 	}
 	return out, nil
+}
+
+// revisarCompilerGo nombra lo que `--compiler go` todavia no mide. Se aislo del cuerpo de `build` para
+// poder probarlo: las negaciones de un portero que solo vive dentro de un LogF no se comprueban.
+func revisarCompilerGo(o buildOpts) error {
+	if kt, _ := getFiles("src", ".kt", false); len(kt) > 0 {
+		return fmt.Errorf("--compiler go no compila Kotlin: %d fuentes .kt en src", len(kt))
+	}
+	if jars := allJars(); len(jars) > 0 {
+		return fmt.Errorf("--compiler go no dexa dependencias: hay %d jars en jar/ y eso lo hace d8", len(jars))
+	}
+	if o.useAAB {
+		return fmt.Errorf("--compiler go no escribe bundles: d8 es quien produce el .aar de las dependencias")
+	}
+	return nil
+}
+
+// compilarFuentesEnGo es la etapa de `apkc build --compiler go` que sustituye a javac: lee src/*.java,
+// escribe build/classes/*.class y dice los fuentes que paso, que es lo que la firma de la etapa espera.
+// No hay incremental aqui: el emisor resuelve los nombres entre ficheros, así que un fuente que cambia
+// obliga a compilarlos todos, y eso es lo que hace.
+func compilarFuentesEnGo() ([]string, bool) {
+	defer timeIt("compile go")()
+	fuentes, err := fuentesJava([]string{"src"})
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	if len(fuentes) == 0 {
+		return nil, false
+	}
+	clases, err := compilarProyectoJava(fuentes, androidJar)
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	if err := escribirClases(filepath.Join("build", "classes"), clases); err != nil {
+		LogF("build", err.Error())
+	}
+	nombres := []string{}
+	for _, f := range fuentes {
+		nombres = append(nombres, f.nombre)
+	}
+	LogI("build", len(nombres), "fuentes de Java en Go ->", len(clases), "clases")
+	return nombres, true
+}
+
+// dexarClasesEnGo es la etapa que sustituye a d8 sobre las clases del proyecto: las lee de build/classes
+// con el lector de la Fase 2 y escribe build/classes.dex, el sitio de donde lo toma el empaquetado.
+func dexarClasesEnGo() {
+	defer timeIt("dex go")()
+	clases, err := leeClases([]string{filepath.Join("build", "classes")})
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	if len(clases) == 0 {
+		return
+	}
+	dex, err := dexDeClases(clases)
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	ruta := filepath.Join("build", "classes.dex")
+	if err := os.WriteFile(ruta, dex, 0644); err != nil {
+		LogF("build", err.Error())
+	}
+	LogI("build", len(clases), "clases ->", len(dex), "bytes en", ruta)
 }

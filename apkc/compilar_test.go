@@ -7,6 +7,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -147,4 +148,95 @@ func nombres(f []fuenteJava) []string {
 		out = append(out, x.nombre)
 	}
 	return out
+}
+
+// TestPorteroDelCompilerNombraLoQueNoMide cubre las negaciones de `--compiler go`: un portero que solo
+// vive dentro de un LogF no se puede probar, y aqui si.
+func TestPorteroDelCompilerNombraLoQueNoMide(t *testing.T) {
+	casos := []struct {
+		nombre string
+		monta  func(t *testing.T, raiz string)
+		useAAB bool
+		espera string
+	}{
+		{"kotlin en src", func(_ *testing.T, raiz string) {
+			pon(t, raiz, "src/p/A.kt", "package p\n")
+		}, false, "Kotlin"},
+		{"jars de dependencia", func(_ *testing.T, raiz string) {
+			pon(t, raiz, "jar/dep.jar", "PK")
+		}, false, "dependencias"},
+		{"bundle pedido", func(_ *testing.T, raiz string) {
+			pon(t, raiz, "src/p/A.java", "package p;\npublic class A {}\n")
+		}, true, "bundles"},
+		{"proyecto medido", func(_ *testing.T, raiz string) {
+			pon(t, raiz, "src/p/A.java", "package p;\npublic class A {}\n")
+		}, false, ""},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			raiz := t.TempDir()
+			c.monta(t, raiz)
+			t.Chdir(raiz)
+			err := revisarCompilerGo(buildOpts{compiler: compilerGo, useAAB: c.useAAB})
+			if c.espera == "" {
+				if err != nil {
+					t.Fatalf("el portero rechazo un proyecto que si mide: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("el portero acepto %s en silencio", c.nombre)
+			}
+			if !strings.Contains(err.Error(), c.espera) {
+				t.Errorf("el error no nombra la construccion (%q)", err)
+			}
+		})
+	}
+}
+
+// TestEtapasDeBuildEnGo es el camino de `apkc build --compiler go` sin pasar por el resto de la
+// herramienta: las dos etapas, una detras de otra, sobre un proyecto en disco. El oraculo vuelve a ser
+// el dex de las seis clases que javac dejo para estos mismos fuentes.
+func TestEtapasDeBuildEnGo(t *testing.T) {
+	androidJar = jarDelSDK(t)
+	raiz := t.TempDir()
+	pon(t, raiz, "src/com/hola/apkcstudio/MainActivity.java", fuenteMainActivityStudio)
+	pon(t, raiz, "src/com/hola/apkcstudio/R.java", fuenteRStudio)
+	t.Chdir(raiz)
+
+	fuente, ran := compilarFuentesEnGo()
+	if !ran {
+		t.Fatal("la etapa de compilacion no corro")
+	}
+	if len(fuente) != 2 {
+		t.Errorf("%d fuentes paso la etapa, medidos dos", len(fuente))
+	}
+	dexarClasesEnGo()
+	dato, err := os.ReadFile(filepath.Join("build", "classes.dex"))
+	if err != nil {
+		t.Fatalf("no hay build/classes.dex: %v", err)
+	}
+	esperado, err := dexDeClases(leeLasSeis(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dato) != len(esperado) {
+		t.Fatalf("el dex de las etapas mide %d bytes y el de javac %d", len(dato), len(esperado))
+	}
+	for i := range dato {
+		if dato[i] != esperado[i] {
+			t.Fatalf("dex distinto en el byte %d: %#02x frente a %#02x", i, dato[i], esperado[i])
+		}
+	}
+}
+
+func pon(t *testing.T, raiz, ruta, contenido string) {
+	t.Helper()
+	full := filepath.Join(raiz, filepath.FromSlash(ruta))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(contenido), 0o644); err != nil {
+		t.Fatal(err)
+	}
 }

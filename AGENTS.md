@@ -128,9 +128,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   bytes) lo verifica `apksigner` por v1 y v2, lo aprueba `zipalign -c -p 4` y `aapt2 dump badging` lo
   entiende. El portero rechaza con nombre lo no medido: cualquier calificador (`res/layout-es`), recursos
   que no sean values/layout, subcarpetas, no-XML, `<permission>` y una version de platform no medida.
-  **`javac` y `d8` sí se ejecutan** en ese camino: lo que ya no se ejecuta es aapt2.
-- **Queda una pieza para el objetivo**: el cableado de la página, para que el editor maneje `link` +
-  `compile` + `dex` + `sign` dentro de la pestaña. Las cuatro piezas ya corren sin proceso y sin conexión.
+  **Con `--linker go` a secas sí se ejecutan `javac` y `d8`**; lo que ya no se ejecuta es aapt2. Con
+  `--compiler go` tampoco esos dos: ver el párrafo de abajo.
+- **Queda una pieza para el objetivo**: el cableado de la página, para que el editor llame a `build
+  --linker go --compiler go` dentro de la pestaña (el comando ya hace todo, parrafo 44; faltan el selector
+  del `android.jar` en la interfaz y el boton). Las cuatro etapas corren sin proceso y sin conexion.
+- **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
+  Go, dex en Go, empaquetado y firma en Go. Nativo en frio: 255 ms y `build/app.apk` de 9868 bytes, que
+  `apksigner` (v1 y v2), `zipalign -c -p 4`, `aapt2 dump badging`, `aapt2 dump resources` y `zipcheck.py`
+  aprueban. Dentro del hospedador con forma de navegador sale el mismo apk: **cada entrada con los mismos
+  bytes** (manifiesto, `classes.dex`, `resources.arsc`, el layout y hasta `META-INF/MANIFEST.MF`). El apk
+  **no es reproducible byte a byte** -dos builds nativos seguidos difieren en 301 bytes porque la hora que
+  guarda el zip entra en la firma-, asi que la comprobacion que se escribe es entrada por entrada.
 - **`apkc compile`: Java en Go** (rama `web`, parrafos 40 a 43). El analizador (`apkc/javafuente.go`) lee el
   subconjunto que necesita la pagina; el emisor (`apkc/javaemisor.go`) escribe el `.class` (version 52):
   resuelve los nombres contra el `android.jar` leyendo solo las entradas que el fuente nombra, dobla las

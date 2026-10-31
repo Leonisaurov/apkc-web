@@ -200,13 +200,23 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   `ConstantValue`, los `method_info` con `Code` y `LineNumberTable`, el `SourceFile` y el `InnerClasses`, y
   sintetiza el `<init>`. Oráculo doble y medido en el §41: `javap -c -p` sobre lo que escribimos imprime las
   mismas líneas que sobre lo que escribe javac, y **el dex de nuestras clases es byte a byte idéntico al dex
-  de las clases de javac** (mismo lector, mismo dexer, 1288 = 1288, cero diferencias).
+  de las clases de javac** (mismo lector, mismo dexer, 1284 = 1284, cero diferencias).
 - **1G.3b HECHA — la clase anónima**, con su medición previa (parrafo 42): campo `this$0` con
   `ACC_FINAL|ACC_SYNTHETIC`, constructor `(LExterior;)V` con `MethodParameters` (`final mandated`, 0x8010),
   atributo `EnclosingMethod`, la fila del `InnerClasses` sin exterior ni nombre, y las menciones que javac
   apunta desde los descriptores. Oráculo: `javap -c -p` igual en las seis clases (solo cambian los números de
   pool) y `apkc dex` dando **2392 bytes idénticos** desde nuestras clases y desde las de javac.
 - **1G.3c HECHA — el comando.** `apkc compile --android-jar android.jar [-o build/classes] [src...]`
+  (parrafo 43), en la lista de comandos que no sondean el SDK. Medido en el binario nativo y dentro del
+  hospedador con forma de navegador: 1,16 s con el jar de 26 MB montado, y las seis clases exportadas son
+  idénticas byte a byte a las nativas.
+- **1G.3d HECHA — enhebrado en `apkc build`.** `--compiler go` sustituye las dos etapas de código
+  (`compileJava` y `bundleJava`) y salta `closeApiGap`, que es un remiendo de javac: aqui todos los fuentes
+  se leen juntos. `build` acepta `--android-jar`, `--sdk-version` y `--codename` por la razon del §39, y
+  `main()` no sondea el SDK cuando la linea pide `--linker go --compiler go`. Medido nativo (255 ms, apk de
+  9868 bytes aprobado por `apksigner`, `zipalign`, `aapt2 dump badging`/`resources` y `zipcheck.py`) y dentro
+  del hospedador: el mismo apk, **entrada por entrada con los mismos bytes**. Parrafo 44, con la nota de que
+  el apk no es reproducible byte a byte por los tiempos del zip.
   (parrafo 43), en la lista de comandos que no sondean el SDK. Medido en el binario nativo y dentro del
   hospedador con forma de navegador: 1,16 s con el jar de 26 MB montado, y las seis clases exportadas son
   idénticas byte a byte a las nativas. **No está cableado en `apkc build`**: ese camino sigue ejecutando

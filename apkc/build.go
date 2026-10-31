@@ -61,6 +61,16 @@ type buildOpts struct {
 	// (the default, what apkc has always done) or the enlazador inside this binary,
 	// which is the piece the browser build needs because a process never starts there
 	linker string
+	// compiler picks who turns src/*.java into build/classes/*.class and then into the
+	// project's dex: javac plus d8 (the default) or this binary, which is what lets a
+	// build finish inside a browser - no process is ever started there
+	compiler string
+	// jar, sdkVersion and codename say where the platform is and which one it is, for the
+	// rounds that run with no SDK around them: inside the tab the jar is whatever file the
+	// user mounted, and its path names no version (§39)
+	jar        string
+	sdkVersion int
+	codename   string
 }
 
 // buildFlags are the command line switches that reach the stages. The three
@@ -77,6 +87,10 @@ type buildFlags struct {
 	sigAlg      *string
 	signer      *string
 	linker      *string
+	compiler    *string
+	rutaJar     *string
+	sdkVersion  *int
+	codename    *string
 }
 
 func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
@@ -94,6 +108,13 @@ func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
 	f.sigAlg = set.String("sigalg", "SHA256withRSA", "signature algorithm to use")
 	f.signer = set.String("signer", signerDefault, "packaging and signing backend: auto (the default: go unless the project builds a bundle, uses a keystore format apkc cannot read, or targets a platform older than 4.3), go (zipalign and apksigner never start), jvm (zipalign and apksigner)")
 	f.linker = set.String("linker", "aapt2", "resource linker backend: aapt2 (the default: compile and link by running the SDK tool) or go (this binary writes the resource table, the binary XML and R.java; it refuses projects whose resources it has not been measured against, and needs android.jar for the framework ids)")
+	f.compiler = set.String("compiler", "javac", "java compiler and dexer: javac (the default: both tools run from the SDK) or go (this binary compiles the measured subset of Java and dexes the result, so no process starts; it refuses kotlin sources, jar dependencies and bundles)")
+	// the three switches the browser-shaped host needs (§39 and §44): inside the tab there is no SDK to
+	// probe, the jar sits wherever the user mounted it, and a path like /sdk/android.jar says nothing
+	// about which platform it is
+	f.rutaJar = set.String("android-jar", "", "the android.jar to compile against; by default the one found in the SDK, which inside a browser has to be said")
+	f.sdkVersion = set.Int("sdk-version", 0, "the API level of that platform, for the manifest's platformBuildVersion; by default it is read from the android.jar path")
+	f.codename = set.String("codename", "", "the version name of that platform (\"14\" for API 34); it needs --sdk-version with it")
 	return f
 }
 
@@ -107,6 +128,10 @@ func (f buildFlags) opts() buildOpts {
 		sigAlg:      *f.sigAlg,
 		signer:      *f.signer,
 		linker:      *f.linker,
+		compiler:    *f.compiler,
+		jar:         *f.rutaJar,
+		sdkVersion:  *f.sdkVersion,
+		codename:    *f.codename,
 	}
 	if f.useAAB != nil {
 		o.useAAB = *f.useAAB
@@ -128,7 +153,21 @@ func _build(o buildOpts) {
 	if o.linker != "aapt2" && o.linker != linkerGo {
 		LogF("build", "--linker %q: the resource linkers are aapt2 and go", o.linker)
 	}
+	if o.compiler != "javac" && o.compiler != compilerGo {
+		LogF("build", "--compiler %q: the java backends are javac and go", o.compiler)
+	}
+	if o.compiler == compilerGo {
+		// el portero nombra lo que este emisor no mide, en vez de compilar a medias
+		if err := revisarCompilerGo(o); err != nil {
+			LogF("build", err.Error())
+		}
+	}
 	prepare()
+	if o.jar != "" {
+		// inside a browser-shaped host there is no SDK to probe (§39): the jar the user mounted is the
+		// classpath of both the linker and the compiler, and the version comes by flag with it
+		androidJar = o.jar
+	}
 
 	// d8 decides how much to desugar from this number, and without it it assumes
 	// API 1 and rewrites every lambda of every dependency
@@ -201,7 +240,7 @@ func _build(o buildOpts) {
 		// dependency index below that sends the sources back, not this call. Marking
 		// every source here used to cost a whole javac pass over a resource that only
 		// added an id, and a copy of a value that did not move was never stale.
-		bundleRes(o.useAAB, o.incremental, o.linker)
+		bundleRes(o, o.incremental)
 	}
 
 	// what the dependencies contribute to the dex is decided by their bytes, not by
@@ -230,12 +269,19 @@ func _build(o buildOpts) {
 	}
 
 	compiledKotlin, compKotlin := compileKotlin(o.incremental)
-	compiledJava, compJava := compileJava(o.incremental)
+	var compiledJava []string
+	var compJava bool
+	if o.compiler == compilerGo {
+		compiledJava, compJava = compilarFuentesEnGo()
+	} else {
+		compiledJava, compJava = compileJava(o.incremental)
+	}
 	compSource := compKotlin || compJava
 	// javac has no way to notice that what a source calls changed shape: its own
 	// file did not. The compiled classes are the only record of that, and they
-	// exist after this stage, so the callers get their own pass.
-	if closeApiGap(o.incremental, append(append([]string{}, compiledJava...), compiledKotlin...)) {
+	// exist after this stage, so the callers get their own pass. The Go compiler
+	// reads every source of the project together, so it has no such blind spot.
+	if o.compiler != compilerGo && closeApiGap(o.incremental, append(append([]string{}, compiledJava...), compiledKotlin...)) {
 		compSource = true
 	}
 	if o.incremental && compSource {
@@ -273,7 +319,11 @@ func _build(o buildOpts) {
 	appStale := !o.incremental || firstRun || typeChanged || compSource || classStale ||
 		apiChanged || (depChanged && !splitDeps) || dexMissing
 	if appStale {
-		bundleJava(api, o.coreLibrary, jars, splitDeps, classes)
+		if o.compiler == compilerGo {
+			dexarClasesEnGo()
+		} else {
+			bundleJava(api, o.coreLibrary, jars, splitDeps, classes)
+		}
 		if o.incremental && len(classes) > 0 {
 			// recorded only when a dex was really written: an empty src/ produces
 			// nothing to attribute to this api level
@@ -426,6 +476,31 @@ func andList(names []string) string {
 }
 
 // prepare verifies the project paths and setup the build dir
+// sinProcesos dice si la linea de comando pide el build que no levanta ningun proceso: recursos, codigo
+// y dex en este mismo binary. No es un analisis de flags -es la lectura minima de dos pares- pero es lo
+// que main() necesita antes de parsear, porque el sondeo del SDK termina el comando dentro de una
+// pestaña donde no hay SDK que encontrar (parrafo 39 y parrafo 44).
+func sinProcesos(args []string) bool {
+	linker, compiler := "", ""
+	for i := 0; i < len(args); i++ {
+		nombre := strings.TrimLeft(args[i], "-")
+		valor := ""
+		if k := strings.Index(args[i], "="); k >= 0 {
+			valor = args[i][k+1:]
+		} else if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			valor = args[i+1]
+			i++
+		}
+		switch nombre {
+		case "linker":
+			linker = valor
+		case "compiler":
+			compiler = valor
+		}
+	}
+	return linker == linkerGo && compiler == compilerGo
+}
+
 func prepare() {
 	if missing := missingProjectPieces(); len(missing) > 0 {
 		LogF("build", "there is no", andList(missing), "here, so this is not an apkc project:",
@@ -474,20 +549,20 @@ func compileRes(incremental bool, linker string) bool {
 // writes into src/. It reports whether any of them actually changed, which is what
 // makes the sources that read those constants stale. Only the incremental build
 // cares: a plain one recompiles everything anyway and must not touch the state file.
-func bundleRes(useAAB bool, incremental bool, linker string) bool {
+func bundleRes(o buildOpts, incremental bool) bool {
 	defer timeIt("aapt2 link")()
-	if linker == linkerGo {
-		if useAAB {
+	if o.linker == linkerGo {
+		if o.useAAB {
 			LogF("build", "--linker go cannot write a bundle: aapt2 link --proto-format produces resources.pb, and this linker does not")
 		}
-		opts, err := opcionesDelProyecto(androidJar, 0, "")
+		opts, err := opcionesDelProyecto(androidJar, o.sdkVersion, o.codename)
 		if err != nil {
-			LogF("build", err)
+			LogF("build", err.Error())
 		}
 		LogI("build", "linking resources with the Go linker")
 		changed, err := enlazarConGo(".", androidJar, opts)
 		if err != nil {
-			LogF("build", err)
+			LogF("build", err.Error())
 		}
 		return changed
 	}
@@ -511,7 +586,7 @@ func bundleRes(useAAB bool, incremental bool, linker string) bool {
 	// bytes, so the bundle still reuses its entry.
 	os.RemoveAll(filepath.Join("build", "res"))
 	args := []string{"link", "-I", androidJar, "--manifest", "AndroidManifest.xml", "-o", "build", "--java", "src", "--output-to-dir"}
-	if useAAB {
+	if o.useAAB {
 		args = append(args, "--proto-format")
 	}
 	args = append(args, flats...)

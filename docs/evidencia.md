@@ -2009,3 +2009,68 @@ fichero o árbol con `os.Stat`, y en el `fs` simulado eso falla para un fichero 
 `os.Stat("/sdk/android.jar")` responde que no existe, mientras que abrirlo funciona (así lo usó el §39). El
 test localizaba el jar con `Stat`, así que se saltaba aunque el jar estuviera montado; ahora lo **abre**
 (`abrirBuscador`) y guarda el resultado en un `sync.Once`, que además evita releer los 26 MB en cada prueba.
+
+## 44. `apkc build --linker go --compiler go`: un apk completo sin levantar ningún proceso, también dentro de la pestaña
+
+Con `compile` y `dex` ya medidos, el cableado dentro de `build` son dos ramas y tres banderas. `--compiler
+go` sustituye las dos etapas de código (`compileJava` por `compilarFuentesEnGo`, `bundleJava` por
+`dexarClasesEnGo`) y salta `closeApiGap`, que es un remiendo de javac: el emisor lee todos los fuentes del
+proyecto juntos, así que no tiene punto ciego. Como dentro de la pestaña no hay SDK que sondear, `build`
+acepta ahora `--android-jar`, `--sdk-version` y `--codename` (las mismas tres razones del §39) y `main()`
+omite el sondeo cuando la línea de comando pide `--linker go` **y** `--compiler go` (`sinProcesos`).
+
+**El portero** (`revisarCompilerGo`, aislado del `LogF` para poder probarlo) rechaza con nombre lo que el
+camino todo-en-Go no mide: fuentes `.kt` en `src`, jars en `jar/` (esas los dexa `d8`) y `--aab`. Cuatro
+subpruebas, incluida la de un proyecto que sí está medido y no debe rechazar nada.
+
+**Medición nativa**, en frío (`rm -rf build`) sobre el proyecto que genera la página:
+
+```sh
+cd $S && apkc build --linker go --compiler go \
+  --android-jar $HOME/Android/platforms/android-34/android.jar --sdk-version 34 --codename 14 \
+  --keystore $HOME/.android/debug.keystore
+#  [build] linking resources with the Go linker   [aapt2 link] 242ms
+#  [build] 2 fuentes de Java en Go -> 6 clases
+#  [build] 6 clases -> 2392 bytes en build/classes.dex
+#  [build] packaging and signing inside apkc      [timing] total 255ms
+```
+
+Sale `build/app.apk` de **9868 bytes**, y los oráculos de siempre lo aprueban: `apksigner verify --verbose`
+→ v1 `true`, v2 `true`; `zipalign -c -p 4` → `rc 0`; `aapt2 dump badging` → `package name=com.hola.apkcstudio
+versionCode='1' platformBuildVersionName='14' platformBuildVersionCode='34' compileSdkVersion='34'` y
+`minSdkVersion:'21'`; `aapt2 dump resources` → `type id id=01 entryCount=1, resource 0x7f010000 id/pulsar`;
+`zipcheck.py` → 7 entradas, cada registro de acuerdo consigo mismo. Frente a los 10194 bytes del build con
+`javac`+`d8`, la diferencia es la que ya midió el §23: el dex de `d8` trae `debug_info` y anotaciones (2844
+frente a nuestros 2392).
+
+**Medición dentro del hospedador**, una sola orden y sin proceso (el proyecto se monta en la raíz porque
+`build` trabaja en el directorio de proceso, y el jar y el keystore como ficheros más):
+
+```sh
+sh -c 'cd shim && node navegador-sim.js \
+  --montar $S/AndroidManifest.xml:/AndroidManifest.xml \
+  --montar $S/res/values/styles.xml:/res/values/styles.xml \
+  --montar $S/res/layout/main.xml:/res/layout/main.xml \
+  --montar $S/src/com/hola/apkcstudio/MainActivity.java:/src/com/hola/apkcstudio/MainActivity.java \
+  --montar $HOME/Android/platforms/android-34/android.jar:/android.jar \
+  --montar $HOME/.android/debug.keystore:/keystore.p12 \
+  --exportar /build/app.apk:$O/app.apk \
+  $PREFIX/tmp/apkc-wasm.wasm build --linker go --compiler go --android-jar /android.jar \
+    --sdk-version 34 --codename 14 --keystore /keystore.p12'
+```
+
+**Resultado**: `app.apk` de **9868 bytes**, las mismas siete entradas que el apk nativo y **los mismos bytes
+en cada una** (comprobado extrayendo los dos y `cmp` entrada a entrada: `AndroidManifest.xml`,
+`META-INF/ANDROID.RSA`, `META-INF/ANDROID.SF`, `META-INF/MANIFEST.MF`, `classes.dex`,
+`res/layout/main.xml`, `resources.arsc`), verificado por `apksigner` (v1 y v2) y `zipalign` también el
+fichero del hospedador.
+
+**Y una nota sobre qué NO claimar aquí**: el apk **no es reproducible byte a byte**, ni siquiera dos veces
+seguidas en nativo — dos `build` separados por dos segundos difieren en 301 bytes, porque la fecha y hora
+que el zip guarda de cada fichero entra en el cálculo de la firma. Por eso la comparación que se escribió
+fue entrada por entrada; el `cmp` directo de los dos apks marca el byte 11, que es justo el campo de hora.
+Si alguien quiere reproducibilidad hará falta fijar esos tiempos, y eso no está medido todavía.
+
+Suite nativa: **190 tests**, cero fallos. Un `apkc build` dentro de la pestaña ya produce un apk firmado: lo
+que queda es que la página llame a esa orden en vez de a `sign` (falta el selector del jar en la interfaz y
+el botón), que es el cableado final del objetivo.

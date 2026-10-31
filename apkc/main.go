@@ -20,6 +20,12 @@ func main() {
 	// the probe used to end the command before it started.
 	switch os.Args[1] {
 	case "dex", "link", "compile":
+	case "build":
+		// `apkc build --linker go --compiler go` starts no process either: it is the whole build of
+		// the tab, and there is no SDK to find in there (§44)
+		if !sinProcesos(os.Args[2:]) {
+			findSDKs()
+		}
 	default:
 		findSDKs()
 	}
