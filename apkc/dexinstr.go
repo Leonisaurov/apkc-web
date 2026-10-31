@@ -34,6 +34,24 @@ const (
 	opInvocaDirecto  = 0x70 // 35c invoke-direct
 	opInvocaEstatico = 0x71 // 35c invoke-static
 	opInvocaInterfaz = 0x72 // 35c invoke-interface
+
+	// leidos de `d8` sobre la sonda del parrafo 50: `sget v0, field@0` sale 0x60 y su indice,
+	// `sput` 0x67, `check-cast v1, type@1` 0x1f y su indice, `return-object v1` 0x11.
+	opSget          = 0x60 // 21c sget vAA, field@BBBB
+	opSput          = 0x67 // 21c sput vAA, field@BBBB
+	opCheckcastDex  = 0x1f // 21c check-cast vAA, type@BBBB
+	opRetornaObjeto = 0x11 // 11x return-object vAA
+	opIput          = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
+
+	// la familia de cuentas enteras sobre dos registros, en el orden ad-sub-mul-div-rem que la
+	// sonda verifico en cuatro de sus miembros (add 0xb0, sub 0xb1, div 0xb3, y el shl 0xb8 de la
+	// misma tabla contigua) y que la otra familia, la de literal, reproduce en el mismo orden
+	// (add-int/lit8 0xd8, mul 0xda, div 0xdb, rem 0xdc)
+	opSumaInt2    = 0xb0 // 12x add-int/2addr
+	opRestaInt2   = 0xb1 // 12x sub-int/2addr
+	opMultiplica2 = 0xb2 // 12x mul-int/2addr
+	opDivide2     = 0xb3 // 12x div-int/2addr
+	opResiduo2    = 0xb4 // 12x rem-int/2addr
 )
 
 // traduce es el estado de un método mientras se traduce. Se corre dos veces: la primera con una
@@ -45,12 +63,14 @@ type traduce struct {
 	x         poolIndex
 	clase     classFull
 	m         classMethod
-	base      int   // primer registro de los locales: cuántos temporales se usan
-	locales   int   // m.LocalCount, medido sobre el .class
-	enPila    []int // registro de cada entrada de la pila JVM
-	libres    []int // temporales ya muertos
-	siguiente int   // próximo temporal nuevo
-	pico      int   // el mayor número de temporal usado
+	base      int          // primer registro de los locales: cuántos temporales se usan
+	locales   int          // m.LocalCount, medido sobre el .class
+	enPila    []int        // registro de cada entrada de la pila JVM
+	libres    []int        // temporales ya muertos
+	renom     map[int]int  // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
+	fijos     map[int]bool // temporal que quedó atado a un local: ya no es reusable
+	siguiente int          // próximo temporal nuevo
+	pico      int          // el mayor número de temporal usado
 	w         []uint16
 	outs      int // la llamada más ancha, que es el outs_size del §20
 	err       error
@@ -99,6 +119,10 @@ func (p *traduce) suelta(r int) {
 	if r >= p.base {
 		return
 	}
+	if p.fijos[r] {
+		// atado a un local: vive mientras viva el método
+		return
+	}
 	for _, vivo := range p.enPila {
 		if vivo == r {
 			return
@@ -119,9 +143,43 @@ func (p *traduce) pop(in jvmInstr) int {
 
 func (p *traduce) push(r int) { p.enPila = append(p.enPila, r) }
 
+// guardaLocal: `istore`/`astore`. d8 no copia: funde el registro del valor con el del local, como
+// midió la sonda del parrafo 50 con `int x = a; x = x + 1; return x`, que sale en una sola
+// instrucción. Al atar un temporal a un local hay que sacarlo de la bolsa de reutilización, porque
+// si no el siguiente `toma` escribiría encima de una variable viva.
+func (p *traduce) guardaLocal(in jvmInstr, n int) {
+	r := p.pop(in)
+	if r == p.local(n) {
+		return
+	}
+	if p.renom == nil {
+		p.renom = map[int]int{}
+	}
+	p.renom[n] = r
+	if r >= p.base {
+		return
+	}
+	if p.fijos == nil {
+		p.fijos = map[int]bool{}
+	}
+	p.fijos[r] = true
+	for i, vivo := range p.libres {
+		if vivo == r {
+			p.libres = append(p.libres[:i], p.libres[i+1:]...)
+			break
+		}
+	}
+}
+
 // local: el registro dalvik del enésimo hueco JVM. Un long o un double ocupa dos huecos aquí y dos
-// registros allá, así que el número de hueco se pasa tal cual.
-func (p *traduce) local(n int) int { return p.base + n }
+// registros allá, así que el número de hueco se pasa tal cual. Si el hueco quedó atado a otro
+// registro (guardaLocal), ese es su registro ahora.
+func (p *traduce) local(n int) int {
+	if r, ok := p.renom[n]; ok {
+		return r
+	}
+	return p.base + n
+}
 
 func (p *traduce) palabra(u uint16) { p.w = append(p.w, u) }
 
@@ -163,6 +221,60 @@ func (p *traduce) indice(n int, in jvmInstr, qué string) bool {
 	}
 	p.palabra(uint16(n))
 	return true
+}
+
+// accesoEstatico: `getstatic` y `putstatic`. Son 21c —opcode, registro e índice— y no llevan
+// receptor: la sonda del parrafo 50 midió `sget v0, field@0` (0x0060 + 0x0000) al leer el campo y
+// `const/16 v0, 9` seguido de `sput v0, field@0` (0x0067) al escribirlo. Solo se probó con enteros.
+func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
+	owner, nombre, desc, _ := p.x.refOf(dexU16(in.ops))
+	if desc != "I" {
+		p.falla(in, "a static access of type "+string(desc[0])+": solo se midió el entero")
+		return
+	}
+	campo, ok := p.t.fieldIdx[fieldKey{owner: owner, typeOf: desc, name: nombre}]
+	if !ok {
+		p.falla(in, "a field that was never interned ("+owner+"."+nombre+" "+desc+")")
+		return
+	}
+	op := byte(opSget)
+	if escribe {
+		op = opSput
+	}
+	r := p.toma(in)
+	if escribe {
+		r = p.pop(in)
+	}
+	p.palabra(uint16(op) | uint16(r&0xff)<<8)
+	if !p.indice(campo, in, "the field_id of the static access") {
+		return
+	}
+	if escribe {
+		p.suelta(r)
+		return
+	}
+	p.push(r)
+}
+
+// cuentaEntera: iadd, isub, imul, idiv, irem. Dalvik los escribe sobre el primer operando
+// (`/2addr`), que es lo que salió de la sonda: `add(a,b)` es 0x21b0 = add-int/2addr v1, v2 y
+// `sub(a,b)` 0x21b1, con el resultado quedándose en v1, de donde sale el `return v1` (0x010f).
+func (p *traduce) cuentaEntera(in jvmInstr) {
+	ops := map[string]byte{"iadd": opSumaInt2, "isub": opRestaInt2, "imul": opMultiplica2,
+		"idiv": opDivide2, "irem": opResiduo2}
+	op, ok := ops[in.name]
+	if !ok {
+		p.falla(in, "an arithmetic opcode this translator does not know")
+		return
+	}
+	b := p.pop(in)
+	a := p.pop(in)
+	if !p.nibble(a, in) || !p.nibble(b, in) {
+		return
+	}
+	p.palabra(unidad12x(op, a, b))
+	p.push(a)
+	p.suelta(b)
 }
 
 // invoca escribe un 35c: primera unidad con el opcode, el recuento de argumentos en los bits 4..7 y
@@ -275,6 +387,60 @@ func (p *traduce) recorre() error {
 				// palabras de d8 sobre el listener del studio (§21)
 				k++
 			}
+		case "getstatic", "putstatic":
+			p.accesoEstatico(in, in.name == "putstatic")
+		case "iadd", "isub", "imul", "idiv", "irem":
+			p.cuentaEntera(in)
+		case "checkcast":
+			desc := p.x.classDescriptor(dexU16(in.ops))
+			r := p.pop(in)
+			p.palabra(uint16(opCheckcastDex) | uint16(r&0xff)<<8)
+			if !p.indice(p.t.typeIdx[desc], in, "the type_id of check-cast") {
+				return p.err
+			}
+			p.push(r)
+		case "areturn":
+			r := p.pop(in)
+			p.palabra(unidad11x(opRetornaObjeto, r))
+		case "ldc_w":
+			p.ldc(in)
+		case "iconst_2", "iconst_3", "iconst_4", "iconst_5", "iconst_m1", "bipush", "sipush":
+			valores := map[string]int{"iconst_m1": -1, "iconst_2": 2, "iconst_3": 3, "iconst_4": 4, "iconst_5": 5}
+			v, esConst := valores[in.name]
+			if !esConst {
+				if in.name == "bipush" {
+					v = int(int8(in.ops[0]))
+				} else {
+					v = int(int16(dexU16(in.ops)))
+				}
+			}
+			r := p.toma(in)
+			if !p.entero(r, v, in) {
+				return p.err
+			}
+			p.push(r)
+		case "iload", "aload", "iload_0", "iload_1", "iload_2", "iload_3", "aload_2", "aload_3":
+			n := 0
+			switch in.name {
+			case "iload", "aload":
+				n = int(in.ops[0])
+			default:
+				n = int(in.name[len(in.name)-1]) - '0'
+			}
+			r := p.local(n)
+			if !p.nibble(r, in) {
+				return p.err
+			}
+			p.push(r)
+		case "istore", "astore", "istore_0", "istore_1", "istore_2", "istore_3", "astore_0", "astore_1", "astore_2", "astore_3":
+			n := 0
+			switch in.name {
+			case "istore", "astore":
+				n = int(in.ops[0])
+			default:
+				n = int(in.name[len(in.name)-1]) - '0'
+			}
+			p.guardaLocal(in, n)
 		default:
 			p.falla(in, "outside the measured subset")
 		}
@@ -287,6 +453,9 @@ func (p *traduce) recorre() error {
 
 func (p *traduce) ldc(in jvmInstr) {
 	i := int(in.ops[0])
+	if len(in.ops) == 2 {
+		i = int(dexU16(in.ops))
+	}
 	r := p.toma(in)
 	switch p.x.tagOf(i) {
 	case cpString:
@@ -296,21 +465,7 @@ func (p *traduce) ldc(in jvmInstr) {
 			return
 		}
 	case cpInteger:
-		v := int(p.x.intOf(i))
-		switch {
-		case v >= -8 && v <= 7:
-			if !p.nibble(r, in) {
-				return
-			}
-			p.palabra(unidad11n(opConst4, r, v))
-		case v >= -32768 && v <= 32767:
-			p.palabra(uint16(opConst16) | uint16(r&0xff)<<8)
-			p.palabra(uint16(v))
-		case v&0xffff == 0 && v>>16 >= -32768 && v>>16 <= 32767:
-			p.palabra(uint16(opConstAlto16) | uint16(r&0xff)<<8)
-			p.palabra(uint16(v >> 16))
-		default:
-			p.falla(in, "an int that fits neither const/4, const/16 nor const/high16: const (0x14) is not measured here")
+		if !p.entero(r, int(p.x.intOf(i)), in) {
 			return
 		}
 	default:
@@ -318,6 +473,30 @@ func (p *traduce) ldc(in jvmInstr) {
 		return
 	}
 	p.push(r)
+}
+
+// entero: la misma elección de formato que d8 tomó sobre la sonda — const/4 para el valor chico
+// (medido con el 1, 2, 3, 4 y 6 del <init>), const/16 para lo que cabe en dieciseis bits (medido
+// con `const/16 v0, 12`) y const/high16 cuando los bits bajos son cero (medido con la id de
+// recurso 0x7f010000 del onCreate). Lo que no cabe en ninguno de los tres se rechaza por nombre.
+func (p *traduce) entero(r int, v int, in jvmInstr) bool {
+	switch {
+	case v >= -8 && v <= 7:
+		if !p.nibble(r, in) {
+			return false
+		}
+		p.palabra(unidad11n(opConst4, r, v))
+	case v >= -32768 && v <= 32767:
+		p.palabra(uint16(opConst16) | uint16(r&0xff)<<8)
+		p.palabra(uint16(v))
+	case v&0xffff == 0 && v>>16 >= -32768 && v>>16 <= 32767:
+		p.palabra(uint16(opConstAlto16) | uint16(r&0xff)<<8)
+		p.palabra(uint16(v >> 16))
+	default:
+		p.falla(in, "an int that fits neither const/4, const/16 nor const/high16: const (0x14) is not measured here")
+		return false
+	}
+	return true
 }
 
 func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
@@ -339,6 +518,10 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		op = opIgetObject
 	case !escribe && desc[0] == 'I':
 		op = opIget
+	case escribe && desc[0] == 'I':
+		// medido en el <init> de la sonda (parrafo 50): seis putfields salen como iput 0x59,
+		// `iput v0, v1, field@1`, con el valor en el primer registro y el objeto en el segundo
+		op = opIput
 	default:
 		p.falla(in, "a field access of type "+string(desc[0])+": only object fields and iget were measured")
 		return
@@ -352,6 +535,10 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 			return
 		}
 		p.palabra(unidad12x(op, valor, objeto))
+		// los dos murieron con el almacenamiento: sin soltarlos, un <init> con seis putfields
+		// pide seis temporales y revienta contra la pila máxima que midió javap
+		p.suelta(valor)
+		p.suelta(objeto)
 	} else {
 		objeto := p.pop(in)
 		r := p.toma(in)
@@ -359,6 +546,7 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 			return
 		}
 		p.palabra(unidad12x(op, r, objeto))
+		p.suelta(objeto)
 		p.push(r)
 	}
 	p.indice(campo, in, "the field_id of the access")
@@ -441,8 +629,11 @@ func (t *dexTables) codeItemDe(clase classFull, m classMethod) (codeItem, error)
 	}
 	x := poolIndex{p: clase.p}
 	// la primera pasada necesita una base que no pise los locales: la pila máxima que midió javap
-	// es un techo de entradas vivas, y por tanto de temporales
-	prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: m.MaxStack}
+	// es un techo de entradas vivas, y por tanto de temporales. Se le suma el número de huecos
+	// porque desde el parrafo 50 un temporal puede quedar *atado* a un local (`int v = ...`), y
+	// esos registros ya no son reutilizables: con la base estrecha el cuarto temporal chocaba
+	// contra el borde y el método entero se rechazaba.
+	prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: m.MaxStack + m.LocalCount + 1}
 	if err := prueba.recorre(); err != nil {
 		return codeItem{}, err
 	}

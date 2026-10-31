@@ -19,17 +19,55 @@ type jvmOpcode struct {
 	ops  int
 }
 
-// jvmMeasured is the whole table. Sixteen entries, in the order the measurement printed them.
+// jvmMeasured es toda la tabla. Las primeras dieciseis salieron del proyecto del studio (parrafo 17); las
+// demas se midieron en el parrafo 50 sobre un fuente con campos, locales y cuentas enteras, y el ancho de
+// cada una es la diferencia de desplazamientos que imprime `javap -c` (ningun numero de memoria). Son
+// opcodes del JVMS: en DEX la cuenta entera vive en otra parte (0xb0..), y confundirlas fue el primer
+// intento de esta tabla.
 var jvmMeasured = map[byte]jvmOpcode{
+	0x01: {"aconst_null", 0},
+	0x02: {"iconst_m1", 0},
 	0x03: {"iconst_0", 0},
 	0x04: {"iconst_1", 0},
+	0x05: {"iconst_2", 0},
+	0x06: {"iconst_3", 0},
+	0x07: {"iconst_4", 0},
+	0x08: {"iconst_5", 0},
+	0x10: {"bipush", 1},
+	0x11: {"sipush", 2},
 	0x12: {"ldc", 1},
+	0x13: {"ldc_w", 2},
+	0x15: {"iload", 1},
+	0x19: {"aload", 1},
+	0x1a: {"iload_0", 0},
+	0x1b: {"iload_1", 0},
+	0x1c: {"iload_2", 0},
+	0x1d: {"iload_3", 0},
 	0x2a: {"aload_0", 0},
 	0x2b: {"aload_1", 0},
+	0x2c: {"aload_2", 0},
+	0x2d: {"aload_3", 0},
+	0x36: {"istore", 1},
+	0x3a: {"astore", 1},
+	0x3b: {"istore_0", 0},
+	0x3c: {"istore_1", 0},
+	0x3d: {"istore_2", 0},
+	0x3e: {"istore_3", 0},
+	0x4b: {"astore_0", 0},
+	0x4c: {"astore_1", 0},
+	0x4d: {"astore_2", 0},
+	0x4e: {"astore_3", 0},
 	0x57: {"pop", 0},
 	0x59: {"dup", 0},
+	0x60: {"iadd", 0},
+	0x64: {"isub", 0},
+	0x68: {"imul", 0},
+	0x6c: {"idiv", 0},
+	0x70: {"irem", 0},
 	0xac: {"ireturn", 0},
 	0xb1: {"return", 0},
+	0xb2: {"getstatic", 2},
+	0xb3: {"putstatic", 2},
 	0xb4: {"getfield", 2},
 	0xb5: {"putfield", 2},
 	0xb6: {"invokevirtual", 2},
@@ -37,6 +75,7 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xb8: {"invokestatic", 2},
 	0xb9: {"invokeinterface", 4}, // index u16, then count u8 and a reserved u8
 	0xbb: {"new", 2},
+	0xc0: {"checkcast", 2},
 }
 
 // jvmInstr is one instruction of a Code array: where it starts, what it is, its operand bytes.

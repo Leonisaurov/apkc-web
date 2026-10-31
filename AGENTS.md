@@ -157,6 +157,15 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   pares desconocidos se ignoran y se anotan**, porque herejarlos daría menos aprobados que `apksigner`.
   No valida la cadena de confianza (sin ancla) y rechaza por nombre DSA/EC, digest que no sea SHA-256,
   varios firmantes y las firmas v3/v4.
+- **El subconjunto de Java crece midiendo, y ya acepta un fuente propio** (§49 y §50): campos con
+  modificadores leídos de `javap -v` (0x0000 a 0x0010), inicializadores bajados al `<init>` con su
+  `LineNumberTable`, `<clinit>` al final, locales con `checkcast`, asignación a campo y aritmética entera
+  (`add-int/2addr 0xb0` y su familia, medida sobre palabras que escribió `d8`). Un proyecto con
+  `private int pulsos = 0`, `Button b = (Button) findViewById(R.id.pulsar)` y `total * 2` compila entero en
+  Go: **834 ms y un apk de 9555 bytes** frente a 10,1 s con `javac`+`d8`; `apksigner` (v1+v2), `zipalign`,
+  `zipcheck`, `aapt2 dump badging` y `apkc verify` lo aprueban, y `d8` releee nuestro dex con `rc 0`. El
+  portero sigue: `if`, concatenación de cadenas, arreglos y bucles se rechazan por nombre hasta que estén
+  medidos, y hay una forma de `d8` para `a*b` (dos unidades, `0x0192` + `0x0201`) que aún no desciframos.
 - **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
   arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
@@ -176,7 +185,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **189 PASS + 1 SKIP** nativa y **181 PASS + 9 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **190 PASS + 2 SKIP** nativa y **182 PASS + 10 SKIP**
   en el hospedador, con los doce tests de Java y los cinco del verificador pasando dentro. El portero
   rechaza con nombre lo no medido: `if`, anónima sobre una clase o dentro de otra o en un método `static`,
   tipos de dos huecos, anotaciones que no sean `@Override`.

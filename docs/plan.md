@@ -226,10 +226,21 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   hospedador que aparecieron al cablear (carrera de arranque en `hospedador.js` y directorios intermedios
   que `fs-fragmento.js` no creaba en memoria).
 
-**Cerrada la Fase 1G y el cableado**: `create`, editar, compilar recursos, compilar Java, dexar, empaquetar
-y firmar ocurren dentro de la pestaña, sin conexión y sin un solo proceso. El emisor y el enlazador siguen
-rechazando por nombre lo que no está medido (§41, §42, §38): esa es la frontera honesta, no un fallo del
-camino.
+- **1G.5 HECHA — el subconjunto admite un fuente que la página no genera** (§49 y §50): campos con los
+  modificadores leídos de `javap -v`, sus inicializadores en el `<init>` (y los estáticos en un `<clinit>`
+  que va al final), variables locales con `checkcast`, asignación a campo y aritmética entera. Medido dos
+  veces: `javap -p -c -l` idéntico línea por línea contra javac 21, y `apkc dex` dando el mismo fichero byte
+  a byte sobre nuestras clases que sobre las de javac (1960 bytes). End-to-end en Go: 834 ms y un apk de 9555
+  bytes que `apksigner`, `zipalign`, `zipcheck`, `aapt2` y `apkc verify` aprueban, y cuyo dex relee `d8` con
+  `rc 0`.
+- **1G.6 PENDIENTE, con su motivo**: el `if` (hacen falta los anchos de las branquias y sus formas dalvik,
+  medidos), la concatenación de cadenas en versión 52 (cadena de `StringBuilder.append`), arreglos y bucles.
+  Hasta entonces el portero los rechaza por nombre; no se abre ninguna de estas puertas "de paso".
+
+**Cerrada la Fase 1G y el cableado**: `create`, editar, compilar recursos, compilar Java, dexar, empaquetar,
+firmar y verificar ocurren dentro de la pestaña, sin conexión y sin un solo proceso. El emisor y el enlazador
+siguen rechazando por nombre lo que no está medido (§41, §42, §38, §49): esa es la frontera honesta, no un
+fallo del camino.
 
 **Mata la fase**: el momento en que el subconjunto deje de ser un subconjunto honesto: si para
 aceptar el fuente hay que implementar la semántica completa de Java (sobrecarga, inferencia,
