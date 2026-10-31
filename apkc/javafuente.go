@@ -856,7 +856,7 @@ func (a *analizadorJava) bloque() ([]jstmt, error) {
 func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	linea := a.actual().donde.linea
 	switch {
-	case a.es('k', "{"):
+	case a.es('p', "{"):
 		b, err := a.bloque()
 		return jbloque{sentencias: b, donde: pos{linea}}, err == nil, err
 	case a.es('k', "return"):

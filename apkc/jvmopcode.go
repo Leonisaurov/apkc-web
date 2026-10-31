@@ -9,7 +9,7 @@ package main
 // from memory is a claim nobody checked, and a wrong width does not merely miscount: it walks into
 // the middle of the next instruction and reports a method that parses.
 //
-// Anything outside the sixteen is refused by name. That includes tableswitch, lookupswitch and
+// Anything outside the measured table is refused by name. That includes tableswitch, lookupswitch and
 // wide, whose widths are not fixed and were not needed by the subset: the day a project uses a
 // switch, the entry gets added with its own measurement, not with a guess about padding.
 
@@ -76,6 +76,24 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xb9: {"invokeinterface", 4}, // index u16, then count u8 and a reserved u8
 	0xbb: {"new", 2},
 	0xc0: {"checkcast", 2},
+	// las branquias, con el ancho de dos bytes que mide `javap -c` en el parrafo 52: el numero que
+	// imprime detras del mnemonic es el desplazamiento, y el siguiente desplazamiento de la lista
+	// esta tres bytes mas adelante que el de la branquia
+	0x99: {"ifeq", 2},
+	0x9a: {"ifne", 2},
+	0x9b: {"iflt", 2},
+	0x9c: {"ifge", 2},
+	0x9d: {"ifgt", 2},
+	0x9e: {"ifle", 2},
+	0x9f: {"if_icmpeq", 2},
+	0xa0: {"if_icmpne", 2},
+	0xa1: {"if_icmplt", 2},
+	0xa2: {"if_icmpge", 2},
+	0xa3: {"if_icmpgt", 2},
+	0xa4: {"if_icmple", 2},
+	0xa7: {"goto", 2},
+	0xc6: {"ifnull", 2},
+	0xc7: {"ifnonnull", 2},
 }
 
 // jvmInstr is one instruction of a Code array: where it starts, what it is, its operand bytes.
@@ -84,6 +102,13 @@ type jvmInstr struct {
 	op   byte
 	name string
 	ops  []byte
+}
+
+// destinoDe: el pc al que salta una branquia JVM. El desplazamiento va en bytes desde el principio
+// de la instruccion —desde su opcode, no desde sus operandos, que es como lo escribio el emisor y
+// como lo lee javap: `2: if_icmpne 7` lleva por operandos `00 05`—, y son un entero con signo.
+func destinoDe(in jvmInstr) int {
+	return in.pc + int(int16(uint16(in.ops[0])<<8|uint16(in.ops[1])))
 }
 
 // walkJvmCode reads a Code array as far as the measured table allows and stops at the first byte
@@ -96,7 +121,7 @@ func walkJvmCode(code []byte) ([]jvmInstr, error) {
 		k, ok := jvmMeasured[op]
 		if !ok {
 			return nil, &jvmWalkError{pc: i, op: op,
-				what: "opcode outside the sixteen this fork measured"}
+				what: "opcode outside the table this fork measured"}
 		}
 		instr := jvmInstr{pc: i, op: op, name: k.name}
 		i++

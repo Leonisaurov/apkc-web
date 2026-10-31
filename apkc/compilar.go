@@ -32,9 +32,11 @@ anywhere. The output goes where the dexer looks for it, one file per class, name
 
 Only the measured subset compiles: declarations, @Override (which leaves no trace in the class file),
 calls on this, on a written receiver, on a type and on super, string and integer literals, inlined
-"static final int" constants like R.layout.main, and anonymous classes with the this$0 field javac gives
-them. Anything else - an if, a long, an annotation other than @Override, a class the classpath does not
-name - stops the command with its line, before writing a single file.
+"static final int" constants like R.layout.main, fields and local variables, integer arithmetic, an
+if or if-else over one of the comparisons javac inverts (docs/evidencia.md §49 and §52), and anonymous
+classes with the this$0 field javac gives them. Anything else - a loop, a long, a condition that is a
+bare boolean, an annotation other than @Override, a class the classpath does not name - stops the
+command with its line, before writing a single file.
 
 Type names resolve against the android.jar passed in, reading only the entries the sources mention.
 `)

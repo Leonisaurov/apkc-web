@@ -873,3 +873,91 @@ func nombresMetodos(ms []classMethod) []string {
 	}
 	return out
 }
+
+const fuenteBranquias = `package com.myapp;
+public class Branquias {
+    static int shared = 5;
+    public int igual(int a, int b) { if (a == b) { return 1; } return 0; }
+    public int mayorcero(int a) { if (a > 0) { return 2; } return 3; }
+    public int nulo(Object o) { if (o == null) { return 4; } return 5; }
+    public int conElse(int a) { if (a == 0) { shared = 1; } else { shared = 2; } return shared; }
+    public int plegable(int a) { if (a == 0) { a = 1; } else { a = 2; } return a; }
+    public int anidadaConElse(int a, int b) { if (a == b) { if (a > 0) { shared = 1; } else { shared = 2; } } else { shared = 3; } return shared; }
+    public int tresNiveles(int a, int b) { if (a == b) { if (a > 0) { if (b > 0) { return 1; } } } return 2; }
+}
+`
+
+// leeCodigo renderiza el Code de un metodo como `pc mnemonic`, con el destino resuelto en las
+// branquias. Es la forma en la que javap imprime el cuerpo, y la que se cotejo contra el suyo.
+func leeCodigo(t *testing.T, m classMethod) string {
+	t.Helper()
+	lista, err := walkJvmCode(m.Code)
+	if err != nil {
+		t.Fatalf("%s: nuestro Code no se recorre: %v", m.Name, err)
+	}
+	fila := []string{}
+	for _, in := range lista {
+		texto := itoa(in.pc) + " " + in.name
+		if strings.HasPrefix(in.name, "if") || in.name == "goto" {
+			texto += "->" + itoa(destinoDe(in))
+		}
+		fila = append(fila, texto)
+	}
+	return strings.Join(fila, " | ")
+}
+
+// TestEmisorBranquiasContraJavap fija la medicion del parrafo 52. El fuente es la sonda
+// p/Branquias y p/Saltos del laboratorio, y lo que se compara es lo que imprime `javap -c -l`
+// sobre las clases de javac 21 (--release 8): la sucesion de instrucciones con sus desplazamientos
+// y el destino de cada branquia. El diff de los dos javap salio mudo —186 lineas para Branquias,
+// doce metodos con `if` de los cuales tres anidan, y 81 para Saltos— y aqui queda la parte que el
+// `if` aporta: la inversion de la condicion, el `goto` que javac escribe solo cuando el cuerpo no
+// sale por su cuenta, el encadenado por encima de una etiqueta vacia, y la linea de la tabla, que
+// en un metodo de una sola linea es UNA fila.
+func TestEmisorBranquiasContraJavap(t *testing.T) {
+	clases, err := compilarProyectoJava([]fuenteJava{{nombre: "Branquias.java", contenido: fuenteBranquias}}, jarDelSDK(t))
+	if err != nil {
+		t.Fatalf("el fuente con branquias no compila: %v", err)
+	}
+	var datos []byte
+	for _, c := range clases {
+		if c.interno == "com/myapp/Branquias" {
+			datos = c.datos
+		}
+	}
+	if datos == nil {
+		t.Fatalf("no salio com/myapp/Branquias de %d clases", len(clases))
+	}
+	c, err := readClassFull(datos)
+	if err != nil {
+		t.Fatalf("nuestra clase no se lee: %v", err)
+	}
+	medidos := map[string]string{
+		"igual":     "0 iload_1 | 1 iload_2 | 2 if_icmpne->7 | 5 iconst_1 | 6 ireturn | 7 iconst_0 | 8 ireturn",
+		"mayorcero": "0 iload_1 | 1 ifle->6 | 4 iconst_2 | 5 ireturn | 6 iconst_3 | 7 ireturn",
+		"nulo":      "0 aload_1 | 1 ifnonnull->6 | 4 iconst_4 | 5 ireturn | 6 iconst_5 | 7 ireturn",
+		"conElse":   "0 iload_1 | 1 ifne->11 | 4 iconst_1 | 5 putstatic | 8 goto->15 | 11 iconst_2 | 12 putstatic | 15 getstatic | 18 ireturn",
+		"plegable":  "0 iload_1 | 1 ifne->9 | 4 iconst_1 | 5 istore_1 | 6 goto->11 | 9 iconst_2 | 10 istore_1 | 11 iload_1 | 12 ireturn",
+		// el anidado destapo el encadenado de gotos: javac escribe `13: goto 27`, no `13: goto 20`
+		// seguido de un `20: goto 27`. El destino intermedio no tiene ninguna instruccion delante,
+		// es una etiqueta vacia, y saltar por encima es lo mismo (parrafo 52)
+		"anidadaConElse": "0 iload_1 | 1 iload_2 | 2 if_icmpne->23 | 5 iload_1 | 6 ifle->16 | 9 iconst_1 | 10 putstatic | 13 goto->27 | 16 iconst_2 | 17 putstatic | 20 goto->27 | 23 iconst_3 | 24 putstatic | 27 getstatic | 30 ireturn",
+		"tresNiveles":    "0 iload_1 | 1 iload_2 | 2 if_icmpne->15 | 5 iload_1 | 6 ifle->15 | 9 iload_2 | 10 ifle->15 | 13 iconst_1 | 14 ireturn | 15 iconst_2 | 16 ireturn",
+	}
+	for _, m := range c.Methods {
+		quieren, esBranquia := medidos[m.Name]
+		if !esBranquia {
+			continue
+		}
+		if sale := leeCodigo(t, m); sale != quieren {
+			t.Errorf("%s:\n  nuestro: %s\n  javac:   %s", m.Name, sale, quieren)
+		}
+		if len(m.Lines) != 1 || m.Lines[0].pc != 0 {
+			t.Errorf("%s: LineNumberTable %v, medido una sola fila en pc 0", m.Name, m.Lines)
+		}
+		delete(medidos, m.Name)
+	}
+	for nombre := range medidos {
+		t.Errorf("%s no salio entre los metodos (%v)", nombre, nombresMetodos(c.Methods))
+	}
+}

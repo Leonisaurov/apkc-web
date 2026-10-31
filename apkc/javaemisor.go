@@ -54,6 +54,23 @@ const (
 	opInvointf   = 0xb9
 	opNew        = 0xbb
 	opCheckcast  = 0xc0
+	// las branquias, con la inversión que hace javac (medida en el parrafo 52 sobre `javap -c`):
+	// `if (a == b)` sale `if_icmpne`, `if (a > 0)` sale `ifle`, `if (o == null)` sale `ifnonnull`
+	opIFEQ      = 0x99
+	opIFNE      = 0x9a
+	opIFLT      = 0x9b
+	opIFGE      = 0x9c
+	opIFGT      = 0x9d
+	opIFLE      = 0x9e
+	opIFICMPEQ  = 0x9f
+	opIFICMPNE  = 0xa0
+	opIFICMPLT  = 0xa1
+	opIFICMPGE  = 0xa2
+	opIFICMPGT  = 0xa3
+	opIFICMPLE  = 0xa4
+	opGOTO      = 0xa7
+	opIFNULL    = 0xc6
+	opIFNONNULL = 0xc7
 	// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49)
 	opIadd = 0x60
 	opIsub = 0x64
@@ -899,6 +916,19 @@ type emisor struct {
 	// truncado avisa que un indice del pool no cabia en el byte de un `ldc`: el fichero ya no es correcto y
 	// el metodo se rechaza por nombre en vez de escribir un operando roto.
 	truncado bool
+
+	// las branquias dejan el operando en blanco y lo rellenan al cerrar la etiqueta: el desplazamiento
+	// del JVMS se cuenta en bytes desde el principio de la instruccion, así que no se conoce hasta que
+	// esta escrito el cuerpo del `if` (parrafo 52)
+	parches           []parcheSalto
+	etiquetas         map[int]int
+	siguienteEtiqueta int
+}
+
+type parcheSalto struct {
+	en       int
+	etiqueta int
+	op       byte
 }
 
 type localVar struct {
@@ -924,8 +954,84 @@ func (e *emisor) baja(n int) {
 	e.prof -= n
 }
 
+// nuevaEtiqueta: un destino de salto nuevo. Las etiquetas son del metodo y se rellenan al cerrarse.
+func (e *emisor) nuevaEtiqueta() int {
+	n := e.siguienteEtiqueta
+	e.siguienteEtiqueta++
+	return n
+}
+
+// saltoEmite escribe la instruccion de salto con sus dos bytes de operando reservados y los deja
+// apuntados a la etiqueta. `consume` dice cuántas palabras baja de la pila simulada: dos en las
+// comparaciones entre dos valores, una en las formas contra cero y contra null, ninguna en el `goto`.
+func (e *emisor) saltoEmite(op byte, destino int, consume int) {
+	e.emite(op, 0, 0)
+	e.parches = append(e.parches, parcheSalto{en: len(e.codigo) - 3, etiqueta: destino, op: op})
+	e.baja(consume)
+}
+
+// cierra anota la posicion actual como destino de la etiqueta y completa los saltos que la esperaban.
+// El operando JVM es un desplazamiento en bytes contados desde el principio de la instruccion, no
+// desde el operando: por eso se guarda `en` en la direccion de la branquia y se escribe en en+1.
+func (e *emisor) cierra(id int) {
+	if e.etiquetas == nil {
+		e.etiquetas = map[int]int{}
+	}
+	e.etiquetas[id] = len(e.codigo)
+	for _, p := range e.parches {
+		if p.etiqueta != id {
+			continue
+		}
+		rel := len(e.codigo) - p.en
+		e.codigo[p.en+1] = byte(rel >> 8)
+		e.codigo[p.en+2] = byte(rel)
+	}
+}
+
+// encadenaGotos: un `goto` cuyo destino es una posicion que empieza por otro `goto` se resuelve
+// contra el segundo. Lo hace javac, leido en el parrafo 52 con un `if` anidado al final del `then`
+// de otro `if` con `else`: escribe `13: goto 27`, mientras que el primer borrador nuestro escribia
+// `13: goto 20` y en 20 estaba el `goto 27` del bloque. La etiqueta intermedia no separa ninguna
+// instruccion, es un salto vacio, y encadenarlo no cambia por donde pasa el programa.
+func (e *emisor) encadenaGotos() {
+	if len(e.parches) == 0 || len(e.etiquetas) == 0 {
+		return
+	}
+	gotoEn := map[int]int{} // posicion de un goto -> etiqueta a la que apunta
+	for _, p := range e.parches {
+		if p.op == opGOTO {
+			gotoEn[p.en] = p.etiqueta
+		}
+	}
+	for i, p := range e.parches {
+		if p.op != opGOTO {
+			continue
+		}
+		donde, ok := e.etiquetas[p.etiqueta]
+		if !ok {
+			continue
+		}
+		for k := 0; k < len(e.parches); k++ { // la cota es el numero de saltos: no hay cadenas ciclicas
+			siguiente, esGoto := gotoEn[donde]
+			if !esGoto {
+				break
+			}
+			posicion, cerrada := e.etiquetas[siguiente]
+			if !cerrada {
+				break
+			}
+			donde = posicion
+			e.parches[i].etiqueta = siguiente
+		}
+		rel := donde - p.en
+		e.codigo[p.en+1] = byte(rel >> 8)
+		e.codigo[p.en+2] = byte(rel)
+	}
+}
+
 // marcaLinea: la LineNumberTable de javac apunta al desplazamiento donde empieza cada sentencia, medido en
-// el parrafo 40 (line 14:0, 15:5, 16:11 en el onCreate de la plantilla).
+// el parrafo 40 (line 14:0, 15:5, 16:11 en el onCreate de la plantilla). Un metodo escrito en una sola
+// linea del fuente lleva UNA fila, leido en el parrafo 52: javac no repite el numero de linea.
 func (e *emisor) marcaLinea(linea int) {
 	if linea <= 0 {
 		return
@@ -1528,6 +1634,123 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 
 // ----- sentencias -----
 
+// esLiteralEntero / esLiteralNulo miran un literal concreto del fuente, sin emitirlo.
+func esLiteralEntero(x jexpr, v int32) bool {
+	lit, ok := x.(jlit)
+	return ok && lit.tipoJ == 'i' && lit.entero == v
+}
+
+func esLiteralNulo(x jexpr) bool {
+	lit, ok := x.(jlit)
+	return ok && lit.tipoJ == 'n'
+}
+
+func esEnteroDesc(desc string) bool {
+	if desc == "" {
+		return false
+	}
+	return strings.IndexByte("IBCSZ", desc[0]) >= 0
+}
+
+// condicionBranca escribe los operandos de la condicion de un `if` y devuelve el opcode de salto con
+// la INVERSION que aplica javac, leida en el parrafo 52 comparando las seis relaciones contra cero,
+// contra una constante, contra otro entero y contra null:
+//
+//	`a == b` if_icmpne · `a != b` if_icmpeq · `a < b` if_icmpge · `a >= b` if_icmplt
+//	`a > b` if_icmple · `a <= b` if_icmpgt · `a == 0` ifne · `a != 0` ifeq · `a < 0` ifge
+//	`a >= 0` iflt · `a > 0` ifle · `a <= 0` ifgt · `o == null` ifnonnull · `o != null` ifnull
+//
+// Lo que no está en esa tabla se rechaza con nombre: el booleano suelto (`if b`), el literal a la
+// izquierda y las referencias comparadas entre sí.
+func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
+	op, esComp := cond.(joperador)
+	if !esComp {
+		return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida (sobre un booleano javac usa `ifeq`, y eso no lo leimos)",
+			lineaDeExpr(cond))
+	}
+	linea := op.donde.linea
+	invertidas := map[string]struct{ dos, uno byte }{
+		"==": {opIFICMPNE, opIFNE},
+		"!=": {opIFICMPEQ, opIFEQ},
+		"<":  {opIFICMPGE, opIFGE},
+		">=": {opIFICMPLT, opIFLT},
+		">":  {opIFICMPLE, opIFLE},
+		"<=": {opIFICMPGT, opIFGT},
+	}
+	pares, ok := invertidas[op.op]
+	if !ok {
+		return 0, 0, fmt.Errorf("linea %d: el operador %q en una condicion no esta medido", linea, op.op)
+	}
+	if esLiteralNulo(op.der) {
+		d, err := e.exp(op.izq)
+		if err != nil {
+			return 0, 0, err
+		}
+		if len(d) == 0 || d[0] != 'L' {
+			return 0, 0, fmt.Errorf("linea %d: comparar con null algo que no es una referencia (%s) no esta medido", linea, d)
+		}
+		if op.op == "==" {
+			return opIFNONNULL, 1, nil
+		}
+		return opIFNULL, 1, nil
+	}
+	if esLiteralNulo(op.izq) {
+		return 0, 0, fmt.Errorf("linea %d: `null %s ...` con el null a la izquierda no esta medido", linea, op.op)
+	}
+	dizq, err := e.exp(op.izq)
+	if err != nil {
+		return 0, 0, err
+	}
+	if esLiteralEntero(op.der, 0) && esEnteroDesc(dizq) {
+		return pares.uno, 1, nil
+	}
+	// el literal a la izquierda (`0 == a`) no se invierte ni se dobla: javac escribe el literal primero
+	// y usa la misma branquia de dos operandos, leido en el parrafo 52 (`iconst_0; iload_1; if_icmpne`)
+	dder, err := e.exp(op.der)
+	if err != nil {
+		return 0, 0, err
+	}
+	if !esEnteroDesc(dizq) || !esEnteroDesc(dder) {
+		return 0, 0, fmt.Errorf("linea %d: `%s` entre %s y %s: solo se midieron enteros y la referencia contra null", linea, op.op, dizq, dder)
+	}
+	return pares.dos, 2, nil
+}
+
+// branca: el `if` y su `else`, en el orden que escribe javac (parrafo 52): los operandos, el salto con
+// la condicion invertida apuntando al `else` (o al despues si no lo hay), el cuerpo, y el `goto` al
+// final solo cuando el cuerpo no sale ya por su cuenta — medido con `if (a == b) return 1;`, que no lo lleva.
+func (e *emisor) branca(v jif) error {
+	e.marcaLinea(v.donde.linea)
+	op, consume, err := e.condicionBranca(v.cond)
+	if err != nil {
+		return err
+	}
+	if v.entonces == nil {
+		return fmt.Errorf("linea %d: un `if` sin cuerpo no esta medido", v.donde.linea)
+	}
+	otroLado := e.nuevaEtiqueta()
+	e.saltoEmite(op, otroLado, consume)
+	if err := e.stm(v.entonces); err != nil {
+		return err
+	}
+	if v.siNo == nil {
+		e.cierra(otroLado)
+		return nil
+	}
+	if !terminaEnSalida(v.entonces) {
+		final := e.nuevaEtiqueta()
+		e.saltoEmite(opGOTO, final, 0)
+		e.cierra(otroLado)
+		if err := e.stm(v.siNo); err != nil {
+			return err
+		}
+		e.cierra(final)
+		return nil
+	}
+	e.cierra(otroLado)
+	return e.stm(v.siNo)
+}
+
 func (e *emisor) stm(s jstmt) error {
 	switch v := s.(type) {
 	case jstmtExpr:
@@ -1648,7 +1871,7 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		return nil
 	case jif:
-		return fmt.Errorf("linea %d: un `if` no esta medido en este emisor: faltan sus saltos comparados con javap", v.donde.linea)
+		return e.branca(v)
 	}
 	return fmt.Errorf("una sentencia de %T no esta medida", s)
 }
@@ -2028,6 +2251,9 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.siguiente = 0
 	e.codigo = nil
 	e.lineas = nil
+	e.parches = nil
+	e.etiquetas = nil
+	e.siguienteEtiqueta = 0
 	e.prof = 0
 	e.maxProf = 0
 	e.maxLoc = 0
@@ -2036,6 +2262,7 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 
 // codeAttr: el atributo Code con su LineNumberTable, en el orden que javac los escribe.
 func (e *emisor) codeAttr() []byte {
+	e.encadenaGotos()
 	code := u2be(uint16(e.maxProf))
 	code = append(code, u2be(uint16(e.maxLoc))...)
 	code = append(code, u4be(uint32(len(e.codigo)))...)
@@ -2157,6 +2384,23 @@ func terminaEnRetorno(cuerpo []jstmt) bool {
 	if len(cuerpo) == 0 {
 		return false
 	}
-	_, es := cuerpo[len(cuerpo)-1].(jretorno)
-	return es
+	return terminaEnSalida(cuerpo[len(cuerpo)-1])
+}
+
+// terminaEnSalida: la sentencia no deja continuar al final del bloque. Un `if` solo termina si su
+// cuerpo y su `else` terminan: medido en el parrafo 52 con `if (a == 0) { return 6; } else { return 7; }`,
+// del que javac no escribe ninguna salida al final.
+func terminaEnSalida(s jstmt) bool {
+	switch v := s.(type) {
+	case jretorno:
+		return true
+	case jbloque:
+		return terminaEnRetorno(v.sentencias)
+	case jif:
+		if v.siNo == nil {
+			return false
+		}
+		return terminaEnSalida(v.entonces) && terminaEnSalida(v.siNo)
+	}
+	return false
 }
