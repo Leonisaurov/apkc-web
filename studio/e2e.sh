@@ -126,6 +126,56 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
     else
       avisa "sin ANDROID_JAR en el entorno: la pestaña no llego a compilar el proyecto entero"
     fi
+
+    # 4c. el proyecto que la pagina GENERA (clase anonima, @+id y style incluidos), compilado por
+    #     la pestaña, frente al mismo proyecto compilado aqui fuera con el mismo camino todo-en-Go
+    estudio="$TMP/pestana-apk/pestanera-estudio.apk"
+    if [ -f "$estudio" ] && [ -n "${ANDROID_JAR:-}" ]; then
+      base=$TMP/studio-e46; rm -rf "$base"; mkdir -p "$base"
+      AQUI="$AQUI" BASE="$base/proyecto" node -e '
+        const fs = require("fs"), path = require("path");
+        const a = require(path.join(process.env.AQUI, "app.js"));
+        const estado = { name: "Hola apkc", package: "com.hola.apkcstudio", minsdk: "21", targetsdk: "33",
+          hello: "Hello World!", button: true, kotlin: false, libs: false, assets: false, native: false,
+          buttonLabel: "Press me", toast: "Clicked!" };
+        const p = a.buildProject(estado);
+        for (const r of Object.keys(p.files)) {
+          const d = path.join(process.env.BASE, r);
+          fs.mkdirSync(path.dirname(d), { recursive: true }); fs.writeFileSync(d, p.files[r]);
+        }'
+      proyecto=$base/proyecto
+      cd "$proyecto"
+      if ! tcr -j 1 -q -- "$APKC" build --linker go --compiler go --android-jar "$ANDROID_JAR" \
+           --sdk-version 34 --codename 14 --keystore "${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
+           >"$TMP/studio-e46-build.log" 2>&1; then
+        falla "el proyecto generado no compila en nativo"; tail -8 "$TMP/studio-e46-build.log"
+      else
+        # d8 tiene que leer el dex que salio del navegador: es lo mas cerca de ART que hay sin telefono
+        dex=$TMP/studio-e46-dex; rm -rf "$dex"; mkdir -p "$dex"
+        unzip -qo "$estudio" classes.dex -d "$dex"
+        if ! timeout 200 "$BUILD_TOOLS/d8" --release --lib "$ANDROID_JAR" --min-api 21 \
+             --output "$dex" "$dex/classes.dex" >"$TMP/studio-e46-d8.log" 2>&1; then
+          falla "d8 no lee el classes.dex que escribio la pestaña"; tail -5 "$TMP/studio-e46-d8.log"
+        fi
+        for pieza in AndroidManifest.xml resources.arsc res/layout/main.xml classes.dex \
+                     META-INF/MANIFEST.MF META-INF/ANDROID.SF; do
+          a=$(unzip -p "$estudio" "$pieza" | sha256sum | cut -c1-16)
+          b=$(unzip -p build/app.apk "$pieza" | sha256sum | cut -c1-16)
+          [ "$a" = "$b" ] || falla "$pieza difiere entre la pestaña ($a) y nativo ($b)"
+        done
+        "$BUILD_TOOLS/zipalign" -c -p 4 "$estudio" || falla "zipalign rechaza el apk del proyecto generado"
+        if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$estudio" >"$TMP/studio-e46-verify.log" 2>&1; then
+          falla "el apk del proyecto generado no verifica"
+        fi
+        grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-e46-verify.log" || falla "apk generado sin v1"
+        grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-e46-verify.log" || falla "apk generado sin v2"
+        if ! python3 "$ZIPCHECK" "$estudio" >/dev/null 2>&1; then falla "zipcheck rechaza el apk del proyecto generado"; fi
+        "$BUILD_TOOLS/aapt2" dump badging "$estudio" >"$TMP/studio-e46-badging.log" 2>&1 || falla "aapt2 no entiende el apk del proyecto generado"
+        grep -q "package: name='com.hola.apkcstudio'" "$TMP/studio-e46-badging.log" || falla "el apk generado no trae el package de la pagina"
+        avisa "pestaña con el proyecto generado: apk de $(wc -c <"$estudio" | tr -d ' ') bytes, igual entrada por entrada al nativo, dex releido por d8"
+      fi
+      cd "$AQUI"
+    fi
   fi
 else
   avisa "sin APKC_WASM, sin fixture o sin chromium: la pestaña con wasm no se probo"

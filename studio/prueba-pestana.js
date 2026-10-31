@@ -260,6 +260,109 @@ async function conductor() {
     const destinoPestana = path.join(fuera, "pestanera-completa.apk");
     fs.writeFileSync(destinoPestana, apkPestana);
     console.log("  --- el apk compilado dentro de la pestaña es " + destinoPestana);
+
+    // 8. el proyecto que la PROPIA página genera (con la clase anónima del botón, el `@+id` y el
+    // `style`), no la plantilla de create: es el que mide el §42 con javap y el que dexa 6 clases.
+    const generado = await evaluar(`(async () => {
+      const estado = { name: "Hola apkc", package: "com.hola.apkcstudio", minsdk: "21", targetsdk: "33",
+        hello: "Hello World!", button: true, kotlin: false, libs: false, assets: false, native: false,
+        buttonLabel: "Press me", toast: "Clicked!" };
+      const p = buildProject(estado);
+      await hospedador.limpiar("/estudio");
+      for (const ruta of Object.keys(p.files)) {
+        await hospedador.escribir("/estudio/" + ruta, new TextEncoder().encode(p.files[ruta]));
+      }
+      await hospedador.cwd("/estudio");
+      const r = await correr(["build", "--linker", "go", "--compiler", "go",
+        "--android-jar", "/sdk/android.jar", "--sdk-version", "34", "--codename", "14",
+        "--keystore", "/sdk/keystore.p12"]);
+      const datos = await hospedador.bytes("/estudio/build/app.apk");
+      return {
+        codigo: r.codigo, ficheros: Object.keys(p.files).length,
+        clases: /\\d+ fuentes de Java en Go -> (\\d+) clases/.exec(String(r.consola || "")),
+        dexBytes: /-> (\\d+) bytes en build\\/classes\\.dex/.exec(String(r.consola || "")),
+        bytes: datos ? Array.from(datos) : null,
+        consola: String(r.consola || "").slice(-400),
+      };
+    })()`);
+    const apkEstudio = Buffer.from(generado.bytes || [], "uint8");
+    comprueba("la pestaña compila el proyecto que genera la página", generado.codigo === 0,
+      "codigo " + generado.codigo + " sobre " + generado.ficheros + " ficheros, consola: " +
+      JSON.stringify(generado.consola.slice(-220)));
+    comprueba("con la clase anónima son seis clases dexadas", generado.clases && generado.clases[1] === "6",
+      generado.clases ? generado.clases[0] : "sin la linea de clases en la consola");
+    comprueba("el dex del proyecto generado sale en la pestaña", generado.dexBytes && Number(generado.dexBytes[1]) > 2000,
+      generado.dexBytes ? generado.dexBytes[0] : "sin la linea del dex");
+    comprueba("el apk del proyecto generado pesa lo de un apk real", apkEstudio.length > 9000, apkEstudio.length + " bytes");
+    const destinoEstudio = path.join(fuera, "pestanera-estudio.apk");
+    fs.writeFileSync(destinoEstudio, apkEstudio);
+    console.log("  --- el apk del proyecto generado, compilado en la pestaña, es " + destinoEstudio);
+
+    // 9. el jar tambien entra SIN red: el usuario lo elige de su disco y la pagina lo guarda en OPFS.
+    //    Es el camino que reclama el "ni siquiera con conexion" del objetivo; hasta aqui estaba probado
+    //    solo el fetch a /android-jar, que es lo que hace el servidor de pruebas.
+    const antesDelPicker = peticiones.length;
+    const avisoVacio = await evaluar(`(async () => {
+      const r = await hospedador.limpiar("/sdk/android.jar");
+      await decirEstadoJar();
+      return { tipo: r.tipo, error: r.error, aviso: document.getElementById("estado-jar").textContent };
+    })()`);
+    comprueba("borrado el jar la pagina lo dice, no lo suppose", /sin android\.jar/.test(avisoVacio.aviso),
+      JSON.stringify(avisoVacio));
+    const doc = await exec("DOM.getDocument");
+    const elegido = await exec("DOM.querySelector", { nodeId: doc.result.root.nodeId, selector: "#android-jar" });
+    const puesto = await exec("DOM.setFileInputFiles", { files: [JAR_SRC], nodeId: elegido.result.nodeId });
+    comprueba("chromium acepta el android.jar en el input de fichero", !puesto.error && !puesto.result.exceptionDetails,
+      JSON.stringify(puesto).slice(0, 160));
+    const desdeDisco = await evaluar(`(async () => {
+      document.getElementById("usar-android-jar").click();
+      const aviso = document.getElementById("estado-jar");
+      for (let i = 0; i < 160; i++) {
+        if (/26361808/.test(aviso.textContent)) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      return { aviso: aviso.textContent, guardado: !!(await hospedador.leer("/sdk/android.jar")).bytes };
+    })()`);
+    const peticionesNuevo = peticiones.slice(antesDelPicker);
+    comprueba("el jar elegido de disco queda en OPFS con su tamano", /26361808 bytes/.test(desdeDisco.aviso) && desdeDisco.guardado,
+      JSON.stringify(desdeDisco.aviso));
+    comprueba("entrar el jar desde el disco no hace ni una peticion",
+      !peticionesNuevo.some((u) => u.includes("/android-jar")),
+      peticionesNuevo.length + " peticiones en el tramo: " + peticionesNuevo.slice(0, 3).join(", "));
+    const sinConexion = await evaluar(`(async () => {
+      await hospedador.limpiar("/proyecto/build");
+      await compilarDelTodo();
+      const datos = await hospedador.bytes("/proyecto/build/app.apk");
+      return { codigo: document.getElementById("ultimo-codigo").textContent, bytes: datos ? datos.length : 0 };
+    })()`);
+    comprueba("con el jar del disco la pestaña vuelve a compilar el apk", sinConexion.codigo === "0" && sinConexion.bytes > 5000,
+      "codigo " + sinConexion.codigo + ", " + sinConexion.bytes + " bytes");
+
+    // 9b. y el jar se eligio UNA VEZ: recargar la pagina no lo borra, y se puede volver a compilar
+    const antesRecarga = peticiones.length;
+    await exec("Page.navigate", { url: URL_PAGINA });
+    for (let i = 0; i < 40; i++) {
+      try { if (await evaluar("!!document.getElementById('codigo') && typeof correr === 'function'")) break; } catch (e) { /* */ }
+      await esperar(300);
+    }
+    const recargada = await evaluar(`(async () => {
+      const datos = await hospedador.bytes("/sdk/android.jar");
+      await hospedador.limpiar("/proyecto/build");
+      await compilarDelTodo();
+      const apk = await hospedador.bytes("/proyecto/build/app.apk");
+      return {
+        aviso: document.getElementById("estado-jar").textContent, jar: datos ? datos.length : 0,
+        codigo: document.getElementById("ultimo-codigo").textContent, bytes: apk ? apk.length : 0,
+      };
+    })()`);
+    comprueba("tras recargar la página el jar sigue en OPFS sin pedirlo otra vez",
+      /26361808 bytes/.test(recargada.aviso) && recargada.jar === 26361808 &&
+      !peticiones.slice(antesRecarga).some((u) => u.includes("/android-jar")),
+      "aviso " + JSON.stringify(recargada.aviso) + ", jar " + recargada.jar + ", peticiones del tramo " +
+      peticiones.slice(antesRecarga).length);
+    comprueba("la página recargada compila otra vez con el jar guardado",
+      recargada.codigo === "0" && recargada.bytes > 5000,
+      "codigo " + recargada.codigo + ", " + recargada.bytes + " bytes");
   } else {
     console.log("  --- sin ANDROID_JAR en el entorno: no se prueba el build completo en la pestaña");
   }

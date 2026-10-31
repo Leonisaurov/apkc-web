@@ -12,11 +12,12 @@
   <p class="sub">
     Genera un proyecto de app <em>de verdad</em> para <code>apkc</code> (sin Gradle),
     te da los comandos, traduce lo que <code>apkc</code> responde y anota en qué paso
-    te atascaste. Y desde la sección 2 <strong>ejecuta apkc aquí dentro</strong>:
-    <code>apkc.wasm</code> con el proyecto en OPFS, sin server. Lo que sigue sin poder
-    hacerse en el navegador es <code>build</code> — <code>aapt2</code>, <code>javac</code> y
-    <code>d8</code> son programas externos y <code>js/wasm</code> no tiene
-    <code>fork/exec</code>; el botón lo muestra tal cual.
+    te atascaste. Y desde la sección 2 <strong>compila aquí dentro</strong>:
+    <code>build --linker go --compiler go</code> enlaza los recursos, saca el <code>.class</code> de tu
+    fuente, lo dexa y firma <strong>sin levantar ningún proceso</strong>, con <code>apkc.wasm</code> y el
+    proyecto en OPFS, sin server ni conexión. Lo que sigue sin poder hacerse es el <code>build</code> de
+    siempre: <code>aapt2</code>, <code>javac</code> y <code>d8</code> son programas externos y
+    <code>js/wasm</code> no tiene <code>fork/exec</code>; el botón «intentar compilar» lo muestra tal cual.
   </p>
 </header>
 
@@ -77,7 +78,7 @@
       <button id="crear-aqui">crear el proyecto aquí (apkc create)</button>
       <button id="nuevo-fichero">fichero nuevo</button>
       <button id="guardar-fichero">guardar (Ctrl+S)</button>
-      <button id="compilar-aqui">intentar compilar (falla hoy)</button>
+      <button id="compilar-aqui">intentar compilar con aapt2/javac/d8 (falla)</button>
       <span id="estado-pestana" class="nota"></span>
       <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
     </div>

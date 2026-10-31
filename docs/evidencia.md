@@ -2113,7 +2113,8 @@ sh -c 'cd studio && APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm \
 - `compilarDelTodo()` deja `ultimo-codigo` en **`0`**, `finished in 5.08793472s` (`[timing] total 5.022s`,
   de los que `961ms` son empaquetar y firmar) y el apk en `/proyecto/build/app.apk`: **9141 bytes**;
 - las **21** comprobaciones de la prueba de pestaña pasan, cero fallos, y las **12 peticiones** registradas
-  son todas del propio origen: cero peticiones ajenas.
+  son todas del propio origen: cero peticiones ajenas. (La prueba creció a **32 comprobaciones** y **18
+  peticiones** con las cuatro secciones del §46, y sigue sin salir de su origen.)
 
 **Los oráculos de fuera, sobre el fichero que salió de la pestaña** (`studio/e2e.sh` lo pide solo, bloque 4b):
 
@@ -2151,4 +2152,85 @@ Con esto el objetivo del repo está cubierto del lado del cliente: `create`, edi
 compilar Java, dexar, empaquetar y firmar, todo dentro de la pestaña y sin conexión. Lo que sigue siendo
 frontera, y no falla silenciosamente: el emisor de `.class` rechaza por nombre lo que no mide (§41, §42) y
 el enlazador rechaza los calificadores de carpeta y los recursos que no sean `values`/`layout` (§38).
+
+## 46. También el proyecto que la página *genera*: la clase anónima, el `@+id` y el `style`, dentro de chromium
+
+El §45 compiló la plantilla de `apkc create`, que es el camino fácil: dos fuentes, `MainActivity` sin clase
+anónima y una `R` con dos tipos. Lo que la página **escribe por su cuenta** cuando se activa el botón es el
+proyecto del §42: `onCreateOptionsMenu` con `new MenuItem.OnMenuItemClickListener() { ... }`,
+`Toast.makeText(MainActivity.this, …)`, `@+id/pulsar` en el layout y `@style/AppTheme` en el manifiesto. Ese
+es el que estaba medido con `javap` y con `d8` **en node y en el hospedador con forma de navegador**, pero no
+en chromium. Se cableó como comprobación 8 de `studio/prueba-pestana.js`: la propia página llama a
+`buildProject(estado)` (el mismo generador del zip), escribe los cinco ficheros en OPFS bajo `/estudio` y
+corre el build sin procesos.
+
+```sh
+sh -c 'cd studio && APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm \
+  APK_EJEMPLO=$PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio/build/app.apk \
+  KS_EJEMPLO=$HOME/.android/debug.keystore \
+  ANDROID_JAR=$HOME/Android/platforms/android-34/android.jar node prueba-pestana.js'
+```
+
+**Dentro de chromium**: cinco ficheros escritos, `codigo 0`, y en la consola de la pestaña las dos líneas que
+se esperaban — `[build] 2 fuentes de Java en Go -> 6 clases` y `[build] 6 clases -> 2392 bytes en
+build/classes.dex`, **los mismos 2392 bytes que midieron el §42 y el §44** — con `[timing] package and sign
+go 788ms`, `total 4.066s` y `finished in 4.067974912s` (en la corrida del gate fueron `546ms` y `3.875s`:
+el tiempo cambia, los bytes no). El apk sale de **9832 bytes**. La prueba de pestaña queda en **32
+comprobaciones**, cero fallos, con **18 peticiones** y ninguna fuera de su origen.
+
+**Y el jar entra sin red, por el camino del usuario (comprobación 9)**: se borra `/sdk/android.jar` (la
+página pasa a decir «sin android.jar en esta pestaña todavía»), se pone el fichero real en el
+`<input type="file">` con `DOM.setFileInputFiles` de CDP, se pulsa `#usar-android-jar` y el aviso queda en
+`hay un android.jar de 26361808 bytes en esta pestaña (/sdk/android.jar)` con **cero peticiones** en ese
+tramo; después `compilarDelTodo()` vuelve a dar `codigo 0` y el mismo apk de 9141 bytes del §45. Hasta aquí
+el «ni siquiera sin conexión» solo estaba probado por el `fetch` a `/android-jar` del servidor de pruebas;
+así lo está por el selector de fichero, que es lo que hace alguien con el avión puesto.
+
+**Y se elige una vez, no una por sesión (comprobación 9b)**: recargada la página con `Page.navigate`, el
+aviso sigue diciendo `hay un android.jar de 26361808 bytes en esta pestaña (/sdk/android.jar)`, `hospedador`
+lee los 26361808 bytes de OPFS y en todo el tramo de recarga no aparece ni una petición a `/android-jar`
+(6 peticiones, todas de assets de la propia página); el build vuelve a salir `codigo 0` con los mismos 9141
+bytes del §45.
+
+**Frente al nativo, mismo proyecto mismo camino** (`buildProject` escrito a disco con node y
+`apkc build --linker go --compiler go`, 733 ms): también **9832 bytes**, y `unzip -p | sha256sum` entrada por
+entrada:
+
+| entrada | sha256 (16 primeros), pestaña = nativo | bytes |
+| --- | --- | --- |
+| `AndroidManifest.xml` | `8d54e26aa55a9833` | 1932 |
+| `classes.dex` | `26da19adb481c95b` | 2392 |
+| `resources.arsc` | `f1a468123da12d9e` | 936 |
+| `res/layout/main.xml` | `c2a0f09d5610287d` | 784 |
+| `META-INF/ANDROID.SF` | `305475898b29d5de` | 500 |
+| `META-INF/MANIFEST.MF` | `a469730c65d2a806` | 376 |
+
+Los oráculos de fuera lo aprueban: `apksigner verify --verbose --min-sdk-version 21` → v1 `true` y v2 `true`
+(1 firmante); `zipalign -c -p 4` → `rc 0`; `zipcheck.py` → 7 entradas coherentes; `aapt2 dump badging` →
+`package: name='com.hola.apkcstudio' versionCode='1' versionName='0.1' platformBuildVersionName='14'
+platformBuildVersionCode='34'` con `minSdkVersion:'21'` y `targetSdkVersion:'33'`.
+
+**Y un oráculo que no pasa por nuestro código**: el `classes.dex` que escribió el navegador lo vuelve a leer
+`d8` (R8, la herramienta de la cadena oficial) con `rc 0`:
+
+```sh
+unzip -qo $PREFIX/tmp/pestana-apk/pestanera-estudio.apk classes.dex -d $PREFIX/tmp/e46-d8
+$BUILD_TOOLS/d8 --release --lib $HOME/Android/platforms/android-34/android.jar --min-api 21 \
+  --output $PREFIX/tmp/e46-d8 $PREFIX/tmp/e46-d8/classes.dex
+#  rc 0, 2076 bytes (en `--release` recorta lo que nadie usa, por eso baja de 2392)
+```
+
+Con esto `studio/e2e.sh` pide tres cosas más (bloque 4c): que `d8` lea el dex del navegador, que las seis
+entradas comparadas coincidan con el nativo y que el apk del proyecto generado pase `apksigner`, `zipalign`,
+`zipcheck` y `aapt2`.
+
+**Señales de que el sistema tendría con qué arrancar, sin teléfono de por medio**: `aapt2 dump badging` del
+apk de la pestaña declara el componente lanzable — `launchable-activity: name='com.hola.apkcstudio.MainActivity'
+label='Hola apkc'` — y en el `classes.dex` que escribió el navegador están las dos clases que ese componente
+necesita, `Lcom/hola/apkcstudio/MainActivity;` y su anónima `Lcom/hola/apkcstudio/MainActivity$1;`, más el
+interfaz del framework al que se enlaza la llamada (`Landroid/view/MenuItem$OnMenuItemClickListener;`), que
+es justamente `invokeinterface` del §42. Comprobado con `unzip -p … classes.dex | strings`.
+
+**Lo que sigue sin medirse es el hecho 2 del objetivo**: instalar y ver arrancar la
+actividad, que necesita un teléfono y no depende de ningún código.
 

@@ -139,6 +139,16 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `aapt2 dump badging`; 12 peticiones y ninguna fuera del origen. Cuesta dos fallos del hospedador arreglarlo
   (carrera de arranque en `hospedador.js`, directorios intermedios que `fs-fragmento.js` no creaba en
   memoria), y el aviso de «intermitencia de OPFS» del §39 era en realidad el primero.
+- **Y también el proyecto que la página genera** (§46): con la clase anónima del botón, el `@+id` y el
+  `@style`, chromium escribe los cinco ficheros en OPFS con el propio `buildProject`, saca **seis clases y
+  2392 bytes de dex** (los mismos del §42 y del §44) y un apk de 9832 bytes **igual entrada por entrada al
+  nativo**, y `d8` releee ese dex con `rc 0`. Lo pide `studio/e2e.sh` (bloque 4c).
+- **El `android.jar` entra sin red por el camino del usuario y dura** (§46, comprobaciones 9 y 9b): se le
+  pone en el `<input type="file">` con `DOM.setFileInputFiles` de CDP, la página lo guarda en OPFS con
+  **cero peticiones** en ese tramo, y tras recargar la página sigue ahí (26361808 bytes, sin volver a
+  pedirlo) y el build vuelve a salir `0`. La prueba de pestaña llega a **32 comprobaciones**.
+- **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
+  arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
   Go, dex en Go, empaquetado y firma en Go. Nativo en frio: 255 ms y `build/app.apk` de 9868 bytes, que
   `apksigner` (v1 y v2), `zipalign -c -p 4`, `aapt2 dump badging`, `aapt2 dump resources` y `zipcheck.py`

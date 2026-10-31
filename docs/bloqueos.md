@@ -68,6 +68,18 @@ lectores de keystore propios (`pkcs12.go`, `jks.go`). Medido aquí: ese bloque c
 en un hospedador sin Node. Quedan en el backend JVM tres cosas concretas —un `.aab`, un keystore
 JCEKS, y un `minSdkVersion` < 18— que no son del navegador.
 
+**Actualizado al cerrar las fases (§40 a §46)**, porque este documento se escribió antes del trabajo: de
+los cuatro programas que apkc lanza, **tres tienen sustituto en Go y corren dentro de chromium** para el
+subconjunto medido — `javac` lo sustituye `apkc/javaemisor.go` con `apkc/compilar.go` (§40 a §43), `d8` lo
+sustituye el dexer de la Fase 2G (§20 a §23, y `d8` releee ese dex con `rc 0` en §46) y `aapt2` lo sustituye
+`build --linker go` (§28 a §38). El cuarto, `zipalign`, ya no hacía falta por el párrafo de arriba. El coste
+que se argumenta en los puntos 1 a 4 sigue escrito tal cual se midió: es la razón por la que se hizo en este
+orden, no una predicción pendiente.
+
+**Lo que de verdad sigue bloqueando el navegador**: `kotlinc` (26,4 s incluso nativo, y es compilador
+ajeno), y el `build` sin banderas, que es el que llama a las herramientas externas. Y el subconjunto de Java
+que no está medido: el emisor lo rechaza por nombre (§41, §42) en vez de improvisar.
+
 ## Lo que la ambición no puede solucionar aunque porte todo
 
 - **Memoria y tamaño**: `android.jar` del API 34 pesa decenas de MB y los demos reales son de 142 MB
@@ -81,4 +93,7 @@ JCEKS, y un `minSdkVersion` < 18— que no son del navegador.
   (`docs/evidencia.md` §11).
 - **Lo que la decisión NO quita**: sigue sin haber quien escriba el `.dex`, el AXML y
   `resources.arsc` por nosotros. Al negarnos el runtime prestado, el trabajo de las fases 2G, 1G y 3
-  pasa a ser entero nuestro; es más lento y es el único camino que cumple "sin conexión".
+  pasa a ser entero nuestro; es más lento y es el único camino que cumple "sin conexión". *(Escrito antes
+  de hacerlas: hoy ese trabajo está hecho y medido —§20 a §23, §28 a §38 y §40 a §46—, y lo que queda de
+  este punto es el tamaño: el `android.jar` de 26 MB y los ~9,5 MB de `apkc.wasm` siguen viajando a la
+  pestaña.)*

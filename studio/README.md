@@ -34,29 +34,35 @@ cabeceras COOP/COEP que OPFS exige (por `file://` no arranca ni el worker de mó
 ```sh
 sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
 sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" node servidor.js'   # http://127.0.0.1:8787/
-# y la prueba que lo conduce todo, con una apk y un keystore de ejemplo:
+# y la prueba que lo conduce todo, con una apk, un keystore y el android.jar del API 34 de ejemplo:
 sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
   APK_EJEMPLO="$PREFIX/tmp/sign-probe/app/build/app.apk" \
-  KS_EJEMPLO="$HOME/.android/debug.keystore" node prueba-pestana.js'
+  KS_EJEMPLO="$HOME/.android/debug.keystore" \
+  ANDROID_JAR="$HOME/Android/platforms/android-34/android.jar" node prueba-pestana.js'
+# sin ANDROID_JAR la prueba lo avisa y no comprueba el build completo (queda en crear/editar/recargar/firmar)
 ```
 
 Qué hace de verdad, y qué no:
 
 - **hace**: `apkc create`, editar el fuente (con resaltado propio, sin dependencias), conservarlo
-  entre sesiones en OPFS, y `apkc sign` — una apk firmada v1+v2 que `apksigner`, `zipalign -c -p`,
-  `jarsigner` y `zipcheck.py` aceptan por fuera. El keystore se elige del disco y no sale de la
-  pestaña.
-- **no hace**: `apkc build`. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
-  arrancan; el botón lo demuestra y apkc lo dice con su texto:
+  entre sesiones en OPFS, `apkc sign` — una apk firmada v1+v2 que `apksigner`, `zipalign -c -p`,
+  `jarsigner` y `zipcheck.py` aceptan por fuera — y **compilar el proyecto entero** con
+  `build --linker go --compiler go`: enlazar los recursos, sacar el `.class`, dexar y firmar, todo dentro
+  de la pestaña y sin levantar un proceso. El keystore y el `android.jar` se eligen del disco y no salen de
+  la pestaña; el jar se guarda en OPFS una vez y sobrevive a recargar. Medido en `docs/evidencia.md` §45 y
+  §46: el apk que sale es **igual entrada por entrada** al del mismo comando en el binario nativo, y `d8`
+  releee el dex que escribió el navegador.
+- **no hace**: el `build` de siempre. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
+  arrancan; el botón «intentar compilar con aapt2/javac/d8» lo demuestra y apkc lo dice con su texto:
   `[build] aapt2 compile never started: pipe: not implemented on js`.
 
 | Fichero | Qué es |
 | --- | --- |
-| `servidor.js` | estáticos + COOP/COEP, sirve `/apkc.wasm` (de `APKC_WASM`) y `/wasm_exec.js` (del `GOROOT`); ningún binario versionado |
+| `servidor.js` | estáticos + COOP/COEP, sirve `/apkc.wasm` (de `APKC_WASM`), `/wasm_exec.js` (del `GOROOT`) y `/android-jar` (de `ANDROID_JAR`), solo para la prueba; ningún binario versionado |
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma y comprueba 15 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco y comprueba 32 cosas |
 
 `e2e.sh` incluye la pestaña cuando `APKC_WASM` apunta a un binario wasm; si no, lo avisa en vez de
 darla por probada.
