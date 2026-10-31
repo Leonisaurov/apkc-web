@@ -161,6 +161,9 @@ type jmetodo struct {
 	esPublico  bool
 	esFinal    bool
 	linea      int
+	// lineaFin es la llave que cierra el cuerpo: javac anota ahi el `return` implicito de un metodo void,
+	// medido en el parrafo 40 (line 16 en la plantilla, que es donde esta el `}` de onCreate).
+	lineaFin int
 }
 
 // jclas es una clase, anidada o no. interior guarda las anidadas en el orden del fuente, y nombreExterno
@@ -175,6 +178,7 @@ type jclas struct {
 	abstracta     bool
 	final         bool
 	esPublica     bool
+	esEstatica    bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
 	linea         int
 	paquete       string
 	imports       []string
@@ -622,6 +626,13 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 				return nil, fmt.Errorf("linea %d: una clase anidada abstracta no esta medida", linea)
 			}
 			anidada, err := a.clase(c)
+			if anidada != nil {
+				// los modificadores los consumio este bucle, no la declaracion: sin esto la anidada perderia
+				// el `public static final` que javac deja en su ClassFile (0x0031) y en el InnerClasses
+				anidada.esPublica = anidada.esPublica || esPublico
+				anidada.esEstatica = anidada.esEstatica || esEstatico
+				anidada.final = anidada.final || esFinal
+			}
 			return anidada, err
 		default:
 			goto cuerpo
@@ -710,6 +721,11 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 		return m, err
 	}
 	m.cuerpo = cuerpo
+	// bloque dejo atras la llave de cierre: el token anterior es ese `}`, y su linea es la que javac
+	// anota en el `return` implicito del metodo (parrafo 40)
+	if a.i > 0 && a.i <= len(a.toks) {
+		m.lineaFin = a.toks[a.i-1].donde.linea
+	}
 	return m, nil
 }
 

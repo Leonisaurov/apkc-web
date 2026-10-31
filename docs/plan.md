@@ -184,14 +184,30 @@ dex escrito a medias no es un compilador.
 sin `javac` y sin conexión. Oráculo: `javap -c -p` sobre los `.class` que produce el `javac` nativo del
 JDK 21 del teléfono, método por método e instrucción por instrucción.
 
-- **1G.1** Qué Java necesita de verdad el proyecto del `studio/`: el árbol de sintaxis que cubre
-  (declaraciones, `@Override`, `new View.OnClickListener() { ... }`, llamadas, cadenas, `R.id.*`).
-  Se lista **leyendo la plantilla**, no adivinando, y se escribe la lista antes del código.
-- **1G.2** Comprobación de tipos mínima contra el `android.jar` del API 34 — aquí está la parte que no
-  es un traductor: hace falta resolver símbolos contra las firmas de 25 MB de SDK. Medir si conviene
-  recortar el `android.jar` (y qué se pierde).
-- **1G.3** Emisión del bytecode: `method_info`, `Code`, tabla de excepciones, atributos que `d8` mira.
-- **1G.4** El `android.jar` entero viaja a la pestaña o se recorta: decisión con su número (fase 4.4).
+- **1G.1 HECHA** — la lista se leyó de la plantilla y de la muestra del `studio/`, no se adivinó: paquete,
+  imports con estrella, `class` con `extends`, `@Override` (que no deja huella en el `.class`, medido en el
+  §40), métodos con parámetros, `super.<metodo>()`, llamadas sin receptor, llamadas sobre un tipo
+  (`Toast.makeText`) y sobre un valor (`menu.add`), `new Tipo(args)` y `new Tipo(args) { ... }`, literales de
+  cadena y entero (hexo incluido), `this`, `Tipo.this`, acceso encadenado (`R.layout.main`), `return`. El
+  léxico y el analizador están en `apkc/javafuente.go` con cinco pruebas; lo que no está medido se rechaza
+  con nombre del fuente y su línea.
+- **1G.2 HECHA para el subconjunto** — la resolución de tipos no recorta el `android.jar`: se lee el índice
+  central una vez (`abrirBuscador`) y cada entrada `.class` que hace falta se descomprime y se pasa por el
+  lector de la Fase 2, con caché (`buscadorDeClases`). Sobre la plantilla del §40 el emisor abre **cuatro**
+  entradas del jar (`Activity`, `Bundle`, y las dos `R` propias vienen del otro fuente). El tamaño del jar
+  sigue siendo el problema de 1G.4, no de ésta.
+- **1G.3 HECHA para la plantilla** — `apkc/javaemisor.go` escribe el pool, los `field_info` con
+  `ConstantValue`, los `method_info` con `Code` y `LineNumberTable`, el `SourceFile` y el `InnerClasses`, y
+  sintetiza el `<init>`. Oráculo doble y medido en el §41: `javap -c -p` sobre lo que escribimos imprime las
+  mismas líneas que sobre lo que escribe javac, y **el dex de nuestras clases es byte a byte idéntico al dex
+  de las clases de javac** (mismo lector, mismo dexer, 1288 = 1288, cero diferencias).
+- **1G.3b PENDIENTE — la clase anónima.** Es lo único que la muestra del `studio/` pide y el emisor no hace:
+  javac le añade el campo `this$0`, un constructor con la captura del exterior y `MainActivity.this` como
+  `aload_0; getfield this$0`. Tiene su medición propia (el `javap` de `MainActivity$1.class`) antes de
+  escribirse; mientras, el emisor la rechaza con nombre.
+- **1G.4** El `android.jar` entero viaja a la pestaña o se recorta: decisión con su número (fase 4.4). Con
+  1G.2 resuelta como está, el jar solo hace falta **en tiempo de compilación**, y la página puede pedirlo
+  una vez y guardarlo en OPFS: es un problema de 26 MB de descarga única, no de código.
 
 **Mata la fase**: el momento en que el subconjunto deje de ser un subconjunto honesto: si para
 aceptar el fuente hay que implementar la semántica completa de Java (sobrecarga, inferencia,

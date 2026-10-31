@@ -129,6 +129,17 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   entiende. El portero rechaza con nombre lo no medido: cualquier calificador (`res/layout-es`), recursos
   que no sean values/layout, subcarpetas, no-XML, `<permission>` y una version de platform no medida.
   **`javac` y `d8` sí se ejecutan** en ese camino: lo que ya no se ejecuta es aapt2.
-- **Quedan dos piezas para el objetivo**: la Fase 1G (escribir `javac` en Go) y el cableado de la página.
+- **Quedan dos piezas para el objetivo**: la clase anónima del emisor de Java (1G.3b: `this$0` y la
+  captura, con su medición `javap` propia) y el cableado de la página para que el editor maneje
+  `link` + la compilación de Java + `dex` + `sign` dentro de la pestaña.
+- **El emisor de `.class` en Go** (rama `web`, parrafos 40 y 41; aun **sin comando**, es funcion de libreria
+  con sus tests). El analizador (`apkc/javafuente.go`) lee el subconjunto de Java que necesita la pagina, con
+  sus cinco tests, y el emisor (`apkc/javaemisor.go`) escribe el `.class`: resuelve los nombres contra el
+  `android.jar` (solo las entradas que hacen falta, leidas por el lector de la Fase 2), dobla las constantes
+  `static final int` como javac, sintetiza el `<init>` y saca `SourceFile` + `InnerClasses`. **El oraculo es
+  doble y paso las dos veces**: `javap -c -p` sobre nuestras clases imprime las mismas lineas que sobre las
+  de javac 21, y el `classes.dex` que sale de las unas es identico byte a byte al que sale de las otras (1288
+  bytes, cero diferencias, firma incluida). Version emitida 52; la clase anonima y el `if` se rechazan con
+  nombre.
 - Una apk mínima no se puede firmar en el cliente sin `R`: las 4 clases `R*` del recuento las genera
   `aapt2`, así que **2G y 3 van atadas** aunque se midan por separado.

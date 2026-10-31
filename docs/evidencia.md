@@ -1738,3 +1738,139 @@ bytes**. Eso cambia el diagnóstico que estaba escrito (`create` falla a veces):
 genera el proyecto, esta en el **persistido** —se consulta el árbol antes de que el contenido este
 escrito—, y por eso es intermitente y por eso la comprobacion falla al recargar y no al crear. Queda
 anotado con su salida, no como sospecha; reproduce una de cada varias corridas y pasa en la siguiente.
+
+## 40. El `.class` que hay que escribir: la plantilla de `apkc create`, medida con `javap -v -p`
+
+Objetivo de la Fase 1G, medido antes de escribir el emisor. El fuente es la plantilla tal cual la genera
+`apkc create` (`MainActivity.java`, 17 líneas) y la `R.java` que escribe **nuestro** enlazador de la
+Fase 3, con `com.hola.j1g` como paquete:
+
+```sh
+$PREFIX/tmp/apkc-gate create $PREFIX/tmp/j1g/proyecto           # plantilla, con las respuestas al prompt
+cd $PREFIX/tmp/j1g/proyecto && $PREFIX/tmp/apkc-gate link \
+  --android-jar $HOME/Android/platforms/android-34/android.jar --sdk-version 34 --codename 14
+$PREFIX/lib/jvm/java-21-openjdk/bin/javac -nowarn -d $PREFIX/tmp/j1g/classes \
+  -classpath $HOME/Android/platforms/android-34/android.jar \
+  src/com/hola/j1g/R.java src/com/hola/j1g/MainActivity.java     # rc 0
+$PREFIX/lib/jvm/java-21-openjdk/bin/javap -J-Xmx256m -v -p -classpath $PREFIX/tmp/j1g/classes \
+  com.hola.j1g.MainActivity com.hola.j1g.R 'com.hola.j1g.R$layout'
+```
+
+`javac` del JDK 21 del teléfono deja **cuatro** clases: `MainActivity.class` de 445 bytes, `R.class` de
+324, `R$layout.class` de 323 y `R$style.class` de 325. Todas con `major version: 65` y
+`flags: (0x0021) ACC_PUBLIC, ACC_SUPER` (la `R` añade `ACC_FINAL`, o sea `0x0031`).
+
+El `onCreate` completo, que es el cuerpo que hay que emitir:
+
+```
+  public void onCreate(android.os.Bundle);
+    descriptor: (Landroid/os/Bundle;)V
+    flags: (0x0001) ACC_PUBLIC
+    Code:
+      stack=2, locals=2, args_size=2
+         0: aload_0
+         1: aload_1
+         2: invokespecial #7                  // Method android/app/Activity.onCreate:(Landroid/os/Bundle;)V
+         5: aload_0
+         6: ldc           #13                 // int 2130771968
+         8: invokevirtual #14                 // Method setContentView:(I)V
+        11: return
+      LineNumberTable:
+        line 14: 0
+        line 15: 5
+        line 16: 11
+```
+
+y el `<init>` que **javac sintetiza** (en el fuente no hay constructor escrito), con su tabla de líneas
+apuntando a la línea de la declaración de clase:
+
+```
+  public com.hola.j1g.MainActivity();
+    Code:
+      stack=1, locals=1, args_size=1
+         0: aload_0
+         1: invokespecial #1                  // Method android/app/Activity."<init>":()V
+         4: return
+      LineNumberTable:
+        line 11: 0
+```
+
+Cuatro cosas se leyeron aquí y no en un manual:
+
+- **`setContentView` se resuelve contra la clase actual.** `#14 = Methodref #15.#16` y `#15 = Class
+  com/hola/j1g/MainActivity`, aunque el método se declara en `android.app.Activity` y `javap` lo imprime
+  sin prefijo de clase. Del camino de superclases se toma la **descripción** (`(I)V`), no el dueño de la
+  referencia. `super.onCreate` es lo contrario: `#7 = Methodref #2.#8` con `#2 = Class
+  android/app/Activity`, porque ahí el receptor está escrito.
+- **`R.layout.main` no es un `getstatic`.** Sale `#13 = Integer 2130771968` (`0x7f010000`) y un `ldc` de
+  un byte de índice: javac dobla en el llamador la constante de compilación. En la `R$layout` ese mismo
+  valor viaja como atributo del campo —`ConstantValue: int 2130771968`, `flags: (0x0019) ACC_PUBLIC,
+  ACC_STATIC, ACC_FINAL`— y **no** deja método de inicialización estática: la clase tiene un solo método,
+  el `<init>` sintetizado contra `java/lang/Object`.
+- **`@Override` no deja huella.** `attributes: 2` en `MainActivity` (SourceFile e InnerClasses) y ningún
+  atributo de anotaciones en los métodos: la anotación se puede descartar sin más. La `R` tiene tres
+  atributos porque además lleva `NestMembers` (`com/hola/j1g/R$style`, `com/hola/j1g/R$layout`), y cada
+  anidada tiene `NestHost`; eso es de Java 11 y **no viaja en la versión 52** que emite este fork.
+- **Las líneas de la `LineNumberTable` son las del fuente**, contadas como las cuenta javac: la 11 es
+  `public class MainActivity extends Activity {`, la 14 `super.onCreate(...)`, la 15 `setContentView(...)`
+  y la 16 el `}` que cierra el método. El pool de `MainActivity` trae `#11 = Class com/hola/j1g/R$layout`
+  y `#27 = Utf8 layout` solo por el `InnerClasses`, no por el código.
+
+Con esto el emisor escribe la **versión 52** (Java 8): los 65 de javac 21 no aportan nada que el dexer o
+`d8` necesiten, y 52 es la que este fork ya lee y dexa. El oráculo de la fase es el `javap -c -p` textual
+de arriba, más abajo, y el dex que sale de ahí.
+
+## 41. El `.class` escrito en Go: `javap` lo lee igual que el de javac, y el dex sale byte a byte idéntico
+
+`apkc/javaemisor.go` emite las cuatro clases del parrafo 40. Dos oráculos; el segundo es el que cierra la
+prueba.
+
+```sh
+# vuelco del emisor (prueba auxiliar, borrada despues de medir) y javap sobre lo que escribe
+sh -c 'cd apkc && go test -count=1 -timeout 120s -run TestVuelcaParaJavap .'
+J=$PREFIX/lib/jvm/java-21-openjdk/bin/javap
+for k in MainActivity Rlayout R; do
+  $J -J-Xmx256m -c -p -classpath $PREFIX/tmp/j1g/ours    "com.hola.j1g.$k" > a.txt
+  $J -J-Xmx256m -c -p -classpath $PREFIX/tmp/j1g/classes "com.hola.j1g.$k" > b.txt
+  diff a.txt b.txt
+done   # Rlayout es R$layout, con el nombre entre comillas
+```
+
+**Primer oráculo**: `javap -c -p` sobre nuestras clases imprime **las mismas líneas de desensamblaje** que
+sobre las de javac en las cuatro clases. Las únicas diferencias del `diff` son espacios de alineación de la
+columna de comentarios, porque el índice de pool que javac escribe en dos dígitos aqui es de uno.
+
+**Segundo oráculo**, dentro de la suite (`TestEmisorDexaLoQueDexaJavac`): las cuatro clases de javac viajan
+como base64 en el test, y el test dexa las nuestras y las de javac con `dexDeClases`. **El dex sale idéntico
+byte a byte** (1288 = 1288, cero bytes distintos), incluidas la firma SHA-1 y la `checksum` del encabezado,
+que son lo primero que se rompe cuando el contenido difiere. No queda nada que comprobar del significado de
+nuestros `.class`: el mismo lector, el mismo dexer y el mismo resultado que produce `javac` en el teléfono.
+
+Tamaños: los nuestros son 380, 298, 304 y 306 bytes frente a los 445, 324, 323 y 325 de javac. La diferencia
+es la versión 52 contra 65 (el `NestMembers`/`NestHost` de 8 bytes por clase y las entradas de pool que
+javac interna para escribirlos) y nada más: el `Code` es el mismo.
+
+Tres defectos que solo aparecieron comparando con el de fuera, no con un manual:
+
+- **El índice del pool estaba desplazado un puesto.** `agregar` devolvía `len(entradas) + 1` después de
+  añadir, o sea que la primera entrada se llamaba 2 a sí misma: cada `CONSTANT_Class` apuntaba a su propio
+  índice en vez de a su `Utf8`. Nuestro lector lo pasaba; **javap lo paró con un mensaje exacto**:
+  `unexpected entry at #3 -- expected tag 7, found 1`. Con el índice correcto el conteo sigue siendo
+  `última posición + 1`.
+- **El `<init>` sintetizado va escrito primero.** javac pone el constructor antes que los demás métodos
+  (medido: `methods: 2`, el primero `<init>`); emitirlo al revés cambiaba el orden de los `class_data` y
+  saltaba el test de igualdad.
+- **Doblar una constante no borra la referencia al tipo.** `R.layout.main` sale `ldc int` sin `getstatic`, y
+  por eso el emisor no escribía ninguna `Class` de `R$layout`: el `InnerClasses` de MainActivity salía
+  vacío. javac sí deja `#11 = Class com/hola/j1g/R$layout` en el pool **solo por el atributo** (medido en el
+  §40), así que la mención se registra al resolver la cadena de nombres, aunque el código no la use.
+
+Y dos reglas de formato que conviene tener escritas porque el código las hace a mano: la mágica es
+`CA FE BA BE` (no `CAFED00D`, que es como la nombra el estándar), y `ldc` lleva el índice en **un byte** —
+a partir de 256 entradas hay que pasar a `ldc_w`, y mientras eso no esté medido el emisor lo nombra
+(`el pool de ... pasa de 255 entradas y ldc_w no esta medido`) en vez de truncar el operando.
+
+La suite nativa pasa con **179 tests** (tres nuevos: la plantilla contra `javap`, el dex contra javac y el
+portero de rechazos). El portero rechaza con nombre lo que este emisor no escribe: clase anónima (falta el
+`this$0`), `if`, `long`/`double`/`float`, una anotación que no sea `@Override` y un tipo que no aparezca en
+el fuente, en su paquete, en los imports ni en el `android.jar`.
