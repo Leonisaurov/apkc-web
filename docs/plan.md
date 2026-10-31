@@ -233,18 +233,29 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   a byte sobre nuestras clases que sobre las de javac (1960 bytes). End-to-end en Go: 834 ms y un apk de 9555
   bytes que `apksigner`, `zipalign`, `zipcheck`, `aapt2` y `apkc verify` aprueban, y cuyo dex relee `d8` con
   `rc 0`.
-- **1G.6 HECHA — el `if` y su `else`** (§52): los anchos de las branquias del JVMS, las cuatro formas
-  dalvik (`10t`, `21t`, `22t`, y el `22s` que el anteojo leía mal), la inversión de la condición que hace
-  javac y el `goto` que solo aparece cuando el cuerpo no sale por su cuenta. Medido dos veces: `javap
-  -p -c -l` idéntico línea por línea contra javac 21 (100 y 81 líneas en las dos sondas, 78 en el
+- **1G.6 HECHA — el `if` y su `else`** (§52): los anchos de las branquias del JVMS, las tres formas
+  dalvik de rama (`10t`, `21t`, `22t`) más el `22s` que el anteojo leía como `22c`, la inversión de la
+  condición que hace javac y el `goto` que solo aparece cuando el cuerpo no sale por su cuenta — y el
+  encadenado por encima de una etiqueta vacía, que es lo que destapó el `if` anidado. Medido dos veces:
+  `javap -p -c -l` idéntico línea por línea contra javac 21 (186 y 81 líneas en las dos sondas, 78 en el
   `MainActivity` de la página), y `apkc dex` dando el mismo fichero byte a byte sobre nuestras clases que
-  sobre las de javac (1440 y 1684 bytes). Contra `d8`: doce de los dieciséis cuerpos salen iguales
-  instrucción por instrucción y con el mismo desplazamiento; los cuatro que no son tres optimizaciones
-  suyas (plegado de `<clinit>`, fusión de colas idénticas, propagación de copias) y todos nuestros dex
-  los relee con `rc 0`.
-- **1G.7 PENDIENTE, con su motivo**: la concatenación de cadenas en versión 52 (cadena de
-  `StringBuilder.append`), arreglos y bucles. Hasta entonces el portero los rechaza por nombre; no se
-  abre ninguna de estas puertas "de paso".
+  sobre las de javac (1796 y 1684 bytes). Contra `d8`: quince de los veintiún cuerpos iguales instrucción
+  por instrucción y con el mismo desplazamiento; los seis restantes, por optimizaciones suyas (plegado del
+  `<clinit>`, fusión de colas idénticas, propagación de copias).
+- **1G.7 HECHA — la concatenación de cadenas y el plegado de constantes** (§53): en la versión 52 javac
+  pega cadenas con una cadena de `StringBuilder.append`, los literales adjacentes se doblan en una sola
+  constante (`"hola" + " " + 3` es un `ldc "hola 3"`, y si no queda otra cosa no hay `StringBuilder`), y las
+  cuentas de literales se doblan — salvo `1 / 0`, que javac deja `idiv` para que la excepción salte en
+  ejecución. Añadido el paréntesis como agrupación en el analizador (con rechazo del molde ambiguo) y
+  `areturn` (0xb0) a la tabla del caminante, que faltaba. Cuatro sondas con `javap` idéntico (134, 35, 206
+  y 54 líneas), `apkc dex` igual byte a byte sobre las dos procedencias (3240 bytes) y `d8` releyendo el
+  nuestro con `rc 0`; veinticinco de treinta y nueve cuerpos salen iguales a `d8` incluso con los ids, y los
+  doce restantes difieren por reescritura de la cadena de `StringBuilder`, plegado de `<clinit>`, `/lit8`
+  contra operando constante, `if-nez` en vez de comparar contra cero, y tres fusiones de cola.
+- **1G.8 PENDIENTE, con su motivo**: arreglos y bucles (la rama hacia atrás rechaza hoy el bucle porque el
+  punto de fusión de registros no está medido), `switch`, `try`/`catch`, y las cadenas que se concatenan con
+  una llamada cuyo tipo no se puede estimar sin emitirla. Hasta entonces el portero los rechaza por nombre;
+  no se abre ninguna de estas puertas "de paso".
 
 **Cerrada la Fase 1G y el cableado**: `create`, editar, compilar recursos, compilar Java, dexar, empaquetar,
 firmar y verificar ocurren dentro de la pestaña, sin conexión y sin un solo proceso. El emisor y el enlazador

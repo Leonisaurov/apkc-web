@@ -2565,7 +2565,7 @@ Es el cierre del §44 al §50 en una frase: **la página compila un fuente que a
 resultado es el mismo que daría `javac` + `d8` hasta donde este subconjunto llega**. Lo del teléfono sigue
 siendo el hecho 2 del objetivo: instalar y ver la ventana.
 
-## 52. El `if`, medido dos veces: la inversión de javac en el `.class` y las cuatro formas de rama en el dex
+## 52. El `if`, medido dos veces: la inversión de javac en el `.class` y las tres formas de rama en el dex
 
 El `if` era la pieza que el §50 dejaba fuera: un fuente con condicionales no se podía escribir en la página.
 Se midió en dos tramos, con dos oráculos que no comparten código con este fork —`javap` sobre las clases de
@@ -2600,7 +2600,8 @@ sobre el mismo fuente, y `javap -p -c -l` a los dos lados: **idéntico línea po
 - **la `LineNumberTable` de un método escrito en una línea tiene una sola fila** (`line 12: 0` en
   `anidadaConElse`), aunque el cuerpo tenga cuatro saltos.
 
-**Segunda medición — las palabras de `d8`.** Cuatro formatos nuevos, leídos de sus ficheros
+**Segunda medición — las palabras de `d8`.** Tres formas de rama nuevas (`22t`, `21t` y `10t`), leídas de sus
+ficheros
 (`--release --min-api 21 --lib android.jar`) sobre las clases de javac, y verificados contra los nuestros:
 
 | qué | d8 | el nuestro |
@@ -2668,4 +2669,94 @@ Tests permanentes: `TestEmisorBranquiasContraJavap` (siete sucesiones con sus de
 anidadas), `TestTraduceBranquiasContraLasPalabrasDeD8` (seis cuerpos, con los desplazamientos que escribió
 d8) y `TestRechazaUnaRamaHaciaAtras` (el `while` que no se acepta). Suite: **199 PASS + 2 SKIP** nativa y
 **181 PASS + 20 SKIP** en el hospedador con forma de navegador.
+
+## 53. Concatenar cadenas y plegar constantes: la versión 52 pega con `StringBuilder`, y `1 / 0` no se dobla
+
+El fuente que alguien escribe en la página necesita decir «llevas 3», no solo decir «cuenta». Con `--release 8`
+sobre javac 21, la concatenación **no** es `invokedynamic` (eso llega en la 55): es una cadena de
+`StringBuilder`, y el andamiaje que falta en el subconjunto eran tres cosas —la cadena de `append`, el plegado
+de constantes y el paréntesis como agrupación—. Sonda en `$PREFIX/tmp/e53/p` (cuatro clases) y comando:
+
+```sh
+javac --release 8 -d cj p/*.java                    # el oráculo
+apkc compile --android-jar android-34/android.jar -o ours p
+for c in Cadena Cero Comp Pliegue; do
+  javap -p -c -l cj/p/$c.class   | sed 's/#[0-9]*/#n/g; s/  */ /g' > a.txt
+  javap -p -c -l ours/p/$c.class | sed 's/#[0-9]*/#n/g; s/  */ /g' > b.txt
+  cmp a.txt b.txt || diff a.txt b.txt
+done
+```
+
+`javap` sale **idéntico línea por línea** en las cuatro clases: 134 líneas en `Cadena`, 35 en `Cero`, 206 en
+`Comp` (la sonda de las branquias, que sigue igual) y 54 en `Pliegue`. Cuatro reglas, todas leídas de esas
+líneas:
+
+1. **la cadena de `append` empieza por el primer operando**: `a + "-" + b` es `new StringBuilder; dup;
+   invokespecial <init>; aload_1; append(String); ldc "-"; append(String); aload_2; append(String); toString`.
+   javac **no** usa el constructor `StringBuilder(String)`, así que el primer `ldc`/`aload` se appendea.
+2. **los literales adjacentes se doblan en una sola constante**, y si después del doble no queda más que
+   cadena, no hay `StringBuilder`: `"hola" + " " + 3` es `0: ldc "hola 3"; 2: areturn`. El entero se escribe
+   en decimal, igual que lo escribiría `String.valueOf`.
+3. **la agrupación es la del fuente**: en `1 + 2 + x + "s"` el subárbol `(1+2)+x` no es concatenación, sale
+   como cuenta entera (`iconst_3; iload_1; iadd`) y se appendea con `append:(I)`. Por eso el analizador
+   necesita el paréntesis: `"s" + (x + 1)` da `ldc "s"; append(String); iload_1; iconst_1; iadd; append(I)`.
+4. **el tipo del operando eligió la sobrecarga**, medida la de entero, la de cadena y la de referencia
+   (`"v=" + o` sale `append:(Ljava/lang/Object;)`). Lo no medido se rechaza: `append(Z)`, `append(C)`,
+   `append(J)` y `append(D)` no los leyimos.
+
+**El plegado de constantes enteras** tiene su propia sonda (`Pliegue`) y un límite que no es obvio:
+`1 + 2` sale `iconst_3`, `1 + 2 * 3` sale `bipush 7` (el 7 va en `bipush` porque `iconst` llega al 5),
+`7 - 10` sale `bipush -3`, `9 / 2` sale `iconst_4` y `9 % 4` sale `iconst_1`. **Pero `1 / 0` no se dobla**:
+javac escribe `iconst_1; iconst_0; idiv`, que es la `ArithmeticException` en tiempo de ejecución y no en la
+compilación. Nuestro plegador respeta esa excepción: con divisor cero devuelve «no plegable» y la cuenta se
+emite entera, medido en `Cero` (35 líneas iguales).
+
+**Dos piezas que faltaban salieron a la primera de dex**: `areturn` (`0xb0`) estaba en el traductor pero **no**
+en la tabla del caminante, así que `apkc dex` se paraba con `byte 0xb0: opcode outside the table this fork
+measured` en cuanto el fuente devolvía una cadena; y el analizador leía el `(` de `(x + 1)` como el principio
+de un molde. El ancho de `areturn` es el que marca `javap`: `0: ldc …; 2: areturn` con la longitud del código
+en 3, o sea un byte y ningún operando.
+
+**Cotejo con `d8` sobre los treinta y nueve cuerpos** (las cuatro clases, desmontadas sin números de
+registro): **veinticinco salen iguales instrucción por instrucción, con los mismos ids y los mismos
+desplazamientos** —entre ellos `todoLiteral`, que es `const-string; return-object` en los dos ficheros— y
+veintisiete si se ignoran los ids. Los doce que se separan tienen cuatro motivos, cada uno con su nombre:
+
+- **`d8` reescribe la cadena de `StringBuilder`** (siete cuerpos, los siete que concatenan algo que no es
+  solo literales): usa `invoke-direct <init>:(Ljava/lang/String;)` con la primera constante, y se salta los
+  `move-result-object` porque sabe que `append` devuelve `this` — en `conEntero` quedan siete instrucciones y
+  quince palabras (`new-instance | const-string | invoke-direct | invoke-virtual | invoke-virtual |
+  move-result-object | return-object`) frente a nuestras diez instrucciones y veinte palabras;
+- **pliega el `<clinit>`** de la constante estática (`static int total = 5` queda en `return-void`, un cuerpo);
+- **mete el operando constante en la forma `/lit8`** (`add-int/lit8 v, v, 3` donde nosotros escribimos
+  `const/4 3` y `add-int/2addr`, y `div-int/lit8 v, v, 0` en `1 / 0`), tres cuerpos;
+- **compara contra cero con la forma `/z`** (`if-nez v` en `if (0 == a)`, donde javac carga el 0 en una
+  palabra y `d8` lo reconoce como el cero), un cuerpo. En esta sonda no aparece la fusión de colas del §52:
+  los `if` de `Comp` terminan cada rama en su propio `return`.
+
+Nuestro fichero, con todo, **lo relee `d8` y lo re-dexa con `rc 0`**, y `apkc dex` da **el mismo fichero byte a
+byte** sobre las clases de javac que sobre las nuestras: **3240 bytes**, `cmp` mudo. La prueba de que el
+traductor no distingue quién escribió el `.class` sigue siendo la misma que en el §50.
+
+**Lo que se rechaza por nombre**: concatenar con una llamada cuyo tipo no se puede estimar sin emitirla
+(devolvería el mensaje «la concatenación está medida sobre literales, campos, variables y `this`»), un
+`append` de tipo no medido, y todo lo de siempre: arreglos, bucles, `switch`.
+
+Tests permanentes: `TestEmisorCadenaContraJavap` (ocho cuerpos con su sucesión de mnemonicos, sus
+desplazamientos y sus destinos) y `TestTraduceLaConcatenacionBajaAStringBuilder` (la cadena baja al dex con
+las formas medidas, y el plegado llega ya plegado: `1 / 0` conserva el `div-int/2addr` con su cero). Suite
+después de este párrafo: **201 PASS + 2 SKIP** nativa y **181 PASS + 22 SKIP** en el hospedador con forma de
+navegador (los dos tests nuevos piden el `android.jar` real a través de `jarDelSDK`, así que en el hospedador
+sin montarlo se saltan: esos son los dos SKIP que faltaban).
+
+**Y el proyecto entero, con la concatenación dentro**: la pestaña escribe `Toast.makeText(this, "cuenta " +
+pulsos, Toast.LENGTH_SHORT).show()` en el fuente propio de su comprobación 11 y saca **un apk de 9598 bytes**
+que verifica sola (v1 `ok`, v2 `ok`) sin salir de su origen; el bloque 4d del gate le pasa los oráculos de
+siempre, **exige `cuenta` y `StringBuilder` en el dex** que escribió el navegador y `d8` lo relee con `rc 0`.
+Nativo, sobre el proyecto generado por la página con ese mismo fuente (`$PREFIX/tmp/e53/medir-pagina.sh`):
+**431 ms y un apk de 10096 bytes** —`apkc build --linker go --compiler go`, sin un solo proceso—, que
+`apksigner` aprueba por v1 y v2, `zipalign -c -p 4` aprueba, `zipcheck.py` aprueba, `aapt2 dump badging`
+lee como `launchable-activity: name='com.hola.apkcstudio.MainActivity'`, `apkc verify` dictamina `ok` y
+`d8` relee su dex con `rc 0` (re-dexado: 2424 bytes frente a los 2736 que escribimos, otra vez por la
+reescritura de la cadena).
 

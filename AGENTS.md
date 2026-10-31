@@ -167,14 +167,24 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
 - **El `if` entró en el subconjunto medido, no adivinado** (§52): javac emite la **condición invertida**
   (`a == b` sale `if_icmpne`, `a > 0` sale `ifle`, `o == null` sale `ifnonnull`) y el desplazamiento se cuenta
   **desde el opcode**; el `goto` solo aparece cuando el `then` no sale por su cuenta; un método de una línea
-  lleva **una** fila en la `LineNumberTable`. En dalvik son cuatro formas (`10t`, `21t`, `22t`, y el `22s` de
-  los literales, que el lector confundía con el `22c`), todas medidas contra las palabras de `d8`. Dos defectos
+  lleva **una** fila en la `LineNumberTable`. En dalvik son tres formas de rama (`10t`, `21t`, `22t`), todas
+  medidas contra las palabras de `d8`, y el `22s` de los literales. Dos defectos
   reales salieron de la comparación: un `goto` que no encadenaba por encima de una etiqueta vacía (javac escribe
   `13: goto 27`, no `13: goto 20`) y el formato `22s` mal leído. Quedan rechazados por nombre: la rama **hacia
   atrás** (un bucle, cuyo punto de fusión de registros no está medido), `goto/16`, el booleano suelto como
-  condición y el `null` a la izquierda. Lo que sigue fuera del subconjunto: concatenación de cadenas en
-  versión 52 y arreglos; y queda una forma de `d8` para `a*b` (dos unidades, `0x0192` + `0x0201`) que aún no
-  desciframos — nosotros emitimos `mul-int/2addr` y `d8` lee el resultado.
+  condición y el `null` a la izquierda.
+- **Concatenar cadenas y plegar constantes, medidos contra javac** (§53): en la versión 52 javac pega con
+  `StringBuilder` (`new`/`dup`/`<init>`/una fila de `append`/`toString`, sin usar el constructor
+  `StringBuilder(String)`), los literales adjacentes se doblan en **una** constante (`"hola" + " " + 3` es un
+  solo `ldc "hola 3"`; si no queda otra cosa no hay `StringBuilder`) y las cuentas de literales se doblan
+  (`1 + 2 * 3` es `bipush 7`) **salvo con divisor cero**: `1 / 0` se emite entero, porque la excepción tiene
+  que saltar en ejecución. Costó dos huecos reales: `areturn` (0xb0) no estaba en la tabla del caminante
+  (el dexer paraba en cuanto un método devolvía una cadena) y el paréntesis de `(x + 1)` se leía como molde.
+  `d8` reescribe esa cadena (siete instrucciones y quince palabras donde nosotros escribimos diez y veinte),
+  y ese es el motivo principal por el que nuestros cuerpos no coinciden con los suyos palabra por palabra.
+  Fuera del subconjunto quedan **arreglos y bucles** (y `switch`/`try`); y sigue en pie una forma de `d8`
+  para `a*b` entre dos parámetros (dos unidades, `0x0192` + `0x0201`) que no hemos descifrado — nosotros
+  emitimos `mul-int/2addr` y `d8` lee el resultado.
 - **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
   arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
@@ -194,7 +204,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **199 PASS + 2 SKIP** nativa y **181 PASS + 20 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **201 PASS + 2 SKIP** nativa y **181 PASS + 22 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
