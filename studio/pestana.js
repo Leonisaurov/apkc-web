@@ -331,7 +331,27 @@ async function compilarDelTodo() {
   const r = await correr(["build", "--linker", "go", "--compiler", "go",
     "--android-jar", RUTA_JAR, "--sdk-version", version, "--codename", codename,
     "--keystore", RUTA_KEYSTORE]);
-  if (r && r.codigo === 0) await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
+  if (r && r.codigo === 0) {
+    await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
+    await verificarLoCompilado();
+  }
+}
+
+// Verificar lo que se compiló aquí, con el lector de firmas del propio binario: la vuelta al apk se
+// hace sobre el fs de la pestaña, sin apksigner y sin red. Si el verificador dice mal, su motivo es la
+// única frase que le interesa a quien espera una apk utilizable.
+async function verificarLoCompilado() {
+  const aviso = document.getElementById("estado-verificacion");
+  await hospedador.cwd(PROYECTO);
+  const r = await correr(["verify", "build/app.apk"]);
+  const lineas = String(r.consola || "")
+    .replace(/\u001b\[[0-9]*m/g, "")
+    .split("\n")
+    .map((l) => l.replace("[verify] ", "").trim())
+    .filter((l) => l.startsWith("v1 (JAR signing)") || l.startsWith("v2 (APK Signature Scheme v2)") ||
+      l.startsWith("certificado") || l.startsWith("par desconocido"));
+  aviso.textContent = lineas.length ? lineas.join(" · ") : "apkc no devolvió ningún veredicto";
+  return r;
 }
 
 // --- arranque ----------------------------------------------------------------------------
@@ -360,6 +380,7 @@ if (typeof document !== "undefined") {
     document.getElementById("compilar-aqui").addEventListener("click", intentarCompilar);
     document.getElementById("usar-android-jar").addEventListener("click", async () => { await usarJarElegido(); });
     document.getElementById("compilar-apk").addEventListener("click", compilarDelTodo);
+    document.getElementById("verificar-apk").addEventListener("click", verificarLoCompilado);
     document.getElementById("recargar-arbol").addEventListener("click", refrescarArbol);
     document.getElementById("descargar-apk").addEventListener("click", (e) => {
       e.preventDefault();

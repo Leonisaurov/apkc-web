@@ -181,5 +181,57 @@ else
   avisa "sin APKC_WASM, sin fixture o sin chromium: la pestaña con wasm no se probo"
 fi
 
+# 5. el verificador propio, cotejado con apksigner: el mismo veredicto sobre el mismo fichero. Sin
+#    esto, `apkc verify` podría estar aprobando lo que rompe un apk y nadie se enteraría.
+cotejo() { # $1 etiqueta, $2 apk, $3 veredicto esperado (si|no)
+  etiqueta=$1; apk=$2; esperado=$3
+  if [ ! -f "$apk" ]; then avisa "$etiqueta: no hay fichero que cotejar ($apk)"; return; fi
+  # los dos `|| rc=$?` son obligatorios: con `set -e` un verify que dice "no" (que es lo que se busca
+  # en dos de los tres casos) habría matado el script antes de poder comparar
+  rc_apk=0; "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$apk" >"$TMP/studio-cotejo-$etiqueta-oraculo.log" 2>&1 || rc_apk=$?
+  rc_nuestro=0; "$APKC" verify "$apk" >"$TMP/studio-cotejo-$etiqueta.log" 2>&1 || rc_nuestro=$?
+  oraculo=si; [ "$rc_apk" -ne 0 ] && oraculo=no
+  nuestro=si; [ "$rc_nuestro" -ne 0 ] && nuestro=no
+  [ "$oraculo" = "$esperado" ] || falla "$etiqueta: apksigner dice $oraculo y se esperaba $esperado"
+  [ "$nuestro" = "$esperado" ] || falla "$etiqueta: apkc verify dice $nuestro donde apksigner dice $oraculo"
+  avisa "$etiqueta: apksigner $oraculo, apkc verify $nuestro"
+}
+
+apk_base=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1)
+if [ -n "${ANDROID_JAR:-}" ] && [ -f "$TMP/pestana-apk/pestanera-estudio.apk" ]; then
+  apk_base="$TMP/pestana-apk/pestanera-estudio.apk"
+fi
+if [ -n "$BUILD_TOOLS" ] && [ -n "$apk_base" ]; then
+  cotejo bueno "$apk_base" si
+
+  # apk con la v3 de google encima: los pares que no se conocen se ignoran (y se dicen), no se herejan
+  con_v3=$TMP/studio-cotejo-con-v3.apk
+  if timeout 200 "$BUILD_TOOLS/apksigner" sign --ks "${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
+       --ks-pass pass:android --v3-signing-enabled true --out "$con_v3" "$apk_base" >"$TMP/studio-cotejo-sign.log" 2>&1; then
+    cotejo con-v3 "$con_v3" si
+    grep -q "no se verificó aquí" "$TMP/studio-cotejo-con-v3.log" ||
+      falla "la v3 presente no se anotó como no verificada en apkc verify"
+  else
+    avisa "con-v3: apksigner no pudo firmar el cotejo ($(tail -2 "$TMP/studio-cotejo-sign.log" | tr '\n' ' '))"
+  fi
+
+  # un byte cambiado dentro de una entrada ALMACENADA: el zip sigue siendo zip y las firmas casan mal
+  alterado=$TMP/studio-cotejo-alterado.apk
+  python3 - "$apk_base" "$alterado" <<'PY'
+import sys, struct
+src, dst = sys.argv[1], sys.argv[2]
+data = bytearray(open(src, "rb").read())
+eocd = data.rfind(b"PK\x05\x06")
+cd = struct.unpack_from("<I", data, eocd + 16)[0]
+largo = struct.unpack_from("<Q", data, cd - 24)[0]
+inicio = cd - largo - 8
+par = struct.unpack_from("<Q", data, inicio + 8)[0]
+valor = inicio + 8 + 8 + 4
+data[valor + (par - 4) // 2] ^= 0x08     # dentro del valor del par de la v2
+open(dst, "wb").write(bytes(data))
+PY
+  cotejo bloque-alterado "$alterado" no
+fi
+
 if [ "$FALLOS" -gt 0 ]; then echo "e2e: $FALLOS problemas"; exit 1; fi
 echo "e2e: todo en orden"

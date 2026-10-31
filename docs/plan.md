@@ -34,7 +34,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | --- | --- | --- |
 | 0.1 mensajes de herramienta | **hecha** (apkc `e7bfd01`) | `[build] aapt2 compile never started: pipe: not implemented on js` |
 | 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
-| 0.2.2 `apkc verify` | pendiente | — |
+| 0.2.2 `apkc verify` | **hecha** (rama `web`): lee el paquete desde el `fs` y comprueba las dos firmas con lectores propios, sin `apksigner` ni `jarsigner` | `docs/evidencia.md` §47: ocho casos cotejados con `apksigner`, mismo veredicto y mismo código de salida, incluidos dos casos que apkc no escribió |
 | 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
 | 2G | **hecha** (rama `web`): lector y escritor de dex en Go. El objetivo medido eran 2844 bytes de `d8`; nuestro dex sobre los mismos `.class` sale **byte a byte igual** al de javac-d8 salvo el `debug_info` (motivo escrito), y `d8` lee el nuestro y lo re-dexa con `rc 0` | `docs/evidencia.md` §13, §20 a §23, §41, §42 |
 | 3 recursos sin `aapt2` | **hecha**: `arscwriter.go`, `axmlwriter.go`, `r.go`, `marco.go`, `enlazar.go` + `arbol.go` + `valores.go` enlazan desde los ficheros de texto; `build --linker go` produce un apk que `apksigner`, `zipalign`, `zipcheck.py` y `aapt2 dump` aprueban | `docs/evidencia.md` §28 a §38 |

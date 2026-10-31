@@ -2176,7 +2176,8 @@ se esperaban — `[build] 2 fuentes de Java en Go -> 6 clases` y `[build] 6 clas
 build/classes.dex`, **los mismos 2392 bytes que midieron el §42 y el §44** — con `[timing] package and sign
 go 788ms`, `total 4.066s` y `finished in 4.067974912s` (en la corrida del gate fueron `546ms` y `3.875s`:
 el tiempo cambia, los bytes no). El apk sale de **9832 bytes**. La prueba de pestaña queda en **32
-comprobaciones**, cero fallos, con **18 peticiones** y ninguna fuera de su origen.
+comprobaciones** (llegó a **37** con el verificador del §47), cero fallos, con **18 peticiones** y ninguna
+fuera de su origen.
 
 **Y el jar entra sin red, por el camino del usuario (comprobación 9)**: se borra `/sdk/android.jar` (la
 página pasa a decir «sin android.jar en esta pestaña todavía»), se pone el fichero real en el
@@ -2233,4 +2234,92 @@ es justamente `invokeinterface` del §42. Comprobado con `unzip -p … classes.d
 
 **Lo que sigue sin medirse es el hecho 2 del objetivo**: instalar y ver arrancar la
 actividad, que necesita un teléfono y no depende de ningún código.
+
+## 47. `apkc verify`: la pestaña dictamina su propio apk, cotejado con `apksigner` caso por caso
+
+Cierra el punto **0.2.2** del plan y es lo único que le faltaba a la página para no tener que pedirle a
+nadie que le diga si el apk que ella escribió está bien. `apkc/verificar.go` vuelve a leer el paquete desde
+el `fs` y comprueba por su cuenta las dos firmas que esta herramienta escribe: recalcula el digest de cada
+entrada contra lo que dice `META-INF/MANIFEST.MF`, digiere el manifiesto sección a sección contra el `.SF`,
+verifica el PKCS#7 sobre los bytes exactos del `.SF`, y localiza el bloque de firmas antes del directorio
+central para recalcular el digest de las tres secciones — con el campo de desplazamiento del registro final
+sustituido por el desplazamiento del bloque, que es la trampa del formato que ya describía el §44 — y
+comprobar la RSA sobre los datos firmados con la clave del certificado emparejado.
+
+Lo que no está medido se rechaza con nombre: `DSA`/`EC`, un digest que no sea SHA-256, varios firmantes, o
+una clave pública que no sea la del certificado. **Y la cadena de confianza no se valida**: un certificado
+de debug es auto-firmado y no hay ancla, así que se informa de él (asunto, serie, caducidad) sin afirmar que
+sea digno de confianza, igual que hace `apksigner` cuando dice «Verifies, but not trusted».
+
+**Dos cosas del formato las decidió el oráculo, no yo** — y las dos me hacían marcar mal un apk ajeno:
+
+- el **bloque de firmas no entra en el digest del contenido**: el digest cubre las entradas, el directorio
+  central y el registro final con el campo sustituido. Medido: un byte cambiado dentro del par de
+  *rellenado* (los ceros que alinean a página) deja `apksigner` en `true/true` y `apkc verify` en `ok/ok`; un
+  byte cambiado dentro del **valor del par de la v2** da `DOES NOT VERIFY` en `apksigner` y «la firma RSA
+  sobre los datos-firmados no verifica» aquí. La diferencia entre los dos puntos es exactamente esa.
+- **un par con id desconocido se ignora y se dice**: añadido un par `0x11223344` al bloque, `apksigner`
+  sigue diciendo `v1 true, v2 true` y `apkc verify` dice `ok/ok` más la nota `par desconocido en el bloque de
+  firmas: 0x11223344`. Herejarlo como fallo habría hecho que esta orden aprobara menos que el oráculo.
+
+**Cotejo con `apksigner`** — el mismo fichero, los dos verificadores, el mismo código de salida. Las tres
+primeras filas y la última las pide `studio/e2e.sh` (bloque 5); las demás se midieron a mano con el mismo
+binario:
+
+| caso | `apksigner verify --verbose` | `apkc verify` | salida |
+| --- | --- | --- | --- |
+| apk compilado y firmado en chromium (§46) | v1 `true`, v2 `true` | v1 `ok`, v2 `ok` | `0` y `0` |
+| apk firmado por `apksigner` (v1+v2, sin v3) | v1 `true`, v2 `true` | v1 `ok`, v2 `ok` | `0` y `0` |
+| apk firmado por `apksigner` con v1+v2+v3 | v1 `true`, v2 `true`, v3 `true` | v1 `ok`, v2 `ok` + nota «la firma v3 no se verificó aquí» | `0` y `0` |
+| byte cambiado en el valor del par de la v2 | `DOES NOT VERIFY` | v1 `ok` (las entradas no se tocaron), v2 mal: «la firma RSA sobre los datos-firmados no verifica» | `1` y `1` |
+| byte cambiado en `resources.arsc`, que viaja almacenado | `DOES NOT VERIFY` | v1 mal: «no se puede leer resources.arsc: zip: checksum error», v2 mal: «el digest guardado no es el de este contenido» | `1` y `1` |
+| byte cambiado en el par de *rellenado* (los ceros que alinean a página) | v1 `true`, v2 `true` | v1 `ok`, v2 `ok` | `0` y `0` |
+| par desconocido `0x11223344` añadido al bloque | v1 `true`, v2 `true` | v1 `ok`, v2 `ok` + nota «par desconocido en el bloque de firmas: 0x11223344» | `0` y `0` |
+| paquete sin ninguna firma (fuera los tres `META-INF`) | `DOES NOT VERIFY` · «Missing META-INF/MANIFEST.MF» | v1 mal: «faltan piezas de la firma v1 dentro del paquete», v2 mal: «no hay bloque de firmas antes del directorio central» | `1` y `1` |
+
+Nótese la segunda fila: **el verificador lee una firma que no escribió él**, que es la única prueba de que
+no está confirmando sus propios supuestos. Y nótese la de `resources.arsc`: ahí la detención no es nuestra,
+es el CRC-32 que el zip lleva por entrada, así que un byte torcido lo detectan tres comprobaciones
+independientes —el CRC del archivo, el digest del manifiesto y el digest del bloque.
+
+**Coste, medido en los tres hospedadores**: nativo `finished in 1.064384ms` y `2.301ms` sobre el apk de 9832
+bytes del §46; dentro del hospedador con forma de navegador (`navegador-sim.js`, mismo `apkc.wasm`)
+`finished in 402.866176ms`; dentro de chromium `finished in 51.294976ms` y `57.554944ms`. Es un orden de
+magnitud más rápido que el `build` completo: verificar no compila nada.
+
+**En la página** el botón `#verificar-apk` corre `verify build/app.apk` y el dictamen se lee en
+`#estado-verificacion`; `compilarDelTodo()` lo llama solo, al terminar un build bueno, para que nadie tenga
+que pulsar dos veces. Las dos comprobaciones nuevas de `studio/prueba-pestana.js` (10 y 10b) valen por la
+prueba de fuego: dentro de chromium, sobre el apk que la propia pestaña compiló, el veredicto es `v1 ok` y
+`v2 ok`; y sobre una copia con **un byte cambiado dentro de `resources.arsc`** — escrito en OPFS como
+`build/mal.apk`, con el byte localizado desde el header local de la entrada — el comando sale con `codigo 1`
+y dice `v1 mal` y `v2 mal`. La prueba de pestaña queda en **37 comprobaciones**, cero fallos, y las
+peticiones siguen siendo todas de su origen.
+
+**Comandos**:
+
+```sh
+# nativo y con el oráculo al lado, sobre el apk que salió de chromium
+$PREFIX/tmp/apkc-gate verify $PREFIX/tmp/pestana-apk/pestanera-estudio.apk
+$BUILD_TOOLS/apksigner verify --verbose --min-sdk-version 21 $PREFIX/tmp/pestana-apk/pestanera-estudio.apk
+# dentro del hospedador con forma de navegador
+sh -c 'cd shim && node navegador-sim.js --montar $PREFIX/tmp/pestana-apk/pestanera-estudio.apk:/en.apk \
+  $PREFIX/tmp/apkc-wasm.wasm verify /en.apk'
+# la prueba de chromium, que además del veredicto bueno comprueba el caso alterado
+sh -c 'cd studio && APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm APK_EJEMPLO=… KS_EJEMPLO=… \
+  ANDROID_JAR=$HOME/Android/platforms/android-34/android.jar node prueba-pestana.js'
+```
+
+**Suite**: cinco tests nuevos en `apkc/verificar_test.go` (bueno, byte cambiado en una entrada almacenada,
+sin firma dicho por esquemas, valor del par alterado, par desconocido ignorado y anotado). Nativa: **189
+PASS, 1 SKIP, 0 fallos** en 15,4 s. Dentro del hospedador con forma de navegador, con el `android.jar`
+montado en `/sdk/android.jar`: **181 PASS, 9 SKIP, 0 fallos**, y los cinco tests del verificador pasan
+todos ahí (`TestVerificarApruebaLoQueEstaBienFirmado` en 0,16 s, el más rápido en 0,04 s), lo que quiere
+decir que el dictamen corre en `js/wasm` igual que en nativo. La comparación contra `apksigner` vive en
+`studio/e2e.sh` (bloque 5) para que un falso «ok» propio no pueda colarse en el gate: `bueno: apksigner si,
+apkc verify si · con-v3: apksigner si, apkc verify si · bloque-alterado: apksigner no, apkc verify no`.
+
+Con `verify` dentro del binario, la cadena completa —crear, compilar, dexar, empaquetar, firmar y
+**dictaminar**— corre en la pestaña. Lo que sigue sin medirse es el hecho 2 del objetivo: instalar ese apk y
+ver la actividad arrancar.
 

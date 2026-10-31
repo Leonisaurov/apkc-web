@@ -147,6 +147,16 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   pone en el `<input type="file">` con `DOM.setFileInputFiles` de CDP, la página lo guarda en OPFS con
   **cero peticiones** en ese tramo, y tras recargar la página sigue ahí (26361808 bytes, sin volver a
   pedirlo) y el build vuelve a salir `0`. La prueba de pestaña llega a **32 comprobaciones**.
+- **`apkc verify` dictamina el apk dentro de la pestaña** (§47): recalcula el digest de cada entrada,
+  digiere el manifiesto sección a sección contra el `.SF`, verifica el PKCS#7 sobre los bytes del `.SF` y
+  comprueba el bloque v2 (registro final con el desplazamiento sustituido). `apksigner` coincide en los
+  ocho casos medidos, mismo veredicto y mismo código de salida, **incluidos dos que apkc no escribió**:
+  un apk firmado por el propio `apksigner` y uno con un par de id desconocido. Dos reglas del formato las
+  dijo el oráculo, no un manual: **el bloque de firmas no entra en el digest del contenido** (un byte en
+  el par de relleno no lo detecta nadie; uno en el valor del par de la v2 lo detectan los dos) y **los
+  pares desconocidos se ignoran y se anotan**, porque herejarlos daría menos aprobados que `apksigner`.
+  No valida la cadena de confianza (sin ancla) y rechaza por nombre DSA/EC, digest que no sea SHA-256,
+  varios firmantes y las firmas v3/v4.
 - **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
   arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
@@ -166,9 +176,10 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  identicos a los del binario nativo (parrafo 43). Suite: 184 nativa, 176 PASS + 9 SKIP en el hospedador, con
-  los doce tests de Java pasando dentro. El portero rechaza con nombre lo no medido: `if`, anonima sobre una
-  clase o dentro de otra o en un metodo `static`, tipos de dos huecos, anotaciones que no sean `@Override`.
+  idénticos a los del binario nativo (§43). Suite actual: **189 PASS + 1 SKIP** nativa y **181 PASS + 9 SKIP**
+  en el hospedador, con los doce tests de Java y los cinco del verificador pasando dentro. El portero
+  rechaza con nombre lo no medido: `if`, anónima sobre una clase o dentro de otra o en un método `static`,
+  tipos de dos huecos, anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

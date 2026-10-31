@@ -55,6 +55,12 @@ Qué hace de verdad, y qué no:
 - **no hace**: el `build` de siempre. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
   arrancan; el botón «intentar compilar con aapt2/javac/d8» lo demuestra y apkc lo dice con su texto:
   `[build] aapt2 compile never started: pipe: not implemented on js`.
+- **dictamina**: `apkc verify build/app.apk` vuelve a leer el apk desde OPFS y comprueba las dos firmas con
+  lectores propios —digest de cada entrada, `.SF` sección a sección, PKCS#7 y bloque v2—, sin `apksigner` y
+  sin conexión. El botón `verificar el apk` lo corre y el veredicto se lee en la página. Cotejado con
+  `apksigner` en ocho casos, mismo veredicto y misma salida (`docs/evidencia.md` §47); la cadena de
+  confianza no se valida porque no hay ancla, y lo no medido (DSA, SHA-1, v3, v4, varios firmantes) se
+  rechaza por nombre.
 
 | Fichero | Qué es |
 | --- | --- |
@@ -62,7 +68,7 @@ Qué hace de verdad, y qué no:
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco y comprueba 32 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —y también el alterado— y comprueba 37 cosas |
 
 `e2e.sh` incluye la pestaña cuando `APKC_WASM` apunta a un binario wasm; si no, lo avisa en vez de
 darla por probada.

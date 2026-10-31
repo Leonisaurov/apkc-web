@@ -105,6 +105,14 @@
         única versión medida es la del API 34) y un keystore para firmar. El jar son ~26 MB y se guardan en
         OPFS: se elige una vez y sobrevive a recargar.
       </p>
+      <p class="nota">
+        Y al terminar, <code>apkc verify</code> vuelve a leer el apk desde el <code>fs</code> de esta
+        pestaña y dictamina las dos firmas por su cuenta: recalcula el digest de cada entrada, digiere el
+        manifiesto sección a sección, verifica el PKCS#7 sobre el <code>.SF</code> y comprueba el bloque de
+        firmas v2. Sin <code>apksigner</code> ni conexión. Lo que no está medido aquí se dice con nombre
+        (DSA, SHA-1, v3, v4, varios firmantes), y la cadena de confianza no se valida: un certificado de
+        debug es auto-firmado y no hay ancla que lo respalde.
+      </p>
       <label>android.jar <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
       <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
       <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
@@ -113,8 +121,10 @@
       <div class="acciones">
         <button id="usar-android-jar">guardar el android.jar elegido en la pestaña</button>
         <button id="compilar-apk" class="primario">compilar aquí (apkc build)</button>
+        <button id="verificar-apk">verificar el apk (apkc verify)</button>
         <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk compilada</a>
       </div>
+      <p class="nota" id="estado-verificacion">sin verificar todavía</p>
     </details>
 
     <details open>

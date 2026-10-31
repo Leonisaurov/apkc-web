@@ -298,8 +298,8 @@ async function conductor() {
     fs.writeFileSync(destinoEstudio, apkEstudio);
     console.log("  --- el apk del proyecto generado, compilado en la pestaña, es " + destinoEstudio);
 
-    // 9. el jar tambien entra SIN red: el usuario lo elige de su disco y la pagina lo guarda en OPFS.
-    //    Es el camino que reclama el "ni siquiera con conexion" del objetivo; hasta aqui estaba probado
+    // 9. el jar también entra SIN red: el usuario lo elige de su disco y la página lo guarda en OPFS.
+    //    Es el camino que reclama el "ni siquiera con conexión" del objetivo; hasta aquí estaba probado
     //    solo el fetch a /android-jar, que es lo que hace el servidor de pruebas.
     const antesDelPicker = peticiones.length;
     const avisoVacio = await evaluar(`(async () => {
@@ -338,7 +338,7 @@ async function conductor() {
     comprueba("con el jar del disco la pestaña vuelve a compilar el apk", sinConexion.codigo === "0" && sinConexion.bytes > 5000,
       "codigo " + sinConexion.codigo + ", " + sinConexion.bytes + " bytes");
 
-    // 9b. y el jar se eligio UNA VEZ: recargar la pagina no lo borra, y se puede volver a compilar
+    // 9b. y el jar se eligió UNA VEZ: recargar la página no lo borra, y se puede volver a compilar
     const antesRecarga = peticiones.length;
     await exec("Page.navigate", { url: URL_PAGINA });
     for (let i = 0; i < 40; i++) {
@@ -363,6 +363,67 @@ async function conductor() {
     comprueba("la página recargada compila otra vez con el jar guardado",
       recargada.codigo === "0" && recargada.bytes > 5000,
       "codigo " + recargada.codigo + ", " + recargada.bytes + " bytes");
+
+    // 10. la pestaña dictamina su propio apk: `apkc verify` vuelve a leer el fichero desde OPFS y
+    //     comprueba las dos firmas sin apksigner, sin conexión y sin un solo proceso.
+    const dictamen = await evaluar(`(async () => {
+      await hospedador.cwd("/proyecto");
+      const r = await correr(["verify", "build/app.apk"]);
+      const texto = String(r.consola || "").replace(/\\u001b\\[[0-9]*m/g, "");
+      await verificarLoCompilado();
+      return {
+        codigo: r.codigo,
+        v1: texto.includes("v1 (JAR signing): ok"),
+        v2: texto.includes("v2 (APK Signature Scheme v2): ok"),
+        aviso: document.getElementById("estado-verificacion").textContent,
+        detalle: texto.split("\\n").filter(Boolean).slice(-4).join(" | "),
+      };
+    })()`);
+    comprueba("apkc verify sale 0 dentro de chromium sobre el apk de la pestaña", dictamen.codigo === 0,
+      JSON.stringify(dictamen.detalle.slice(-200)));
+    comprueba("la pestaña verifica su v1 y su v2 por sí misma", dictamen.v1 && dictamen.v2,
+      JSON.stringify(dictamen.detalle.slice(-220)));
+    comprueba("el veredicto se lee en la página, no solo en la consola",
+      /v1 \(JAR signing\): ok/.test(dictamen.aviso) && /v2 \(APK Signature Scheme v2\): ok/.test(dictamen.aviso),
+      JSON.stringify(dictamen.aviso.slice(0, 200)));
+
+    // 10b. y el veredicto discrimina: un byte cambiado dentro de una entrada ALMACENADA (resources.arsc
+    //      viaja sin comprimir y alineado) tiene que dar v1 mal y v2 mal, no un "ok" por inercia
+    const alterado = await evaluar(`(async () => {
+      const datos = await hospedador.bytes("/proyecto/build/app.apk");
+      const a = new TextEncoder().encode("resources.arsc");
+      const buscar = (aguja, desde) => {
+        for (let i = desde; i < datos.length - aguja.length; i++) {
+          let ok = true;
+          for (let j = 0; j < aguja.length; j++) if (datos[i + j] !== aguja[j]) { ok = false; break; }
+          if (ok) return i;
+        }
+        return -1;
+      };
+      const nombre = buscar(a, 0);
+      if (nombre < 0) return { encontrado: false };
+      const ver = nombre - 30;                                  // principio del header local
+      const largoNombre = datos[ver + 26] | (datos[ver + 27] << 8);
+      const largoExtra = datos[ver + 28] | (datos[ver + 29] << 8);
+      const comprimido = datos[ver + 18] | (datos[ver + 19] << 8) | (datos[ver + 20] << 16) | (datos[ver + 21] << 24);
+      const datosDe = ver + 30 + largoNombre + largoExtra;
+      datos[datosDe + Math.floor(comprimido / 2)] ^= 0x08;
+      await hospedador.escribir("/proyecto/build/mal.apk", new Uint8Array(datos));
+      await hospedador.cwd("/proyecto");
+      const r = await correr(["verify", "build/mal.apk"]);
+      const texto = String(r.consola || "").replace(/\\u001b\\[[0-9]*m/g, "");
+      return {
+        encontrado: true, codigo: r.codigo, tamano: comprimido,
+        v1mal: texto.includes("v1 (JAR signing): mal"),
+        v2mal: texto.includes("v2 (APK Signature Scheme v2): mal"),
+        detalle: texto.split("\\n").filter(Boolean).slice(-3).join(" | "),
+      };
+    })()`);
+    comprueba("el apk alterado se puede preparar en la pestaña", alterado.encontrado === true,
+      JSON.stringify(alterado).slice(0, 120));
+    comprueba("apkc verify rechaza el apk con un byte cambiado dentro de chromium",
+      alterado.codigo !== 0 && alterado.v1mal === true && alterado.v2mal === true,
+      "codigo " + alterado.codigo + ", " + JSON.stringify(String(alterado.detalle).slice(-220)));
   } else {
     console.log("  --- sin ANDROID_JAR en el entorno: no se prueba el build completo en la pestaña");
   }
