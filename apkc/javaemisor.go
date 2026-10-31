@@ -1585,9 +1585,46 @@ func (e *emisor) accesoEstatico(interno string, segs []string, linea int) (strin
 }
 
 // campoDeLaClaseActual: `menu` suelto cuando fuera un campo de esta clase.
+// duenioDelCampo: donde vive un nombre suelto de asignacion o de lectura. Primero la clase actual; y
+// dentro de una anonima, si no es propio, el exterior: medido en el parrafo 54 sobre el contador, cuyo
+// `onClick` escribe `pulsos = pulsos + 1` y `total = total + pulsos` en campos de la Activity que creó
+// la anonima.
+func (e *emisor) duenioDelCampo(nombre string) (string, campoResuelto, bool) {
+	if cr, err := e.ctx.buscarCampo(e.interno, nombre); err == nil {
+		return e.interno, cr, true
+	}
+	if e.c.anonima {
+		externo := e.encierreInterno()
+		if cr, err := e.ctx.buscarCampo(externo, nombre); err == nil {
+			if cr.acceso&accPrivate != 0 {
+				// medido en el parrafo 54 con el mismo contador en privado: si el campo del exterior es
+				// privado, javac no escribe el getfield contra el campo sino contra dos metodos suyos
+				// sinteticos —`access$000(Lp/Contador;)I` para leer y `access$002(Lp/Contador;I)I` para
+				// escribir, y el de escritura devuelve el valor, de ahi el `pop`—. Ni el nombre ni el
+				// orden de esos metodos estan medidos, asi que el nombre se rechaza por nombre.
+				return "", campoResuelto{}, false
+			}
+			return externo, cr, true
+		}
+	}
+	return "", campoResuelto{}, false
+}
+
+// cargaDelDuenio: el receptor de un campo de instancia. En la clase actual es `aload_0`; dentro de una
+// anonima, si el campo es del exterior, javac pasa por la captura: `aload_0; getfield this$0:LExterior;`.
+// Medido dos veces en la misma linea del contador (`pulsos = pulsos + 1`), una por el receptor del
+// `putfield` y otra por la lectura del valor: javac no duplica el receptor con `dup`, lo vuelve a cargar.
+func (e *emisor) cargaDelDuenio(dueño string) {
+	e.cargaDe(0, "L")
+	if dueño == e.interno {
+		return
+	}
+	e.getfield(e.pool.campo(e.interno, "this$0", "L"+dueño+";"))
+}
+
 func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
-	cr, err := e.ctx.buscarCampo(e.interno, nombre)
-	if err != nil {
+	dueño, cr, encontrado := e.duenioDelCampo(nombre)
+	if !encontrado {
 		return "", false
 	}
 	if cr.constante {
@@ -1595,7 +1632,7 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 		return cr.desc, true
 	}
 	if cr.acceso&accStatic != 0 {
-		idx := e.pool.campo(e.interno, nombre, cr.desc)
+		idx := e.pool.campo(dueño, nombre, cr.desc)
 		e.emite(opGetstatic, byte(idx>>8), byte(idx))
 		e.sube()
 		return cr.desc, true
@@ -1603,8 +1640,8 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 	if e.estatico {
 		return "", false
 	}
-	e.cargaDe(0, "L")
-	e.getfield(e.pool.campo(e.interno, nombre, cr.desc))
+	e.cargaDelDuenio(dueño)
+	e.getfield(e.pool.campo(dueño, nombre, cr.desc))
 	return cr.desc, true
 }
 
@@ -1996,25 +2033,23 @@ func (e *emisor) stm(s jstmt) error {
 			e.guardaDe(lv.indice, lv.desc)
 			return nil
 		}
-		// asignar a un campo de la clase actual: `pulsos = pulsos + 1`, medido como `aload_0` (el
-		// receptor, ANTES del valor), el valor, y `putfield`; en un campo estatico no hay receptor
-		cr, err := e.ctx.buscarCampo(e.interno, segs[0])
-		if err != nil {
-			return fmt.Errorf("linea %d: asignar a %s, que no es ni una variable local ni un campo de esta clase, no esta medido",
+		// asignar a un campo: `pulsos = pulsos + 1`, medido como el receptor ANTES del valor, el valor, y
+		// `putfield`; en un campo estatico no hay receptor. Desde una anonima el campo puede ser del
+		// exterior, y entonces el receptor es la captura (parrafo 54).
+		dueño, cr, encontrado := e.duenioDelCampo(segs[0])
+		if !encontrado {
+			return fmt.Errorf("linea %d: asignar a %s: no es una variable local ni un campo de esta clase; si es campo del exterior y es privado, javac lo resuelve con sus metodos sinteticos access$NNN y eso no esta medido",
 				v.donde.linea, segs[0])
 		}
 		if cr.constante {
 			return fmt.Errorf("linea %d: %s es una constante final y javac no la deja reasignar", v.donde.linea, segs[0])
 		}
 		esEstatico := cr.acceso&accStatic != 0
-		if esEstatico && e.c.anonima {
-			return fmt.Errorf("linea %d: asignar al estatico %s desde una anonima no esta medido", v.donde.linea, segs[0])
-		}
 		if !esEstatico {
 			if e.estatico {
 				return fmt.Errorf("linea %d: asignar a %s sin `this`, en un metodo estatico, no es Java", v.donde.linea, segs[0])
 			}
-			e.cargaDe(0, "L")
+			e.cargaDelDuenio(dueño)
 		}
 		dv, err := e.exp(v.valor)
 		if err != nil {
@@ -2029,7 +2064,7 @@ func (e *emisor) stm(s jstmt) error {
 			}
 			return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, segs[0], cr.desc, dv)
 		}
-		idx := e.pool.campo(e.interno, segs[0], cr.desc)
+		idx := e.pool.campo(dueño, segs[0], cr.desc)
 		if esEstatico {
 			e.putstatic(idx)
 		} else {

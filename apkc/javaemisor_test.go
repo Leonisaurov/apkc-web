@@ -1024,3 +1024,64 @@ func TestEmisorCadenaContraJavap(t *testing.T) {
 		t.Errorf("%s no salio entre los metodos (%v)", nombre, nombresMetodos(c.Methods))
 	}
 }
+
+const fuenteContador = `package com.myapp;
+
+import android.view.*;
+
+public class Contador {
+    int pulsos = 0;
+    static int total = 5;
+
+    public void enruta(View b) {
+        b.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pulsos = pulsos + 1;
+                total = total + pulsos;
+                if (pulsos > 3) { v.setContentDescription("muchos " + pulsos); }
+                else { v.setContentDescription("pulsos " + pulsos); }
+            }
+        });
+    }
+}
+`
+
+// TestEmisorAnonimaConCampoDelExterior fija la medicion del parrafo 54: la app del contador, que es la
+// que se puede usar de verdad. Tres cosas, todas leidas del `javap -c -l` de javac 21 sobre el mismo
+// fuente:
+//
+//   - dentro de la anonima, `pulsos` NO es campo propio: javac carga la captura y luego el campo
+//     (`aload_0; getfield this$0:LExterior;` y encima `getfield Exterior.pulsos:I`), y para escribir
+//     vuelve a cargar la captura en vez de duplicar el receptor con `dup` — de ahi las dos filas de
+//     `iget-object` que `d8` si comparte;
+//   - `total`, estatico del exterior, se lee y se escribe con `getstatic`/`putstatic` sin pasar por la
+//     captura (parrafo 50), y por eso el campo tiene que ser del paquete: si fuera `private`, javac
+//     escribiria `access$000`/`access$002` sinteticos del exterior, y ese nombre no esta medido;
+//   - el `if` y la concatenacion viven dentro del `onClick`, que es la primera vez que las tres piezas
+//     medidas se usan juntas en un mismo cuerpo.
+func TestEmisorAnonimaConCampoDelExterior(t *testing.T) {
+	medidos := map[string]map[string]string{
+		"com/myapp/Contador": {
+			"enruta": "0 aload_1 | 1 new | 4 dup | 5 aload_0 | 6 invokespecial | 9 invokevirtual | 12 return",
+		},
+		"com/myapp/Contador$1": {
+			"onClick": "0 aload_0 | 1 getfield | 4 aload_0 | 5 getfield | 8 getfield | 11 iconst_1 | 12 iadd | 13 putfield | 16 getstatic | 19 aload_0 | 20 getfield | 23 getfield | 26 iadd | 27 putstatic | 30 aload_0 | 31 getfield | 34 getfield | 37 iconst_3 | 38 if_icmple->73 | 41 aload_1 | 42 new | 45 dup | 46 invokespecial | 49 ldc | 51 invokevirtual | 54 aload_0 | 55 getfield | 58 getfield | 61 invokevirtual | 64 invokevirtual | 67 invokevirtual | 70 goto->102 | 73 aload_1 | 74 new | 77 dup | 78 invokespecial | 81 ldc | 83 invokevirtual | 86 aload_0 | 87 getfield | 90 getfield | 93 invokevirtual | 96 invokevirtual | 99 invokevirtual | 102 return",
+		},
+	}
+	for interno, quieren := range medidos {
+		c := claseDelFuente(t, "Contador.java", fuenteContador, interno)
+		for _, m := range c.Methods {
+			lista, esMedido := quieren[m.Name]
+			if !esMedido {
+				continue
+			}
+			if sale := leeCodigo(t, m); sale != lista {
+				t.Errorf("%s %s:\n  nuestro: %s\n  javac:   %s", interno, m.Name, sale, lista)
+			}
+			delete(quieren, m.Name)
+		}
+		for nombre := range quieren {
+			t.Errorf("%s: %s no salio entre los metodos (%v)", interno, nombre, nombresMetodos(c.Methods))
+		}
+	}
+}
