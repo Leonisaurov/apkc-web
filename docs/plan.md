@@ -253,9 +253,17 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   doce restantes difieren por reescritura de la cadena de `StringBuilder`, plegado de `<clinit>`, `/lit8`
   contra operando constante, `if-nez` en vez de comparar contra cero, y tres fusiones de cola.
 - **1G.8 PENDIENTE, con su motivo**: arreglos y bucles (la rama hacia atrás rechaza hoy el bucle porque el
-  punto de fusión de registros no está medido), `switch`, `try`/`catch`, y las cadenas que se concatenan con
-  una llamada cuyo tipo no se puede estimar sin emitirla. Hasta entonces el portero los rechaza por nombre;
-  no se abre ninguna de estas puertas "de paso".
+  punto de fusión de registros no está medido), `switch`, `try`/`catch`, las cadenas que se concatenan con
+  una llamada cuyo tipo no se puede estimar sin emitirla, y **los campos privados del exterior leídos desde
+  una anónima**: javac los resuelve con dos métodos sintéticos del exterior (`access$000` para leer,
+  `access$002` para escribir, que además devuelve el valor) y ni el número ni el orden están medidos (§54).
+  Hasta entonces el portero los rechaza por nombre; no se abre ninguna de estas puertas "de paso".
+- **1G.9 HECHA — la app que hace algo al pulsar** (§54): anónima sobre `View$OnClickListener`, escritura del
+  campo del exterior por la captura, `if` y concatenación dentro del mismo `onClick`. Cinco clases con
+  `javap` idéntico (49 y 69 líneas las dos del contador), `apkc dex` igual byte a byte sobre las dos
+  procedencias (2304 bytes), cinco de los ocho cuerpos iguales a `d8` instrucción por instrucción y el resto
+  por sus tres optimizaciones conocidas. Compilada también dentro de la pestaña, con su apk verificado y su
+  dex releído por `d8` (bloque 4e del gate).
 
 **Cerrada la Fase 1G y el cableado**: `create`, editar, compilar recursos, compilar Java, dexar, empaquetar,
 firmar y verificar ocurren dentro de la pestaña, sin conexión y sin un solo proceso. El emisor y el enlazador

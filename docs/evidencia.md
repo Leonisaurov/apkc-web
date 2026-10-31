@@ -2760,3 +2760,89 @@ lee como `launchable-activity: name='com.hola.apkcstudio.MainActivity'`, `apkc v
 `d8` relee su dex con `rc 0` (re-dexado: 2424 bytes frente a los 2736 que escribimos, otra vez por la
 reescritura de la cadena).
 
+## 54. La app del contador: anónima, campo del exterior, `if` y concatenación en el mismo cuerpo
+
+El objetivo dice «un APK utilizable», y utilizable quiere decir que algo cambie cuando se pulsa. El fuente
+que hace eso cabe en lo medido salvo una pieza: **escribir un campo del exterior desde dentro de la
+anónima**. Sonda en `$PREFIX/tmp/e54/p`, con `javac --release 8 -cp android.jar` y `apkc compile` sobre el
+mismo fichero:
+
+```java
+public class Contador extends Activity {
+    int pulsos = 0;
+    static int total = 5;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pulsos = pulsos + 1;
+                total = total + pulsos;
+                if (pulsos > 3) { v.setContentDescription("muchos " + pulsos); }
+                else { v.setContentDescription("pulsos " + pulsos); }
+            }
+        });
+    }
+}
+```
+
+**`javap -p -c -l` sale idéntico línea por línea** en las cinco clases: `Contador` (49 líneas),
+`Contador$1` (69), `R` (10), `R$layout` (12) y `R$id` (12). Tres reglas nuevas, todas leídas de esas 69
+líneas del `onClick`:
+
+- **el campo del exterior se alcanza por la captura, dos veces**: `pulsos = pulsos + 1` es
+  `aload_0; getfield this$0:Lp/Contador;` (el receptor del `putfield`), otra `aload_0; getfield this$0` con
+  su `getfield p/Contador.pulsos:I` (la lectura del valor), `iconst_1; iadd`, `putfield p/Contador.pulsos:I`.
+  javac **no** duplica el receptor con `dup`: vuelve a cargarlo. `d8` sí comparte la lectura —de ahí que su
+  cuerpo tenga un `iget-object` menos que el nuestro—, que es una optimización suya, no una diferencia de
+  semántica.
+- **el estático del exterior no pasa por la captura**: `total = total + pulsos` es
+  `getstatic p/Contador.total:I`, la captura para leer `pulsos`, `iadd` y `putstatic` — las formas del §50,
+  ahora desde la anónima.
+- **el `if` del §52 y la concatenación del §53 viven dentro del `onClick`**: `if_icmple 73`, dos cadenas de
+  `StringBuilder` cerradas con `setContentDescription:(Ljava/lang/CharSequence;)V` (se les pasa un `String`,
+  que es lo que ya midió `setText` en el §49) y el `goto 102` del `then` que no sale por su cuenta.
+
+**El campo tiene que ser del paquete, y el `private` se rechaza por nombre.** Con `private int pulsos`, javac
+no escribe el `getfield` contra el campo: escribe dos **métodos sintéticos del exterior**, leídos en la primera
+corrida de esta sonda —
+
+```
+ 8: invokestatic  // Method p/Contador.access$000:(Lp/Contador;)I
+13: invokestatic  // Method p/Contador.access$002:(Lp/Contador;I)I
+16: pop
+```
+
+lectura `access$000`, escritura `access$002` **que devuelve el valor** (de ahí el `pop`). Ni el número
+(`000`, `002`) ni el lugar que ocupan en el `methods` del exterior están medidos, así que el emisor los
+rechaza con ese texto en vez de inventarlos: es el único caso del contador que queda fuera, y se dice con su
+motivo.
+
+**Cotejo con `d8`**: sobre los ocho cuerpos de la sonda, **cinco salen iguales** instrucción por instrucción y
+con los mismos ids y desplazamientos; los tres que se separan son los tres motivos de siempre —el `<clinit>`
+plegado, la cadena de `StringBuilder` reescrita (con su `add-int/lit8` y su `invoke-direct <init>(String)`) y
+el `this$0` compartido—. `apkc dex` da **el mismo fichero de 2304 bytes** sobre las clases de javac que sobre
+las nuestras, y `d8` relee el nuestro con `rc 0`.
+
+Test permanente: `TestEmisorAnonimaConCampoDelExterior`, con las dos sucesiones completas medidas (`enruta` y
+el `onClick`).
+
+**Falta una nota de proyecto**: el layout que escribe `apkc create` no tiene ningún `@+id`, así que un fuente
+que haga `R.id.pulsar` se rechaza con «el campo id no esta en com/myapp/R ni en sus padres» —y está bien que
+pase, porque el recurso no existe—. Al anadirle el botón (`android:id="@+id/pulsar"`), el enlazador de Go emite
+su clase `id` (`public static final class id { public static final int pulsar=0x7f010000; }`) y el fuente
+compila entero. Eso es lo que hace la comprobación 12 de `studio/prueba-pestana.js`: escribe el layout y el
+`MainActivity` del contador en el proyecto que creó la propia pestaña, y compila dentro de chromium —**41
+comprobaciones, 0 fallos, un apk de 10098 bytes** con v1 `ok` y v2 `ok`, y las **18** peticiones todas de su
+origen—.
+
+Fuera del navegador, el mismo proyecto (`apkc create` + los dos ficheros escritos a mano,
+`$PREFIX/tmp/e54/medir-proyecto.sh` y el `repro` de la sonda): **499 ms y un apk de 10048 bytes** con
+`--linker go --compiler go`, `apksigner` por v1 y v2, `zipalign -c -p 4`, `zipcheck.py`, `aapt2 dump badging`
+que lee `launchable-activity: name='com.myapp.MainActivity'`, y su `classes.dex` (2724 bytes) **releído por
+`d8` con `rc 0`** (re-dexado a 2408). El bloque 4e del gate comprueba además que en el dex del navegador están
+`Lcom/myapp/MainActivity$1;`, `Landroid/view/View$OnClickListener;`, `setContentDescription`, `pulsos` y la
+cadena que arma el concatenedor.
+

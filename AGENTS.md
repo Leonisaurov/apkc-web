@@ -185,6 +185,13 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   Fuera del subconjunto quedan **arreglos y bucles** (y `switch`/`try`); y sigue en pie una forma de `d8`
   para `a*b` entre dos parámetros (dos unidades, `0x0192` + `0x0201`) que no hemos descifrado — nosotros
   emitimos `mul-int/2addr` y `d8` lee el resultado.
+- **La app del contador, y por qué el campo no puede ser `private`** (§54): una anónima sobre
+  `View$OnClickListener` que escribe `pulsos = pulsos + 1` en el exterior, decide con `if` y arma el texto
+  con concatenación — las tres piezas medidas, juntas por primera vez en un `onClick`. javac **vuelve a
+  cargar la captura** (`aload_0; getfield this$0` dos veces) en vez de hacer `dup`, y el estático del
+  exterior se lee con `getstatic` sin pasar por ella. Si el campo del exterior es **privado**, javac no
+  escribe el campo: escribe `access$000`/`access$002` sintéticos del exterior (el de escritura *devuelve* el
+  valor, de ahí el `pop`), y como ni el número ni el orden están medidos, ese caso se rechaza por nombre.
 - **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
   arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
@@ -204,7 +211,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **201 PASS + 2 SKIP** nativa y **181 PASS + 22 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **202 PASS + 2 SKIP** nativa y **181 PASS + 23 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
