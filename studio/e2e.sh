@@ -122,7 +122,15 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       for pieza in classes.dex resources.arsc AndroidManifest.xml res/layout/main.xml; do
         unzip -l "$compilado" | grep -q " $pieza\$" || falla "falta $pieza en el apk compilado en la pestaña"
       done
+      # y lo que el manifiesto promete con qué arrancar tiene que estar en el dex que escribió el
+      # navegador: es lo más cerca del `pm install` que se puede comprobar sin dispositivo
+      lanzable=$(sed -n "s/^launchable-activity: name='\([^']*\)'.*\$/\1/p" "$TMP/studio-pestana-badging.log" | head -1)
+      [ -n "$lanzable" ] || falla "aapt2 no declaró un componente lanzable en el apk de la pestaña"
+      interno=$(printf '%s' "$lanzable" | tr '.' '/')
+      unzip -p "$compilado" classes.dex | strings | grep -q "L$interno;" ||
+        falla "el dex del navegador no trae la clase que el manifiesto declara lanzable ($interno)"
       avisa "pestaña compilando: apk de $(wc -c <"$compilado" | tr -d ' ') bytes, verificado por apksigner (v1+v2), zipalign, zipcheck y aapt2"
+      avisa "el apk de la pestaña declara $lanzable y esa clase está dentro de su dex"
     else
       avisa "sin ANDROID_JAR en el entorno: la pestaña no llego a compilar el proyecto entero"
     fi
@@ -172,6 +180,13 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         if ! python3 "$ZIPCHECK" "$estudio" >/dev/null 2>&1; then falla "zipcheck rechaza el apk del proyecto generado"; fi
         "$BUILD_TOOLS/aapt2" dump badging "$estudio" >"$TMP/studio-e46-badging.log" 2>&1 || falla "aapt2 no entiende el apk del proyecto generado"
         grep -q "package: name='com.hola.apkcstudio'" "$TMP/studio-e46-badging.log" || falla "el apk generado no trae el package de la pagina"
+        # en este proyecto hay clase anonima: la interfaz del framework contra la que enlaza tiene
+        # que estar en el dex del navegador, y el metodo que llama a su `show()` tambien
+        for nombre in 'Lcom/hola/apkcstudio/MainActivity;' 'Lcom/hola/apkcstudio/MainActivity$1;' \
+                      'Landroid/view/MenuItem$OnMenuItemClickListener;'; do
+          unzip -p "$estudio" classes.dex | strings | grep -q "$nombre" ||
+            falla "el dex del navegador no trae $nombre"
+        done
         avisa "pestaña con el proyecto generado: apk de $(wc -c <"$estudio" | tr -d ' ') bytes, igual entrada por entrada al nativo, dex releido por d8"
       fi
       cd "$AQUI"

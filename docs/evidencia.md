@@ -2323,3 +2323,37 @@ Con `verify` dentro del binario, la cadena completa —crear, compilar, dexar, e
 **dictaminar**— corre en la pestaña. Lo que sigue sin medirse es el hecho 2 del objetivo: instalar ese apk y
 ver la actividad arrancar.
 
+
+## 48. Lo más cerca de `pm install` que hay sin teléfono: la clase que el manifiesto promete está en el dex del navegador
+
+Un apk puede firmar bien y aun así no arrancar si el componente que declara su manifiesto no existe dentro
+del `classes.dex`. Eso es comprobable sin dispositivo, y `studio/e2e.sh` lo pide desde ahora, en los dos
+apks que salen de chromium:
+
+```sh
+lanzable=$(sed -n "s/^launchable-activity: name='\([^']*\)'.*\$/\1/p" $TMP/studio-pestana-badging.log)
+interno=$(printf '%s' "$lanzable" | tr '.' '/')           # com.myapp.MainActivity -> com/myapp/MainActivity
+unzip -p $TMP/pestana-apk/pestanera-completa.apk classes.dex | strings | grep -q "L$interno;"
+```
+
+**Medido**: para el apk de la plantilla, `aapt2 dump badging` declara `launchable-activity: name='com.myapp.MainActivity'`
+y esa clase está en el dex que escribió el navegador (el gate lo avisa: `el apk de la pestaña declara
+com.myapp.MainActivity y esa clase está dentro de su dex`). Para el proyecto que la página genera (§46), el
+gate exige tres nombres dentro del mismo `classes.dex` de 2392 bytes:
+
+- `Lcom/hola/apkcstudio/MainActivity;` — la actividad,
+- `Lcom/hola/apkcstudio/MainActivity$1;` — la clase anónima que emite el fuente, con su `this$0` del §42,
+- `Landroid/view/MenuItem$OnMenuItemClickListener;` — la interfaz del framework contra la que va el
+  `invokeinterface` del botón, es decir el enlace que ART tendría que resolver al cargarla.
+
+Todo junto, la corrida del gate queda así (`sh e2e.sh`, `rc 0`): variante java 10348 bytes y kotlin 678823
+bytes verificadas por `apksigner`/`zipcheck`; la pestaña con **37 comprobaciones**; el apk compilado dentro
+de chromium de 9141 bytes aprobado por `apksigner` (v1+v2), `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump
+badging`; el del proyecto generado de 9832 bytes **igual entrada por entrada al nativo** y su dex releído
+por `d8` con `rc 0`; y el cotejo del verificador propio contra `apksigner` — `bueno: si/si`,
+`con-v3: si/si`, `bloque-alterado: no/no`.
+
+**El límite de esta comprobación, dicho sin adornos**: `strings` sobre el dex prueba que el *tipo* existe y
+que la *referencia* a la interfaz del framework está escrita. No prueba que el cargador de ART la resuelva
+contra el `framework.jar` del aparato ni que `onCreate` sobreviva a la inflación del layout. Eso último es
+exactamente el hecho 2 del objetivo y sigue necesitando un teléfono.
