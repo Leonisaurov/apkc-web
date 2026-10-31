@@ -1028,20 +1028,30 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 	}
 	if a.es('p', "(") {
 		donde := a.actual().donde
+		marca := a.i
 		a.avanzar()
 		tipo, err := a.tipo()
+		if err == nil && a.es('p', ")") {
+			a.avanzar()
+			e, err := a.expresionUnaria()
+			if err != nil {
+				return nil, err
+			}
+			return jcast{tipo: tipo, dentro: e, donde: donde}, nil
+		}
+		// no era un molde: una expresion entre parentesis, que solo cambia la precedencia y deja el
+		// mismo arbol. Se deshace lo leido y se vuelve por la ruta de la expresion. Medido en el
+		// parrafo 53 con `"s" + (x + 1)`, donde javac escribe la cuenta entera y un solo append(I).
+		a.i = marca
+		a.avanzar() // el (
+		e, err := a.expresion()
 		if err != nil {
 			return nil, err
 		}
-		if !a.es('p', ")") {
-			return nil, fmt.Errorf("linea %d: entre parentesis se esperaba un molde (Tipo) y no una expresion", a.actual().donde.linea)
-		}
-		a.avanzar()
-		e, err := a.expresionUnaria()
-		if err != nil {
+		if err := a.comerSimbolo(")"); err != nil {
 			return nil, err
 		}
-		return jcast{tipo: tipo, dentro: e, donde: donde}, nil
+		return e, nil
 	}
 	e, err := a.atomo()
 	if err != nil {

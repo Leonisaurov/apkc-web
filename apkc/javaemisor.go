@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -1272,11 +1273,19 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return e.nuevo(v)
 	case joperador:
 		// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49):
-		// dos palabras dentro, una fuera. Concatenar cadenas con `+` es StringBuilder y es otro incremento.
+		// dos palabras dentro, una fuera. Antes de emitir se prueba el plegado de constantes, que javac
+		// hace (`1 + 2` sale `iconst_3`, `1 + 2 * 3` sale `bipush 7`, medido en el parrafo 53).
+		if v.op == "+" && e.esConcatenacion(v) {
+			return e.concatenar(v)
+		}
 		codes := map[string]byte{"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem}
 		code, esAritmetica := codes[v.op]
 		if !esAritmetica {
 			return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
+		}
+		if plegado, esConstante := plegarEntero(v); esConstante {
+			e.cargaEntero(plegado)
+			return "I", nil
 		}
 		izq, err := e.exp(v.izq)
 		if err != nil {
@@ -1285,6 +1294,10 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		der, err := e.exp(v.der)
 		if err != nil {
 			return "", err
+		}
+		if izq == "Ljava/lang/String;" || der == "Ljava/lang/String;" {
+			return "", fmt.Errorf("linea %d: `%s` con una cadena cuyo tipo no se puede estimar sin emitirla (una llamada): la concatenacion esta medida sobre literales, campos, variables y `this`",
+				v.donde.linea, v.op)
 		}
 		if izq != "I" || der != "I" {
 			return "", fmt.Errorf("linea %d: `%s` aplicado a %s y %s: solo se midio la aritmetica de enteros",
@@ -1297,6 +1310,166 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return "", fmt.Errorf("linea %d: la negacion no esta medida en este emisor", v.donde.linea)
 	}
 	return "", fmt.Errorf("una expresion de %T no esta medida", x)
+}
+
+// internoStringBuilder: el tipo con el que javac pega cadenas en la version 52. No es un recuerdo del
+// manual: del `javap -c` de la sonda del parrafo 53 sale `new #9 // class java/lang/StringBuilder`,
+// `dup`, `invokespecial #11 <init>:()V`, una fila de `invokevirtual append` y `toString()Ljava/lang/String;`.
+const internoStringBuilder = "java/lang/StringBuilder"
+
+// esConcatenacion: un `+` es concatenacion cuando alguno de sus dos lados devuelve cadena. La
+// agrupacion es la del fuente (izquierda asociativa): en `1 + 2 + x + "s"` el subarbol `(1+2)+x` NO es
+// concatenacion y javac lo evalua como cuenta entera, para appendear su resultado con append(I).
+func (e *emisor) esConcatenacion(v joperador) bool {
+	return e.tieneCadena(v.izq) || e.tieneCadena(v.der)
+}
+
+// tieneCadena: el operando es cadena, o es el resultado de otra concatenacion. Hace falta porque
+// `tipoEstimado` estima literales, campos, variables y `this`, pero no el resultado de un `+`: en
+// `"hola" + " " + 3` el nodo de arriba tiene por izquierda a `"hola" + " "`, y esa rama ya devuelve
+// cadena por si sola (parrafo 53).
+func (e *emisor) tieneCadena(x jexpr) bool {
+	if op, es := x.(joperador); es && op.op == "+" {
+		// el subarbol se juzga con la misma regla, bajando por su espina izquierda
+		if e.esConcatenacion(op) {
+			return true
+		}
+	}
+	d, err := e.tipoEstimado(x)
+	return err == nil && d == "Ljava/lang/String;"
+}
+
+// segmentosDeConcat: los operandos en el orden en que javac los appendea, bajando por la espina
+// izquierda mientras el hijo siga siendo concatenacion.
+func (e *emisor) segmentosDeConcat(v joperador) []jexpr {
+	if hijo, es := v.izq.(joperador); es && hijo.op == "+" && e.esConcatenacion(hijo) {
+		return append(e.segmentosDeConcat(hijo), v.der)
+	}
+	return []jexpr{v.izq, v.der}
+}
+
+// textoLiteral: el texto con el que javac dobla un literal dentro de una concatenacion: la cadena tal
+// cual, o el entero escrito en decimal. Medido con `"hola" + " " + 3` (una sola constante "hola 3") y
+// `"x" + 2 + 3 + n` (`ldc "x23"` y despues `iload_1; append(I)`).
+func textoLiteral(x jexpr) (string, bool) {
+	lit, es := x.(jlit)
+	if !es {
+		return "", false
+	}
+	switch lit.tipoJ {
+	case 's':
+		return lit.texto, true
+	case 'i':
+		return strconv.Itoa(int(lit.entero)), true
+	}
+	return "", false
+}
+
+// concatenar escribe la cadena de StringBuilder. Tres reglas leidas del javap de la sonda: los literales
+// adjacentes se doblan en UNA constante; si despues del plegado no queda mas que una cadena no hay
+// StringBuilder (`"hola" + 3` es un solo `ldc`); y el primer operando se appendea como los demas, porque
+// javac no usa el constructor `StringBuilder(String)`.
+func (e *emisor) concatenar(v joperador) (string, error) {
+	piezas := []jexpr{}
+	texto := ""
+	hayTexto := false
+	for _, s := range e.segmentosDeConcat(v) {
+		if t, esLiteral := textoLiteral(s); esLiteral {
+			texto += t
+			hayTexto = true
+			continue
+		}
+		if hayTexto {
+			piezas = append(piezas, jlit{tipoJ: 's', texto: texto, donde: v.donde})
+			texto, hayTexto = "", false
+		}
+		piezas = append(piezas, s)
+	}
+	if hayTexto {
+		piezas = append(piezas, jlit{tipoJ: 's', texto: texto, donde: v.donde})
+	}
+	if len(piezas) == 1 {
+		if t, soloLiterales := textoLiteral(piezas[0]); soloLiterales {
+			e.ldc(e.pool.cadena(t))
+			e.sube()
+			return "Ljava/lang/String;", nil
+		}
+	}
+	appends := map[string]string{
+		"I":                  "(I)Ljava/lang/StringBuilder;",
+		"Ljava/lang/String;": "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+	}
+	idx := e.pool.clase(internoStringBuilder)
+	e.emite(opNew, byte(idx>>8), byte(idx))
+	e.sube()
+	e.emite(opDup)
+	e.sube()
+	// el dup deja dos referencias: el constructor se come una y la otra es la cadena viva
+	e.invoca(opInvokespec, internoStringBuilder, "<init>", "()V", 1)
+	for _, p := range piezas {
+		d, err := e.exp(p)
+		if err != nil {
+			return "", err
+		}
+		desc, medida := appends[d]
+		if !medida {
+			if d != "" && (d[0] == 'L' || d[0] == '[') {
+				// medido con `String.valueOf(o)` implicito: `append:(Ljava/lang/Object;)`
+				desc = "(Ljava/lang/Object;)Ljava/lang/StringBuilder;"
+			} else {
+				return "", fmt.Errorf("linea %d: concatenar una expresion de tipo %s: solo se midieron entero, cadena y referencia (append(Z), append(C), append(J) y append(D) no los leyimos)",
+					v.donde.linea, d)
+			}
+		}
+		e.invoca(opInvokevirt, internoStringBuilder, "append", desc, 2)
+	}
+	e.invoca(opInvokevirt, internoStringBuilder, "toString", "()Ljava/lang/String;", 1)
+	return "Ljava/lang/String;", nil
+}
+
+// plegarEntero: javac dobla las cuentas de literales (parrafo 53): `1 + 2` es `iconst_3`, `1 + 2 * 3` es
+// `bipush 7` —el 7 va en bipush porque iconst llega al 5—, `7 - 10` es `bipush -3` y `9 / 2` es `iconst_4`.
+// Con un divisor de cero NO lo dobla: `1 / 0` sale `iconst_1; iconst_0; idiv`, que es la excepcion en
+// tiempo de ejecucion y no en la compilacion.
+func plegarEntero(x jexpr) (int32, bool) {
+	lit, esLit := x.(jlit)
+	if esLit {
+		if lit.tipoJ != 'i' {
+			return 0, false
+		}
+		return lit.entero, true
+	}
+	op, esOp := x.(joperador)
+	if !esOp {
+		return 0, false
+	}
+	a, ok := plegarEntero(op.izq)
+	if !ok {
+		return 0, false
+	}
+	b, ok := plegarEntero(op.der)
+	if !ok {
+		return 0, false
+	}
+	switch op.op {
+	case "+":
+		return a + b, true
+	case "-":
+		return a - b, true
+	case "*":
+		return a * b, true
+	case "/":
+		if b == 0 {
+			return 0, false
+		}
+		return a / b, true
+	case "%":
+		if b == 0 {
+			return 0, false
+		}
+		return a % b, true
+	}
+	return 0, false
 }
 
 // aplanar: los segmentos de una cadena de puntos y su base, que viene vacia si empezo por un nombre.

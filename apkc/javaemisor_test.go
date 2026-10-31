@@ -915,23 +915,7 @@ func leeCodigo(t *testing.T, m classMethod) string {
 // sale por su cuenta, el encadenado por encima de una etiqueta vacia, y la linea de la tabla, que
 // en un metodo de una sola linea es UNA fila.
 func TestEmisorBranquiasContraJavap(t *testing.T) {
-	clases, err := compilarProyectoJava([]fuenteJava{{nombre: "Branquias.java", contenido: fuenteBranquias}}, jarDelSDK(t))
-	if err != nil {
-		t.Fatalf("el fuente con branquias no compila: %v", err)
-	}
-	var datos []byte
-	for _, c := range clases {
-		if c.interno == "com/myapp/Branquias" {
-			datos = c.datos
-		}
-	}
-	if datos == nil {
-		t.Fatalf("no salio com/myapp/Branquias de %d clases", len(clases))
-	}
-	c, err := readClassFull(datos)
-	if err != nil {
-		t.Fatalf("nuestra clase no se lee: %v", err)
-	}
+	c := claseDelFuente(t, "Branquias.java", fuenteBranquias, "com/myapp/Branquias")
 	medidos := map[string]string{
 		"igual":     "0 iload_1 | 1 iload_2 | 2 if_icmpne->7 | 5 iconst_1 | 6 ireturn | 7 iconst_0 | 8 ireturn",
 		"mayorcero": "0 iload_1 | 1 ifle->6 | 4 iconst_2 | 5 ireturn | 6 iconst_3 | 7 ireturn",
@@ -954,6 +938,85 @@ func TestEmisorBranquiasContraJavap(t *testing.T) {
 		}
 		if len(m.Lines) != 1 || m.Lines[0].pc != 0 {
 			t.Errorf("%s: LineNumberTable %v, medido una sola fila en pc 0", m.Name, m.Lines)
+		}
+		delete(medidos, m.Name)
+	}
+	for nombre := range medidos {
+		t.Errorf("%s no salio entre los metodos (%v)", nombre, nombresMetodos(c.Methods))
+	}
+}
+
+const fuenteCadena = `package com.myapp;
+public class Cadena {
+    static int total = 5;
+    int n;
+    public String todoLiteral() { return "hola" + " " + 3; }
+    public String conEntero(int x) { return "llevas " + x; }
+    public String enteroPrimero(int x) { return 1 + 2 + x + "s"; }
+    public String parentesis(int x) { return "s" + (x + 1); }
+    public String campo() { return "v" + n; }
+    public int plegado() { return 1 + 2 * 3; }
+    public int entreCero() { return 1 / 0; }
+    public String dosVariables(String a, String b) { return a + "-" + b; }
+}
+`
+
+// claseDelFuente compila un fuente con nuestro emisor y devuelve la clase pedida, leida del .class que
+// escribimos.
+func claseDelFuente(t *testing.T, archivo, fuente, interno string) classFull {
+	t.Helper()
+	clases, err := compilarProyectoJava([]fuenteJava{{nombre: archivo, contenido: fuente}}, jarDelSDK(t))
+	if err != nil {
+		t.Fatalf("%s no compila: %v", interno, err)
+	}
+	for _, c := range clases {
+		if c.interno != interno {
+			continue
+		}
+		cf, err := readClassFull(c.datos)
+		if err != nil {
+			t.Fatalf("%s no se lee: %v", interno, err)
+		}
+		return cf
+	}
+	t.Fatalf("no salio %s de %d clases", interno, len(clases))
+	return classFull{}
+}
+
+// TestEmisorCadenaContraJavap fija la medicion del parrafo 53: la concatenacion de cadenas en la
+// version 52 es una cadena de StringBuilder, y el plegado de constantes es el de javac. Las tres
+// reglas medidas, con su lista de instrucciones al lado:
+//
+//   - los literales adjacentes se doblan en UNA constante ("hola" + " " + 3 sale un solo ldc "hola 3"),
+//     y si despues del plegado no queda nada mas, no hay StringBuilder;
+//   - el primer operando se appendea como los demas: javac no usa el constructor StringBuilder(String);
+//   - `1 + 2` sale iconst_3 y `1 + 2 * 3` sale bipush 7, pero `1 / 0` NO se dobla: queda
+//     iconst_1; iconst_0; idiv, que es la excepcion en tiempo de ejecucion.
+//
+// Lo que se escribe con los parentesis (`"s" + (x + 1)`) es una sola cuenta entera con un append(I),
+// porque el subarbol `(1+2)+x` de `1 + 2 + x + "s"` no es concatenacion.
+func TestEmisorCadenaContraJavap(t *testing.T) {
+	c := claseDelFuente(t, "Cadena.java", fuenteCadena, "com/myapp/Cadena")
+	medidos := map[string]string{
+		"todoLiteral":   "0 ldc | 2 areturn",
+		"conEntero":     "0 new | 3 dup | 4 invokespecial | 7 ldc | 9 invokevirtual | 12 iload_1 | 13 invokevirtual | 16 invokevirtual | 19 areturn",
+		"enteroPrimero": "0 new | 3 dup | 4 invokespecial | 7 iconst_3 | 8 iload_1 | 9 iadd | 10 invokevirtual | 13 ldc | 15 invokevirtual | 18 invokevirtual | 21 areturn",
+		"parentesis":    "0 new | 3 dup | 4 invokespecial | 7 ldc | 9 invokevirtual | 12 iload_1 | 13 iconst_1 | 14 iadd | 15 invokevirtual | 18 invokevirtual | 21 areturn",
+		"campo":         "0 new | 3 dup | 4 invokespecial | 7 ldc | 9 invokevirtual | 12 aload_0 | 13 getfield | 16 invokevirtual | 19 invokevirtual | 22 areturn",
+		"plegado":       "0 bipush | 2 ireturn",
+		"entreCero":     "0 iconst_1 | 1 iconst_0 | 2 idiv | 3 ireturn",
+		"dosVariables":  "0 new | 3 dup | 4 invokespecial | 7 aload_1 | 8 invokevirtual | 11 ldc | 13 invokevirtual | 16 aload_2 | 17 invokevirtual | 20 invokevirtual | 23 areturn",
+	}
+	for _, m := range c.Methods {
+		quieren, esCadena := medidos[m.Name]
+		if !esCadena {
+			continue
+		}
+		if sale := leeCodigo(t, m); sale != quieren {
+			t.Errorf("%s:\n  nuestro: %s\n  javac:   %s", m.Name, sale, quieren)
+		}
+		if vuelta := vueltaDe(m.Desc); vuelta != "Ljava/lang/String;" && m.Name != "plegado" && m.Name != "entreCero" {
+			t.Errorf("%s: devuelve %s, se esperaba cadena", m.Name, vuelta)
 		}
 		delete(medidos, m.Name)
 	}
