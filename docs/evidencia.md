@@ -2010,7 +2010,7 @@ fichero o árbol con `os.Stat`, y en el `fs` simulado eso falla para un fichero 
 test localizaba el jar con `Stat`, así que se saltaba aunque el jar estuviera montado; ahora lo **abre**
 (`abrirBuscador`) y guarda el resultado en un `sync.Once`, que además evita releer los 26 MB en cada prueba.
 
-## 44. `apkc build --linker go --compiler go`: un apk completo sin levantar ningún proceso, también dentro de la pestaña
+## 44. `apkc build --linker go --compiler go`: un apk completo sin levantar ningún proceso, también en el hospedador con forma de navegador
 
 Con `compile` y `dex` ya medidos, el cableado dentro de `build` son dos ramas y tres banderas. `--compiler
 go` sustituye las dos etapas de código (`compileJava` por `compilarFuentesEnGo`, `bundleJava` por
@@ -2071,6 +2071,84 @@ que el zip guarda de cada fichero entra en el cálculo de la firma. Por eso la c
 fue entrada por entrada; el `cmp` directo de los dos apks marca el byte 11, que es justo el campo de hora.
 Si alguien quiere reproducibilidad hará falta fijar esos tiempos, y eso no está medido todavía.
 
-Suite nativa: **190 tests**, cero fallos. Un `apkc build` dentro de la pestaña ya produce un apk firmado: lo
-que queda es que la página llame a esa orden en vez de a `sign` (falta el selector del jar en la interfaz y
-el botón), que es el cableado final del objetivo.
+Suite nativa: **190 tests**, cero fallos. Lo que esta sección todavía no medía era chromium: faltaba que
+la página llamara a esa orden en vez de a `sign`. Ese cableado está hecho y medido en el §45.
+
+## 45. La página compila dentro de chromium: el apk entero, y byte a byte igual que el build nativo
+
+El cableado son tres ficheros de la página y nada más de apkc. En `studio/index.html` el bloque 2 gana un
+`<details>` con el selector del jar (`#android-jar`), el del keystore (`#keystore-compilar`), la versión de
+SDK y su nombre en clave (`#sdk-version`, `#codename`), un aviso de estado (`#estado-jar`) y dos botones:
+`#usar-android-jar` guarda el jar en OPFS y `#compilar-apk` llama a `compilarDelTodo()`
+(`studio/pestana.js`), que pone el cwd en `/proyecto`, corre `build --linker go --compiler go --android-jar
+/sdk/android.jar --sdk-version … --codename … --keystore /sdk/keystore.p12` y, si sale 0, deja el apk en el
+ancla `#descargar-apk-compilada`. `studio/servidor.js` sirve `/android-jar` desde la variable `ANDROID_JAR`:
+el jar entra por el propio origen de la página, no por un CDN (regla 4).
+
+**Aparecieron dos fallos, y los dos eran del hospedador de la pestaña, no de apkc.**
+
+1. **Carrera de arranque.** Desde el segundo comando en adelante, `hospedador.ejecutar` devolvía `codigo 1`
+   con la consola vacía. Se reprodujo con dos órdenes seguidas (`version`, `build`) en vez de con una: la
+   página llamaba a `iniciar()` dos veces a la vez, cada una montaba su `fs` y el segundo `postMessage`
+   pisaba el primero. `studio/hospedador.js` guarda ahora la promesa de arranque en `arranque` (un solo
+   `hacerIniciar()` en vuelo; si falla, se borra para reintentar). Esto reinterpreta la nota de
+   «intermitencia de OPFS» del §39: no era intermitencia, era esta carrera.
+2. **Montar en un subdirectorio.** `/sdk/android.jar` escrito con `escribir` se leía perfecto desde JS y Go
+   contestaba `open /sdk/android.jar: No such file or directory`; el mismo jar en la raíz (`/android.jar`)
+   abría. `caminoAbierto` del fragmento de fs exige que **cada tramo** del camino exista como nodo de
+   memoria, y `montar` solo creaba los directorios intermedios en OPFS. `studio/fs-fragmento.js` crea ahora
+   también los nodos de directorio intermedios.
+
+**Medición dentro de chromium** (conducida por CDP, con el binario `GOOS=js` y el jar real):
+
+```sh
+sh -c 'cd studio && APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm \
+  APK_EJEMPLO=$PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio/build/app.apk \
+  KS_EJEMPLO=$HOME/.android/debug.keystore \
+  ANDROID_JAR=$HOME/Android/platforms/android-34/android.jar node prueba-pestana.js'
+```
+
+- el jar entra por `/android-jar` (origen propio): **26361808 bytes** escritos en OPFS, y releídos por el fs
+  de la pestaña dan **los mismos 26361808**, con cabecera `PK\3\4`;
+- `compilarDelTodo()` deja `ultimo-codigo` en **`0`**, `finished in 5.08793472s` (`[timing] total 5.022s`,
+  de los que `961ms` son empaquetar y firmar) y el apk en `/proyecto/build/app.apk`: **9141 bytes**;
+- las **21** comprobaciones de la prueba de pestaña pasan, cero fallos, y las **12 peticiones** registradas
+  son todas del propio origen: cero peticiones ajenas.
+
+**Los oráculos de fuera, sobre el fichero que salió de la pestaña** (`studio/e2e.sh` lo pide solo, bloque 4b):
+
+```sh
+$BUILD_TOOLS/apksigner verify --verbose --min-sdk-version 21 $PREFIX/tmp/pestana-apk/pestanera-completa.apk
+#  Verified using v1 scheme (JAR signing): true
+#  Verified using v2 scheme (APK Signature Scheme v2): true
+$BUILD_TOOLS/zipalign -c -p 4 …pestanera-completa.apk           # rc 0
+python3 ~/Develop/Go/apkc-harness/zipcheck.py …pestanera-completa.apk
+#  7 entries, every record agrees with itself; 1 other stored entry at 4
+$BUILD_TOOLS/aapt2 dump badging …pestanera-completa.apk
+#  package: name='com.myapp' versionCode='1' versionName='0.1' platformBuildVersionName='14'
+#  platformBuildVersionCode='34' compileSdkVersion='34' … minSdkVersion:'21' targetSdkVersion:'33'
+```
+
+**Y la comparación que cierra el objetivo**: el mismo proyecto, compilado con el binario nativo
+(`apkc create proyecto`, el mismo `src/com/myapp/Editado.java` que escribe la prueba, y el mismo
+`build --linker go --compiler go`) da **exactamente 9141 bytes** y **los mismos bytes en cada entrada**.
+`unzip -p … | sha256sum` de las cinco entradas que importan, pestaña frente a nativo:
+
+| entrada | sha256 (16 primeros), pestaña = nativo | bytes |
+| --- | --- | --- |
+| `AndroidManifest.xml` | `ed604df837035a84` | 1908 |
+| `resources.arsc` | `b38acea1833e0226` | 788 |
+| `res/layout/main.xml` | `0cc057bb56f82857` | 604 |
+| `classes.dex` | `907c811250803c58` | 1396 |
+| `META-INF/MANIFEST.MF` | `96485e1eb5fc0a7f` | 376 |
+
+Es decir: **el apk que produce el navegador sin levantar un solo proceso no se parece al nativo, es igual**,
+entrada por entrada; solo difiere el tiempo del zip (lo del §44, que sigue sin claimar reproducibilidad). El
+`classes.dex` es de 1396 bytes y no los 2392 del proyecto del studio porque aquí se compilan dos fuentes
+distintos: la plantilla de `apkc create` (`com.myapp`, sin clase anónima) más el `Editado` de la prueba.
+
+Con esto el objetivo del repo está cubierto del lado del cliente: `create`, editar, compilar recursos,
+compilar Java, dexar, empaquetar y firmar, todo dentro de la pestaña y sin conexión. Lo que sigue siendo
+frontera, y no falla silenciosamente: el emisor de `.class` rechaza por nombre lo que no mide (§41, §42) y
+el enlazador rechaza los calificadores de carpeta y los recursos que no sean `values`/`layout` (§38).
+

@@ -450,6 +450,15 @@ export function crearFs(carpeta) {
     async montar(rutaSimulada, bytes) {
       const a = absoluta(String(rutaSimulada));
       await directorio(tramosDe(a).slice(0, -1), true);
+      // los directorios intermedios tienen que existir TAMBIÉN en la memoria: `open` comprueba con
+      // caminoAbierto que cada tramo del camino sea un nodo directorio, y aquí solo se creaban en OPFS.
+      // El síntoma era un montaje que la página leía bien y apkc no abría:
+      // "open /sdk/android.jar: No such file or directory"
+      let acumulado = "";
+      for (const t of tramosDe(a).slice(0, -1)) {
+        acumulado += "/" + t;
+        if (!raiz.get(acumulado)) nuevoNodo(acumulado, true);
+      }
       const n = nuevoNodo(a, false);
       n.sinCargar = true;
       n.data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);

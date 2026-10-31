@@ -11,6 +11,7 @@
 import { crearFs } from "./fs-fragmento.js";
 
 let sistema = null;            // { fs, montar, extraer, lista, ... } — se asigna AL FINAL del init
+let arranque = null;           // la promesa del init en curso: ver iniciar()
 let bytesModule = null;        // los bytes del wasm, una sola bajada; la instancia no se reutiliza
 let errorWasmExec = null;      // el motivo por el que no se pudo cargar wasm_exec.js
 let ocupado = false;
@@ -18,8 +19,21 @@ let cola = [];
 let entregarRaiz = null;
 const raizPrometida = new Promise((resuelve) => { entregarRaiz = resuelve; });
 
-async function iniciar() {
-  if (sistema) return;
+// Un mutex de arranque, no un `if (sistema) return`: dos mensajes seguidos (por ejemplo el `leer` con
+// que la página pregunta si ya hay un android.jar guardado y el `arbol` del arranque, o un `montar`
+// y un `ejecutar`) pasaban ambos por el guard antes de que `sistema` estuviera asignado, creaban dos
+// fs, y el comando quedaba enlazado al `globalThis.fs` de uno mientras la respuesta se leía de la
+// consola del otro. El síntoma era un código de salida 1 con la consola vacía, y ficheros de cero
+// bytes tras recargar: lo que docs/evidencia.md tenía anotado como intermitencia de OPFS (§39).
+function iniciar() {
+  if (sistema) return Promise.resolve();
+  if (!arranque) {
+    arranque = hacerIniciar().catch((e) => { arranque = null; throw e; });
+  }
+  return arranque;
+}
+
+async function hacerIniciar() {
   if (!crossOriginIsolated) {
     // sin COOP/COEP el handle sincrónico no está disponible; el síntoma es un TypeError dentro
     // del fs, que parece un fallo de apkc

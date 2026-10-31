@@ -254,11 +254,11 @@ async function firmar() {
   if (r && r.codigo === 0) await descargar(PROYECTO + "/build/firmado.apk");
 }
 
-async function descargar(ruta) {
+async function descargar(ruta, ancla) {
   const r = await hospedador.leer(ruta);
   if (!r.bytes) { nota("no hay nada en " + ruta); return; }
   const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
-  const enlace = document.getElementById("descargar-apk");
+  const enlace = document.getElementById(ancla || "descargar-apk");
   enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.android.package-archive" }));
   enlace.download = ruta.split("/").pop();
   nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
@@ -272,8 +272,66 @@ async function intentarCompilar() {
   if (r && r.codigo !== 0) {
     document.getElementById("consola-pestana").textContent +=
       "\nEse fallo es el muro conocido: js/wasm no tiene fork/exec, así que aapt2/javac/d8 no pueden arrancar.\n" +
-      "Lo que sí corre hoy aquí es create y sign. Ver docs/plan.md (fases 1 y 2) para lo que falta.\n";
+      "Lo que sí corre aquí entero es `build --linker go --compiler go`: el botón de arriba, que pide el android.jar.\n";
   }
+}
+
+// --- el build sin procesos: recursos, Java, dex y firma, en este mismo binario ------------
+const RUTA_JAR = "/sdk/android.jar";
+const RUTA_KEYSTORE = "/sdk/keystore.p12";
+
+async function ponerJarDeUrl(url) {
+  // la ruta del servidor local, no de un CDN: la página solo habla con su propio origen, y eso es
+  // lo que comprueba la prueba de la pestaña contando las peticiones
+  const respuesta = await fetch(url);
+  if (!respuesta.ok) throw new Error("el android.jar de " + url + " respondió " + respuesta.status);
+  const datos = new Uint8Array(await respuesta.arrayBuffer());
+  await hospedador.escribir(RUTA_JAR, datos);
+  await decirEstadoJar();
+  return datos.length;
+}
+
+async function usarJarElegido() {
+  const entrada = document.getElementById("android-jar");
+  if (!entrada.files.length) { nota("elige el android.jar primero"); return false; }
+  const datos = new Uint8Array(await entrada.files[0].arrayBuffer());
+  await hospedador.escribir(RUTA_JAR, datos);
+  await decirEstadoJar();
+  nota("android.jar guardado en esta pestaña (" + datos.length + " bytes); no sube a ningún sitio");
+  return true;
+}
+
+async function decirEstadoJar() {
+  const aviso = document.getElementById("estado-jar");
+  const r = await hospedador.leer(RUTA_JAR);
+  if (r.bytes) {
+    aviso.textContent = "hay un android.jar de " + r.bytes.length + " bytes en esta pestaña (" + RUTA_JAR + ")";
+    return true;
+  }
+  aviso.textContent = "sin android.jar en esta pestaña todavía";
+  return false;
+}
+
+async function compilarDelTodo() {
+  if (!(await decirEstadoJar())) {
+    if (!(await usarJarElegido())) { nota("hace falta el android.jar del API 34 para compilar aquí"); return; }
+  }
+  const keystore = document.getElementById("keystore-compilar");
+  if (keystore.files.length) {
+    const datos = new Uint8Array(await keystore.files[0].arrayBuffer());
+    await hospedador.escribir(RUTA_KEYSTORE, datos);
+    nota("keystore guardado en la pestaña; queda en OPFS");
+  } else if (!(await hospedador.leer(RUTA_KEYSTORE)).bytes) {
+    nota("hace falta también un keystore para poder firmar el apk");
+    return;
+  }
+  const version = (document.getElementById("sdk-version").value || "34").trim();
+  const codename = (document.getElementById("codename").value || "14").trim();
+  await hospedador.cwd(PROYECTO);
+  const r = await correr(["build", "--linker", "go", "--compiler", "go",
+    "--android-jar", RUTA_JAR, "--sdk-version", version, "--codename", codename,
+    "--keystore", RUTA_KEYSTORE]);
+  if (r && r.codigo === 0) await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
 }
 
 // --- arranque ----------------------------------------------------------------------------
@@ -300,11 +358,18 @@ if (typeof document !== "undefined") {
     });
     document.getElementById("firmar-aqui").addEventListener("click", firmar);
     document.getElementById("compilar-aqui").addEventListener("click", intentarCompilar);
+    document.getElementById("usar-android-jar").addEventListener("click", async () => { await usarJarElegido(); });
+    document.getElementById("compilar-apk").addEventListener("click", compilarDelTodo);
     document.getElementById("recargar-arbol").addEventListener("click", refrescarArbol);
     document.getElementById("descargar-apk").addEventListener("click", (e) => {
       e.preventDefault();
       descargar((document.getElementById("apk-a-firmar").value || PROYECTO + "/build/firmado.apk").trim());
     });
+    document.getElementById("descargar-apk-compilada").addEventListener("click", (e) => {
+      e.preventDefault();
+      descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
+    });
+    decirEstadoJar();
     iniciarPestana();
   });
 }

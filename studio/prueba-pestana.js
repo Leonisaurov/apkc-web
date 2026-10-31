@@ -12,6 +12,9 @@ const TMP = process.env.PREFIX ? process.env.PREFIX + "/tmp" : "/tmp";
 const WASM = process.env.APKC_WASM || "";
 const APK = process.env.APK_EJEMPLO || "";
 const KS = process.env.KS_EJEMPLO || "";
+// el android.jar es opcional: sin él no se puede probar el build completo dentro de la pestaña, y
+// la prueba lo dice en la salida en vez de pasar de largo en silencio
+const JAR_SRC = process.env.ANDROID_JAR || "";
 const PUERTO = Number(process.env.STUDIO_SERVIDOR_PORT || 8791);
 const CDP = process.env.STUDIO_PORT || "9345";
 const URL_PAGINA = "http://127.0.0.1:" + PUERTO + "/index.html";
@@ -32,11 +35,13 @@ if (!KS || !fs.existsSync(KS)) falta("KS_EJEMPLO apuntando a un keystore");
 const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- el servidor y el navegador -----------------------------------------------------------
-const servidor = spawn(process.execPath, [path.join(__dirname, "servidor.js"), String(PUERTO)], {
-  cwd: __dirname,
-  env: { ...process.env, APKC_WASM: path.resolve(WASM), APK_EJEMPLO: path.resolve(APK), KS_EJEMPLO: path.resolve(KS) },
-  stdio: ["ignore", "pipe", "pipe"],
-});
+  const envServidor = { ...process.env, APKC_WASM: path.resolve(WASM), APK_EJEMPLO: path.resolve(APK), KS_EJEMPLO: path.resolve(KS) };
+  if (JAR_SRC) envServidor.ANDROID_JAR = path.resolve(JAR_SRC);
+  const servidor = spawn(process.execPath, [path.join(__dirname, "servidor.js"), String(PUERTO)], {
+    cwd: __dirname,
+    env: envServidor,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
 let salidaServidor = "";
 servidor.stdout.on("data", (d) => { salidaServidor += d; });
 servidor.stderr.on("data", (d) => { salidaServidor += d; });
@@ -210,11 +215,55 @@ async function conductor() {
   const build = await evaluar(`(async () => {
     await hospedador.cwd("/proyecto");
     const r = await correr(["build"]);
-    return { codigo: r.codigo, consola: r.consola };
+    return { codigo: r.codigo, consola: r.consola, tipo: r.tipo, error: r.error };
   })()`);
   comprueba("apkc build en wasm dice el motivo, no se calla", build.codigo !== 0 &&
     /never started|not implemented on js/.test(String(build.consola)),
     JSON.stringify(build).slice(0, 320));
+
+  // 7. el proyecto entero, compilado DENTRO de la pestaña: recursos, Java, dex y firma, sin que
+  // el navegador arranque un solo proceso. El jar llega por fetch del propio origen y se guarda
+  // en OPFS, que es lo que hace el botón de la página.
+  if (JAR_SRC && fs.existsSync(JAR_SRC)) {
+    const jarPuesto = await evaluar(`(async () => {
+      const n = await ponerJarDeUrl("/android-jar");
+      const leido = await hospedador.leer("/sdk/android.jar");
+      const arbol = await hospedador.arbol();
+      const nodo = (arbol.nodos || []).find(x => x.ruta === "/sdk/android.jar");
+      const cabecera = leido.bytes ? Array.from(leido.bytes.slice(0, 4)) : null;
+      return { escrito: n, leido: leido.bytes ? leido.bytes.length : null, nodo: nodo ? nodo.bytes : "fuera del arbol", cabecera };
+    })()`);
+    comprueba("el android.jar entra en OPFS desde el propio origen", jarPuesto.escrito > 1000000, jarPuesto.escrito + " bytes");
+    comprueba("el android.jar vuelve a leerse por el fs de la pestaña", jarPuesto.leido === jarPuesto.escrito,
+      "leido " + jarPuesto.leido + ", cabecera " + JSON.stringify(jarPuesto.cabecera) + ", arbol " + jarPuesto.nodo);
+
+    const compilado = await evaluar(`(async () => {
+      const ks = new Uint8Array(await (await fetch("/keystore-ejemplo")).arrayBuffer());
+      await hospedador.escribir("/sdk/keystore.p12", ks);
+      document.getElementById("sdk-version").value = "34";
+      document.getElementById("codename").value = "14";
+      await compilarDelTodo();
+      const datos = await hospedador.bytes("/proyecto/build/app.apk");
+      return {
+        codigo: document.getElementById("ultimo-codigo").textContent,
+        bytes: datos ? Array.from(datos) : null,
+        descarga: document.getElementById("descargar-apk-compilada").download || "",
+        consola: String(document.getElementById("consola-pestana").textContent).slice(-500),
+      };
+    })()`);
+    const apkPestana = Buffer.from(compilado.bytes || [], "uint8");
+    comprueba("apkc build sin procesos sale 0 dentro de chromium", compilado.codigo === "0",
+      "codigo " + compilado.codigo + ", consola: " + JSON.stringify(compilado.consola.slice(-200)));
+    comprueba("la pestaña produjo un apk", apkPestana.length > 5000, apkPestana.length + " bytes");
+    comprueba("la descarga del apk queda lista en la página", compilado.descarga === "app.apk",
+      JSON.stringify(compilado.descarga));
+    const destinoPestana = path.join(fuera, "pestanera-completa.apk");
+    fs.writeFileSync(destinoPestana, apkPestana);
+    console.log("  --- el apk compilado dentro de la pestaña es " + destinoPestana);
+  } else {
+    console.log("  --- sin ANDROID_JAR en el entorno: no se prueba el build completo en la pestaña");
+  }
+
 
   // requisito del proyecto, escrito como comprobación: la pestaña no puede pedir nada fuera de
   // su origen. Ni un CDN de un runtime de terceros, ni telemetría, ni una fuente.

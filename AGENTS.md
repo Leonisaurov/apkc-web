@@ -130,9 +130,15 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   que no sean values/layout, subcarpetas, no-XML, `<permission>` y una version de platform no medida.
   **Con `--linker go` a secas sí se ejecutan `javac` y `d8`**; lo que ya no se ejecuta es aapt2. Con
   `--compiler go` tampoco esos dos: ver el párrafo de abajo.
-- **Queda una pieza para el objetivo**: el cableado de la página, para que el editor llame a `build
-  --linker go --compiler go` dentro de la pestaña (el comando ya hace todo, parrafo 44; faltan el selector
-  del `android.jar` en la interfaz y el boton). Las cuatro etapas corren sin proceso y sin conexion.
+- **El objetivo está cubierto dentro de la pestaña** (§45): `studio/index.html` pide el
+  `android.jar` (selector de fichero o `/android-jar` del propio servidor) y lo guarda en OPFS como
+  `/sdk/android.jar`; el botón `compilar-apk` corre `build --linker go --compiler go` con `--keystore` y deja
+  el apk listo para descargar. Medido en chromium real: 26361808 bytes de jar que entran y se releen
+  iguales, último código de salida `0`, apk de **9141 bytes** con **los mismos bytes en cada entrada** que el
+  build nativo del mismo proyecto, aprobado por `apksigner` (v1 y v2), `zipalign -c -p 4`, `zipcheck.py` y
+  `aapt2 dump badging`; 12 peticiones y ninguna fuera del origen. Cuesta dos fallos del hospedador arreglarlo
+  (carrera de arranque en `hospedador.js`, directorios intermedios que `fs-fragmento.js` no creaba en
+  memoria), y el aviso de «intermitencia de OPFS» del §39 era en realidad el primero.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
   Go, dex en Go, empaquetado y firma en Go. Nativo en frio: 255 ms y `build/app.apk` de 9868 bytes, que
   `apksigner` (v1 y v2), `zipalign -c -p 4`, `aapt2 dump badging`, `aapt2 dump resources` y `zipcheck.py`

@@ -66,9 +66,12 @@
       dentro del navegador: sin server, sin SDK y sin JDK. El árbol vive en OPFS
       (<a href="#" id="recargar-arbol">recargar</a>, aislamiento cross-origin:
       <span id="aislacion">?</span>), así que lo que escribas sobrevive a recargar la página.
-      <strong>Lo que no puede hacer todavía es compilar</strong>: <code>aapt2</code>,
-      <code>javac</code> y <code>d8</code> son programas externos y <code>js/wasm</code> no tiene
-      <code>fork/exec</code>. Prueba el botón para ver el muro tal cual lo dice apkc.
+      <strong>Compilar también se puede</strong>, pero con los backends de este binario:
+      <code>build --linker go --compiler go</code> enlaza los recursos, saca el <code>.class</code>
+      de tu fuente, lo dexa y firma, todo dentro de la pestaña, porque <code>js/wasm</code> no tiene
+      <code>fork/exec</code> y <code>aapt2</code>, <code>javac</code> y <code>d8</code> son programas
+      externos. El botón «intentar compilar» enseña ese muro tal cual lo dice apkc; el del panel de
+      abajo produce el apk.
     </p>
     <div class="acciones">
       <button id="crear-aqui">crear el proyecto aquí (apkc create)</button>
@@ -90,6 +93,28 @@
         </div>
       </div>
     </div>
+
+    <details open>
+      <summary>compilar el proyecto aquí dentro (apkc build, sin procesos)</summary>
+      <p class="nota">
+        <code>apkc build --linker go --compiler go</code> hace las cuatro cosas con este mismo binario:
+        enlaza los recursos, compila <code>MainActivity.java</code> a <code>.class</code>, dexa y firma. No
+        arranca <code>aapt2</code>, <code>javac</code> ni <code>d8</code>, así que ocurre dentro de la
+        pestaña. Pide dos ficheros tuyos, y ninguno sale de aquí: el <code>android.jar</code> del SDK (la
+        única versión medida es la del API 34) y un keystore para firmar. El jar son ~26 MB y se guardan en
+        OPFS: se elige una vez y sobrevive a recargar.
+      </p>
+      <label>android.jar <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
+      <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+      <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
+        <input type="text" id="codename" value="14" class="ruta"></label>
+      <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
+      <div class="acciones">
+        <button id="usar-android-jar">guardar el android.jar elegido en la pestaña</button>
+        <button id="compilar-apk" class="primario">compilar aquí (apkc build)</button>
+        <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk compilada</a>
+      </div>
+    </details>
 
     <details open>
       <summary>firmar una apk con tu propio keystore, aquí dentro</summary>

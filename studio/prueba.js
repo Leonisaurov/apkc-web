@@ -95,6 +95,11 @@ const js = fs.readFileSync(path.join(__dirname, "ui.js"), "utf8");
 const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
 for (const m of js.matchAll(/getElementById\("([^"]+)"\)/g))
   if (!ids.has(m[1])) mal(`ui.js pide #${m[1]} y index.html no lo tiene`);
+// lo mismo para la pestaña: es el otro fichero que toca el DOM, y un id que no existe se traduce
+// en un `addEventListener` sobre null que solo se ve cuando alguien pulsa el boton
+const pestana = fs.readFileSync(path.join(__dirname, "pestana.js"), "utf8");
+for (const m of pestana.matchAll(/getElementById\("([^"]+)"\)/g))
+  if (!ids.has(m[1])) mal(`pestana.js pide #${m[1]} y index.html no lo tiene`);
 for (const m of html.matchAll(/<input[^>]*name="([^"]+)"/g))
   if (!new RegExp(`"(f\\.get|f\\.has)\\(\"${m[1]}\"`).test(js) && !js.includes(`"${m[1]}"`))
     mal(`el formulario tiene ${m[1]} y estado() no lo lee`);

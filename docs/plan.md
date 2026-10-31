@@ -217,13 +217,18 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   9868 bytes aprobado por `apksigner`, `zipalign`, `aapt2 dump badging`/`resources` y `zipcheck.py`) y dentro
   del hospedador: el mismo apk, **entrada por entrada con los mismos bytes**. Parrafo 44, con la nota de que
   el apk no es reproducible byte a byte por los tiempos del zip.
-  (parrafo 43), en la lista de comandos que no sondean el SDK. Medido en el binario nativo y dentro del
-  hospedador con forma de navegador: 1,16 s con el jar de 26 MB montado, y las seis clases exportadas son
-  idénticas byte a byte a las nativas. **No está cableado en `apkc build`**: ese camino sigue ejecutando
-  `javac` y `d8`, y enhebrarlo es lo que queda junto con la página.
-- **1G.4** El `android.jar` entero viaja a la pestaña o se recorta: decisión con su número (fase 4.4). Con
-  1G.2 resuelta como está, el jar solo hace falta **en tiempo de compilación**, y la página puede pedirlo
-  una vez y guardarlo en OPFS: es un problema de 26 MB de descarga única, no de código.
+- **1G.4 HECHA — el `android.jar` entra en la pestaña por su propio origen.** La página lo pide una vez
+  (`/android-jar` desde `servidor.js`, o el selector de fichero `#android-jar`) y lo guarda en OPFS como
+  `/sdk/android.jar`; `compilarDelTodo()` se lo pasa a `build --compiler go`. Medido dentro de chromium:
+  26361808 bytes escritos, releídos iguales, y el apk que sale es **de los mismos 9141 bytes y con los
+  mismos bytes en cada entrada** que el build nativo del mismo proyecto. Párrafo 45, con los dos fallos del
+  hospedador que aparecieron al cablear (carrera de arranque en `hospedador.js` y directorios intermedios
+  que `fs-fragmento.js` no creaba en memoria).
+
+**Cerrada la Fase 1G y el cableado**: `create`, editar, compilar recursos, compilar Java, dexar, empaquetar
+y firmar ocurren dentro de la pestaña, sin conexión y sin un solo proceso. El emisor y el enlazador siguen
+rechazando por nombre lo que no está medido (§41, §42, §38): esa es la frontera honesta, no un fallo del
+camino.
 
 **Mata la fase**: el momento en que el subconjunto deje de ser un subconjunto honesto: si para
 aceptar el fuente hay que implementar la semántica completa de Java (sobrecarga, inferencia,

@@ -13,6 +13,9 @@ TMP=${PREFIX:-/data/data/com.termux/files/usr}/tmp
 APKC=${APKC:?faltan las ganas y la variable APKC con el binario}
 SDK=${ANDROID_HOME:-$HOME/Android}
 BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)
+# el android.jar sirve también para la pestaña: `apkc build --linker go --compiler go` compila Java
+# contra el SDK dentro de chromium, así que la prueba puede pedir el apk entero del navegador
+ANDROID_JAR=${ANDROID_JAR:-$(ls -d "$SDK"/platforms/*/android.jar 2>/dev/null | sort -V | tail -1)}
 ZIPCHECK="$HOME/Develop/Go/apkc-harness/zipcheck.py"
 FALLOS=0
 
@@ -90,7 +93,7 @@ fi
 APK_FIXTURE=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1)
 if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && command -v chromium-browser >/dev/null 2>&1; then
   if ! APKC_WASM="$APKC_WASM" APK_EJEMPLO="$APK_FIXTURE" KS_EJEMPLO="${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
-       node "$AQUI/prueba-pestana.js" >"$TMP/studio-pestana.log" 2>&1; then
+       ANDROID_JAR="${ANDROID_JAR:-}" node "$AQUI/prueba-pestana.js" >"$TMP/studio-pestana.log" 2>&1; then
     falla "la pestaña con apkc.wasm"; tail -12 "$TMP/studio-pestana.log"
   else
     firmada="$TMP/pestana-apk/pestanera.apk"
@@ -101,6 +104,28 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
     grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-verify.log" || falla "apk de pestaña sin v2"
     if ! python3 "$ZIPCHECK" "$firmada" >/dev/null 2>&1; then falla "zipcheck rechaza la apk de la pestaña"; fi
     avisa "pestaña: $(grep -c '^  ok' "$TMP/studio-pestana.log") comprobaciones, apk firmada dentro de chromium de $(wc -c <"$firmada" | tr -d ' ') bytes y verificada"
+
+    # 4b. el apk que la pestaña compiló entera (recursos, Java, dex y firma sin un solo proceso):
+    #     los mismos oráculos que se piden a una apk de verdad, por herramientas de fuera
+    compilado="$TMP/pestana-apk/pestanera-completa.apk"
+    if [ -f "$compilado" ]; then
+      if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$compilado" >"$TMP/studio-pestana-completa.log" 2>&1; then
+        falla "el apk compilado en la pestaña no verifica"
+      fi
+      grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-completa.log" || falla "apk compilado en pestaña sin v1"
+      grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-completa.log" || falla "apk compilado en pestaña sin v2"
+      "$BUILD_TOOLS/zipalign" -c -p 4 "$compilado" || falla "zipalign rechaza el apk compilado en la pestaña"
+      if ! python3 "$ZIPCHECK" "$compilado" >/dev/null 2>&1; then falla "zipcheck rechaza el apk compilado en la pestaña"; fi
+      # y aapt2, que es quien lee la tabla de recursos, tiene que entenderlo
+      "$BUILD_TOOLS/aapt2" dump badging "$compilado" >"$TMP/studio-pestana-badging.log" 2>&1 || falla "aapt2 no entiende el apk de la pestaña"
+      grep -q "package: name='com.myapp'" "$TMP/studio-pestana-badging.log" || falla "el apk de la pestaña no trae el package que creo"
+      for pieza in classes.dex resources.arsc AndroidManifest.xml res/layout/main.xml; do
+        unzip -l "$compilado" | grep -q " $pieza\$" || falla "falta $pieza en el apk compilado en la pestaña"
+      done
+      avisa "pestaña compilando: apk de $(wc -c <"$compilado" | tr -d ' ') bytes, verificado por apksigner (v1+v2), zipalign, zipcheck y aapt2"
+    else
+      avisa "sin ANDROID_JAR en el entorno: la pestaña no llego a compilar el proyecto entero"
+    fi
   fi
 else
   avisa "sin APKC_WASM, sin fixture o sin chromium: la pestaña con wasm no se probo"
