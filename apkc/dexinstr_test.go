@@ -201,6 +201,55 @@ func TestRechazaUnaRamaHaciaAtras(t *testing.T) {
 	}
 }
 
+// TestTraduceLaConcatenacionBajaAStringBuilder: la cadena de StringBuilder que escribe el emisor llega
+// al dex con las formas ya medidas (new-instance 0x22, invoke-direct 0x70, const-string 0x1a,
+// invoke-virtual 0x6e con su move-result-object y return-object 0x11), y el plegado de constantes llega
+// hecho: `1 / 0` conserva el divisor porque javac no lo dobla, y `"hola" + " " + 3` es un solo
+// const-string. Se comparan los mnemonicos, no los ids ni los registros: los primeros salen del orden
+// en que este internador vio las clases, y eso no es lo que se quiso medir aqui.
+func TestTraduceLaConcatenacionBajaAStringBuilder(t *testing.T) {
+	cf := claseDelFuente(t, "Cadena.java", fuenteCadena, "com/myapp/Cadena")
+	td := newDexTables()
+	if err := td.collectClasses([]classFull{cf}); err != nil {
+		t.Fatalf("internando: %v", err)
+	}
+	td.orderTables()
+	medidos := map[string]string{
+		"todoLiteral": "const-string return-object",
+		"plegado":     "const/4 return",
+		"entreCero":   "const/4 const/4 div-int/2addr return",
+		"conEntero": "new-instance invoke-direct const-string invoke-virtual move-result-object " +
+			"invoke-virtual move-result-object invoke-virtual move-result-object return-object",
+	}
+	for _, m := range cf.Methods {
+		quieren, esMedido := medidos[m.Name]
+		if !esMedido {
+			continue
+		}
+		ci, err := td.codeItemDe(cf, m)
+		if err != nil {
+			t.Errorf("%s: %v", m.Name, err)
+			continue
+		}
+		lista, err := desmontaPalabras(ci.insns)
+		if err != nil {
+			t.Errorf("%s: nuestras palabras no se leen: %v", m.Name, err)
+			continue
+		}
+		nombres := []string{}
+		for _, instr := range lista {
+			nombres = append(nombres, strings.Fields(instr)[0])
+		}
+		if sale := strings.Join(nombres, " "); sale != quieren {
+			t.Errorf("%s:\n  nuestro: %s\n  medido:  %s", m.Name, sale, quieren)
+		}
+		delete(medidos, m.Name)
+	}
+	for nombre := range medidos {
+		t.Errorf("%s no salio entre los metodos de la clase (%v)", nombre, nombresMetodos(cf.Methods))
+	}
+}
+
 // TestLaCabeceraSaleCoherenteConLoMedido: ins_size tiene que ser el args_size de javap y
 // registers_size no puede quedar por debajo de sus locales ni de sus propias palabras.
 func TestLaCabeceraSaleCoherenteConLoMedido(t *testing.T) {
