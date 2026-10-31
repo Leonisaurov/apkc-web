@@ -224,6 +224,37 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         falla "d8 no relee el dex con branquias que salió de la pestaña"
       avisa "fuente escrito a mano: apk de $(wc -c <"$escrita" | tr -d ' ') bytes con $lanzable en su dex, verificado por apksigner, zipalign, zipcheck, aapt2 y releido por d8"
     fi
+
+    # 4e. la APP DEL CONTADOR escrita en la pestaña (parrafo 54): anonima sobre una interfaz del
+    #     framework, campo del exterior, `if` y concatenacion en el mismo cuerpo
+    contador="$TMP/pestana-apk/pestanera-contador.apk"
+    if [ -f "$contador" ]; then
+      if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$contador" >"$TMP/studio-pestana-contador.log" 2>&1; then
+        falla "el apk de la app del contador no verifica"
+      fi
+      grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-contador.log" || falla "apk del contador sin v1"
+      grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-contador.log" || falla "apk del contador sin v2"
+      "$BUILD_TOOLS/zipalign" -c -p 4 "$contador" || falla "zipalign rechaza el apk del contador"
+      python3 "$ZIPCHECK" "$contador" >/dev/null 2>&1 || falla "zipcheck rechaza el apk del contador"
+      "$BUILD_TOOLS/aapt2" dump badging "$contador" >"$TMP/studio-pestana-contador-badging.log" 2>&1 ||
+        falla "aapt2 no entiende el apk del contador"
+      lanzable=$(sed -n "s/^launchable-activity: name='\([^']*\)'.*\$/\1/p" "$TMP/studio-pestana-contador-badging.log" | head -1)
+      [ "com.myapp.MainActivity" = "$lanzable" ] ||
+        falla "el apk del contador declara $lanzable y se esperaba com.myapp.MainActivity"
+      # la anonima, la interfaz del framework contra la que enlaza, el metodo que llama, el campo del
+      # exterior y la cadena que arma el concatenedor tienen que estar en el dex del navegador
+      for nombre in 'Lcom/myapp/MainActivity$1;' 'Landroid/view/View$OnClickListener;' setContentDescription pulsos total lleva; do
+        unzip -p "$contador" classes.dex | strings | grep -qe "$nombre" ||
+          falla "el dex del contador no trae $nombre"
+      done
+      mkdir -p "$TMP/contador-dex" "$TMP/contador-redex"
+      unzip -p "$contador" classes.dex >"$TMP/contador-dex/classes.dex" ||
+        falla "el apk del contador no trae classes.dex"
+      "$BUILD_TOOLS/d8" --release --min-api 21 --lib "$ANDROID_JAR" --output "$TMP/contador-redex" \
+        "$TMP/contador-dex/classes.dex" >"$TMP/studio-contador-d8.log" 2>&1 ||
+        falla "d8 no relee el dex del contador que salió de la pestaña"
+      avisa "app del contador: apk de $(wc -c <"$contador" | tr -d ' ') bytes con su anonima y su concat en el dex, verificado por apksigner, zipalign, zipcheck, aapt2 y releido por d8"
+    fi
   fi
 else
   avisa "sin APKC_WASM, sin fixture o sin chromium: la pestaña con wasm no se probo"

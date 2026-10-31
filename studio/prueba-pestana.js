@@ -477,6 +477,70 @@ async function conductor() {
     fs.writeFileSync(path.join(fuera, "pestanera-escrita.apk"), apkEscrita);
     console.log("  --- el apk del fuente escrito a mano, compilado en la pestaña, es " +
       path.join(fuera, "pestanera-escrita.apk"));
+
+    // 12. y la app puede CONTAR: una anonima sobre una interfaz del framework que escribe el campo del
+    // exterior, decide con `if` y arma el texto con concatenación (párrafo 54). Es el fuente que la
+    // página no genera y que, instalado, hace algo.
+    const fuenteContador = [
+      "package com.myapp;",
+      "",
+      "import android.app.*;",
+      "import android.os.*;",
+      "import android.view.*;",
+      "import android.widget.*;",
+      "",
+      "public class MainActivity extends Activity {",
+      "    int pulsos = 0;",
+      "    static int total = 5;",
+      "",
+      "    @Override",
+      "    public void onCreate(Bundle savedInstanceState) {",
+      "        super.onCreate(savedInstanceState);",
+      "        setContentView(R.layout.main);",
+      "        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {",
+      "            public void onClick(View v) {",
+      "                pulsos = pulsos + 1;",
+      "                total = total + pulsos;",
+      "                if (pulsos > 3) { v.setContentDescription(\"muchos \" + pulsos); }",
+      "                else { v.setContentDescription(\"pulsos \" + pulsos); }",
+      "                Toast.makeText(MainActivity.this, \"llevas \" + pulsos, Toast.LENGTH_SHORT).show();",
+      "            }",
+      "        });",
+      "    }",
+      "}",
+      "",
+    ].join("\n");
+    const contador = await evaluar(`(async () => {
+      // se le anade un boton con id al layout que creo apkc: es lo que alguien escribiria en el
+      // editor, y lo que exige R.id.pulsar para poder enlazar el listener
+      const layout = (await hospedador.texto("/proyecto/res/layout/main.xml")) || "";
+      const boton = '\\n    <Button\\n        android:id="@+id/pulsar"\\n        android:layout_width="wrap_content"\\n        android:layout_height="wrap_content"\\n        android:text="Press me"/>\\n';
+      await hospedador.escribir("/proyecto/res/layout/main.xml",
+        new TextEncoder().encode(layout.replace("</LinearLayout>", boton + "</LinearLayout>")));
+      await hospedador.escribir("/proyecto/src/com/myapp/MainActivity.java",
+        new TextEncoder().encode(${JSON.stringify(fuenteContador)}));
+      await hospedador.limpiar("/proyecto/build");
+      await compilarDelTodo();
+      const r = await correr(["verify", "build/app.apk"]);
+      const texto = String(r.consola || "").replace(/\\u001b\\[[0-9]*m/g, "");
+      const datos = await hospedador.bytes("/proyecto/build/app.apk");
+      return {
+        codigo: document.getElementById("ultimo-codigo").textContent,
+        bytes: datos ? Array.from(datos) : null,
+        v1: texto.includes("v1 (JAR signing): ok"), v2: texto.includes("v2 (APK Signature Scheme v2): ok"),
+        detalle: texto.split("\\n").filter(Boolean).slice(0, 2).join(" | "),
+        consola: String(r.consola || "").slice(-260),
+      };
+    })()`);
+    const apkContador = Buffer.from(contador.bytes || [], "uint8");
+    comprueba("la app del contador compila entera en la pestaña", contador.codigo === "0" && apkContador.length > 5000,
+      "codigo " + contador.codigo + ", " + apkContador.length + " bytes, consola: " + JSON.stringify(String(contador.consola).slice(-180)));
+    comprueba("y su apk verifica con la anonima, el if y la concatenación dentro",
+      contador.v1 === true && contador.v2 === true,
+      JSON.stringify(String(contador.detalle).slice(-180)));
+    fs.writeFileSync(path.join(fuera, "pestanera-contador.apk"), apkContador);
+    console.log("  --- el apk de la app del contador, compilado en la pestaña, es " +
+      path.join(fuera, "pestanera-contador.apk"));
   } else {
     console.log("  --- sin ANDROID_JAR en el entorno: no se prueba el build completo en la pestaña");
   }

@@ -55,7 +55,9 @@ Qué hace de verdad, y qué no:
 - **hace también**: compilar un fuente que la página **no** generó. Campos con sus modificadores, variables
   locales con cast, cuentas enteras, el `if` con su `else` y la concatenación de cadenas
   (`docs/evidencia.md` §49 a §53), medidos contra `javap -c -l` de javac 21 línea por línea y contra las
-  palabras de `d8`. El editor guarda, compila y descarga ese apk.
+  palabras de `d8`. Y la **app del contador** (§54): un botón con `@+id`, un `OnClickListener` anónimo que
+  escribe el campo de la Activity, decide con `if` y arma el texto que muestra — compilada, firmada y
+  dictaminada dentro de la pestaña. El editor guarda, compila y descarga ese apk.
 - **no hace**: el `build` de siempre. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
   arrancan; el botón «intentar compilar con aapt2/javac/d8» lo demuestra y apkc lo dice con su texto:
   `[build] aapt2 compile never started: pipe: not implemented on js`. Y dentro del `--compiler go` el
@@ -74,7 +76,7 @@ Qué hace de verdad, y qué no:
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado y el de un fuente escrito a mano— y comprueba 39 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 41 cosas |
 
 `e2e.sh` incluye la pestaña cuando `APKC_WASM` apunta a un binario wasm; si no, lo avisa en vez de
 darla por probada.
