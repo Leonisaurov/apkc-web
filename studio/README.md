@@ -53,14 +53,14 @@ Qué hace de verdad, y qué no:
   §46: el apk que sale es **igual entrada por entrada** al del mismo comando en el binario nativo, y `d8`
   releee el dex que escribió el navegador.
 - **hace también**: compilar un fuente que la página **no** generó. Campos con sus modificadores, variables
-  locales con cast, cuentas enteras y el `if` con su `else` (`docs/evidencia.md` §49 a §52), medidos contra
-  `javap -c -l` de javac 21 línea por línea y contra las palabras de `d8`. El editor guarda, compila y
-  descarga ese apk.
+  locales con cast, cuentas enteras, el `if` con su `else` y la concatenación de cadenas
+  (`docs/evidencia.md` §49 a §53), medidos contra `javap -c -l` de javac 21 línea por línea y contra las
+  palabras de `d8`. El editor guarda, compila y descarga ese apk.
 - **no hace**: el `build` de siempre. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
   arrancan; el botón «intentar compilar con aapt2/javac/d8» lo demuestra y apkc lo dice con su texto:
   `[build] aapt2 compile never started: pipe: not implemented on js`. Y dentro del `--compiler go` el
-  fuente tiene frontera: sin bucles, sin concatenación de cadenas, sin arreglos — lo que no está medido se
-  rechaza con su línea, no se compila a medias.
+  fuente tiene frontera: sin bucles, sin arreglos, sin `switch` ni `try` — lo que no está medido se rechaza
+  con su línea, no se compila a medias.
 - **dictamina**: `apkc verify build/app.apk` vuelve a leer el apk desde OPFS y comprueba las dos firmas con
   lectores propios —digest de cada entrada, `.SF` sección a sección, PKCS#7 y bloque v2—, sin `apksigner` y
   sin conexión. El botón `verificar el apk` lo corre y el veredicto se lee en la página. Cotejado con
