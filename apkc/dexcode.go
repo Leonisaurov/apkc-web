@@ -310,8 +310,8 @@ func (d *dexFile) valoresEstaticos(off uint32) ([]encodedField, error) {
 }
 
 // desmontaPalabras convierte las palabras de un code_item en instrucciones legibles. Nace de la
-// misma medicion que el traductor (docs/evidencia.md §21): solo conoce los quince formatos que
-// d8 escribio sobre el proyecto del studio, y un opcode fuera de esa lista es un error con nombre,
+// misma medicion que el traductor (docs/evidencia.md §21, §50 y §52): solo conoce los formatos que
+// d8 escribio sobre las sondas, y un opcode fuera de esa lista es un error con nombre,
 // no un misterio. Es lo que permite decir "nuestras palabras y las de d8 son las mismas
 // instrucciones sobre los mismos ids" sin comparar registros, que es donde un asignador distinto
 // separa (documentado en el plan 2G.4).
@@ -323,7 +323,7 @@ func desmontaPalabras(palabras []uint16) ([]string, error) {
 		alta := uint8(u >> 8)
 		nombre, formato, ok := formatoDalvik(op)
 		if !ok {
-			return nil, fmt.Errorf("at word %d: opcode %#02x is outside the fifteen formats measured on d8's file", i, op)
+			return nil, fmt.Errorf("at word %d: opcode %#02x is outside the formats measured on d8's files", i, op)
 		}
 		switch formato {
 		case '0': // 10x: sin operandos
@@ -344,12 +344,28 @@ func desmontaPalabras(palabras []uint16) ([]string, error) {
 			}
 			out = append(out, fmt.Sprintf("%s v%d, %d", nombre, alta, palabras[i+1]))
 			i += 2
+		case 'u': // 21t: vAA, desplazamiento en unidades de codigo desde esta instruccion
+			if i+1 >= len(palabras) {
+				return nil, fmt.Errorf("at word %d: %s wants its offset word and the item ends", i, nombre)
+			}
+			out = append(out, fmt.Sprintf("%s v%d, +%d", nombre, alta, int(int16(palabras[i+1]))))
+			i += 2
 		case 'f': // 22c: vA, vB, indice
 			if i+1 >= len(palabras) {
 				return nil, fmt.Errorf("at word %d: %s wants its index word and the item ends", i, nombre)
 			}
 			out = append(out, fmt.Sprintf("%s v%d, v%d, %d", nombre, alta&0xf, alta>>4, palabras[i+1]))
 			i += 2
+		case 't': // 22t: vA, vB, desplazamiento — la misma primera unidad que el 22c, y la segunda
+			// es un entero con signo en vez de un indice (medido en el parrafo 52)
+			if i+1 >= len(palabras) {
+				return nil, fmt.Errorf("at word %d: %s wants its offset word and the item ends", i, nombre)
+			}
+			out = append(out, fmt.Sprintf("%s v%d, v%d, +%d", nombre, alta&0xf, alta>>4, int(int16(palabras[i+1]))))
+			i += 2
+		case 'b': // 10t: goto, con el desplazamiento de ocho bits en la mitad alta de su propia unidad
+			out = append(out, fmt.Sprintf("%s +%d", nombre, int(int8(alta))))
+			i++
 		case 'i': // 35c: conteo y registros repartidos, con el indice en medio
 			if i+2 >= len(palabras) {
 				return nil, fmt.Errorf("at word %d: %s wants three words and the item ends", i, nombre)
@@ -372,13 +388,27 @@ func desmontaPalabras(palabras []uint16) ([]string, error) {
 			}
 			out = append(out, fmt.Sprintf("%s {%s}, %d", nombre, texto, palabras[i+1]))
 			i += 3
+		case 's': // 22s: vAA, vBB, #+CCCC. Medido en las palabras de d8 del parrafo 52: `add-int/lit8`
+			// sobre el campo sale 00d8 0100 —el registro de un byte en el alto de la primera unidad,
+			// y en la segunda el literal con signo en el byte alto, con vBB en el nibble bajo—, y
+			// `mul-int/lit8` con el 2 sale 00da 0200. No es el reparto de nibbles del 22c.
+			if i+1 >= len(palabras) {
+				return nil, fmt.Errorf("at word %d: %s wants its literal word and the item ends", i, nombre)
+			}
+			u := palabras[i+1]
+			out = append(out, fmt.Sprintf("%s v%d, v%d, %d", nombre, alta, u&0xf, int(int8(u>>8))))
+			i += 2
+		default:
+			return nil, fmt.Errorf("at word %d: %s has format %q, which this reader has no case for", i, nombre, formato)
 		}
 	}
 	return out, nil
 }
 
-// formatoDalvik da el nombre y la forma de los quince opcodes medidos en el fichero de d8. El
-// nombre es el que usa la herramienta, para que un diff se lea sin tabla al lado.
+// formatoDalvik da el nombre y la forma de cada opcode medido en un fichero de d8: los quince del
+// proyecto del studio (§21), los de cuentas, campos y casts de la sonda del parrafo 50 y las
+// branquias de la del parrafo 52. El nombre es el que usa la herramienta, para que un diff se lea
+// sin tabla al lado.
 func formatoDalvik(op byte) (string, byte, bool) {
 	switch op {
 	case 0x0e:
@@ -387,6 +417,8 @@ func formatoDalvik(op byte) (string, byte, bool) {
 		return "move-result-object", 'x', true
 	case 0x0f:
 		return "return", 'x', true
+	case 0x11:
+		return "return-object", 'x', true
 	case 0x12:
 		return "const/4", 'n', true
 	case 0x13:
@@ -395,14 +427,48 @@ func formatoDalvik(op byte) (string, byte, bool) {
 		return "const/high16", 'c', true
 	case 0x1a:
 		return "const-string", 'c', true
+	case 0x1f:
+		return "check-cast", 'c', true
 	case 0x22:
 		return "new-instance", 'c', true
+	case 0x28:
+		return "goto", 'b', true
+	case 0x32:
+		return "if-eq", 't', true
+	case 0x33:
+		return "if-ne", 't', true
+	case 0x34:
+		return "if-lt", 't', true
+	case 0x35:
+		return "if-ge", 't', true
+	case 0x36:
+		return "if-gt", 't', true
+	case 0x37:
+		return "if-le", 't', true
+	case 0x38:
+		return "if-eqz", 'u', true
+	case 0x39:
+		return "if-nez", 'u', true
+	case 0x3a:
+		return "if-ltz", 'u', true
+	case 0x3b:
+		return "if-gez", 'u', true
+	case 0x3c:
+		return "if-gtz", 'u', true
+	case 0x3d:
+		return "if-lez", 'u', true
 	case 0x52:
 		return "iget", 'f', true
 	case 0x54:
 		return "iget-object", 'f', true
+	case 0x59:
+		return "iput", 'f', true
 	case 0x5b:
 		return "iput-object", 'f', true
+	case 0x60:
+		return "sget", 'c', true
+	case 0x67:
+		return "sput", 'c', true
 	case 0x6e:
 		return "invoke-virtual", 'i', true
 	case 0x6f:
@@ -413,6 +479,28 @@ func formatoDalvik(op byte) (string, byte, bool) {
 		return "invoke-static", 'i', true
 	case 0x72:
 		return "invoke-interface", 'i', true
+	case 0xb0:
+		return "add-int/2addr", '2', true
+	case 0xb1:
+		return "sub-int/2addr", '2', true
+	case 0xb2:
+		return "mul-int/2addr", '2', true
+	case 0xb3:
+		return "div-int/2addr", '2', true
+	case 0xb4:
+		return "rem-int/2addr", '2', true
+	case 0xd0:
+		return "add-int/lit16", 's', true
+	case 0xd8:
+		return "add-int/lit8", 's', true
+	case 0xd9:
+		return "sub-int/lit8", 's', true
+	case 0xda:
+		return "mul-int/lit8", 's', true
+	case 0xdb:
+		return "div-int/lit8", 's', true
+	case 0xdc:
+		return "rem-int/lit8", 's', true
 	}
 	return "", 0, false
 }

@@ -52,7 +52,30 @@ const (
 	opMultiplica2 = 0xb2 // 12x mul-int/2addr
 	opDivide2     = 0xb3 // 12x div-int/2addr
 	opResiduo2    = 0xb4 // 12x rem-int/2addr
+
+	// las branquias, leidas de las palabras de `d8` sobre la sonda del parrafo 52: `if (a == b)`
+	// escribe 0x2133 = if-ne v1, v2 y su desplazamiento en la unidad siguiente; `ifne` sobre un
+	// entero sale if-nez 0x39; `ifnull` sale if-eqz 0x38 (el nulo es cero para dalvik) y `goto`
+	// 0x28 con el desplazamiento de ocho bits en la mitad alta de su propia unidad.
+	opSalto = 0x28 // 10t goto +AAAA
+	// familia de dos registros (22c con desplazamiento) y de uno (21t), en el mismo orden que la
+	// de enteros del JVMS: eq, ne, lt, ge, gt, le
+	opIfEq, opIfNe, opIfLt, opIfGe, opIfGt, opIfLe       = 0x32, 0x33, 0x34, 0x35, 0x36, 0x37
+	opIfEqz, opIfNez, opIfLtz, opIfGez, opIfGtz, opIfLez = 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d
 )
+
+// las dos tablas de branquias. La inversion de la condicion ya la hizo javac al escribir el .class
+// (el emisor la midio en el parrafo 52), asi que aqui solo se cambia de mnemonic: `if_icmpne` del
+// JVMS es `if-ne` de dalvik, y `ifnonnull` es `if-nez`, porque el null es cero para la maquina.
+var ifContraCero = map[string]byte{
+	"ifeq": opIfEqz, "ifne": opIfNez, "iflt": opIfLtz, "ifge": opIfGez, "ifgt": opIfGtz, "ifle": opIfLez,
+	"ifnull": opIfEqz, "ifnonnull": opIfNez,
+}
+
+var ifEntreDos = map[string]byte{
+	"if_icmpeq": opIfEq, "if_icmpne": opIfNe, "if_icmplt": opIfLt,
+	"if_icmpge": opIfGe, "if_icmpgt": opIfGt, "if_icmple": opIfLe,
+}
 
 // traduce es el estado de un método mientras se traduce. Se corre dos veces: la primera con una
 // base tan ancha como la pila máxima que midió javap, para saber cuántos temporales hacen falta de
@@ -69,6 +92,8 @@ type traduce struct {
 	libres    []int        // temporales ya muertos
 	renom     map[int]int  // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
 	fijos     map[int]bool // temporal que quedó atado a un local: ya no es reusable
+	pcs       map[int]int  // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
+	saltos    []parcheDEX  // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
 	siguiente int          // próximo temporal nuevo
 	pico      int          // el mayor número de temporal usado
 	w         []uint16
@@ -256,6 +281,94 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	p.push(r)
 }
 
+// parcheDEX: una branquia cuyo desplazamiento todavía no se conoce. `desde` es la unidad donde
+// empieza la instrucción —el desplazamiento dalvik se cuenta desde ahí, en unidades de código, y no
+// desde el operando—, `en` la unidad donde va a escribirse, y `destino` el pc JVM al que se salta.
+// `enMitadAlta` marca el `goto` 10t, que lleva los ocho bits dentro de su propia unidad.
+type parcheDEX struct {
+	desde, en, destino int
+	enMitadAlta        bool
+}
+
+// salto emite la branquia con el desplazamiento en blanco y la deja apuntada al pc destino. `consume`
+// dice cuántos registros baja: dos en la familia de dos operandos, uno en las formas contra cero y
+// contra null, ninguno en el `goto`. Las unidades que escribe cada forma son las que midió `d8` sobre
+// la sonda del parrafo 52: if-ne v1, v2 es 0x2133 con el desplazamiento en la unidad siguiente;
+// if-nez v1 es 0x0139 igual; y el goto de d8 es 0x0228, con el dos en la mitad alta de su propia
+// unidad (y 0x0528 cuando el hueco llega a cinco).
+func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
+	desde := len(p.w)
+	switch consume {
+	case 2:
+		b := p.pop(in)
+		a := p.pop(in)
+		if !p.nibble(a, in) || !p.nibble(b, in) {
+			return
+		}
+		p.palabra(unidad12x(op, a, b))
+		p.palabra(0)
+		p.suelta(a)
+		p.suelta(b)
+	case 1:
+		a := p.pop(in)
+		if !p.nibble(a, in) {
+			return
+		}
+		p.palabra(unidad11x(op, a))
+		p.palabra(0)
+		p.suelta(a)
+	default:
+		p.palabra(uint16(op)) // el goto 10t: la mitad alta queda en blanco hasta el parche
+	}
+	p.abreSalto(desde, len(p.w)-1, destino, consume == 0, in)
+}
+
+func (p *traduce) abreSalto(desde, en, destino int, mitadAlta bool, in jvmInstr) {
+	if destino < 0 || destino > len(p.m.Code) {
+		p.falla(in, "a branch to pc "+itoa(destino)+", outside the code of the method")
+		return
+	}
+	p.saltos = append(p.saltos, parcheDEX{desde: desde, en: en, destino: destino, enMitadAlta: mitadAlta})
+}
+
+// parchaSaltos completa los desplazamientos al final del método, cuando ya se escribió hasta el
+// último destino. Un pc que no es el principio de ninguna instrucción no se inventa: se rechaza,
+// porque llegar ahí significa que el salto entra en medio de un operando.
+func (p *traduce) parchaSaltos() error {
+	for _, s := range p.saltos {
+		donde, ok := p.pcs[s.destino]
+		if !ok {
+			if s.destino != len(p.m.Code) {
+				return &traduceError{pc: s.destino, nombre: p.m.Name,
+					motivo: "a branch that does not land on the start of an instruction"}
+			}
+			donde = len(p.w) // se salta al hueco que hay despues de la ultima instruccion
+		}
+		rel := donde - s.desde
+		if rel < 0 {
+			// una rama hacia atras es un bucle: aqui el destino se alcanza con la pila JVM en el
+			// mismo sitio pero con registros repartidos por dos caminos distintos, y ese reparto
+			// no lo midio ninguna sonda. `d8` lo resuelve con analisis de viveza; nosotros lo
+			// rechazamos por nombre hasta que alguien lo mida.
+			return &traduceError{nombre: p.m.Name,
+				motivo: "a backward branch of " + itoa(rel) + " code units: a loop, whose register merge at the target is not measured here"}
+		}
+		if s.enMitadAlta {
+			if rel > 127 {
+				return &traduceError{nombre: p.m.Name,
+					motivo: "a goto of " + itoa(rel) + " code units: the 10t form reaches 127 and goto/16 is not measured here"}
+			}
+			p.w[s.en] |= uint16(rel&0xff) << 8
+			continue
+		}
+		if rel > 32767 {
+			return &traduceError{nombre: p.m.Name, motivo: "a branch offset that does not fit sixteen bits"}
+		}
+		p.w[s.en] = uint16(rel)
+	}
+	return nil
+}
+
 // cuentaEntera: iadd, isub, imul, idiv, irem. Dalvik los escribe sobre el primer operando
 // (`/2addr`), que es lo que salió de la sonda: `add(a,b)` es 0x21b0 = add-int/2addr v1, v2 y
 // `sub(a,b)` 0x21b1, con el resultado quedándose en v1, de donde sale el `return v1` (0x010f).
@@ -322,6 +435,12 @@ func (p *traduce) recorre() error {
 	}
 	for k := 0; k < len(lista); k++ {
 		in := lista[k]
+		// donde cae cada instruccion en unidades de codigo: es lo que hace falta para responder un
+		// salto, porque el desplazamiento dalvik se mide desde el principio de la branquia
+		if p.pcs == nil {
+			p.pcs = map[int]int{}
+		}
+		p.pcs[in.pc] = len(p.w)
 		// mira: la siguiente instruccion JVM. Se usa para saber si el resultado de una llamada se
 		// va a tirar: d8 no emite move-result-object cuando el pop lo consume, y las palabras del
 		// listener del studio lo dejan ver (§21)
@@ -441,12 +560,21 @@ func (p *traduce) recorre() error {
 				n = int(in.name[len(in.name)-1]) - '0'
 			}
 			p.guardaLocal(in, n)
+		case "ifeq", "ifne", "iflt", "ifge", "ifgt", "ifle", "ifnull", "ifnonnull":
+			p.salto(ifContraCero[in.name], destinoDe(in), 1, in)
+		case "if_icmpeq", "if_icmpne", "if_icmplt", "if_icmpge", "if_icmpgt", "if_icmple":
+			p.salto(ifEntreDos[in.name], destinoDe(in), 2, in)
+		case "goto":
+			p.salto(opSalto, destinoDe(in), 0, in)
 		default:
 			p.falla(in, "outside the measured subset")
 		}
 		if p.err != nil {
 			return p.err
 		}
+	}
+	if err := p.parchaSaltos(); err != nil {
+		return err
 	}
 	return nil
 }

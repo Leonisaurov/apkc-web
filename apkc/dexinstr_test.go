@@ -112,6 +112,95 @@ func TestTraduceEmiteLasMismasInstruccionesQueD8(t *testing.T) {
 	}
 }
 
+// TestTraduceBranquiasContraLasPalabrasDeD8 fija los numeros que escribio `d8` sobre la sonda del
+// parrafo 52 (p/Branquias y p/Saltos, con `--min-api 21`). El cuerpo JVM esta escrito a mano con los
+// desplazamientos que midio `javap`, y lo que se compara es la sucesion desmontada sin numeros de
+// registro: si el desplazamiento parcheado sale mal, el destino cae en otra instruccion y la fila
+// cambia. En `plegable` el nuestro conserva el `goto` que d8 quito por propagacion de copias, con el
+// mismo +2 que d8 escribio en su propio goto de `conElse` (0x0228).
+func TestTraduceBranquiasContraLasPalabrasDeD8(t *testing.T) {
+	td, clases := tablaDeLasSeis(t)
+	cf := clases[0]
+	sondas := []struct {
+		nombre  string
+		desc    string
+		pila    int
+		locales int
+		args    int
+		code    []byte
+		quieren string
+	}{
+		{
+			nombre: "igual", desc: "(II)I", pila: 2, locales: 3, args: 3,
+			code:    []byte{0x1b, 0x1c, 0xa0, 0x00, 0x05, 0x04, 0xac, 0x03, 0xac},
+			quieren: "if-ne v, v, +4 | const/4 v, 1 | return v | const/4 v, 0 | return v",
+		},
+		{
+			nombre: "distinto", desc: "(II)I", pila: 2, locales: 3, args: 3,
+			code:    []byte{0x1b, 0x1c, 0x9f, 0x00, 0x05, 0x04, 0xac, 0x03, 0xac},
+			quieren: "if-eq v, v, +4 | const/4 v, 1 | return v | const/4 v, 0 | return v",
+		},
+		{
+			nombre: "mayorcero", desc: "(I)I", pila: 1, locales: 2, args: 2,
+			code:    []byte{0x1b, 0x9e, 0x00, 0x05, 0x05, 0xac, 0x06, 0xac},
+			quieren: "if-lez v, +4 | const/4 v, 2 | return v | const/4 v, 3 | return v",
+		},
+		{
+			nombre: "nulo", desc: "(Ljava/lang/Object;)I", pila: 1, locales: 2, args: 2,
+			code:    []byte{0x2b, 0xc7, 0x00, 0x05, 0x07, 0xac, 0x08, 0xac},
+			quieren: "if-nez v, +4 | const/4 v, 4 | return v | const/4 v, 5 | return v",
+		},
+		{
+			nombre: "plegable", desc: "(I)I", pila: 1, locales: 2, args: 2,
+			code: []byte{0x1b, 0x9a, 0x00, 0x08, 0x04, 0x3c, 0xa7, 0x00, 0x05,
+				0x05, 0x3c, 0x1b, 0xac},
+			quieren: "if-nez v, +4 | const/4 v, 1 | goto +2 | const/4 v, 2 | return v",
+		},
+		{
+			// tres branquias anidadas que caen al mismo sitio: es `tresNiveles` de la sonda, y
+			// aqui si sale palabra por palabra igual que d8 (salvo los numeros de registro)
+			nombre: "tresNiveles", desc: "(II)I", pila: 2, locales: 3, args: 3,
+			code: []byte{0x1b, 0x1c, 0xa0, 0x00, 0x0d, 0x1b, 0x9e, 0x00, 0x09,
+				0x1c, 0x9e, 0x00, 0x05, 0x04, 0xac, 0x05, 0xac},
+			quieren: "if-ne v, v, +8 | if-lez v, +6 | if-lez v, +4 | const/4 v, 1 | return v | const/4 v, 2 | return v",
+		},
+	}
+	for _, s := range sondas {
+		m := classMethod{HasCode: true, Name: s.nombre, Desc: s.desc,
+			MaxStack: s.pila, LocalCount: s.locales, ArgCount: s.args, Code: s.code}
+		ci, err := td.codeItemDe(cf, m)
+		if err != nil {
+			t.Errorf("%s: %v", s.nombre, err)
+			continue
+		}
+		lista, err := desmontaPalabras(ci.insns)
+		if err != nil {
+			t.Errorf("%s: nuestras palabras no se leen: %v", s.nombre, err)
+			continue
+		}
+		if sale := strings.Join(esqueleto(lista), " | "); sale != s.quieren {
+			t.Errorf("%s:\n  nuestro: %s\n  d8:      %s", s.nombre, sale, s.quieren)
+		}
+	}
+}
+
+// TestRechazaUnaRamaHaciaAtras: el cuerpo de un `while` escrito por javac cabe entero en la tabla de
+// anchos, y aun asi se rechaza. Lo que no esta medido no es el opcode, es el reparto de registros en
+// el destino de una rama que llega por dos caminos; `d8` lo calcula con viveza y aqui no hay ni una
+// sonda que lo fije. Se comprueba con el bucle `while (a > 0) { a = 1; }` (iload_1, ifle 9, iconst_1,
+// istore_1, goto 0, iload_1, ireturn), que es el que javac escribe para esa linea.
+func TestRechazaUnaRamaHaciaAtras(t *testing.T) {
+	td, clases := tablaDeLasSeis(t)
+	bucle := classMethod{HasCode: true, Name: "mientras", Desc: "(I)I",
+		MaxStack: 1, LocalCount: 2, ArgCount: 2,
+		Code: []byte{0x1b, 0x9e, 0x00, 0x08, 0x04, 0x3c, 0xa7, 0xff, 0xfa, 0x1b, 0xac}}
+	if _, err := td.codeItemDe(clases[0], bucle); err == nil {
+		t.Error("se acepto una rama hacia atras: un bucle sin medir su punto de fusion")
+	} else if !strings.Contains(err.Error(), "loop") {
+		t.Errorf("el rechazo no dice por que: %v", err)
+	}
+}
+
 // TestLaCabeceraSaleCoherenteConLoMedido: ins_size tiene que ser el args_size de javap y
 // registers_size no puede quedar por debajo de sus locales ni de sus propias palabras.
 func TestLaCabeceraSaleCoherenteConLoMedido(t *testing.T) {

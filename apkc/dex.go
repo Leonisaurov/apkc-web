@@ -32,8 +32,9 @@ subprocess anywhere. The input is whatever javac left on disk (build/classes, or
 output of a jar); the output is the named file, because the progress lines share stdout with
 the user and a dex does not belong among them.
 
-Only the measured subset is dexed: an invokedynamic, a lambda or a switch outside the sixteen
-opcodes this fork checked against javap stops the command with its name, not a half-written dex.
+Only the measured subset is dexed: an invokedynamic, a lambda or a switch outside the opcodes this
+fork checked against javap (§17, §50 and §52 of docs/evidencia.md) stops the command with its name,
+not a half-written dex.
 `)
 	}
 	out := set.String("o", "build/outputs/classes.dex", "where the classes.dex goes")
