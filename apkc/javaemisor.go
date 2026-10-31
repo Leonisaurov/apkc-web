@@ -34,6 +34,10 @@ import (
 // versionDeClassEmitida: Java 8, dicho arriba.
 const versionDeClassEmitida = 52
 
+// accMandated: el flag con el que javac marca el parametro de la captura en el MethodParameters del
+// constructor sintetizado de una anonima (parrafo 42, medido como `final mandated` = 0x8010).
+const accMandated = 0x8000
+
 // Los opcodes que este emisor escribe, con el numero del JVMS.
 const (
 	opAconstNull = 0x01
@@ -42,6 +46,7 @@ const (
 	opDup        = 0x59
 	opGetstatic  = 0xb2
 	opGetfield   = 0xb4
+	opPutfield   = 0xb5
 	opInvokevirt = 0xb6
 	opInvokespec = 0xb7
 	opInvokestat = 0xb8
@@ -308,9 +313,135 @@ func internoDe(paquete string, nombre string) string {
 func (ctx *contextoJava) registrar(c *jclas) {
 	ctx.orden = append(ctx.orden, c)
 	ctx.propias[internoDe(c.paquete, c.nombre)] = c
+	for _, m := range c.metodos {
+		for _, s := range m.cuerpo {
+			ctx.registrarSentencia(s)
+		}
+	}
 	for _, d := range c.interior {
 		ctx.registrar(d)
 	}
+}
+
+// registrarSentencia y registrarExpresion bajan por el arbol hasta los `new Tipo(...) { ... }`: la clase
+// anonima que crean no esta en la lista de la clase que la rodea, y el emisor tiene que conocerla para
+// resolver su nombre y para escribir su fichero (parrafo 42).
+func (ctx *contextoJava) registrarSentencia(s jstmt) {
+	switch v := s.(type) {
+	case jstmtExpr:
+		ctx.registrarExpresion(v.e)
+	case jretorno:
+		if v.e != nil {
+			ctx.registrarExpresion(v.e)
+		}
+	case jdecl:
+		if v.valor != nil {
+			ctx.registrarExpresion(v.valor)
+		}
+	case jasign:
+		ctx.registrarExpresion(v.destino)
+		ctx.registrarExpresion(v.valor)
+	case jbloque:
+		for _, st := range v.sentencias {
+			ctx.registrarSentencia(st)
+		}
+	case jif:
+		ctx.registrarExpresion(v.cond)
+		if v.entonces != nil {
+			ctx.registrarSentencia(v.entonces)
+		}
+		if v.siNo != nil {
+			ctx.registrarSentencia(v.siNo)
+		}
+	}
+}
+
+func (ctx *contextoJava) registrarExpresion(x jexpr) {
+	switch v := x.(type) {
+	case jnuevo:
+		for _, a := range v.args {
+			ctx.registrarExpresion(a)
+		}
+		if v.cuerpo != nil {
+			ctx.registrar(v.cuerpo)
+		}
+	case jllamada:
+		if v.base != nil {
+			ctx.registrarExpresion(v.base)
+		}
+		for _, a := range v.args {
+			ctx.registrarExpresion(a)
+		}
+	case jacceso:
+		if v.base != nil {
+			ctx.registrarExpresion(v.base)
+		}
+	case jcast:
+		ctx.registrarExpresion(v.dentro)
+	case joperador:
+		ctx.registrarExpresion(v.izq)
+		ctx.registrarExpresion(v.der)
+	case jnegacion:
+		ctx.registrarExpresion(v.dentro)
+	}
+}
+
+// anonimasDe: las clases anonimas que crea el cuerpo de c, en el orden del fuente.
+func anonimasDe(c *jclas) []*jclas {
+	var out []*jclas
+	var expr func(jexpr)
+	var sent func(jstmt)
+	sent = func(s jstmt) {
+		switch v := s.(type) {
+		case jstmtExpr:
+			expr(v.e)
+		case jretorno:
+			if v.e != nil {
+				expr(v.e)
+			}
+		case jdecl:
+			if v.valor != nil {
+				expr(v.valor)
+			}
+		case jasign:
+			expr(v.destino)
+			expr(v.valor)
+		case jbloque:
+			for _, st := range v.sentencias {
+				sent(st)
+			}
+		}
+	}
+	expr = func(x jexpr) {
+		switch v := x.(type) {
+		case jnuevo:
+			for _, a := range v.args {
+				expr(a)
+			}
+			if v.cuerpo != nil {
+				out = append(out, v.cuerpo)
+			}
+		case jllamada:
+			if v.base != nil {
+				expr(v.base)
+			}
+			for _, a := range v.args {
+				expr(a)
+			}
+		case jacceso:
+			if v.base != nil {
+				expr(v.base)
+			}
+		case jcast:
+			expr(v.dentro)
+		}
+	}
+	for _, m := range c.metodos {
+		for _, s := range m.cuerpo {
+			sent(s)
+		}
+	}
+	return out
 }
 
 func (ctx *contextoJava) hay(internal string) bool {
@@ -451,7 +582,34 @@ func (ctx *contextoJava) accesosDe(internal string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return c.Access & ^accSuper, nil
+	// en la fila del InnerClasses javac anade ACC_STATIC a la anidada del framework: medido sobre
+	// MenuItem$OnMenuItemClickListener, donde el ClassFile de la interface dice 0x0601 y la fila dice 0x0609
+	// (lo que aqui se usa para decidir `invokeinterface` es el 0x0601 del ClassFile, no esta maskara).
+	accesos := c.Access &^ accSuper
+	if strings.Contains(internal, "$") {
+		accesos |= accStatic
+	}
+	return accesos, nil
+}
+
+// usarDescriptor apunta las anidadas que aparecen escritas dentro de un descriptor. javac las recuerda en el
+// InnerClasses del que llama aunque el tipo solo salga ahi: medido en el parrafo 42, donde MainActivity lista
+// MenuItem$OnMenuItemClickListener sin nombrarla en ningun opcode.
+func (e *emisor) usarDescriptor(desc string) {
+	for i := 0; i < len(desc); i++ {
+		if desc[i] != 'L' {
+			continue
+		}
+		j := strings.IndexByte(desc[i+1:], ';')
+		if j < 0 {
+			break
+		}
+		nombre := desc[i+1 : i+1+j]
+		if strings.Contains(nombre, "$") {
+			e.usar(nombre)
+		}
+		i += j + 1
+	}
 }
 
 // buscarMetodo recorre la clase y sus padres por nombre y aridad. Devuelve la descripcion, los accesos del
@@ -655,7 +813,12 @@ func compilarProyectoJava(fuentes []fuenteJava, rutaJar string) ([]claseEmitida,
 			salida = append(salida, hechas...)
 		}
 	}
-	sort.Slice(salida, func(i, j int) bool { return salida[i].interno < salida[j].interno })
+	// El orden del vector es el de las rutas con el sufijo `.class` dentro, que es el orden en que `leeClases`
+	// presentaria los ficheros y por tanto el orden de las class_defs del dex: MainActivity$1.class antes que
+	// MainActivity.class (el `$` es 0x24 y el punto 0x2e), y la R despues de sus anidadas.
+	sort.SliceStable(salida, func(i, j int) bool {
+		return salida[i].interno+".class" < salida[j].interno+".class"
+	})
 	return salida, nil
 }
 
@@ -674,6 +837,14 @@ func (ctx *contextoJava) emmitirArbol(c *jclas) ([]claseEmitida, error) {
 		return nil, fmt.Errorf("linea %d: %w", c.linea, err)
 	}
 	salida := []claseEmitida{{interno: internoDe(c.paquete, c.nombre), datos: datos}}
+	// las anonimas que crea el cuerpo de esta clase son su propio fichero, con su captura
+	for _, a := range anonimasDe(c) {
+		hijas, err := ctx.emmitirArbol(a)
+		if err != nil {
+			return nil, err
+		}
+		salida = append(salida, hijas...)
+	}
 	for _, d := range c.interior {
 		hijas, err := ctx.emmitirArbol(d)
 		if err != nil {
@@ -692,7 +863,8 @@ type emisor struct {
 	pool     *poolBuilder
 	c        *jclas
 	interno  string
-	menciona map[string]bool // nombres con `$` que el codigo usa, que javac apunta en InnerClasses
+	menciona []string // nombres con `$` que el codigo usa, en el orden del primer uso
+	vistas   map[string]bool
 
 	// del metodo actual
 	estatico  bool
@@ -804,11 +976,25 @@ func (e *emisor) ldc(idx int) {
 	e.emite(opLdc, byte(idx))
 }
 
-// usar anota una clase anidada mencionada, para que su entrada llegue al InnerClasses.
+// usar anota una clase anidada mencionada, para que su entrada llegue al InnerClasses. El orden es el de
+// primer uso: javac escribe las filas asi, medido en el parrafo 42 (R$layout, MainActivity$1, la interface).
 func (e *emisor) usar(internal string) {
-	if strings.Contains(internal, "$") {
-		e.menciona[internal] = true
+	if !strings.Contains(internal, "$") {
+		return
 	}
+	if e.vistas[internal] {
+		return
+	}
+	e.vistas[internal] = true
+	e.menciona = append(e.menciona, internal)
+}
+
+// getfield: el receptor se come y sale el valor del campo, asi que la pila no cambia de alto. getstatic, en
+// cambio, no come nada y sube uno.
+func (e *emisor) getfield(idx int) {
+	e.emite(opGetfield, byte(idx>>8), byte(idx))
+	e.baja(1)
+	e.sube()
 }
 
 // invoca escribe el opcode con su indice (y el conteo, si es invokeinterface) y ajusta la pila simulada.
@@ -821,6 +1007,7 @@ func (e *emisor) invoca(opcode byte, dueño, nombre, desc string, enPila int) {
 		idx = e.pool.metodo(dueño, nombre, desc)
 	}
 	e.usar(dueño)
+	e.usarDescriptor(desc)
 	e.emite(opcode, byte(idx>>8), byte(idx))
 	if esInterface {
 		e.emite(byte(enPila), 0)
@@ -884,7 +1071,15 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return "", fmt.Errorf("linea %d: un literal de clase %q no esta medido", v.donde.linea, string(v.tipoJ))
 	case jthis:
 		if v.nombre != "" {
-			return "", fmt.Errorf("linea %d: `%s.this` es la captura de una clase externa, que se baja al campo this$0 y se comprueba aparte", v.donde.linea, v.nombre)
+			// `Exterior.this` es leer el campo de captura: medido en el parrafo 42, `aload_0; getfield
+			// this$0:Lcom/hola/apkcstudio/MainActivity;` dentro de MainActivity$1
+			if !e.c.anonima || sinPaquete(e.encierreInterno()) != v.nombre {
+				return "", fmt.Errorf("linea %d: `%s.this` solo se mide dentro de la anonima que ese exterior crea", v.donde.linea, v.nombre)
+			}
+			externo := "L" + e.encierreInterno() + ";"
+			e.cargaDe(0, "L")
+			e.getfield(e.pool.campo(e.interno, "this$0", externo))
+			return externo, nil
 		}
 		if e.estatico {
 			return "", fmt.Errorf("linea %d: `this` en un metodo estatico no es Java", v.donde.linea)
@@ -982,8 +1177,7 @@ func (e *emisor) cadenaDeCampos(desc string, segs []string, linea int) (string, 
 			return "", fmt.Errorf("linea %d: %s.%s es estatico: sacarlo de una instancia no esta medido", linea, dueño, seg)
 		}
 		idx := e.pool.campo(dueño, seg, cr.desc)
-		e.emite(opGetfield, byte(idx>>8), byte(idx))
-		e.sube()
+		e.getfield(idx)
 		actual = cr.desc
 	}
 	return actual, nil
@@ -1050,9 +1244,7 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 		return "", false
 	}
 	e.cargaDe(0, "L")
-	idx := e.pool.campo(e.interno, nombre, cr.desc)
-	e.emite(opGetfield, byte(idx>>8), byte(idx))
-	e.sube()
+	e.getfield(e.pool.campo(e.interno, nombre, cr.desc))
 	return cr.desc, true
 }
 
@@ -1152,7 +1344,38 @@ func (e *emisor) superDe() (string, error) { return e.ctx.padreDe(e.c) }
 // aparte, con su propio parrafo de medicion.
 func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if n.cuerpo != nil {
-		return "", fmt.Errorf("linea %d: una clase anonima baja el exterior a this$0 y ese camino se mide aparte", n.donde.linea)
+		// la anonima se nombra Exterior$N como la nombra javac y su constructor recibe primero la captura
+		// del exterior: medido en el parrafo 42 (`new #28; dup; aload_0; invokespecial <init>
+		// :(Lcom/hola/apkcstudio/MainActivity;)V`)
+		if e.estatico {
+			return "", fmt.Errorf("linea %d: una anonima creada en un metodo estatico no tiene capturado un this y ese caso no esta medido", n.donde.linea)
+		}
+		interno := internoDe(n.cuerpo.paquete, n.cuerpo.nombre)
+		e.usar(interno)
+		idx := e.pool.clase(interno)
+		e.emite(opNew, byte(idx>>8), byte(idx))
+		e.sube()
+		e.emite(opDup)
+		e.sube()
+		e.cargaDe(0, "L")
+		if err := e.argumentos(n.args); err != nil {
+			return "", err
+		}
+		sb := strings.Builder{}
+		sb.WriteString("(L" + e.interno + ";")
+		for _, arg := range n.args {
+			d, err := e.tipoEstimado(arg)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(d)
+		}
+		sb.WriteString(")")
+		// un descriptor de metodo lleva siempre la vuelta: sin la V del constructor el dexer internaria un
+		// tipo que no existe
+		sb.WriteString("V")
+		e.invoca(opInvokespec, interno, "<init>", sb.String(), len(n.args)+2)
+		return "L" + interno + ";", nil
 	}
 	interno, err := e.ctx.tipoAInterno(n.tipo)
 	if err != nil {
@@ -1161,6 +1384,7 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	e.usar(interno)
 	idx := e.pool.clase(interno)
 	e.emite(opNew, byte(idx>>8), byte(idx))
+	e.sube()
 	e.emite(opDup)
 	e.sube()
 	if err := e.argumentos(n.args); err != nil {
@@ -1175,7 +1399,9 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		}
 		sb.WriteString(d)
 	}
-	sb.WriteString(")")
+	sb.WriteString(")V")
+	// el `dup` deja dos referencias: el constructor se come una con sus argumentos y la otra es el valor de
+	// la expresion, que es el hueco que sube de la pila al terminar
 	e.invoca(opInvokespec, interno, "<init>", sb.String(), len(n.args)+1)
 	return "L" + interno + ";", nil
 }
@@ -1308,7 +1534,7 @@ func (e *emisor) stm(s jstmt) error {
 	return fmt.Errorf("una sentencia de %T no esta medida", s)
 }
 
-// descDeAccesoEmitidoCero: el descriptor de `R.layout.main` sin emitir nada, para saber que tipo lleva un
+// descDeAccesoEstatico: el descriptor de `R.layout.main` sin emitir nada, para saber que tipo lleva un
 // argumento de un `new` antes de haberlo escrito.
 func (e *emisor) descDeAccesoEstatico(interno string, segs []string) (string, error) {
 	if len(segs) == 0 {
@@ -1339,7 +1565,7 @@ func (e *emisor) descDeAccesoEstatico(interno string, segs []string) (string, er
 // InnerClasses se calcula al final, cuando ya se sabe que anidadas menciona el codigo.
 func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	interno := internoDe(c.paquete, c.nombre)
-	e := &emisor{ctx: ctx, pool: nuevoPool(), c: c, interno: interno, menciona: map[string]bool{}}
+	e := &emisor{ctx: ctx, pool: nuevoPool(), c: c, interno: interno, vistas: map[string]bool{}}
 
 	thisIdx := e.pool.clase(interno)
 	superIdx := e.pool.clase("java/lang/Object")
@@ -1351,8 +1577,29 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		e.usar(s)
 		superIdx = e.pool.clase(s)
 	}
-	if len(c.implementa) > 0 {
-		return nil, fmt.Errorf("linea %d: una clase que implementa interfaces hereda los metodos abstractos del padre, y ese camino no esta medido", c.linea)
+	if len(c.implementa) > 0 && !c.anonima {
+		return nil, fmt.Errorf("linea %d: una clase escrita a mano que implementa interfaces no esta medida: faltan sus metodos abstractos y sus flags", c.linea)
+	}
+
+	iface := []int{}
+	for _, im := range c.implementa {
+		nombre, err := ctx.tipoAInterno(im)
+		if err != nil {
+			return nil, fmt.Errorf("linea %d: %w", c.linea, err)
+		}
+		if c.anonima {
+			// de una anonima solo se midio la que implementa una interface (parrafo 42); la que extiende una
+			// clase va por el super y ahi el constructor cambia, asi que se nombra en vez de escribir mal
+			accesos, err := ctx.accesosDe(nombre)
+			if err != nil {
+				return nil, fmt.Errorf("linea %d: %w", c.linea, err)
+			}
+			if accesos&accInterface == 0 {
+				return nil, fmt.Errorf("linea %d: una anonima sobre %s, que no es una interface, no esta medida (javac la pone como super)", c.linea, im)
+			}
+		}
+		e.usar(nombre)
+		iface = append(iface, e.pool.clase(nombre))
 	}
 
 	access := accSuper
@@ -1367,12 +1614,20 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	}
 
 	campos := []byte{}
+	nCampos := 0
+	if c.anonima {
+		// javac abre la anonima con su campo de captura, antes de lo que el fuente escriba (parrafo 42:
+		// `final com.hola.apkcstudio.MainActivity this$0;` con flags 0x1010, ACC_FINAL y ACC_SYNTHETIC)
+		campos = append(campos, e.campoCaptura()...)
+		nCampos++
+	}
 	for _, f := range c.campos {
 		b, err := e.campoDeClassFile(f)
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", f.donde.linea, err)
 		}
 		campos = append(campos, b...)
+		nCampos++
 	}
 
 	// javac escribe el constructor primero, sintetizado o no: el orden va aqui, no detras
@@ -1384,7 +1639,14 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 			constructorEscrito = true
 		}
 	}
-	if !constructorEscrito {
+	if c.anonima {
+		b, err := e.initCaptura()
+		if err != nil {
+			return nil, err
+		}
+		metodos = append(metodos, b...)
+		conte++
+	} else if !constructorEscrito {
 		b, err := e.initSintetico()
 		if err != nil {
 			return nil, err
@@ -1400,23 +1662,28 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
-	// las filas del InnerClasses: las anidadas que esta clase declara, la propia si es anidada, y las que
-	// menciona el codigo (R$layout en MainActivity, medido en el parrafo 40)
-	porNombrar := map[string]bool{}
-	for _, d := range c.interior {
-		porNombrar[internoDe(d.paquete, d.nombre)] = true
-	}
-	if strings.Contains(c.nombre, "$") {
-		porNombrar[interno] = true
-	}
-	for m := range e.menciona {
-		porNombrar[m] = true
-	}
+	// Las filas del InnerClasses van en el orden en que javac las escribe: las anidadas declaradas aqui, al
+	// reves de como se declaran (medido: la R del estudio lista style, layout, id); la propia clase si es
+	// anidada; y despues las que menciona el codigo, en orden de primer uso (medido: R$layout, MainActivity$1
+	// y la interface, en ese orden, en el parrafo 42).
 	var nombres []string
-	for n := range porNombrar {
+	ya := map[string]bool{}
+	anadir := func(n string) {
+		if n == "" || ya[n] {
+			return
+		}
+		ya[n] = true
 		nombres = append(nombres, n)
 	}
-	sort.Strings(nombres)
+	for i := len(c.interior) - 1; i >= 0; i-- {
+		anadir(internoDe(c.interior[i].paquete, c.interior[i].nombre))
+	}
+	if strings.Contains(c.nombre, "$") {
+		anadir(interno)
+	}
+	for _, m := range e.menciona {
+		anadir(m)
+	}
 	entradas := []byte{}
 	if len(nombres) > 0 {
 		entradas = u2be(uint16(len(nombres)))
@@ -1431,6 +1698,14 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 
 	attrs := attrInfo(e.pool, "SourceFile", u2be(uint16(e.pool.utf8(ctx.archivo))))
 	conteAttrs := 1
+	if c.anonima {
+		cuerpo, err := e.cuerpoEnclosingMethod()
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, attrInfo(e.pool, "EnclosingMethod", cuerpo)...)
+		conteAttrs++
+	}
 	if len(nombres) > 0 {
 		attrs = append(attrs, attrInfo(e.pool, "InnerClasses", entradas)...)
 		conteAttrs++
@@ -1443,8 +1718,11 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	out = append(out, u2be(uint16(access))...)
 	out = append(out, u2be(uint16(thisIdx))...)
 	out = append(out, u2be(uint16(superIdx))...)
-	out = append(out, u2be(0)...) // interfaces_count: ninguna medida, dicho arriba
-	out = append(out, u2be(uint16(len(c.campos)))...)
+	out = append(out, u2be(uint16(len(iface)))...)
+	for _, i := range iface {
+		out = append(out, u2be(uint16(i))...)
+	}
+	out = append(out, u2be(uint16(nCampos))...)
 	out = append(out, campos...)
 	out = append(out, u2be(uint16(conte))...)
 	out = append(out, metodos...)
@@ -1453,8 +1731,15 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	return out, nil
 }
 
-// filaInner: inner, outer, nombre simple y access_flags, como los escribe javac.
+// filaInner: inner, outer, nombre simple y access_flags, como los escribe javac. La fila de una anonima va
+// sin exterior y sin nombre, y con flags ninguno: medido en el parrafo 42 (`InnerClasses: #2;`).
 func (e *emisor) filaInner(internal string) ([]byte, error) {
+	if propia, ok := e.ctx.clasePropia(internal); ok && propia.anonima {
+		b := u2be(uint16(e.pool.clase(internal)))
+		b = append(b, u2be(0)...) // outer
+		b = append(b, u2be(0)...) // nombre
+		return append(b, u2be(0)...), nil
+	}
 	outer := ""
 	nombreSimplo := internal
 	if i := strings.LastIndex(internal, "$"); i >= 0 {
@@ -1473,6 +1758,66 @@ func (e *emisor) filaInner(internal string) ([]byte, error) {
 	b = append(b, u2be(uint16(oi))...)
 	b = append(b, u2be(uint16(e.pool.utf8(sinPaquete(nombreSimplo))))...)
 	return append(b, u2be(uint16(accesos))...), nil
+}
+
+// campoCaptura: el `final synthetic Tipo this$0;` con el que javac baja el exterior dentro de la anonima
+// (parrafo 42: flags 0x1010, descriptor del exterior y ningun atributo).
+func (e *emisor) campoCaptura() []byte {
+	desc := "L" + e.encierreInterno() + ";"
+	b := u2be(uint16(accFinal | accSynthetic))
+	b = append(b, u2be(uint16(e.pool.utf8("this$0")))...)
+	b = append(b, u2be(uint16(e.pool.utf8(desc)))...)
+	return append(b, u2be(0)...)
+}
+
+func (e *emisor) encierreInterno() string {
+	if e.c.encierre == nil {
+		return "java/lang/Object"
+	}
+	return internoDe(e.c.encierre.paquete, e.c.encierre.nombre)
+}
+
+// initCaptura: el constructor de la anonima. Lleva la captura como unico parametro, le pone el campo antes
+// de subir al padre y anade el atributo MethodParameters marcando el parametro como `final mandated`
+// (0x8010), todo medido en el parrafo 42 sobre MainActivity$1.
+func (e *emisor) initCaptura() ([]byte, error) {
+	externo := "L" + e.encierreInterno() + ";"
+	desc := "(" + externo + ")V"
+	e.preparaMetodo(desc, false)
+	e.reserva("", "L")
+	e.reserva("", externo)
+	e.marcaLinea(e.c.linea)
+	e.cargaDe(0, "L")
+	e.cargaDe(1, externo)
+	idx := e.pool.campo(e.interno, "this$0", externo)
+	e.emite(opPutfield, byte(idx>>8), byte(idx))
+	e.baja(2)
+	e.cargaDe(0, "L")
+	e.invoca(opInvokespec, "java/lang/Object", "<init>", "()V", 1)
+	e.emite(retorno('V'))
+	attrs := attrInfo(e.pool, "Code", e.codeAttr())
+	// MethodParameters: conteo u1, y por cada uno nombre u2 y flags u2. El de la captura no tiene nombre.
+	mp := []byte{1}
+	mp = append(mp, u2be(0)...)
+	mp = append(mp, u2be(uint16(accFinal|accMandated))...)
+	attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
+	return e.methodInfo("<init>", desc, 0, attrs, 2), nil
+}
+
+// enclosingMethod: el atributo que dice en que metodo de que clase se creo la anonima. javac lo escribe y
+// nuestro dexer lo convierte en la anotacion Ldalvik/annotation/EnclosingMethod; (parrafo 42).
+func (e *emisor) cuerpoEnclosingMethod() ([]byte, error) {
+	if e.c.encierre == nil || e.c.metodoEncierre == nil {
+		return nil, fmt.Errorf("linea %d: la anonima no trae la clase y el metodo que la crean", e.c.linea)
+	}
+	externo := internoDe(e.c.encierre.paquete, e.c.encierre.nombre)
+	desc, err := e.ctx.descDeMetodo(*e.c.metodoEncierre)
+	if err != nil {
+		return nil, err
+	}
+	e.usar(externo)
+	b := u2be(uint16(e.pool.clase(externo)))
+	return append(b, u2be(uint16(e.pool.nombreYTipo(e.c.metodoEncierre.nombre, desc)))...), nil
 }
 
 func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {

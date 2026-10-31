@@ -183,6 +183,14 @@ type jclas struct {
 	paquete       string
 	imports       []string
 	nombreExterno string
+
+	// anonima: la clase que crea un `new Tipo(args) { ... }`. javac le pone el campo this$0, un constructor
+	// con la captura y el atributo EnclosingMethod, y en el InnerClasses su fila va sin nombre ni exterior
+	// (parrafo 42). encierre y metodoEncierre son de donde salio, y se guardan punteros porque el descriptor
+	// del exterior se calcula despues, en el emisor.
+	anonima        bool
+	encierre       *jclas
+	metodoEncierre *jmetodo
 }
 
 // archivoJava es un fuente entero: el paquete, los imports y la clase principal con sus anidadas.
@@ -375,6 +383,10 @@ type analizadorJava struct {
 	imports  []string
 	anonima  int
 	exterior string // nombre interno de la clase de primera nivel, para nombrar a sus anonimas
+	// claseActual y metodoActual son el contexto del `new ... { ... }`: javac anota en la anonima la clase y
+	// el metodo que la crean (EnclosingMethod, parrafo 42) y le pasa la clase como captura.
+	claseActual  *jclas
+	metodoActual *jmetodo
 }
 
 func (a *analizadorJava) actual() tokenJava { return a.toks[a.i] }
@@ -500,6 +512,9 @@ func esNombreDeTipo(v string) bool {
 // clase lee una declaracion de clase, con sus anidadas.
 func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
 	c := &jclas{paquete: a.paquete, linea: a.actual().donde.linea}
+	anterior := a.claseActual
+	a.claseActual = c
+	defer func() { a.claseActual = anterior }()
 	for {
 		t := a.actual()
 		switch {
@@ -716,7 +731,12 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 		a.avanzar()
 		return m, nil
 	}
+	// el metodo se apunta antes del cuerpo: una anonima que aparezca dentro necesita saber donde nacio para
+	// su EnclosingMethod (parrafo 42), y aqui el nombre, la vuelta y los parametros ya estan leidos
+	antes := a.metodoActual
+	a.metodoActual = &m
 	cuerpo, err := a.bloque()
+	a.metodoActual = antes
 	if err != nil {
 		return m, err
 	}
@@ -1178,11 +1198,26 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 // claseAnonima lee el cuerpo de un `new Interface() { ... }`. Lo que no sea implementar metodos no esta
 // medido: javac le pone el campo this$0 y el constructor con la captura, y eso se comprueba aparte.
 func (a *analizadorJava) claseAnonima(nombre string) (*jclas, error) {
+	if a.claseActual == nil {
+		return nil, fmt.Errorf("linea %d: una clase anonima fuera de una declaracion de clase no es Java", a.actual().donde.linea)
+	}
+	if strings.Contains(a.claseActual.nombre, "$") {
+		return nil, fmt.Errorf("linea %d: una anonima dentro de otra anonima no esta medida: javac nombra Exterior$1$2 y aqui el contador es por clase de primera nivel", a.actual().donde.linea)
+	}
+	if a.claseActual != nil && a.claseActual.nombre != a.exterior {
+		return nil, fmt.Errorf("linea %d: una anonima creada dentro de una clase anidada no esta medida (javac la nombra Exterior$Anidada$1)", a.actual().donde.linea)
+	}
 	c := &jclas{
-		nombre:     a.exterior + "$" + strconv.Itoa(a.anonima),
-		implementa: []string{nombre},
-		paquete:    a.paquete,
-		linea:      a.actual().donde.linea,
+		nombre:         a.exterior + "$" + strconv.Itoa(a.anonima),
+		implementa:     []string{nombre},
+		paquete:        a.paquete,
+		linea:          a.actual().donde.linea,
+		anonima:        true,
+		encierre:       a.claseActual,
+		metodoEncierre: a.metodoActual,
+	}
+	if a.metodoActual == nil {
+		return nil, fmt.Errorf("linea %d: una anonima creada fuera de un metodo (en un campo o un inicializador) no esta medida: falta el EnclosingMethod", c.linea)
 	}
 	if err := a.comerSimbolo("{"); err != nil {
 		return nil, err

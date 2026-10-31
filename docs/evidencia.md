@@ -1842,13 +1842,15 @@ columna de comentarios, porque el índice de pool que javac escribe en dos dígi
 
 **Segundo oráculo**, dentro de la suite (`TestEmisorDexaLoQueDexaJavac`): las cuatro clases de javac viajan
 como base64 en el test, y el test dexa las nuestras y las de javac con `dexDeClases`. **El dex sale idéntico
-byte a byte** (1288 = 1288, cero bytes distintos), incluidas la firma SHA-1 y la `checksum` del encabezado,
+byte a byte** (1284 = 1284, cero bytes distintos), incluidas la firma SHA-1 y la `checksum` del encabezado,
 que son lo primero que se rompe cuando el contenido difiere. No queda nada que comprobar del significado de
 nuestros `.class`: el mismo lector, el mismo dexer y el mismo resultado que produce `javac` en el teléfono.
 
-Tamaños: los nuestros son 380, 298, 304 y 306 bytes frente a los 445, 324, 323 y 325 de javac. La diferencia
+Tamaños: los nuestros son 467, 298, 304 y 306 bytes frente a los 445, 324, 323 y 325 de javac. La diferencia
 es la versión 52 contra 65 (el `NestMembers`/`NestHost` de 8 bytes por clase y las entradas de pool que
-javac interna para escribirlos) y nada más: el `Code` es el mismo.
+javac interna para escribirlos) y nada más: el `Code` es el mismo. *Estas cuatro cifras y el 1284 se midieron
+otra vez con `apkc compile` después del §42, que añadió las reglas de mención del `InnerClasses`; el oráculo
+del párrafo anterior es el test, que sigue pasando.*
 
 Tres defectos que solo aparecieron comparando con el de fuera, no con un manual:
 
@@ -1874,3 +1876,136 @@ La suite nativa pasa con **179 tests** (tres nuevos: la plantilla contra `javap`
 portero de rechazos). El portero rechaza con nombre lo que este emisor no escribe: clase anónima (falta el
 `this$0`), `if`, `long`/`double`/`float`, una anotación que no sea `@Override` y un tipo que no aparezca en
 el fuente, en su paquete, en los imports ni en el `android.jar`.
+
+## 42. La clase anónima: `this$0`, `EnclosingMethod`, `invokeinterface` y el dex idéntico de las seis clases
+
+Lo que pedía la muestra del `studio/` (`menu.add("…").setOnMenuItemClickListener(new MenuItem.OnMenuItem-
+ClickListener() { … })` con `Toast.makeText(MainActivity.this, "Clicked!", Toast.LENGTH_SHORT).show()`) se
+midió antes de escribirlo, sobre las seis clases que `javac` dejó en `build/classes` del proyecto generado
+por la página:
+
+```sh
+$J=$(echo $PREFIX)/lib/jvm/java-21-openjdk/bin/javap
+S=$(echo $PREFIX)/tmp/studio-e2e-java/com.hola.apkcstudio
+$J -J-Xmx256m -v -p -classpath $S/build/classes 'com.hola.apkcstudio.MainActivity$1'
+$J -J-Xmx256m -c -p -classpath $S/build/classes com.hola.apkcstudio.MainActivity
+```
+
+**La anonima, `javap -v -p`**: `flags: (0x0020) ACC_SUPER` (ni pública ni final), `super_class`
+`java/lang/Object` **aunque el fuente dice `new MenuItem.OnMenuItemClickListener()`** — una anonima sobre una
+interface extiende Object e *implementa* la interface: `interfaces: 1, fields: 1, methods: 2, attributes: 4`.
+El campo es `final com.hola.apkcstudio.MainActivity this$0;` con `descriptor: Lcom/hola/apkcstudio/MainActivity;`
+y `flags: (0x1010) ACC_FINAL, ACC_SYNTHETIC`. El constructor es `MainActivity$1(MainActivity)` con
+`flags: (0x0000)` y:
+
+```
+   0: aload_0
+   1: aload_1
+   2: putfield      #1   // Field this$0:Lcom/hola/apkcstudio/MainActivity;
+   5: aload_0
+   6: invokespecial #7   // Method java/lang/Object."<init>":()V
+   9: return
+  LineNumberTable:
+    line 20: 0
+  MethodParameters:
+    Name        Flags
+    <no name>   final mandated
+```
+
+o sea: **primero se guarda la captura y después se llama al padre**, la tabla de líneas apunta a la línea del
+`new` (la 20), y el parámetro sintético lleva `MethodParameters` con `ACC_FINAL|ACC_MANDATED` (0x8010) y sin
+nombre. El método implementado, `onMenuItemClick(MenuItem)`, sale `stack=3, locals=2` con
+`aload_0; getfield this$0; ldc "Clicked!"; iconst_0; invokestatic Toast.makeText; invokevirtual Toast.show;
+iconst_1; ireturn` en las líneas 22 y 23 — `MainActivity.this` es un `getfield`, `Toast.LENGTH_SHORT` es un
+`iconst_0` (constante doblada del jar) y `show()` es `invokevirtual` porque el receptor es una clase.
+
+**El `InnerClasses` tiene tres filas en el exterior y dos en la anonima**, y ahí estaba la parte que un
+manual no dice. En `MainActivity`: `layout=R$layout of R`, despues `#28;` (la anonima, **sin exterior y sin
+nombre**) y despues `OnMenuItemClickListener=class android/view/MenuItem$OnMenuItemClickListener of
+android/view/MenuItem` — en **orden de primer uso**, no alfabetico ni de declaración. Y esa tercera fila
+existe aunque la interface no aparezca en ningún opcode: solo está escrita dentro del descriptor de
+`setOnMenuItemClickListener`. En la R, las tres anidadas van listas `style, layout, id`, o sea **al revés de
+como se declaran**. Los flags de una anidada del framework salen `0x0609` en la fila (`public static`)
+mientras su propio ClassFile dice `0x0601`: javac añade `ACC_STATIC` a la fila.
+
+**Resultado con el emisor encima**: `javap -c -p` sobre las seis clases nuestras imprime lo mismo que sobre
+las seis de javac, con la única diferencia del **número de pool** (`invokespecial #10` frente a `#1`), que no
+es un hecho semántico. Y el oráculo duro, dentro de la suite (`TestEmisorMuestraDexaLoQueDexaJavac`): el dex
+de nuestras seis clases es **idéntico byte a byte** al dex de las seis de javac, 2392 = 2392, cero
+diferencias. La suite nativa pasa con **182 tests**.
+
+Tres defectos que solo salieron comparando, y cada uno con su síntoma:
+
+- **El descriptor de un constructor sin vuelta.** `new` armaba `(Lcom/hola/apkcstudio/MainActivity;)` y
+  olvidaba la `V`. El lector no se quejaba; el dex salía con un `method_id`
+  `MainActivity$1.<init>(…)I` y una cadena `L` de más, y el fichero crecía 32 bytes. El formato pide
+  `(...)V` siempre.
+- **`fields_count` sin contar el campo de captura.** Se escribía el campo pero el conteo salía del AST, que
+  no lo tiene. `javap`: `unexpected end of file while reading MainActivity$1`; nuestro lector:
+  `class … ends inside needs 720914 bytes at 727 of 881`. El conteo va de lo *emitido*, no de lo declarado.
+- **El orden de las `class_defs`.** El dexer conserva el orden de entrada, así que la lista emitida se ordena
+  por `interno + ".class"` — el mismo orden de rutas que usa `leeClases` — y por eso `MainActivity$1.class`
+  (el `$` es 0x24) va **antes** que `MainActivity.class` (el punto es 0x2e) y la `R` después de sus anidadas.
+  Con el orden crudo por nombre el dex medía 4 bytes más y no coincidía ni uno.
+
+Quedan rechazadas con nombre, porque no están medidas: la anonima sobre una clase (`javac` la pone como
+`super`, no como interface), una anonima dentro de otra, una anonima creada en un método `static` (no hay
+`this` que capturar) o en un inicializador de campo (no hay `EnclosingMethod` que anotar), el `if`, los tipos
+de dos huecos y las anotaciones que no sean `@Override`.
+
+## 43. `apkc compile`: el `.class` sin `javac`, medido en el binario y dentro del hospedador con forma de navegador
+
+El emisor de los párrafos 41 y 42 era función de librería; la página necesita un comando. `apkc/compilar.go`
+añade `apkc compile --android-jar android.jar [-o build/classes] [carpeta-con-java ...]`, que lee los `.java`
+del árbol, resuelve los nombres contra el jar y escribe una clase por fichero con el nombre internal — el
+mismo sitio y el mismo nombre de donde los lee `apkc dex`. `compile` entra en la lista de comandos que **no**
+sondean el SDK (`case "dex", "link", "compile":`), porque dentro de la pestaña no hay SDK que encontrar.
+
+**Medición nativa**, sobre el proyecto real que genera la página (`studio-e2e-java/com.hola.apkcstudio`):
+
+```sh
+$G compile --android-jar $HOME/Android/platforms/android-34/android.jar -o $T/compilado $S/src
+#   [compile] 2 fuentes -> 6 clases en .../compilado   finished in 33.588615ms
+$G dex -o $T/dex-go.dex   $T/compilado            # 6 classes -> 2392 bytes
+$G dex -o $T/dex-javac.dex $S/build/classes       # 6 classes -> 2392 bytes
+cmp $T/dex-go.dex $T/dex-javac.dex                # identical
+```
+
+Los seis ficheros miden 1034, 881, 312, 318, 320 y 362 bytes frente a los 1036, 900, 331, 337, 339 y 390 de
+`javac`; `javap -c -p` sobre ellos imprime **las mismas líneas**, y las únicas diferencias del `diff` en las
+seis clases son los **números de pool** (`invokespecial #10` frente a `#1`), que no son un hecho semántico. Y
+el dex que sale de los unos es **idéntico byte a byte** al que sale de los otros: 2392 = 2392, `cmp` mudo.
+
+**Medición dentro del hospedador** (`shim/navegador-sim.js`, un `fs` en memoria, sin red y sin proceso), con
+el jar montado como un fichero más:
+
+```sh
+sh -c 'cd shim && node navegador-sim.js \
+  --montar $HOME/Android/platforms/android-34/android.jar:/sdk/android.jar \
+  --montar $S/src/com/hola/apkcstudio/MainActivity.java:/proyecto/src/com/hola/apkcstudio/MainActivity.java \
+  --montar $S/src/com/hola/apkcstudio/R.java:/proyecto/src/com/hola/apkcstudio/R.java \
+  --exportar /proyecto/build/classes/com/hola/apkcstudio/MainActivity.class:$T/wasm-classes/.../MainActivity.class \
+  ... (seis exportaciones) ... \
+  $PREFIX/tmp/apkc-wasm.wasm compile --android-jar /sdk/android.jar -o /proyecto/build/classes /proyecto/src'
+```
+
+**Resultado**: `[compile] 2 fuentes -> 6 clases`, **1,16 s** (leer los 26361808 bytes del jar por el `fs`
+simulado es lo que tarda), y las seis clases exportadas son **idénticas byte a byte a las que produce el
+binario nativo**; dexadas desde fuera, dan los mismos 2392 bytes que las clases de `javac`. O sea: el paso
+Java completo corre dentro de la forma de navegador, con el mismo resultado.
+
+La suite, en ese hospedador: **176 PASS, 0 FAIL, 9 SKIP**, y los **doce** tests de Java (`TestLexico*`,
+`TestParsear*`, `TestEmisor*`, `TestCompile*`) **pasan dentro** en vez de saltarse, con el jar montado en
+`/sdk/android.jar`; el más caro, `TestCompileEscribeLasClasesDelProyecto`, tarda 2,88 s allí dentro. Nativa:
+**184 tests**. Tres tests nuevos por el comando: el camino de disco entero (`fuentesJava` →
+`compilarProyectoJava` → `escribirClases` → `leeClases` → `dexDeClases` igual byte a byte que javac), el
+rechazo que no escribe nada, y el recorrido que ignora los `.kt` y los `.txt` y nombra una raíz que no existe.
+
+**Otra trampa del hospedador, corregida en el propio comando**: `fuentesJava` averiguaba si la raíz era
+fichero o árbol con `os.Stat`, y en el `fs` simulado eso falla para un fichero montado; ahora intenta el
+`ReadFile` cuando el nombre acaba en `.java` y si no, camina el árbol, que es lo que funcionaba en el §39.
+
+**Una trampa del hospedador, anotada porque costó un salto de prueba**: dentro del `fs` simulado
+`os.Stat("/sdk/android.jar")` responde que no existe, mientras que abrirlo funciona (así lo usó el §39). El
+test localizaba el jar con `Stat`, así que se saltaba aunque el jar estuviera montado; ahora lo **abre**
+(`abrirBuscador`) y guarda el resultado en un `sync.Once`, que además evita releer los 26 MB en cada prueba.

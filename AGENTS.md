@@ -129,17 +129,25 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   entiende. El portero rechaza con nombre lo no medido: cualquier calificador (`res/layout-es`), recursos
   que no sean values/layout, subcarpetas, no-XML, `<permission>` y una version de platform no medida.
   **`javac` y `d8` sí se ejecutan** en ese camino: lo que ya no se ejecuta es aapt2.
-- **Quedan dos piezas para el objetivo**: la clase anónima del emisor de Java (1G.3b: `this$0` y la
-  captura, con su medición `javap` propia) y el cableado de la página para que el editor maneje
-  `link` + la compilación de Java + `dex` + `sign` dentro de la pestaña.
-- **El emisor de `.class` en Go** (rama `web`, parrafos 40 y 41; aun **sin comando**, es funcion de libreria
-  con sus tests). El analizador (`apkc/javafuente.go`) lee el subconjunto de Java que necesita la pagina, con
-  sus cinco tests, y el emisor (`apkc/javaemisor.go`) escribe el `.class`: resuelve los nombres contra el
-  `android.jar` (solo las entradas que hacen falta, leidas por el lector de la Fase 2), dobla las constantes
-  `static final int` como javac, sintetiza el `<init>` y saca `SourceFile` + `InnerClasses`. **El oraculo es
-  doble y paso las dos veces**: `javap -c -p` sobre nuestras clases imprime las mismas lineas que sobre las
-  de javac 21, y el `classes.dex` que sale de las unas es identico byte a byte al que sale de las otras (1288
-  bytes, cero diferencias, firma incluida). Version emitida 52; la clase anonima y el `if` se rechazan con
-  nombre.
+- **Queda una pieza para el objetivo**: el cableado de la página, para que el editor maneje `link` +
+  `compile` + `dex` + `sign` dentro de la pestaña. Las cuatro piezas ya corren sin proceso y sin conexión.
+- **`apkc compile`: Java en Go** (rama `web`, parrafos 40 a 43). El analizador (`apkc/javafuente.go`) lee el
+  subconjunto que necesita la pagina; el emisor (`apkc/javaemisor.go`) escribe el `.class` (version 52):
+  resuelve los nombres contra el `android.jar` leyendo solo las entradas que el fuente nombra, dobla las
+  constantes `static final int` como javac, sintetiza el `<init>`, escribe `SourceFile`, `InnerClasses`,
+  `EnclosingMethod` y `MethodParameters`, y baja una clase anonima a su campo `this$0` con el constructor que
+  la captura. `apkc/compilar.go` lo expone como comando, en la lista de los que **no** sondean el SDK.
+  **El oraculo es doble y paso en los dos binarios**: `javap -c -p` sobre nuestras seis clases imprime las
+  mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
+  **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
+  forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
+  identicos a los del binario nativo (parrafo 43). Suite: 184 nativa, 176 PASS + 9 SKIP en el hospedador, con
+  los doce tests de Java pasando dentro. El portero rechaza con nombre lo no medido: `if`, anonima sobre una
+  clase o dentro de otra o en un metodo `static`, tipos de dos huecos, anotaciones que no sean `@Override`.
+- **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
+  abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
+  `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden
+  de argumentos de `navegador-sim.js` es `--montar`/`--exportar` primero, despues el `.wasm` y despues la
+  orden.
 - Una apk mínima no se puede firmar en el cliente sin `R`: las 4 clases `R*` del recuento las genera
   `aapt2`, así que **2G y 3 van atadas** aunque se midan por separado.

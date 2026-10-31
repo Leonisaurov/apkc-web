@@ -201,10 +201,16 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   sintetiza el `<init>`. Oráculo doble y medido en el §41: `javap -c -p` sobre lo que escribimos imprime las
   mismas líneas que sobre lo que escribe javac, y **el dex de nuestras clases es byte a byte idéntico al dex
   de las clases de javac** (mismo lector, mismo dexer, 1288 = 1288, cero diferencias).
-- **1G.3b PENDIENTE — la clase anónima.** Es lo único que la muestra del `studio/` pide y el emisor no hace:
-  javac le añade el campo `this$0`, un constructor con la captura del exterior y `MainActivity.this` como
-  `aload_0; getfield this$0`. Tiene su medición propia (el `javap` de `MainActivity$1.class`) antes de
-  escribirse; mientras, el emisor la rechaza con nombre.
+- **1G.3b HECHA — la clase anónima**, con su medición previa (parrafo 42): campo `this$0` con
+  `ACC_FINAL|ACC_SYNTHETIC`, constructor `(LExterior;)V` con `MethodParameters` (`final mandated`, 0x8010),
+  atributo `EnclosingMethod`, la fila del `InnerClasses` sin exterior ni nombre, y las menciones que javac
+  apunta desde los descriptores. Oráculo: `javap -c -p` igual en las seis clases (solo cambian los números de
+  pool) y `apkc dex` dando **2392 bytes idénticos** desde nuestras clases y desde las de javac.
+- **1G.3c HECHA — el comando.** `apkc compile --android-jar android.jar [-o build/classes] [src...]`
+  (parrafo 43), en la lista de comandos que no sondean el SDK. Medido en el binario nativo y dentro del
+  hospedador con forma de navegador: 1,16 s con el jar de 26 MB montado, y las seis clases exportadas son
+  idénticas byte a byte a las nativas. **No está cableado en `apkc build`**: ese camino sigue ejecutando
+  `javac` y `d8`, y enhebrarlo es lo que queda junto con la página.
 - **1G.4** El `android.jar` entero viaja a la pestaña o se recorta: decisión con su número (fase 4.4). Con
   1G.2 resuelta como está, el jar solo hace falta **en tiempo de compilación**, y la página puede pedirlo
   una vez y guardarlo en OPFS: es un problema de 26 MB de descarga única, no de código.
