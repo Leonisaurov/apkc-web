@@ -192,8 +192,8 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       cd "$AQUI"
     fi
 
-    # 4d. el fuente ESCRITO A MANO en la pestaña (campos con modificadores, cadena de llamadas y
-    #     cuentas enteras, párrafos 49 y 50): los mismos oráculos que a cualquier apk
+    # 4d. el fuente ESCRITO A MANO en la pestaña (campos con modificadores, cadena de llamadas,
+    #     cuentas enteras y las branquias del párrafo 52): los mismos oráculos que a cualquier apk
     escrita="$TMP/pestana-apk/pestanera-escrita.apk"
     if [ -f "$escrita" ]; then
       if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$escrita" >"$TMP/studio-pestana-escrita.log" 2>&1; then
@@ -212,7 +212,16 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         unzip -p "$escrita" classes.dex | strings | grep -q "$nombre" ||
           falla "el dex del fuente escrito no trae $nombre"
       done
-      avisa "fuente escrito a mano: apk de $(wc -c <"$escrita" | tr -d ' ') bytes con $lanzable en su dex, verificado por apksigner, zipalign, zipcheck y aapt2"
+      # y el oráculo del párrafo 52: el dex sale de la pestaña CON branquias, y d8 lo relee y lo
+      # re-dexa. Un desplazamiento mal parcheado se ve aquí, porque d8 recorre el código antes de
+      # convertirlo y un destino fuera del método es un error con nombre
+      mkdir -p "$TMP/escrita-dex" "$TMP/escrita-redex"
+      unzip -p "$escrita" classes.dex >"$TMP/escrita-dex/classes.dex" ||
+        falla "el apk escrito a mano no trae classes.dex"
+      "$BUILD_TOOLS/d8" --release --min-api 21 --lib "$ANDROID_JAR" --output "$TMP/escrita-redex" \
+        "$TMP/escrita-dex/classes.dex" >"$TMP/studio-escrita-d8.log" 2>&1 ||
+        falla "d8 no relee el dex con branquias que salió de la pestaña"
+      avisa "fuente escrito a mano: apk de $(wc -c <"$escrita" | tr -d ' ') bytes con $lanzable en su dex, verificado por apksigner, zipalign, zipcheck, aapt2 y releido por d8"
     fi
   fi
 else

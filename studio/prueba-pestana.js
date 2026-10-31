@@ -426,7 +426,7 @@ async function conductor() {
       "codigo " + alterado.codigo + ", " + JSON.stringify(String(alterado.detalle).slice(-220)));
 
     // 11. y se puede ESCRIBIR un fuente propio, no solo el que genera la página: campos con
-    // modificadores, una cadena de llamadas y cuentas enteras (lo que midieron los párrafos 49 y 50)
+    // modificadores, una cadena de llamadas, cuentas enteras y las branquias del párrafo 52
     const fuenteEscrita = [
       "package com.myapp;",
       "",
@@ -445,8 +445,8 @@ async function conductor() {
       "        setContentView(R.layout.main);",
       "        View raiz = getWindow().getDecorView();",
       "        pulsos = pulsos + 1;",
-      "        total = total * 2;",
-      "        raiz.setVisibility(0);",
+      "        if (pulsos > 2) { total = total * 2; } else { total = total + 1; }",
+      "        if (raiz != null) { raiz.setVisibility(0); }",
       "        Toast.makeText(this, \"cuenta\", Toast.LENGTH_SHORT).show();",
       "    }",
       "}",
