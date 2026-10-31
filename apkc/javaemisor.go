@@ -45,6 +45,7 @@ const (
 	opPop        = 0x57
 	opDup        = 0x59
 	opGetstatic  = 0xb2
+	opPutstatic  = 0xb3
 	opGetfield   = 0xb4
 	opPutfield   = 0xb5
 	opInvokevirt = 0xb6
@@ -53,6 +54,12 @@ const (
 	opInvointf   = 0xb9
 	opNew        = 0xbb
 	opCheckcast  = 0xc0
+	// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49)
+	opIadd = 0x60
+	opIsub = 0x64
+	opImul = 0x68
+	opIdiv = 0x6c
+	opIrem = 0x70
 )
 
 // descPrimitivo: el descriptor de cada tipo escrito en el fuente. `long`, `float` y `double` se rechazan
@@ -168,7 +175,9 @@ func attrInfo(pool *poolBuilder, nombre string, cuerpo []byte) []byte {
 
 // carga y guarda devuelven el opcode breve (el indice va en el propio opcode, 0 a 3) y el opcode con el
 // indice detras, que es el que se usa a partir de 4. Son los numeros del JVMS: iload_0 0x1a, aload_0 0x2a,
-// istore_0 0x3b, astore_0 0x47, y las formas con indice 0x15, 0x19, 0x36 y 0x3a.
+// istore_0 0x3b, astore_0 0x4b, y las formas con indice 0x15, 0x19, 0x36 y 0x3a. El 0x4b esta leido de
+// `javap -c` sobre `View v = findViewById(...)` (parrafo 49): con 0x47, que es dstore_0, el `astore_2` de
+// javac salia como `dstore_2` y la ranura se contaba de a dos.
 func carga(desc byte) (breve byte, conIndice byte) {
 	if desc == 'I' || desc == 'B' || desc == 'C' || desc == 'S' || desc == 'Z' {
 		return 0x1a, 0x15
@@ -180,7 +189,7 @@ func guarda(desc byte) (breve byte, conIndice byte) {
 	if desc == 'I' || desc == 'B' || desc == 'C' || desc == 'S' || desc == 'Z' {
 		return 0x3b, 0x36
 	}
-	return 0x47, 0x3a
+	return 0x4b, 0x3a
 }
 
 func retorno(desc byte) byte {
@@ -301,6 +310,17 @@ type contextoJava struct {
 	orden   []*jclas // en el orden del fuente, para resolver sin depender del azar de un mapa
 	propias map[string]*jclas
 	archivo string // el SourceFile que anota javac: el nombre del fuente, sin rutas
+}
+
+// internoDeDescriptor: el lector de la Fase 2 guarda `this_class` y `super_class` en forma de descriptor
+// (`Landroid/widget/TextView;`), y el indice del jar va por nombre internal. Sin esta conversion el
+// segundo eslabon de la cadena de padres responde que la clase "no esta en el android.jar", que es lo
+// que pasaba al resolver `setText` de un `Button`, declarado en TextView.
+func internoDeDescriptor(desc string) string {
+	if len(desc) >= 2 && desc[0] == 'L' && desc[len(desc)-1] == ';' {
+		return desc[1 : len(desc)-1]
+	}
+	return desc
 }
 
 func internoDe(paquete string, nombre string) string {
@@ -670,7 +690,7 @@ func (b *buscadorDeClases) enLaCadena(interno, nombre string, argc int) (desc st
 		if c.Super == "" {
 			break
 		}
-		actual = c.Super
+		actual = internoDeDescriptor(c.Super)
 	}
 	return "", 0, fmt.Errorf("%s no declara %s con %d argumentos ni lo hereda", interno, nombre, argc)
 }
@@ -707,11 +727,11 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 				if f.esFinal {
 					acc |= accFinal
 				}
-				cr := campoResuelto{desc: d, acceso: acc, dueño: dueño, constante: f.esEstatico && f.esFinal}
+				cr := campoResuelto{desc: d, acceso: acc, dueño: dueño, constante: f.esFinal}
 				if cr.constante {
 					lit, esLit := f.valor.(jlit)
 					if !esLit {
-						return campoResuelto{}, fmt.Errorf("el campo %s.%s dice ser final y estatico pero no tiene literal", actual, nombre)
+						return campoResuelto{}, fmt.Errorf("el campo %s.%s dice ser final pero su inicializador no es un literal", actual, nombre)
 					}
 					if lit.tipoJ != 'i' {
 						return campoResuelto{}, fmt.Errorf("doblar una constante %s.%s que no es un entero no esta medida", actual, nombre)
@@ -751,7 +771,7 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 		if c.Super == "" {
 			break
 		}
-		actual = c.Super
+		actual = internoDeDescriptor(c.Super)
 	}
 	return campoResuelto{}, fmt.Errorf("el campo %s no esta en %s ni en sus padres", nombre, dueño)
 }
@@ -997,6 +1017,46 @@ func (e *emisor) getfield(idx int) {
 	e.sube()
 }
 
+// putfield se come el receptor y el valor; putstatic solo el valor. Medido en `javap -c`: el `<init>` de
+// `private int oculto = 3` es `aload_0; iconst_3; putfield #7`, y el `<clinit>` de `static int shared = 5`
+// es `iconst_5; putstatic #53`, sin receptor.
+func (e *emisor) putfield(idx int) {
+	e.emite(opPutfield, byte(idx>>8), byte(idx))
+	e.baja(2)
+}
+
+func (e *emisor) putstatic(idx int) {
+	e.emite(opPutstatic, byte(idx>>8), byte(idx))
+	e.baja(1)
+}
+
+// inicializador escribe el valor de un campo con su destino, en la forma que javac deja en el binario y con
+// la LineNumberTable apuntando a la linea del campo (medido: `line 9: 4`, donde 4 es el `aload_0`).
+func (e *emisor) inicializador(f jcampo) error {
+	desc, err := e.ctx.descriptorDe(f.tipo)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", f.donde.linea, err)
+	}
+	e.marcaLinea(f.donde.linea)
+	idx := e.pool.campo(e.interno, f.nombre, desc)
+	if !f.esEstatico {
+		e.cargaDe(0, "L")
+	}
+	d, err := e.exp(f.valor)
+	if err != nil {
+		return err
+	}
+	if d != desc {
+		return fmt.Errorf("linea %d: el campo %s es %s y su inicializador deja %s", f.donde.linea, f.nombre, desc, d)
+	}
+	if f.esEstatico {
+		e.putstatic(idx)
+	} else {
+		e.putfield(idx)
+	}
+	return nil
+}
+
 // invoca escribe el opcode con su indice (y el conteo, si es invokeinterface) y ajusta la pila simulada.
 func (e *emisor) invoca(opcode byte, dueño, nombre, desc string, enPila int) {
 	esInterface := opcode == opInvointf
@@ -1105,7 +1165,28 @@ func (e *emisor) exp(x jexpr) (string, error) {
 	case jnuevo:
 		return e.nuevo(v)
 	case joperador:
-		return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
+		// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49):
+		// dos palabras dentro, una fuera. Concatenar cadenas con `+` es StringBuilder y es otro incremento.
+		codes := map[string]byte{"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem}
+		code, esAritmetica := codes[v.op]
+		if !esAritmetica {
+			return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
+		}
+		izq, err := e.exp(v.izq)
+		if err != nil {
+			return "", err
+		}
+		der, err := e.exp(v.der)
+		if err != nil {
+			return "", err
+		}
+		if izq != "I" || der != "I" {
+			return "", fmt.Errorf("linea %d: `%s` aplicado a %s y %s: solo se midio la aritmetica de enteros",
+				v.donde.linea, v.op, izq, der)
+		}
+		e.emite(code)
+		e.baja(1)
+		return "I", nil
 	case jnegacion:
 		return "", fmt.Errorf("linea %d: la negacion no esta medida en este emisor", v.donde.linea)
 	}
@@ -1506,20 +1587,58 @@ func (e *emisor) stm(s jstmt) error {
 		acc, esAcceso := v.destino.(jacceso)
 		segs, base := aplanar(acc)
 		if !esAcceso || base != nil || len(segs) != 1 {
-			return fmt.Errorf("linea %d: una asignacion que no sea a una variable local no esta medida", v.donde.linea)
+			return fmt.Errorf("linea %d: una asignacion con mas de un nombre en el destino no esta medida", v.donde.linea)
 		}
-		lv, ok := e.locales[segs[0]]
-		if !ok {
-			return fmt.Errorf("linea %d: asignar a %s, que no es una variable local, no esta medido", v.donde.linea, segs[0])
+		if lv, ok := e.locales[segs[0]]; ok {
+			dv, err := e.exp(v.valor)
+			if err != nil {
+				return err
+			}
+			if dv[0] != lv.desc[0] {
+				return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, acc.nombre, lv.desc, dv)
+			}
+			e.guardaDe(lv.indice, lv.desc)
+			return nil
+		}
+		// asignar a un campo de la clase actual: `pulsos = pulsos + 1`, medido como `aload_0` (el
+		// receptor, ANTES del valor), el valor, y `putfield`; en un campo estatico no hay receptor
+		cr, err := e.ctx.buscarCampo(e.interno, segs[0])
+		if err != nil {
+			return fmt.Errorf("linea %d: asignar a %s, que no es ni una variable local ni un campo de esta clase, no esta medido",
+				v.donde.linea, segs[0])
+		}
+		if cr.constante {
+			return fmt.Errorf("linea %d: %s es una constante final y javac no la deja reasignar", v.donde.linea, segs[0])
+		}
+		esEstatico := cr.acceso&accStatic != 0
+		if esEstatico && e.c.anonima {
+			return fmt.Errorf("linea %d: asignar al estatico %s desde una anonima no esta medido", v.donde.linea, segs[0])
+		}
+		if !esEstatico {
+			if e.estatico {
+				return fmt.Errorf("linea %d: asignar a %s sin `this`, en un metodo estatico, no es Java", v.donde.linea, segs[0])
+			}
+			e.cargaDe(0, "L")
 		}
 		dv, err := e.exp(v.valor)
 		if err != nil {
+			if !esEstatico {
+				e.baja(1) // el receptor que ya se habia contado
+			}
 			return err
 		}
-		if dv[0] != lv.desc[0] {
-			return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, acc.nombre, lv.desc, dv)
+		if dv != cr.desc {
+			if !esEstatico {
+				e.baja(1)
+			}
+			return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, segs[0], cr.desc, dv)
 		}
-		e.guardaDe(lv.indice, lv.desc)
+		idx := e.pool.campo(e.interno, segs[0], cr.desc)
+		if esEstatico {
+			e.putstatic(idx)
+		} else {
+			e.putfield(idx)
+		}
 		return nil
 	case jbloque:
 		for _, st := range v.sentencias {
@@ -1658,6 +1777,15 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		b, err := e.metodoDeClassFile(m)
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", m.linea, err)
+		}
+		metodos = append(metodos, b...)
+		conte++
+	}
+	// el `static {}` va despues de lo declarado: es el orden que tiene javac en el ClassFile medido
+	if !c.anonima && len(c.inicializadoresEstaticos()) > 0 {
+		b, err := e.clinitSintetico()
+		if err != nil {
+			return nil, err
 		}
 		metodos = append(metodos, b...)
 		conte++
@@ -1825,6 +1953,12 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 	if f.esPublico {
 		acc |= accPublic
 	}
+	if f.esPrivado {
+		acc |= accPrivate
+	}
+	if f.esProtegido {
+		acc |= accProtected
+	}
 	if f.esEstatico {
 		acc |= accStatic
 	}
@@ -1838,21 +1972,51 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 	attrs := []byte{}
 	conte := 0
 	if f.valor != nil {
-		if !f.esEstatico || !f.esFinal {
-			return nil, fmt.Errorf("un campo con inicializador que no es `static final` se baja al <init> y eso no esta medido")
-		}
+		// medido con `javap -v` (parrafo 49): `static final int x = 6` se dobla y lleva ConstantValue sin
+		// codigo; `final int fijo = 6` lleva ConstantValue *y* su `bipush 6; putfield` en el <init>; y uno
+		// que no es final solo el codigo. Un `static final` con algo que no es un literal entero no esta
+		// medido: se rechaza en vez de suponer donde lo pondria javac.
 		lit, esLit := f.valor.(jlit)
-		if !esLit || lit.tipoJ != 'i' {
-			return nil, fmt.Errorf("el ConstantValue de un campo que no es un entero literal no esta medido")
+		constante := esLit && lit.tipoJ == 'i'
+		if f.esFinal && !constante {
+			return nil, fmt.Errorf("el ConstantValue de un campo `final` cuyo inicializador no es un entero literal no esta medido")
 		}
-		attrs = append(attrs, attrInfo(e.pool, "ConstantValue", u2be(uint16(e.pool.entero(lit.entero))))...)
-		conte = 1
+		if f.esFinal {
+			attrs = append(attrs, attrInfo(e.pool, "ConstantValue", u2be(uint16(e.pool.entero(lit.entero))))...)
+			conte = 1
+		}
 	}
 	b := u2be(uint16(acc))
 	b = append(b, u2be(uint16(e.pool.utf8(f.nombre)))...)
 	b = append(b, u2be(uint16(e.pool.utf8(desc)))...)
 	b = append(b, u2be(uint16(conte))...)
 	return append(b, attrs...), nil
+}
+
+// inicializadoresDeInstancia: los campos con valor que javac baja al <init>, en orden de declaracion. Un
+// `static final` con literal se dobla en el ConstantValue y no baja a ningun sitio; por eso se excluye.
+func (c *jclas) inicializadoresDeInstancia() []jcampo {
+	out := []jcampo{}
+	for _, f := range c.campos {
+		if f.valor == nil || f.esEstatico {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
+}
+
+// inicializadoresEstaticos: los campos `static` con un valor que no sea la constante doblada, que javac
+// escribe en un <clinit> que va DESPUES de los metodos declarados (medido: <init>, onCreate, contar, {}).
+func (c *jclas) inicializadoresEstaticos() []jcampo {
+	out := []jcampo{}
+	for _, f := range c.campos {
+		if f.valor == nil || !f.esEstatico || f.esFinal {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 // preparaMetodo deja el emisor como nuevo: el pool y las anidadas mencionadas son de la clase, todo lo demas
@@ -1960,12 +2124,31 @@ func (e *emisor) initSintetico() ([]byte, error) {
 	e.marcaLinea(e.c.linea)
 	e.cargaDe(0, "L")
 	e.invoca(opInvokespec, dueño, "<init>", "()V", 1)
+	for _, f := range e.c.inicializadoresDeInstancia() {
+		if err := e.inicializador(f); err != nil {
+			return nil, err
+		}
+	}
 	e.emite(retorno('V'))
 	acc := 0
 	if e.c.esPublica {
 		acc = accPublic
 	}
 	return e.methodInfo("<init>", "()V", acc, attrInfo(e.pool, "Code", e.codeAttr()), 1), nil
+}
+
+// clinitSintetico: el `static {}` que javac escribe al final, despues de los metodos declarados, solo
+// cuando hay un campo estatico con un valor que no sea la constante doblada. Lleva ACC_STATIC, `()V`,
+// `locals=0` (no hay `this`) y una fila por campo en su LineNumberTable.
+func (e *emisor) clinitSintetico() ([]byte, error) {
+	e.preparaMetodo("()V", true)
+	for _, f := range e.c.inicializadoresEstaticos() {
+		if err := e.inicializador(f); err != nil {
+			return nil, err
+		}
+	}
+	e.emite(retorno('V'))
+	return e.methodInfo("<clinit>", "()V", accStatic, attrInfo(e.pool, "Code", e.codeAttr()), 1), nil
 }
 
 // terminaEnRetorno: la ultima sentencia del cuerpo es un return. Con `if` y bucles todavia no se puede

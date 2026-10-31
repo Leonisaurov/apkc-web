@@ -2235,6 +2235,79 @@ es justamente `invokeinterface` del §42. Comprobado con `unzip -p … classes.d
 **Lo que sigue sin medirse es el hecho 2 del objetivo**: instalar y ver arrancar la
 actividad, que necesita un teléfono y no depende de ningún código.
 
+## 49. Escribir de verdad: campos, `static {}`, variables locales y aritmética, medidos contra `javap -v -c -l`
+
+Hasta aquí la pestaña compila lo que **ella genera**. «Escribir o pegar el fuente de una app mínima»
+pide algo más: un campo propio, una variable local con su cast, una condición. Esta sección mide qué
+emite javac para eso y qué faltaba para emitirlo igual.
+
+**El objetivo, leído de javac 21 con `--release 8`** (la versión 52 que escribe este emisor):
+
+```sh
+javac -nowarn --release 8 -cp $HOME/Android/platforms/android-34/android.jar -d cj com/myapp/R.java com/myapp/Campos.java
+javap -J-Xmx256m -p -v -l -cp cj com.myapp.Campos
+```
+
+Con seis campos declarados así:
+
+```java
+private int oculto = 3;  protected int visible = 1;  int paquete = 2;
+public int publico7 = 4;  static int shared = 5;  final int fijo = 6;
+```
+
+los flags son `0x0002`, `0x0004`, `0x0000`, `0x0001`, `0x0008` y `0x0010`, y **solo `fijo` lleva
+`ConstantValue: int 6`** — un `final` de instancia con literal se dobla *y* se baja al `<init>`, que es
+la parte que nadie adivina bien. El `<init>` medido:
+
+```
+ 0: aload_0    1: invokespecial Activity.<init>:()V    4: aload_0  5: iconst_3  6: putfield oculto:I
+ 9: aload_0   10: iconst_1   11: putfield visible:I   14: … paquete  19: … publico7
+24: aload_0   25: bipush 6   27: putfield fijo:I      30: return
+LineNumberTable: line 8:0, 9:4, 10:9, 11:14, 12:19, 14:24     stack=2, locals=1
+```
+
+una fila de línea **por campo**, apuntando al `aload_0` de cada uno, y el `static int shared = 5` fuera
+de ahí: va a un `<clinit>` (`flags 0x0008`, `()V`, `stack=1, locals=0`, una fila `line 13: 0`) que javac
+escribe **después de todos los métodos declarados**. En el cuerpo, `View v = findViewById(...)` es
+`invokevirtual; astore_2`; `Button b = (Button) v` añade `checkcast #43` antes del `astore_3`; `oculto =
+oculto + fijo` es `aload_0; aload_0; getfield; bipush 6; iadd; putfield` — la constante `fijo` llega
+**doblada**, no leída; y `shared = shared * 2` no lleva receptor: `getstatic; iconst_2; imul; putstatic`.
+`contar(int)` sale `stack=2, locals=3` y su cuerpo es `iload_1; iconst_1; isub; istore_2; iload_2;
+iconst_3; irem; istore_2; iload_2; ireturn`, idéntico en las dos compilaciones; `a*b`, `a/b`, `a%b` dan
+`imul` `0x68`, `idiv` `0x6c`, `irem` `0x70`.
+
+**Tres defectos reales salió a buscar esta medición**, y los tres estaban en código que ya pasaba sus
+pruebas:
+
+1. **`astore` estaba mapeado a la fila de `double`.** `guarda()` devolvía `0x47` para un objeto, que es
+   `dstore_0`; el JVMS pone `astore_0` en `0x4b`. Nadie lo había visto porque **el subconjunto medido
+   nunca guardaba una variable local de tipo referencia**: la plantilla y la `R` no tienen locales. Con
+   `0x47` nuestro `View v = …` salía como `dstore_2`, que además cuenta la ranura de a dos.
+2. **La cadena de padres del jar pedía un nombre internal y recibía un descriptor.**
+   `classreader.go` guarda `super_class` como `Landroid/widget/TextView;` y `enLaCadena` pasaba ese valor
+   tal cual a `claseDelJar`, que indexa por `android/widget/TextView`. Resultado: `b.setText(...)`
+   respondía `android/widget/Button: Landroid/widget/TextView; no esta en el android.jar`. Se veía solo
+   cuando el método **no** está declarado en la clase del receptor, y aquí sí lo estaba todo: el
+   `setContentView` de la plantilla vive en `Activity`, un salto de cadena. Añadido
+   `internoDeDescriptor` en los dos recorridos (métodos y campos).
+3. **Un `final int` propio no se doblaba.** `buscarCampo` marcaba constante solo si era
+   `estatico && final`, y javac dobla también el `final` de instancia con literal (medido: `bipush 6`,
+   no `getfield fijo`).
+
+**Estado de la comprobación**: con estos tres arreglos, `javap -p -c -l` sobre nuestra clase y sobre la de
+javac es **idéntica línea por línea** (112 líneas, `diff` mudo), y `TestEmisorCamposContraJavap` fija los
+flags de los seis campos, el orden `<init> / onCreate / contar / <clinit>`, las alturas de pila y ranuras
+`(2,1) (3,4) (2,3) (1,0)` y las seis filas de la `LineNumberTable`. Suite nativa: verde.
+
+**Y lo que todavía no vale, dicho sin adornos**: `apkc dex` traduce dieciséis opcodes medidos
+(`jvmMeasured`) y se niega con nombre ante el resto — este fuente le trae `bipush`, `iconst_3`, `iadd`,
+`imul`, `irem`, `astore_n`, `getstatic`/`putstatic` y `checkcast`. Mientras el traductor no crezca con su
+propia medición contra `d8`, **el avance del emisor no llega al apk**: `build --compiler go` sobre un
+proyecto con campos falla en el dexer, no en el compilador. La pestaña sigue compilando hoy lo que genera
+la página, que es lo que los §44 a §48 demuestran. El siguiente incremento es ese: la tabla del dexer y su
+bajada a instrucciones DEX, con el oráculo de siempre — `d8` sobre los `.class` de javac frente a los
+nuestros, byte a byte.
+
 ## 47. `apkc verify`: la pestaña dictamina su propio apk, cotejado con `apksigner` caso por caso
 
 Cierra el punto **0.2.2** del plan y es lo único que le faltaba a la página para no tener que pedirle a

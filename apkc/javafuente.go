@@ -143,13 +143,15 @@ type jparam struct {
 }
 
 type jcampo struct {
-	nombre     string
-	tipo       string
-	esEstatico bool
-	esFinal    bool
-	esPublico  bool
-	valor      jexpr
-	donde      pos
+	nombre      string
+	tipo        string
+	esEstatico  bool
+	esFinal     bool
+	esPublico   bool
+	esPrivado   bool
+	esProtegido bool
+	valor       jexpr
+	donde       pos
 }
 
 type jmetodo struct {
@@ -619,6 +621,7 @@ nombre:
 // miembroDeClase lee un campo, un metodo o una clase anidada.
 func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error) {
 	esEstatico, esFinal, esPublico, esAbstracta := false, false, false, false
+	esPrivado, esProtegido := false, false
 	for {
 		switch {
 		case a.es('k', "static"):
@@ -629,8 +632,10 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 			esPublico = true
 		case a.es('k', "abstract"):
 			esAbstracta = true
-		case a.es('k', "private"), a.es('k', "protected"):
-			return nil, fmt.Errorf("linea %d: el modificador %q en un miembro no esta medido contra javap", linea, a.actual().valor)
+		case a.es('k', "private"):
+			esPrivado = true
+		case a.es('k', "protected"):
+			esProtegido = true
 		case a.es('p', "@"):
 			if err := a.anotacion(); err != nil {
 				return nil, err
@@ -656,14 +661,27 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 	}
 cuerpo:
 	_ = esAbstracta
+	// `private` y `protected` se midieron en los flags de un campo (0x0002 y 0x0004, parrafo 49); en un
+	// metodo todavia no se leyeron, así que se rechazan aqui y no en el emisor, que es mas lejos del fuente
+	leerMetodo := func(retorno string) (interface{}, error) {
+		if esPrivado || esProtegido {
+			modificador := "private"
+			if esProtegido {
+				modificador = "protected"
+			}
+			return nil, fmt.Errorf("linea %d: un metodo %s no esta medido contra javap: los unicos flags leidos son los de un campo",
+				linea, modificador)
+		}
+		return a.metodo(c, retorno, esEstatico, esFinal, esPublico, linea)
+	}
 	if a.es('k', "void") {
 		a.avanzar()
-		return a.metodo(c, "void", esEstatico, esFinal, esPublico, linea)
+		return leerMetodo("void")
 	}
 	// un constructor: `Nombre(`
 	if a.actual().kind == 'i' && a.actual().valor == sinPaquete(c.nombre) && a.pegaParentesis() {
 		a.avanzar()
-		return a.metodo(c, c.nombre, esEstatico, esFinal, esPublico, linea)
+		return leerMetodo(c.nombre)
 	}
 	tipo, err := a.tipo()
 	if err != nil {
@@ -673,10 +691,11 @@ cuerpo:
 		return nil, fmt.Errorf("linea %d: se esperaba un nombre de miembro y hay %q", a.actual().donde.linea, a.actual().valor)
 	}
 	if a.pegaParentesis() {
-		return a.metodo(c, tipo, esEstatico, esFinal, esPublico, linea)
+		return leerMetodo(tipo)
 	}
 	nombre := a.avanzar().valor
-	campo := jcampo{nombre: nombre, tipo: tipo, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico, donde: pos{linea}}
+	campo := jcampo{nombre: nombre, tipo: tipo, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico,
+		esPrivado: esPrivado, esProtegido: esProtegido, donde: pos{linea}}
 	// un campo con inicializador: `public static final int main=0x7f020000;`, que es justo la forma en
 	// que el enlazador de la Fase 3 escribe la R.java que despues hay que compilar
 	if a.es('p', "=") {
@@ -969,8 +988,9 @@ func (a *analizadorJava) expresion() (jexpr, error) {
 	return a.expresionBinaria(0)
 }
 
-// precedencias: las que usa este subconjunto, medidas con el emisor.
-var precedenciasJava = map[string]int{"||": 1, "&&": 2, "==": 3, "!=": 3, "<": 4, ">": 4, "<=": 4, ">=": 4, "+": 5, "-": 5, "*": 6, "/": 6}
+// precedencias: las que usa este subconjunto, medidas con el emisor. El `%` entra porque su `irem` esta
+// leido de `javap -c` (parrafo 49), no porque la precedencia se suponga.
+var precedenciasJava = map[string]int{"||": 1, "&&": 2, "==": 3, "!=": 3, "<": 4, ">": 4, "<=": 4, ">=": 4, "+": 5, "-": 5, "*": 6, "/": 6, "%": 6}
 
 func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
 	izq, err := a.expresionUnaria()

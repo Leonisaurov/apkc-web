@@ -706,3 +706,170 @@ func contieneEntero(p *pool, v int32) bool {
 	}
 	return false
 }
+
+// fuenteCampos es el fuente que el parrafo 49 midio con `javac --release 8` y `javap -p -c -l`: campos con
+// los seis modos de modificadores, un `final int` que javac dobla y aun baja al <init>, un `static int`
+// que va al <clinit>, variables locales con cast y aritmetica entera.
+const fuenteCampos = `package com.myapp;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class Campos extends Activity {
+    private int oculto = 3;
+    protected int visible = 1;
+    int paquete = 2;
+    public int publico7 = 4;
+    static int shared = 5;
+    final int fijo = 6;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        View v = findViewById(R.id.pulsar);
+        Button b = (Button) v;
+        oculto = oculto + fijo;
+        shared = shared * 2;
+        b.setText("sumado");
+        Toast.makeText(this, "total", Toast.LENGTH_SHORT).show();
+    }
+
+    int contar(int hasta) {
+        int n = hasta - 1;
+        n = n % 3;
+        return n;
+    }
+}
+`
+
+const fuenteRCampos = `package com.myapp;
+public final class R {
+    public static final class layout { public static final int main = 0x7f010000; }
+    public static final class id { public static final int pulsar = 0x7f030000; }
+}
+`
+
+// TestEmisorCamposContraJavap fija la medicion del parrafo 49 sobre lo que escribimos nosotros: los flags
+// de cada campo, el orden de los metodos (<init>, los declarados, el <clinit> al final), las alturas de
+// pila y ranuras y la LineNumberTable. Son los numeros que imprime `javap -v -l -c` sobre las clases del
+// mismo fuente compilado con javac 21; el diff de los dos javap salio mudo, de 112 lineas iguales.
+func TestEmisorCamposContraJavap(t *testing.T) {
+	jar := jarDelSDK(t)
+	clases, err := compilarProyectoJava([]fuenteJava{
+		{nombre: "Campos.java", contenido: fuenteCampos},
+		{nombre: "R.java", contenido: fuenteRCampos},
+	}, jar)
+	if err != nil {
+		t.Fatalf("el fuente de campos no compila: %v", err)
+	}
+	var datos []byte
+	for _, c := range clases {
+		if c.interno == "com/myapp/Campos" {
+			datos = c.datos
+		}
+	}
+	if datos == nil {
+		t.Fatalf("no salio com/myapp/Campos de %d clases", len(clases))
+	}
+	c, err := readClassFull(datos)
+	if err != nil {
+		t.Fatalf("nuestra clase no se lee: %v", err)
+	}
+
+	campos := []struct {
+		nombre string
+		desc   string
+		acc    int
+		conste *int32
+	}{
+		{"oculto", "I", 0x0002, nil},
+		{"visible", "I", 0x0004, nil},
+		{"paquete", "I", 0x0000, nil},
+		{"publico7", "I", 0x0001, nil},
+		{"shared", "I", 0x0008, nil},
+		{"fijo", "I", 0x0010, int32De(6)},
+	}
+	if len(c.Fields) != len(campos) {
+		t.Fatalf("hay %d campos, se esperaban %d", len(c.Fields), len(campos))
+	}
+	for i, quieren := range campos {
+		got := c.Fields[i]
+		if got.Name != quieren.nombre || got.Desc != quieren.desc || got.Access != quieren.acc {
+			t.Errorf("campo %d: tenemos %s %s flags 0x%04x y javac %s %s 0x%04x",
+				i, got.Name, got.Desc, got.Access, quieren.nombre, quieren.desc, quieren.acc)
+		}
+		if quieren.conste == nil {
+			if got.HasConst {
+				t.Errorf("campo %s lleva ConstantValue y javac no", quieren.nombre)
+			}
+			continue
+		}
+		if !got.HasConst || got.ConstInt != *quieren.conste {
+			t.Errorf("campo %s: ConstantValue %v %d, javac dice %d", quieren.nombre, got.HasConst, got.ConstInt, *quieren.conste)
+		}
+	}
+
+	orden := []string{"<init>", "onCreate", "contar", "<clinit>"}
+	if len(c.Methods) != len(orden) {
+		t.Fatalf("hay %d metodos, se esperaban %d (%v)", len(c.Methods), len(orden), nombresMetodos(c.Methods))
+	}
+	for i, nombre := range orden {
+		if c.Methods[i].Name != nombre {
+			t.Errorf("metodo %d: %s, javac lo pone en el orden %v", i, c.Methods[i].Name, orden)
+		}
+	}
+
+	iniciales := c.Methods[0]
+	if iniciales.MaxStack != 2 || iniciales.LocalCount != 1 || iniciales.Access != 0x0001 {
+		t.Errorf("<init>: stack %d locals %d flags 0x%04x, medidos 2 1 0x0001",
+			iniciales.MaxStack, iniciales.LocalCount, iniciales.Access)
+	}
+	// las filas medidas: la de la declaracion de clase (8) y una por campo inicializado, en su orden
+	salida := [][2]int{{8, 0}, {9, 4}, {10, 9}, {11, 14}, {12, 19}, {14, 24}}
+	if len(iniciales.Lines) != len(salida) {
+		t.Fatalf("<init> tiene %d filas de linea y se midieron %d", len(iniciales.Lines), len(salida))
+	}
+	for i, par := range salida {
+		if iniciales.Lines[i].line != par[0] || iniciales.Lines[i].pc != par[1] {
+			t.Errorf("<init> fila %d: line %d pc %d, medido line %d pc %d",
+				i, iniciales.Lines[i].line, iniciales.Lines[i].pc, par[0], par[1])
+		}
+	}
+
+	onCreate := c.Methods[1]
+	if onCreate.MaxStack != 3 || onCreate.LocalCount != 4 {
+		t.Errorf("onCreate: stack %d locals %d, medidos 3 4", onCreate.MaxStack, onCreate.LocalCount)
+	}
+	if onCreate.Access != 0x0001 || onCreate.Desc != "(Landroid/os/Bundle;)V" {
+		t.Errorf("onCreate: flags 0x%04x descriptor %s", onCreate.Access, onCreate.Desc)
+	}
+	contar := c.Methods[2]
+	if contar.Access != 0x0000 || contar.Desc != "(I)I" {
+		t.Errorf("contar: flags 0x%04x descriptor %s, medidos 0x0000 (I)I", contar.Access, contar.Desc)
+	}
+	if contar.MaxStack != 2 || contar.LocalCount != 3 {
+		t.Errorf("contar: stack %d locals %d, medidos 2 3", contar.MaxStack, contar.LocalCount)
+	}
+
+	clinit := c.Methods[3]
+	if clinit.Access != 0x0008 || clinit.Desc != "()V" || clinit.MaxStack != 1 || clinit.LocalCount != 0 {
+		t.Errorf("<clinit>: flags 0x%04x %s stack %d locals %d, medidos 0x0008 ()V 1 0",
+			clinit.Access, clinit.Desc, clinit.MaxStack, clinit.LocalCount)
+	}
+	if len(clinit.Lines) != 1 || clinit.Lines[0].line != 13 || clinit.Lines[0].pc != 0 {
+		t.Errorf("<clinit> LineNumberTable: %v, medido una fila line 13 pc 0", clinit.Lines)
+	}
+}
+
+func int32De(v int32) *int32 { return &v }
+
+func nombresMetodos(ms []classMethod) []string {
+	out := []string{}
+	for _, m := range ms {
+		out = append(out, m.Name)
+	}
+	return out
+}
