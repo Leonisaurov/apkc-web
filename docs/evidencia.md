@@ -2945,3 +2945,81 @@ contiguo del área de `class_data` con los índices dentro de rango y el `code_o
 que escribió `d8`** (si la prueba no pasa con el oráculo, la prueba está mal) y la clase del contador con su
 `static int total = 5`.
 
+## 56. El `debug_info_item`: lo que faltaba del 2G.3, medido con `dexdump -d` y una traza en el teléfono
+
+El formato se midió con una sonda propia, no con un manual. La sonda (`$PREFIX/tmp/dbg/probe/Sonda.java`)
+son tres métodos con las líneas separadas a propósito: `cuenta(II)V` con las sentencias en las líneas 6, 7,
+8, 9 y 11; `Sonda()` en la 15, la 13 (el campo), la 16 y la 17; `arma(String)` en la 20, 21, 22, 23 y 24.
+
+```sh
+"$J/javac" -d . probe/Sonda.java                      # sin -g: la forma en que escribe este fork
+d8 --min-api 21 --lib "$ANDROID_JAR" --output . probe/Sonda.class
+rish -c 'cat > /data/local/tmp/d8sonda.dex' < classes.dex
+rish -c '/apex/com.android.art/bin/dexdump -d /data/local/tmp/d8sonda.dex'   # positions: 0x0000 line=20 …
+```
+
+Con las palabras crudas delante (`0f 00 0e 39 4d 4b 00`, `06 02 00 00 0e 1e 2d 3c 1f 00`,
+`14 01 00 0e 5a 3c 4b 69 00`) salen cuatro cosas del formato, todas medidas:
+
+- **el item empieza por la línea inicial**. El `header_addr` que cita la documentación del formato **no
+  se escribe**: `d8` lo salta y el parser de ART también. Es la segunda vez en este proyecto que el manual
+  describe un campo que quien escribe el fichero omite (la primera fue el `initial_value` del
+  `encoded_field`, §22 y §55).
+- **el recuento de argumentos no cuenta `this`**: `<init>()V` sale `00`, `arma(String)` sale `01`,
+  `cuenta(II)V` sale `02`.
+- **los nombres de los argumentos son un byte `00` cada uno** cuando el `.class` no trae
+  `LocalVariableTable`, y `d8` **no los toma de `MethodParameters`**: recompilada la sonda con
+  `-parameters`, el área de debug sale **idéntica byte a byte** y lo único que cambia en el fichero es que
+  aparece la anotación `Ldalvik/annotation/MethodParameters;`. Con `-g` sí cambian (ahí van los
+  `DBG_START_LOCAL`), y ese caso no se emite aquí.
+- **la posición se marca con el opcode especial** `0x0a + 15·Δpc + (Δlínea + 4)`, cuyo rango es Δlínea en
+  [-4, +10]; cerrar es `0x00`, y no hace falta `SET_FILE` porque el nombre del fichero ya está en
+  `class_def_item.source_file_idx`.
+
+Emisor en `apkc/dexdebug.go`, cableado en `armaDex`: área nueva `0x2003` justo detrás del código
+(alineación 1) y el `debug_info_off` de cada `code_item` **parcheado** después de conocer la base, porque
+es una referencia hacia adelante. Los items **idénticos comparten offset**: nueve cuerpos del fixture dan
+**ocho items**, y el `map_list` declara ocho.
+
+**Contra las palabras de `d8`.** Dexada la misma `.class` de la sonda por los dos caminos:
+
+| método | `d8` | nosotros |
+| --- | --- | --- |
+| `<init>()V` | `0f 00 0e 39 4d 4b 00` | idéntico |
+| `arma(Ljava/lang/String;)V` | `14 01 00 0e 5a 3c 4b 69 00` | idéntico |
+| `cuenta(II)V` | `06 02 00 00 0e 1e 2d 3c 1f 00` | `… 2e 00`: el último salto es de dos unidades porque nuestro cuerpo tiene una más —la diferencia de secuencia de instrucciones de los párrafos 52 y 53, no del formato— |
+
+**En el aparato.** Con el proyecto del contador rehecho: el dex pasa de 2716 a **2784 bytes**, `dexdump`
+sigue diciendo `rc 0`, y `-d` lista **18 posiciones**: en `MainActivity$1.onClick` lee
+`0x0000 line=18 … 0x0070 line=23`, que son las líneas reales del fuente. Y la prueba que le importa al
+usuario: instalada una variante que divide por cero (`total = total / total`, con `total` en 0, línea 18
+del fuente), al pulsar el botón el `logcat` del teléfono imprime
+
+```
+E/AndroidRuntime(29111): java.lang.ArithmeticException: divide by zero
+E/AndroidRuntime(29111): 	at com.myapp.MainActivity$1.onClick(MainActivity.java:18)
+```
+
+Antes de este párrafo las trazas salían sin número. Ahora el apk que se compila en la pestaña lleva sus
+propias líneas hasta el `logcat`, escritas por un emisor de Go.
+
+**Efecto en las cuentas.** Fixture: 2384 → **2436 bytes**, y 13 → 14 entradas en el `map_list`. Suite
+nativa: **208 PASS + 2 SKIP**, con tres pruebas nuevas en `apkc/dexdebug_test.go` (las palabras de `d8`,
+el caso en que el delta se sale del especial y el área deduplicada releída con un decodificador propio).
+En el hospedador con forma de navegador: **186 PASS + 24 SKIP**. Gate entero: `rc 0`, **41
+comprobaciones**, y los apks que escribe chromium crecen con su área de depuración —el del contador pasa de
+10095 (§55) a **10169 bytes**, el compilado de la página generada de 9834 a **9888**, y el del fuente
+escrito a mano de 9589 a **9638**—.
+
+**Defecto aparte, encontrado de paso y todavía SIN ARREGLAR.** La primera variante de la sonda de crash
+metía dos locales nuevos dentro del `onClick` (`int cero = 0; int k = pulsos / cero;`), y ART rechazó la
+clase: `VerifyError: … onClick failed to verify: [0x0] instance field access on object that has
+non-reference type Undefined`. Medido en su `code_item`: `registers=10`, `ins=2`, y el cuerpo usa `v6`
+para `this` — el traductor numera los locales del `.class` en orden (`slot i → v(base+i)`), así que los
+argumentos caen en `v6`/`v7` cuando el formato exige que los `ins` registros **sean los últimos** de la
+frame (`v8`/`v9`). Mientras `locales == ins` las dos cuentas coinciden, y por eso el subconjunto medido
+hasta hoy (el `onClick` del contador: dos locales y dos argumentos) salía bien. En cuanto un método tiene
+más locales que argumentos el dex sale **inverificable**. Hay que remapear la asignación para que los
+argumentos ocupen la parte alta de la frame, medido contra la numeración de `d8`, y añadir una prueba con
+un método de tres locales y dos argumentos.
+

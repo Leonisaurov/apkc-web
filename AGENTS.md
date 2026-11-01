@@ -96,9 +96,10 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
 - **`apkc dex` existe y corre dentro de wasm** (§23, rama `web`): `.class` -> `classes.dex` en Go, sin
-  `d8` ni proceso. Sobre el proyecto del studio: 2384 bytes (eran 2392 hasta el §55, que quitó el relleno
-  entre `class_data_item`; los 2844 de `d8` menos `debug_info`,
-  anotaciones y su marca de origen), con `type_ids`/`field_ids`/`method_ids` byte a byte iguales y los
+  `d8` ni proceso. Sobre el proyecto del studio: 2436 bytes (2392 hasta el §55, que quitó el relleno
+  entre `class_data_item`, y 2436 desde el §56, que añade el área de depuración; la diferencia con los
+  2844 de `d8` es hoy el bloque de anotaciones y su marca de origen), con
+  `type_ids`/`field_ids`/`method_ids` byte a byte iguales y los
   nueve cuerpos con la misma secuencia de instrucciones, los mismos índices y el mismo número de
   palabras. El oráculo que lo cierra: `d8` lee el dex que escribimos y lo re-dexa con `rc 0`, y el
   fichero que sale del binario `GOOS=js` es **idéntico byte a byte** al del binario nativo.
@@ -142,7 +143,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   memoria), y el aviso de «intermitencia de OPFS» del §39 era en realidad el primero.
 - **Y también el proyecto que la página genera** (§46): con la clase anónima del botón, el `@+id` y el
   `@style`, chromium escribe los cinco ficheros en OPFS con el propio `buildProject`, saca **seis clases y
-  2384 bytes de dex** (los mismos del §42 y del §44) y un apk de 9832 bytes **igual entrada por entrada al
+  2436 bytes de dex** (los mismos del §42 y del §44) y un apk de 9832 bytes **igual entrada por entrada al
   nativo**, y `d8` releee ese dex con `rc 0`. Lo pide `studio/e2e.sh` (bloque 4c).
 - **El `android.jar` entra sin red por el camino del usuario y dura** (§46, comprobaciones 9 y 9b): se le
   pone en el `<input type="file">` con `DOM.setFileInputFiles` de CDP, la página lo guarda en OPFS con
@@ -206,8 +207,32 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `0x1e` cortaba con `unexpected static field initial value type: 'L' vs 'I'`. Prueba permanente:
   `apkc/dexlayout_test.go`, que replica las cuatro comprobaciones y corre también **sobre el fichero de `d8`**.
   El oráculo barato: `/apex/com.android.art/bin/dexdump <dex>` empujado con `rish`, un segundo por fichero.
+- **El `debug_info_item` está hecho y se ve en el `logcat`** (§56): el formato se midió con una sonda
+  propia y `dexdump -d` del aparato, no con un manual. Cuatro cosas: el item **empieza por la línea
+  inicial** —el `header_addr` del manual `d8` lo salta, como el `initial_value` del `encoded_field`—;
+  el recuento de argumentos **no cuenta `this`**; los nombres van como bytes `00` cuando el `.class` no
+  trae `LocalVariableTable`, y **no** se toman de `MethodParameters` (recompilada la sonda con
+  `-parameters` el área sale idéntica y lo único que cambia es la anotación
+  `Ldalvik/annotation/MethodParameters;`); y la posición se marca con el especial
+  `0x0a + 15·Δpc + (Δlínea + 4)`, Δlínea en [-4, +10]. Emisor en `apkc/dexdebug.go`, área `0x2003` detrás
+  de `0x2001`, `debug_info_off` parcheado al conocer la base, e items idénticos compartiendo offset (nueve
+  cuerpos del fixture → ocho items). Dos de tres métodos salen **idénticos byte a byte** a `d8`. Prueba en
+  el teléfono: una variante que divide por cero imprime
+  `java.lang.ArithmeticException: divide by zero at com.myapp.MainActivity$1.onClick(MainActivity.java:18)`
+  —la línea exacta—; antes las trazas salían sin número.
+- **Defecto conocido y SIN arreglar, encontrado al buscar esa traza** (§56, último párrafo): el
+  traductor numera los locales como en el `.class` (`slot i → v(base+i)`), así que los argumentos no
+  caen al final de la frame. Con `locales == ins` coincide por casualidad y todo va bien; en cuanto un
+  método tiene **más locales que argumentos** ART lo rechaza (`instance field access on object that has
+  non-reference type Undefined`, medido: `registers=10`, `ins=2`, el cuerpo usa `v6` para `this`). Hay
+  que permutar `local(n)` para poner los argumentos arriba —identidad cuando `locales == ins`, así que no
+  toca lo ya medido—, con numeración de `d8` como oráculo y prueba en el aparato.
+- **Queda el bloque de anotaciones** para cerrar del todo el 2G.3: `d8` escribe
+  `EnclosingClass`, `InnerClass`, `EnclosingMethod` y `MethodParameters` (lo decodifica `dexdump -a` en
+  el aparato) y nosotros dejamos `annotations_off` en cero. Los datos ya salen del `.class` que escribe
+  `apkc/javaemisor.go`, así que falta el llevalos al dex.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
-  escribe chromium, 10095 bytes) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
+  escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
   `"muchos 4"`. Es decir: corren las dos ramas del `if`, la suma sobre el campo de instancia capturado, el
   estático del exterior, la concatenación de `StringBuilder`, la llamada virtual y el `Toast` (capas
@@ -228,9 +253,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   la captura. `apkc/compilar.go` lo expone como comando, en la lista de los que **no** sondean el SDK.
   **El oraculo es doble y paso en los dos binarios**: `javap -c -p` sobre nuestras seis clases imprime las
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
-  **el mismo fichero byte a byte** que sobre las otras: 2384 = 2384, `cmp` mudo. Dentro del hospedador con
+  **el mismo fichero byte a byte** que sobre las otras: 2436 = 2436, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **205 PASS + 2 SKIP** nativa y **183 PASS + 24 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **208 PASS + 2 SKIP** nativa y **186 PASS + 24 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

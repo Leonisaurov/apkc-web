@@ -38,7 +38,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 0.2.1 `apkc sign` | **hecha** (apkc `a909214`) | `docs/evidencia.md` §7 y §8: `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` sobre el apk re-firmado, y el mismo apk firmado **dentro de wasm** en 1,20 s |
 | 0.2.2 `apkc verify` | **hecha** (rama `web`): lee el paquete desde el `fs` y comprueba las dos firmas con lectores propios, sin `apksigner` ni `jarsigner` | `docs/evidencia.md` §47: ocho casos cotejados con `apksigner`, mismo veredicto y mismo código de salida, incluidos dos casos que apkc no escribió |
 | 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
-| 2G | **hecha** (rama `web`): lector y escritor de dex en Go. El objetivo medido eran 2844 bytes de `d8`; nuestro dex sobre los mismos `.class` sale **byte a byte igual** al de javac-d8 salvo el `debug_info` (motivo escrito), y `d8` lee el nuestro y lo re-dexa con `rc 0` | `docs/evidencia.md` §13, §20 a §23, §41, §42 |
+| 2G | **hecha** (rama `web`): lector y escritor de dex en Go, **con `debug_info_item` desde el §56**. El objetivo medido eran 2844 bytes de `d8`; `apkc dex` da **el mismo fichero byte a byte** sobre las `.class` de javac que sobre las que escribe este fork, y lo que separa nuestro fichero del de `d8` ya no es el debug sino el bloque de anotaciones y su marca de origen. `d8` lee el nuestro y lo re-dexa con `rc 0`, y ART del aparato lo verifica y lee sus líneas | `docs/evidencia.md` §13, §20 a §23, §41, §42, §56 |
 | 3 recursos sin `aapt2` | **hecha**: `arscwriter.go`, `axmlwriter.go`, `r.go`, `marco.go`, `enlazar.go` + `arbol.go` + `valores.go` enlazan desde los ficheros de texto; `build --linker go` produce un apk que `apksigner`, `zipalign`, `zipcheck.py` y `aapt2 dump` aprueban | `docs/evidencia.md` §28 a §38 |
 | 1G Java -> `.class` en Go | **hecha para el subconjunto del `studio/` y algo más**: `javafuente.go`, `javaemisor.go`, `compilar.go`; oráculo doble (`javap -c -p` y el dex idéntico) y rechazo por nombre de lo no medido. El subconjunto llega a campos con modificadores, variables locales, `checkcast`, aritmética entera y el `if`/`else`, la concatenación con `StringBuilder` y la anónima que toca un campo del exterior | `docs/evidencia.md` §40 a §43, §49 a §52 y §53-§54 |
 | 4.1 etapas como interfaz | **logrado por otro camino**: no hay interfaz con dos implementaciones, hay banderas (`--linker go`, `--compiler go`) que eligen el módulo de Go en vez del proceso, y `sinProcesos()` se salta el sondeo del SDK. El `os/exec` de siempre sigue ahí para el camino nativo, que es el que funciona con SDK completo | `docs/evidencia.md` §38, §44, §45 |
@@ -152,9 +152,15 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   del área `debug_info_item` que declara el `map_list`. **Hecha también la traducción de las dieciséis
   operaciones JVM a sus quince formatos dalvik** (§21): los nueve cuerpos emiten la misma secuencia de
   instrucciones, sobre los mismos índices y con el mismo número de palabras que `d8`, y seis de nueve
-  salen idénticos hasta los números de registro. Lo que queda para escribir aquí es el
-  **`debug_info_item` compartido**: nueve métodos usan siete, porque `d8` deduplica los cuerpos con
-  las mismas líneas; emitir uno por método dará un dex más grande sin estar mal.
+  salen idénticos hasta los números de registro. **El `debug_info_item` está hecho y medido** (§56):
+  formato casado contra las palabras de `d8` con una sonda propia y con `dexdump -d` del aparato, emisor
+  en `apkc/dexdebug.go`, área `0x2003` en el mapa, items idénticos compartiendo offset (nueve cuerpos del
+  fixture dan ocho items, como deduplica `d8`) y trazas con número de línea en el `logcat` del teléfono.
+  **Lo que queda del punto: el bloque de anotaciones** (`annotation_item` 0x2004, `annotation_set_item`
+  0x1003 y `annotations_directory_item` 0x2006, que `d8` sí escribe y nosotros no: `annotations_off` sale
+  cero). Y un defecto de registro encontrado de paso (§56, último párrafo): el traductor numera los
+  locales como en el `.class`, así que un método con **más locales que argumentos** produce un dex que
+  ART rechaza con `instance field access on object that has non-reference type Undefined`.
   **Sin medir a propósito**: `try_item` y `encoded_catch_handler`, porque ninguno de los nueve métodos
   del fixture los tiene; hará falta un fichero con `try` antes de escribirlos. Lo mismo con
   `move-result` de un primitivo, los métodos privados llamados con `invokespecial` y cualquier forma
