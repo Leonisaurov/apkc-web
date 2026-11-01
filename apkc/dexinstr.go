@@ -405,10 +405,12 @@ func (p *traduce) cuentaEntera(in jvmInstr) {
 // el quinto registro en los 0..3; segunda unidad con el índice del método; tercera con los
 // registros en nibbles, el primero en los bits bajos. Así están las nueve llamadas del fixture
 // (§21): invoke-direct {v0}, method@16 sale 1070 0010 0000 y invoke-interface {v2, v0}, method@3
-// sale 2072 0003 0002.
+// sale 2072 0003 0002. Con **cero** argumentos también vale 35c, medido el 2026-11-01 sobre
+// `invoke-static {}` de un `main` llamado desde javac: d8 escribe `7100 0600 0000`, o sea el recuento
+// a cero en el byte alto, el índice del método detras y la tercera unidad en cero.
 func (p *traduce) invoca(op byte, regs []int, metodo int, in jvmInstr) {
 	n := len(regs)
-	if n < 1 || n > 5 {
+	if n > 5 {
 		p.falla(in, "a call of "+itoa(n)+" arguments: 35c goes up to five and invoke/range is not measured here")
 		return
 	}
@@ -423,6 +425,10 @@ func (p *traduce) invoca(op byte, regs []int, metodo int, in jvmInstr) {
 	}
 	p.palabra(uint16(op) | uint16((n&0xf)<<4|g&0xf)<<8)
 	if !p.indice(metodo, in, "the method index") {
+		return
+	}
+	if n == 0 {
+		p.palabra(0)
 		return
 	}
 	unidadRegs := uint16(regs[0] & 0xf)
