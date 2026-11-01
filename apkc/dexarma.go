@@ -25,6 +25,15 @@ import (
 
 func putU16(b []byte, v uint16) []byte { return append(b, byte(v), byte(v>>8)) }
 
+// tipoArrayCodificado es el kind con el que el map_list declara el area de los
+// encoded_array_item, o sea las constantes de los campos estaticos que anuncia
+// class_def_item.static_values_off. Vale 0x2005 y se mide en el fichero de `d8`: su mapa cierra
+// con `0x2000 size=6 off=2659` y `0x2005 size=4 off=2746`. El area no pide alineacion: los cuatro
+// arrays de `d8` empiezan en 2746, 2749, 2755 y 2761. Lo que si comprueba ART es el `map_list` —
+// `d8` y nuestro lector no lo miran—, y por eso un kind equivocado aqui solo se nota en el
+// aparato: con 0x2007 el verificador responde `Unknown map section type 2007`.
+const tipoArrayCodificado dexKind = 0x2005
+
 func putU32(b []byte, v uint32) []byte {
 	return append(b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
 }
@@ -43,6 +52,20 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 			return nil, err
 		}
 	}
+
+	// El `class_defs` va **ordenado por type_idx**, que es lo que exige el cargador de ART: busca la
+	// clase con una búsqueda binaria sobre ese orden. Un fichero que lo respeta mal instala bien y
+	// responde `ClassNotFoundException` al arrancar la actividad —medido en el teléfono sobre el apk
+	// que escribió la pestaña (2026-11-01): `pm install` Success, `am start -W` Status ok, y en el
+	// logcat `Unable to instantiate activity ComponentInfo{com.myapp/com.myapp.MainActivity}` con
+	// `Didn't find class "com.myapp.MainActivity"`, mientras `strings` del dex muestra el nombre—.
+	// `d8` no lo nota porque recorre la tabla linealmente, y por eso el oráculo del re-dex no lo
+	// atrapaba. Ordenar aquí alinea además las áreas de datos con el orden de d8.
+	ordenadas := append([]classFull(nil), clases...)
+	sort.SliceStable(ordenadas, func(i, j int) bool {
+		return td.typeIdx[ordenadas[i].Name] < td.typeIdx[ordenadas[j].Name]
+	})
+	clases = ordenadas
 
 	// 1. areas cuyo contenido no depende de ningún offset absoluto
 	cadenas, relCadenas := td.areaCadenas()
@@ -77,8 +100,9 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	datos, relDatos, arrays, relArrays, cuantosArrays := td.areaClassData(clases, absCodigo)
 	poner(0x2000, datos, 1)
 	// el encoded_array_item con las constantes de los campos estáticos, justo detrás del
-	// class_data: es el orden en que lo dejó d8 (class_data en 2384, el primer array en 2465)
-	poner(0x2005, arrays, 1)
+	// class_data: es el orden en que lo dejó d8 (class_data 2659..2746, arrays desde 2746, sin
+	// separación y sin alinear: el suyo cae en 2746, que no es múltiplo de cuatro)
+	poner(tipoArrayCodificado, arrays, 1)
 
 	// 3. ahora sí, los contenidos que nombran offsets absolutos
 	stringIDs := []byte{}
@@ -141,7 +165,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		// cero si la clase no tiene ninguno (medido: R$id, R$layout y R$style lo llevan; las otras
 		// tres clases del fixture, no)
 		if r, ok := relArrays[cf.Name]; ok {
-			classDefs = putU32(classDefs, uint32(base[0x2005])+r)
+			classDefs = putU32(classDefs, uint32(base[tipoArrayCodificado])+r)
 		} else {
 			classDefs = putU32(classDefs, 0)
 		}
@@ -153,17 +177,17 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	}{
 		{0x0001, stringIDs}, {0x0002, typeIDs}, {0x0003, protoIDs}, {0x0004, fieldIDs},
 		{0x0005, methodIDs}, {0x0006, classDefs}, {0x2001, codigo}, {0x1001, listas},
-		{0x2002, cadenas}, {0x2000, datos}, {0x2005, arrays},
+		{0x2002, cadenas}, {0x2000, datos}, {tipoArrayCodificado, arrays},
 	}
 
 	// 4. map_list: las entradas, en orden ascendente de offset, como las escribió d8
 	entradas := [][3]uint32{{uint32(0x0000), 1, 0}}
-	tipos := []dexKind{0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x2001, 0x1001, 0x2002, 0x2000, 0x2005}
+	tipos := []dexKind{0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x2001, 0x1001, 0x2002, 0x2000, tipoArrayCodificado}
 	cuantos := map[dexKind]uint32{
 		0x0001: uint32(len(td.strings)), 0x0002: uint32(len(td.types)), 0x0003: uint32(len(td.protos)),
 		0x0004: uint32(len(td.fields)), 0x0005: uint32(len(td.methods)), 0x0006: uint32(len(clases)),
 		0x2001: uint32(len(cuerpos)), 0x1001: uint32(cuantasListas), 0x2002: uint32(len(td.strings)),
-		0x2000: uint32(len(clases)), 0x2005: uint32(cuantosArrays),
+		0x2000: uint32(len(clases)), tipoArrayCodificado: uint32(cuantosArrays),
 	}
 	mapOff := alignUp(off, 4)
 	for _, k := range tipos {
@@ -207,7 +231,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		b = putU32(b, uint32(base[k]))
 	}
 	// data_size y data_off: el bloque de datos va del primer code_item al final del class_data
-	b = putU32(b, uint32(base[0x2005]+len(arrays)-base[0x2001]))
+	b = putU32(b, uint32(base[tipoArrayCodificado]+len(arrays)-base[0x2001]))
 	b = putU32(b, uint32(base[0x2001]))
 
 	for _, a := range areas {
@@ -331,6 +355,15 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint3
 // áreaClassData: los class_data_item y, en su propio área, los encoded_array_item con las
 // constantes de los campos estáticos. Devuelve también las posiciones relativas de ambos, porque
 // class_defs tiene que nombrar los dos.
+//
+// Los ítems van **pegados**, sin relleno entre ellos. Es lo que hace d8 y lo que exige ART, que
+// recorre el área de `class_data_item` de forma contigua a partir del offset del `map_list`: midió
+// en el teléfono (Android 15, `dexdump`) que un `class_data_item` de 17 bytes seguido de tres ceros
+// de relleno desincronizaba ese recorrido y el verificador cortaba el fichero entero con
+// `Bad index for class_data_item field_idx: 8 >= 6` — leía los ceros como los cuatro recuentos de la
+// clase siguiente. El fichero de `d8` no lleva relleno: sus ítems miden 17, 24, 12, 12, 12 y 10
+// bytes y el último termina justo donde empieza el primer `encoded_array_item` (2746). Tampoco
+// alinea los arrays: los suyos empiezan en 2746, 2749, 2755 y 2761.
 func (td *dexTables) areaClassData(clases []classFull, absCodigo map[[2]string]uint32) ([]byte, map[string]uint32, []byte, map[string]uint32, int) {
 	buf := []byte{}
 	rels := map[string]uint32{}
@@ -338,16 +371,10 @@ func (td *dexTables) areaClassData(clases []classFull, absCodigo map[[2]string]u
 	relArrays := map[string]uint32{}
 	cuantos := 0
 	for _, cf := range clases {
-		for uint32(len(buf))%4 != 0 {
-			buf = append(buf, 0)
-		}
 		rels[cf.Name] = uint32(len(buf))
 		d, v := td.classDataDe(cf, absCodigo)
 		buf = append(buf, d...)
 		if len(v) > 0 {
-			for uint32(len(arrays))%4 != 0 {
-				arrays = append(arrays, 0)
-			}
 			relArrays[cf.Name] = uint32(len(arrays))
 			cuantos++
 			arrays = append(arrays, v...)
@@ -421,8 +448,21 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[2]string]uint32) (
 		if len(estaticos) > 0 {
 			vf, bytes := td.valorEstatico(p.f)
 			if vf == 0 {
-				// un estatico sin constante se anuncia con el tipo VALUE_NULL: el array tiene que
-				// traer un elemento por campo, o la cuenta del lector no cuadra
+				// El array tiene que traer un elemento por campo estatico, o la cuenta del lector no
+				// cuadra. Que el elemento sea del TIPO del campo lo exige ART: medido en el aparato
+				// (Android 15, `dexdump`, 2026-11-01) con `Lcom/myapp/MainActivity;` y su
+				// `static int total = 5` — sin `ConstantValue` en el `.class` porque no es `final` —,
+				// anunciarlo con el byte 0x1e cortaba la verificacion entera con
+				// `unexpected static field initial value type: 'L' vs 'I'`. `d8` si escribe la
+				// constante (`01 04 05`: un valor de un byte con el tipo del entero, y el 5), porque
+				// propaga el `<clinit>`; nosotros todavia no, asi que se anuncia un cero del mismo
+				// tipo — el `4` de siempre con los cuatro bytes de siempre, que es la cabecera que
+				// `d8` usa para las `R$id` — y el `<clinit>` lo sobrescribe al correr, que es lo que
+				// habria hecho de todas formas.
+				if p.f.Desc == "I" {
+					valores = append(valores, byte(valueInt|3<<5), 0, 0, 0, 0)
+					continue
+				}
 				valores = append(valores, valueNull)
 				continue
 			}

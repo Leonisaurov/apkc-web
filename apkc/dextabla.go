@@ -239,9 +239,16 @@ func (t *dexTables) followConstant(x poolIndex, idx int) {
 
 // orderTables puts every table in the order the format asks for. Each sort below was checked
 // against the tables d8 wrote: the string order by utf-16 units (measured in 2G-B), types by their
-// descriptor's position in the string table, protos by shorty then return then parameter list,
+// descriptor's position in the string table, protos by RETURN TYPE then shorty then parameter list,
 // fields by class then name then type, and methods by class then NAME then proto: ese ultimo orden
 // es el que sale del fichero de d8 (§19), no el que cita la documentación del formato.
+//
+// El orden de los protos lo corrigió el verificador del aparato (Android 15, `dexdump`, 2026-11-01):
+// `Out-of-order proto_id return types`. Medido en el fichero de `d8`, sus doce protos van con el
+// tipo de retorno ascendente (View, Toast, String, StringBuilder, y luego los ocho V) y el shorty
+// solo desempata dentro del mismo retorno; con el orden viejo (shorty primero) el `V` de `void` caía
+// en medio y ART cortaba la verificación. `d8` al re-leer nuestro fichero no lo notaba: el que exige
+// este orden es ART.
 func (t *dexTables) orderTables() {
 	sortByMUTF8(t.strings)
 	for i, s := range t.strings {
@@ -255,11 +262,11 @@ func (t *dexTables) orderTables() {
 
 	sort.Slice(t.protos, func(i, j int) bool {
 		a, b := t.protos[i], t.protos[j]
-		if t.stringIdx[a.shorty] != t.stringIdx[b.shorty] {
-			return t.stringIdx[a.shorty] < t.stringIdx[b.shorty]
-		}
 		if t.typeIdx[a.ret] != t.typeIdx[b.ret] {
 			return t.typeIdx[a.ret] < t.typeIdx[b.ret]
+		}
+		if t.stringIdx[a.shorty] != t.stringIdx[b.shorty] {
+			return t.stringIdx[a.shorty] < t.stringIdx[b.shorty]
 		}
 		return a.params < b.params
 	})
