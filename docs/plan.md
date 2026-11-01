@@ -156,17 +156,24 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   formato casado contra las palabras de `d8` con una sonda propia y con `dexdump -d` del aparato, emisor
   en `apkc/dexdebug.go`, área `0x2003` en el mapa, items idénticos compartiendo offset (nueve cuerpos del
   fixture dan ocho items, como deduplica `d8`) y trazas con número de línea en el `logcat` del teléfono.
-  **Lo que queda del punto: el bloque de anotaciones** (`annotation_item` 0x2004, `annotation_set_item`
-  0x1003 y `annotations_directory_item` 0x2006, que `d8` sí escribe y nosotros no: `annotations_off` sale
-  cero). Y un defecto de registro encontrado de paso, **arreglado y medido en el §57**: el traductor
-  numeraba los locales como en el `.class`, así que un método con **más locales que argumentos** producía
-  un dex que ART rechazaba con `instance field access on object that has non-reference type Undefined`.
+  **Hecho también el defecto de numeración encontrado de paso (§57)**: el traductor numeraba los locales
+  como en el `.class`, así que un método con **más locales que argumentos** producía un dex que ART
+  rechazaba con `instance field access on object that has non-reference type Undefined`. Corregido con una
+  permutación en `local(n)` que es identidad cuando `locales == ins`.
+  Con las tres estructuras del título —`class_data_item`, `code_item` y `debug_info_item`— **el punto está
+  cerrado**. Lo que queda para que el fichero entero sea igual que el de `d8` son las anotaciones, que
+  son diferencia aceptada por el 2G.4 y están medidas en el §58.
   **Sin medir a propósito**: `try_item` y `encoded_catch_handler`, porque ninguno de los nueve métodos
   del fixture los tiene; hará falta un fichero con `try` antes de escribirlos. Lo mismo con
   `move-result` de un primitivo, los métodos privados llamados con `invokespecial` y cualquier forma
   `/range` o `/from16`: el traductor los rechaza por nombre en vez de adivinar la palabra.
 - **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. Si difiere, `xxd` y escribir
   a qué sección corresponde; se acepta diferencia documentada **solo si el apk se instala y arranca**.
+  **Diferencia escrita y condición cumplida**: tras el §56 quedan fuera de nuestro fichero el bloque de
+  anotaciones (`0x2004`, `0x1003`, `0x2006`, medido byte a byte en el §58 y sin emitir:
+  `annotations_off` sale cero) y la cadena con la que `d8` se firma a sí mismo. Las tablas fijas y los
+  cuerpos coinciden, y el apk con esa diferencia se instala y arranca desde el §55, con las líneas de
+  depuración leyendo en el `logcat` desde el §56.
 - **2G.5** La frontera declarada y probada por separado: lambdas, `invokedynamic`, default methods,
   y cualquier cosa que dependencias ajenas aporten. **Fuera del subconjunto**, con el motivo escrito.
   **Hecha y probada** (§21 y §23): el lector de `.class` rechaza `invokedynamic`, `dynamic` y los

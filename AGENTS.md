@@ -230,10 +230,21 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   Prueba: `TestLaFramePoneLosArgumentosArriba`. En el aparato: la fuente que antes no verificaba ahora da
   `dexdump rc 0`, instala, corre y imprime `ArithmeticException: divide by zero at
   com.myapp.MainActivity$1.onClick(MainActivity.java:21)`.
-- **Queda el bloque de anotaciones** para cerrar del todo el 2G.3: `d8` escribe
-  `EnclosingClass`, `InnerClass`, `EnclosingMethod` y `MethodParameters` (lo decodifica `dexdump -a` en
-  el aparato) y nosotros dejamos `annotations_off` en cero. Los datos ya salen del `.class` que escribe
-  `apkc/javaemisor.go`, así que falta el llevalos al dex.
+- **El 2G.3 está cerrado; lo que separa nuestro fichero del de `d8` son las anotaciones, y están medidas**
+  (§58): `annotation_item` (`0x2004`, alineación 1) = visibilidad + `type_idx` + `size` + pares
+  `name_idx`/`encoded_value`; el `encoded_value` lleva el tipo en los **cinco bits bajos** y la anchura en
+  los **tres altos** (`arg + 1` bytes), con `0x1e` null, `0x17` cadena, `0x18` tipo, `0x1a` método y `0x1c`
+  array. El `annotation_set_item` **no va ordenado ascendente** (medido `{2623, 2614}`). El directorio
+  (`0x2006`) tiene **cuatro `u32` de cabecera** —`class_annotations_off`, `fields_size`,
+  `annotated_methods_size`, `annotated_static_fields_size`— y luego las listas pegadas; los dos `u32` más
+  que cita el manual no los escribe `d8`, y `annotations_off` de campo/método apunta directo a un
+  `annotation_set_item` sin que exista el kind `0x1002`. `d8` emite `InnerClass`, `EnclosingMethod` o
+  `EnclosingClass` en las clases y `MethodParameters`/`Signature` en los métodos, y `MethodParameters` solo
+  si el `.class` trae el atributo —lo que javac sí pone en el `<init>` sintético de la anónima; nuestro
+  emisor también, y **si al emitir las anotaciones el doble oráculo diverge, eso se resuelve midiendo**,
+  no ajustando—. El lector ya guarda esos contenidos (`apkc/classreader.go`: `Enclosing`,
+  `Parametros`, `Signature`); falta el emisor, y es diferencia **aceptada por el 2G.4** porque el apk se
+  instala y arranca desde el §55.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,

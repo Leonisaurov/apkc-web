@@ -50,16 +50,34 @@ type classFull struct {
 	Inners             []classInner
 	VisibleAnnotations []byte // raw, so the markers survive without interpreting them
 
-	// The three attributes d8 turns into dalvik annotations. They are read as presence,
-	// not content: which annotation a class carries follows from having them at all, and
-	// the content only matters when the annotations are emitted for real.
+	// The three attributes d8 turns into dalvik annotations. Presence is what the dexer needed
+	// until paragraph 58; from there the content is read too, because the annotation carries it:
+	// EnclosingMethod names the class and the method, MethodParameters lists one entry per
+	// argument, and Signature is a string index.
 	EnclosingMethod bool
 	EnclosingClass  bool
+	Enclosing       classEnclosing
+	Signature       string // el attribute Signature de la clase, en texto MUTF-8
 
 	// p is the class's own constant pool. The dexer's interning follows operands that name
 	// pool entries, so the pool belongs with the class it came from; it is not part of what
 	// the shape of the class means.
 	p *pool
+}
+
+// classEnclosing: el contenido del atributo EnclosingMethod. Nombre y descriptor vienen vacios
+// cuando el atributo anuncia metodo ausente (una clase local dentro de un inicializador estatico).
+type classEnclosing struct {
+	clase  string
+	nombre string
+	desc   string
+}
+
+// classParametro: una fila del atributo MethodParameters, que d8 copia en la anotacion
+// Ldalvik/annotation/MethodParameters; con el nombre y los flags que javac dejo.
+type classParametro struct {
+	nombre string // vacio cuando el nombre es 0, o sea no declarado
+	access int
 }
 
 type classInner struct {
@@ -97,8 +115,11 @@ type classMethod struct {
 	Lines      []classLine
 	Thrown     []string
 	// Parameters marks a method that carries the MethodParameters attribute, which d8 keeps as
-	// a dalvik annotation
+	// a dalvik annotation. Desde el parrafo 58 vienen tambien las filas: la anotacion lleva un
+	// array de access_flags y otro de nombres (null cuando el nombre no esta declarado).
 	Parameters bool
+	Parametros []classParametro
+	Signature  string // el attribute Signature del metodo, en texto
 }
 
 type classTry struct {
@@ -162,15 +183,26 @@ func readClassFull(data []byte) (classFull, error) {
 				if err := m.readCode(x, a.body); err != nil {
 					return classFull{}, fmt.Errorf("%s%s: %w", m.Name, m.Desc, err)
 				}
-			case "Exceptions", "MethodParameters":
-				if a.name == "MethodParameters" {
-					m.Parameters = true
-					continue
-				}
+			case "Exceptions":
 				r := &cursor{b: a.body}
 				for _, idx := range r.u2s() {
 					m.Thrown = append(m.Thrown, x.classDescriptor(idx))
 				}
+			case "MethodParameters":
+				// JVMS 4.7.10: un conteo y por cada parametro el indice del nombre (0 si no esta
+				// declarado) y sus flags, que son los del .class y no los del dex
+				m.Parameters = true
+				r := &cursor{b: a.body}
+				for i, n := 0, r.u2(); i < n && !r.failed(); i++ {
+					var nombre string
+					if idx := r.u2(); idx != 0 {
+						nombre = p.utf[idx]
+					}
+					m.Parametros = append(m.Parametros, classParametro{nombre: nombre, access: r.u2()})
+				}
+			case "Signature":
+				r := &cursor{b: a.body}
+				m.Signature = p.utf[r.u2()]
 			}
 		}
 		cf.Methods = append(cf.Methods, m)
@@ -186,9 +218,20 @@ func readClassFull(data []byte) (classFull, error) {
 		case "RuntimeVisibleAnnotations":
 			cf.VisibleAnnotations = a.body
 		case "EnclosingMethod":
+			// JVMS 4.7.7: la clase que envuelve y, cuando los hay, el nombre y el descriptor del
+			// metodo que envuelve. d8 lo convierte en Ldalvik/annotation/EnclosingMethod;.
 			cf.EnclosingMethod = true
+			r := &cursor{b: a.body}
+			cf.Enclosing.clase = x.classDescriptor(r.u2())
+			if idx := r.u2(); idx != 0 {
+				cf.Enclosing.nombre = p.utf[r.u2()]
+				cf.Enclosing.desc = p.utf[r.u2()]
+			}
 		case "EnclosingClass":
 			cf.EnclosingClass = true
+		case "Signature":
+			r := &cursor{b: a.body}
+			cf.Signature = p.utf[r.u2()]
 		}
 	}
 	cf.p = p

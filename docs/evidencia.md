@@ -3081,3 +3081,69 @@ bytes y el apk del contador de la pestaña en 10169 (ahí `locales == ins`, así
 del fuente escrito a mano pasa de 9638 a **9636** —dos bytes menos, porque en `onCreate` hay un local
 además de los argumentos y la numeración nueva cambia algún formato de registro; no lo he desglosado—.
 
+## 58. El bloque de anotaciones, medido byte a byte (y por qué es la diferencia del 2G.4, no el 2G.3)
+
+Es lo único que separa nuestro `classes.dex` del de `d8` desde el §56, aparte de la cadena con la que
+`d8` se firma a sí misma. Está **medido y sin emitir**: `annotations_off` sale cero en nuestras clases. La
+medición va aquí para que no se vuelva a descubrir a ciegas. Dos sondas —`$PREFIX/tmp/e57/an`, una anónima
+dentro de un método, y `$PREFIX/tmp/e58/an`, con `@Deprecated` en clase, campo, campo estático y método—,
+ambas compiladas con el `javac` del teléfono y el `d8` del SDK y leídas con
+`/apex/com.android.art/bin/dexdump -a` en el aparato.
+
+**`annotation_item`** (kind `0x2004`, alineación 1: d8 lo pone en 741 y en 1396, impar): es un
+`encoded_annotation` = `ubyte` de visibilidad (`0x02` = SYSTEM en las `Ldalvik/annotation/*`), `type_idx`
+uleb128, `size` uleb128 y por cada elemento un `name_idx` uleb128 seguido de un `encoded_value`.
+
+**`encoded_value`** con la numeración que ya usa este fork (`valueInt = 0x04`, `valueString = 0x17`,
+`valueType = 0x18`, `valueMethod = 0x1a`, `valueArray = 0x1c`, `valueNull = 0x1e`; el tipo van en los
+**cinco bits bajos** y el código de anchura en los **tres altos**, anchura = `arg + 1` bytes):
+
+| bytes | qué son | medido en |
+| --- | --- | --- |
+| `1e` | null, sin datos | `names={null, null}` |
+| `44 10 80 00` | entero en 3 bytes = 32784 | `accessFlags={32784, 4112}` |
+| `24 10 10` | entero en 2 bytes = 4112 | la segunda fila del array |
+| `1c 02 …` | array de 2 elementos | el array de `MethodParameters` |
+| `17 00` | cadena = índice 0 (`"()V"`) | `Signature; value={"()V"}` |
+| `1a 0a` | método = índice 10 (`largo`) | `EnclosingMethod; value=largo` |
+
+**`annotation_set_item`** (`0x1003`, alineación 4) = `u32` con el número de elementos y una lista de
+`u32` con los desplazamientos de cada `annotation_item`. **Ojo, medida, contra lo que se cita
+normalmente**: `d8` los escribe **sin ordenar** —el set de `Lcom/myapp/R$id;` es `{2623, 2614}`, decreciente—,
+así que el `Integridad`/comparador byte a byte no puede exigir orden ascendente.
+
+**`annotations_directory_item`** (`0x2006`, alineación 4). Con campos anotados (`$PREFIX/tmp/e58/an`,
+directorio en 776) la rejilla de `u32` sale:
+
+```
++ 0: 768   class_annotations_off      (un set_item con la anotacion @Deprecated)
++ 4:   2   fields_size
++ 8:   1   annotated_methods_size
++12:   0   annotated_static_fields_size
++16:   0   field_annotation[0].field_idx        = 0 (nombre)
++20: 768   field_annotation[0].annotations_off  -- y el campo 1 apunta al MISMO set (24: 1, 28: 768)
+```
+
+Es decir: **cuatro `u32` de cabecera y luego las listas**, con los `u32` de campos estáticos/instancia y
+parámetros que cita la documentación del formato *no escritos* por `d8` cuando van a cero —y `annotations_off`
+de un campo o un método apunta directo a un `annotation_set_item` (misma forma que un `annotation_set_ref_list`:
+`u32` cuenta + `u32[]`), sin que el mapa declare nunca el kind `0x1002`—. Medido también que la cabecera de
+seis `u32` que cita el manual **no es lo que hay**: leyéndola así, en `probe.Sonda$1` (directorio en 1496,
+con un solo método anotado) saldría `annotated_instance_fields_size = 7`, que es imposible en una clase con
+cero campos.
+
+**Qué elige `d8` emitir** (leído con `dexdump -a`, no inferido): en la clase `InnerClass` con
+`accessFlags` y `name` (nulo para una anónima), y `EnclosingMethod` (valor = índice de método) o
+`EnclosingClass` (valor = tipo) según la clase venga de un método o de otra clase; en el constructor de la
+anónima `MethodParameters` con dos arrays (`accessFlags` con los flags del `.class`, `names` nulos cuando el
+nombre no está declarado) y `Signature`. `MethodParameters` **solo aparece si el `.class` trae el atributo**: la sonda compilada sin `-parameters` no
+lo lleva en los métodos escritos a mano y sí en el `<init>` sintético de la anónima, que es lo que javac
+hace por defecto. Nuestro emisor también lo escribe en ese constructor, así que el doble oráculo
+(`apkc dex` dando el mismo fichero sobre las clases de javac y sobre las de este fork) **no debería
+romperse**, pero eso es una comprobación que queda pendiente de hacer junto con el emisor: si al emitir las
+anotaciones las dos salidas divergen, la diferencia será un atributo que un lado pone y el otro no, y hay
+que resolverlo por medición y no por ajuste.
+
+Por eso esto pertenece al **2G.4**, no al 2G.3: el 2G.4 acepta la diferencia documentada *si el apk se
+instala y arranca*, y esa condición se cumplió en el §55 y volvería a comprobarse igual al emitirlas.
+
