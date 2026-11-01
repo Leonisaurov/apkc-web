@@ -752,8 +752,16 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 // traductor emite, más lo que el §20 obliga a poner en la cabecera: ins_size son los huecos que
 // toman los argumentos, outs_size la llamada más ancha y registers_size temporales más locales.
 func (t *dexTables) codeItemDe(clase classFull, m classMethod) (codeItem, error) {
+	ci, _, err := t.codeItemConPc(clase, m)
+	return ci, err
+}
+
+// codeItemConPc es codeItemDe devolviendo ademas la correspondencia pc JVM -> unidad dalvik: el
+// debug_info_item del §56 la necesita, porque las lineas del `.class` estan indexadas por pc JVM y
+// el dex las nombra por unidad propia.
+func (t *dexTables) codeItemConPc(clase classFull, m classMethod) (codeItem, map[int]int, error) {
 	if !m.HasCode {
-		return codeItem{}, nil
+		return codeItem{}, nil, nil
 	}
 	x := poolIndex{p: clase.p}
 	// la primera pasada necesita una base que no pise los locales: la pila máxima que midió javap
@@ -763,14 +771,14 @@ func (t *dexTables) codeItemDe(clase classFull, m classMethod) (codeItem, error)
 	// contra el borde y el método entero se rechazaba.
 	prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: m.MaxStack + m.LocalCount + 1}
 	if err := prueba.recorre(); err != nil {
-		return codeItem{}, err
+		return codeItem{}, nil, err
 	}
 	final := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: prueba.pico}
 	if err := final.recorre(); err != nil {
-		return codeItem{}, err
+		return codeItem{}, nil, err
 	}
 	if final.pico > prueba.pico {
-		return codeItem{}, &traduceError{nombre: m.Name,
+		return codeItem{}, nil, &traduceError{nombre: m.Name,
 			motivo: "the second pass asked for more temporaries than the first: translator bug"}
 	}
 	return codeItem{
@@ -781,5 +789,5 @@ func (t *dexTables) codeItemDe(clase classFull, m classMethod) (codeItem, error)
 		debugInfoOff:  0,
 		insnsSize:     uint32(len(final.w)),
 		insns:         final.w,
-	}, nil
+	}, final.pcs, nil
 }

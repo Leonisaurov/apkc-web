@@ -39,7 +39,7 @@ func TestElDexArmadoSeLeeConsigoMismo(t *testing.T) {
 	if err := d.Integrity(); err != nil {
 		t.Errorf("the signature or the checksum of what we wrote does not verify: %v", err)
 	}
-	cuentas := map[dexKind]int{0x0001: 52, 0x0002: 23, 0x0003: 9, 0x0004: 4, 0x0005: 17, 0x0006: 6}
+	cuentas := map[dexKind]int{0x0001: 52, 0x0002: 23, 0x0003: 9, 0x0004: 4, 0x0005: 17, 0x0006: 6, 0x2003: 8}
 	for k, q := range cuentas {
 		got := 0
 		for _, e := range d.maps {
@@ -54,9 +54,10 @@ func TestElDexArmadoSeLeeConsigoMismo(t *testing.T) {
 			t.Errorf("section %s has %d items, expected %d", k, got, q)
 		}
 	}
-	// el map_list declara las once áreas que escribimos, la cabecera y el propio mapa
-	if len(d.maps) != 13 {
-		t.Errorf("%d map_list entries, expected 13 (header, eleven areas, the map itself)", len(d.maps))
+	// el map_list declara las doce áreas que escribimos (con la de depuración del §56), la cabecera y
+	// el propio mapa
+	if len(d.maps) != 14 {
+		t.Errorf("%d map_list entries, expected 14 (header, twelve areas, the map itself)", len(d.maps))
 	}
 	n := 0
 	for _, e := range d.maps {
@@ -222,6 +223,7 @@ func TestLosClassDefsComparanAccesoYOrigenConLosDeD8(t *testing.T) {
 func TestLosCodeItemsEscritosSeLeenComoFueronEscritos(t *testing.T) {
 	td, clases := tablaDeLasSeis(t)
 	b, d := armaElFixture(t)
+	inicioDep := d.offDe(0x2003)
 	leidos := map[[2]string]codeItem{}
 	porClase, err := d.methodsDeCadaClase()
 	if err != nil {
@@ -236,8 +238,14 @@ func TestLosCodeItemsEscritosSeLeenComoFueronEscritos(t *testing.T) {
 				t.Fatalf("%s %s: %v", c.name, nombre, err)
 			}
 			leidos[[2]string{c.name, nombre}] = ci
-			if ci.triesSize != 0 || ci.debugInfoOff != 0 {
-				t.Errorf("%s %s: the fork emits no tries and no debug", c.name, nombre)
+			if ci.triesSize != 0 {
+				t.Errorf("%s %s: the fork emits no tries", c.name, nombre)
+			}
+			// desde el §56 cada cuerpo anuncia su debug_info_item: el offset tiene que caer dentro
+			// del area que declara el mapa, que es como la recorre ART
+			if ci.debugInfoOff < inicioDep || int(ci.debugInfoOff) >= len(b) {
+				t.Errorf("%s %s: debug_info_off %d is not inside the debug area (starts at %d, file is %d)",
+					c.name, nombre, ci.debugInfoOff, inicioDep, len(b))
 			}
 			// el area de codigo no puede pasar de donde el mapa dice que empieza lo de despues
 			if m.codeOff+uint32(ci.tamanoEnBytes()) > uint32(len(b)) {

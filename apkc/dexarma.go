@@ -70,10 +70,14 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	// 1. areas cuyo contenido no depende de ningún offset absoluto
 	cadenas, relCadenas := td.areaCadenas()
 	listas, relListas, cuantasListas := td.areaListas(clases)
-	codigo, relCodigo, cuerpos, err := td.areaCodigo(clases)
+	codigo, relCodigo, pcsMetodo, cuerpos, err := td.areaCodigo(clases)
 	if err != nil {
 		return nil, err
 	}
+	// el area de depuracion se arma con las posiciones ya traducidas (van en unidades dalvik, no en
+	// los pcs del `.class`) y va detras del codigo, en el orden en que lo dejo `d8`: su mapa declara
+	// `0x2001` y despues `0x2003`
+	depuracion, relDepuracion, cuantasDepuracion := td.areaDebug(clases, pcsMetodo)
 
 	// 2. bases, en el orden de d8
 	off := int(dexHeaderSize)
@@ -90,6 +94,15 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	poner(0x0005, make([]byte, 8*len(td.methods)), 4)
 	poner(0x0006, make([]byte, 32*len(clases)), 4)
 	poner(0x2001, codigo, 4)
+	poner(0x2003, depuracion, 1)
+	// el `debug_info_off` vive dentro del code_item, que ya estaba escrito con ceros: se parcha ahora
+	// que la base del area de depuracion es conocida. Es la misma referencia hacia adelante que `d8`
+	// resuelve al final del todo (§56).
+	for clave, r := range relCodigo {
+		if d, ok := relDepuracion[clave]; ok {
+			binary.LittleEndian.PutUint32(codigo[r+8:], uint32(base[0x2003])+d)
+		}
+	}
 	poner(0x1001, listas, 4)
 	poner(0x2002, cadenas, 1)
 	// los class_data_item dependen de los code_off absolutos, que ya se pueden saber
@@ -176,17 +189,19 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		datos []byte
 	}{
 		{0x0001, stringIDs}, {0x0002, typeIDs}, {0x0003, protoIDs}, {0x0004, fieldIDs},
-		{0x0005, methodIDs}, {0x0006, classDefs}, {0x2001, codigo}, {0x1001, listas},
+		{0x0005, methodIDs}, {0x0006, classDefs}, {0x2001, codigo}, {0x2003, depuracion},
+		{0x1001, listas},
 		{0x2002, cadenas}, {0x2000, datos}, {tipoArrayCodificado, arrays},
 	}
 
 	// 4. map_list: las entradas, en orden ascendente de offset, como las escribió d8
 	entradas := [][3]uint32{{uint32(0x0000), 1, 0}}
-	tipos := []dexKind{0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x2001, 0x1001, 0x2002, 0x2000, tipoArrayCodificado}
+	tipos := []dexKind{0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x2001, 0x2003, 0x1001, 0x2002, 0x2000, tipoArrayCodificado}
 	cuantos := map[dexKind]uint32{
 		0x0001: uint32(len(td.strings)), 0x0002: uint32(len(td.types)), 0x0003: uint32(len(td.protos)),
 		0x0004: uint32(len(td.fields)), 0x0005: uint32(len(td.methods)), 0x0006: uint32(len(clases)),
-		0x2001: uint32(len(cuerpos)), 0x1001: uint32(cuantasListas), 0x2002: uint32(len(td.strings)),
+		0x2001: uint32(len(cuerpos)), 0x2003: uint32(cuantasDepuracion), 0x1001: uint32(cuantasListas),
+		0x2002: uint32(len(td.strings)),
 		0x2000: uint32(len(clases)), tipoArrayCodificado: uint32(cuantosArrays),
 	}
 	mapOff := alignUp(off, 4)
@@ -315,25 +330,28 @@ func (td *dexTables) areaListas(clases []classFull) ([]byte, map[string]uint32, 
 }
 
 // áreaCodigo: un code_item por método con cuerpo, con su posición dentro del área y el codeItem
-// traducido (el recuento de objetos del map_list sale de ahí).
-func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint32, []codeItem, error) {
+// traducido (el recuento de objetos del map_list sale de ahí), más la correspondencia de pcs que
+// el área de depuración necesita.
+func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint32, map[[2]string]map[int]int, []codeItem, error) {
 	buf := []byte{}
 	rels := map[[2]string]uint32{}
+	pcs := map[[2]string]map[int]int{}
 	cuerpos := []codeItem{}
 	for _, cf := range clases {
 		for _, m := range cf.Methods {
 			if !m.HasCode {
 				continue
 			}
-			ci, err := td.codeItemDe(cf, m)
+			ci, donde, err := td.codeItemConPc(cf, m)
 			if err != nil {
-				return nil, nil, nil, fmt.Errorf("%s%s: %w", cf.Name, m.Name, err)
+				return nil, nil, nil, nil, fmt.Errorf("%s%s: %w", cf.Name, m.Name, err)
 			}
 			for uint32(len(buf))%4 != 0 {
 				buf = append(buf, 0)
 			}
 			clave := [2]string{cf.Name, m.Name}
 			rels[clave] = uint32(len(buf))
+			pcs[clave] = donde
 			buf = putU16(buf, uint16(ci.registersSize))
 			buf = putU16(buf, uint16(ci.insSize))
 			buf = putU16(buf, uint16(ci.outsSize))
@@ -349,7 +367,7 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint3
 	for uint32(len(buf))%4 != 0 {
 		buf = append(buf, 0)
 	}
-	return buf, rels, cuerpos, nil
+	return buf, rels, pcs, cuerpos, nil
 }
 
 // áreaClassData: los class_data_item y, en su propio área, los encoded_array_item con las
