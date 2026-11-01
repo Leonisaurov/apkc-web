@@ -96,7 +96,8 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
 - **`apkc dex` existe y corre dentro de wasm** (§23, rama `web`): `.class` -> `classes.dex` en Go, sin
-  `d8` ni proceso. Sobre el proyecto del studio: 2392 bytes (los 2844 de `d8` menos `debug_info`,
+  `d8` ni proceso. Sobre el proyecto del studio: 2384 bytes (eran 2392 hasta el §55, que quitó el relleno
+  entre `class_data_item`; los 2844 de `d8` menos `debug_info`,
   anotaciones y su marca de origen), con `type_ids`/`field_ids`/`method_ids` byte a byte iguales y los
   nueve cuerpos con la misma secuencia de instrucciones, los mismos índices y el mismo número de
   palabras. El oráculo que lo cierra: `d8` lee el dex que escribimos y lo re-dexa con `rc 0`, y el
@@ -141,7 +142,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   memoria), y el aviso de «intermitencia de OPFS» del §39 era en realidad el primero.
 - **Y también el proyecto que la página genera** (§46): con la clase anónima del botón, el `@+id` y el
   `@style`, chromium escribe los cinco ficheros en OPFS con el propio `buildProject`, saca **seis clases y
-  2392 bytes de dex** (los mismos del §42 y del §44) y un apk de 9832 bytes **igual entrada por entrada al
+  2384 bytes de dex** (los mismos del §42 y del §44) y un apk de 9832 bytes **igual entrada por entrada al
   nativo**, y `d8` releee ese dex con `rc 0`. Lo pide `studio/e2e.sh` (bloque 4c).
 - **El `android.jar` entra sin red por el camino del usuario y dura** (§46, comprobaciones 9 y 9b): se le
   pone en el `<input type="file">` con `DOM.setFileInputFiles` de CDP, la página lo guarda en OPFS con
@@ -192,8 +193,26 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   exterior se lee con `getstatic` sin pasar por ella. Si el campo del exterior es **privado**, javac no
   escribe el campo: escribe `access$000`/`access$002` sintéticos del exterior (el de escritura *devuelve* el
   valor, de ahí el `pop`), y como ni el número ni el orden están medidos, ese caso se rechaza por nombre.
-- **Lo único que falta para el objetivo es el hecho 2 del plan**: instalar el apk en un teléfono y ver
-  arrancar la actividad. Necesita dispositivo y permiso del usuario; ningún código lo sustituye.
+- **El teléfono es el oráculo que faltaba, y encontró cuatro defectos** (§55): con `rish` (el shell de Shizuku,
+  sin `adb`) el apk del enlace en Go **se instala y la actividad arranca** —`pm install -r` `Success`,
+  `am start -W -S` `Status: ok` / `LaunchState: COLD`, `Displayed com.myapp/.MainActivity: +527ms`, sin `FATAL`,
+  y `pm compile -f` `Success` con `[status=verify]`—. Antes de eso ART rechazaba el dex con tres avisos que ni
+  `d8` ni nuestros tests veían, porque **nadie recorre las áreas de forma contigua ni mira el `map_list`**:
+  (1) el `encoded_array_item` es **0x2005**, no 0x2007, y su área no se alinea a 4 —los arrays de `d8` empiezan
+  en 2746, 2749, 2755 y 2761—; (2) los `class_data_item` van **pegados**, sin relleno entre ítems —el relleno
+  desincronizaba el caminante y salía `Bad index for class_data_item field_idx: 8 >= 6`—; (3) los `proto_ids`
+  se ordenan por **tipo de retorno** primero (`Out-of-order proto_id return types`); y (4) el `encoded_value` de
+  un estático tiene que ser **del tipo del campo**: un `static int total = 5` sin `ConstantValue` anunciado con
+  `0x1e` cortaba con `unexpected static field initial value type: 'L' vs 'I'`. Prueba permanente:
+  `apkc/dexlayout_test.go`, que replica las cuatro comprobaciones y corre también **sobre el fichero de `d8`**.
+  El oráculo barato: `/apex/com.android.art/bin/dexdump <dex>` empujado con `rish`, un segundo por fichero.
+- **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
+  escribe chromium, 10095 bytes) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
+  `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
+  `"muchos 4"`. Es decir: corren las dos ramas del `if`, la suma sobre el campo de instancia capturado, el
+  estático del exterior, la concatenación de `StringBuilder`, la llamada virtual y el `Toast` (capas
+  `Toast#…` en `SurfaceFlinger`), con `FATAL EXCEPTION` **0 veces**. Lo que sigue sin medir son los
+  `encoded_value` que no sean enteros.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
   Go, dex en Go, empaquetado y firma en Go. Nativo en frio: 255 ms y `build/app.apk` de 9868 bytes, que
   `apksigner` (v1 y v2), `zipalign -c -p 4`, `aapt2 dump badging`, `aapt2 dump resources` y `zipcheck.py`
@@ -209,9 +228,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   la captura. `apkc/compilar.go` lo expone como comando, en la lista de los que **no** sondean el SDK.
   **El oraculo es doble y paso en los dos binarios**: `javap -c -p` sobre nuestras seis clases imprime las
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
-  **el mismo fichero byte a byte** que sobre las otras: 2392 = 2392, `cmp` mudo. Dentro del hospedador con
+  **el mismo fichero byte a byte** que sobre las otras: 2384 = 2384, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **202 PASS + 2 SKIP** nativa y **181 PASS + 23 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **205 PASS + 2 SKIP** nativa y **183 PASS + 24 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

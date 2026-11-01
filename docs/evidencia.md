@@ -2846,3 +2846,102 @@ que lee `launchable-activity: name='com.myapp.MainActivity'`, y su `classes.dex`
 `Lcom/myapp/MainActivity$1;`, `Landroid/view/View$OnClickListener;`, `setContentDescription`, `pulsos` y la
 cadena que arma el concatenedor.
 
+## 55. El teléfono dice la última palabra: tres defectos de `map_list` y de áreas que ni `d8` ni nuestros tests veían
+
+El segundo hecho del plan («el apk se instala y la actividad arranca») se probó en este aparato con el shell de
+Shizuku, sin `adb`: `rish` (en el PATH, `uid=2000(shell)`, Android 15). Los ficheros se empujan y se ordena con
+`rish -c`, y el oráculo que cerró el caso es el verificador de ART, que vive en el propio aparato:
+
+```sh
+rish -c 'cat > /data/local/tmp/ours.dex' < build/classes.dex
+rish -c '/apex/com.android.art/bin/dexdump /data/local/tmp/ours.dex >/dev/null 2>&1; echo rc=$?'
+```
+
+Cuesta un segundo por fichero y **no requiere instalar nada**. Con eso delante, el dex que escribía la pestaña
+sacó tres defectos que ningún oráculo previo veía.
+
+**Cómo se instaló y qué respondió.** `pm install -r /data/local/tmp/ir.apk` → `Success`;
+`am start -W -S -n com.myapp/.MainActivity` → `Status: ok`, `LaunchState: COLD`, `TotalTime: 527`; el proceso
+quedaba vivo (`pidof -s com.myapp`) y `logcat` no traía `FATAL`. Pero la primera vez el arranque moría así:
+
+```
+java.lang.ClassNotFoundException: Didn't find class "com.myapp.MainActivity" on path: DexPathList[...base.apk...]
+Caused by: ... Failure to verify dex file '.../base.apk': Bad index for class_data_item field_idx: 8 >= 6
+```
+
+Es decir: `am start` respondía `Status: ok` **y la actividad no existía** — el aviso de ART estaba enterrado en
+el `logcat`, no en la salida de `am`. Nada de esto lo veía `d8`: releía nuestro fichero con `rc 0` porque no
+mira el `map_list` ni recorre las áreas de forma contigua.
+
+**Defecto 1 — el `map_list` declaraba el área de los valores estáticos con un kind inventado.** Medido en el
+fichero de `d8`, el mapa cierra con `0x2000 size=6 off=2659` y `0x2005 size=4 off=2746`: el
+`encoded_array_item` es **0x2005**, y 0x2007 no existe. Con 0x2007 escrito por nosotros, ART respondía
+`Offset(2537) should be aligned by 4 for maplist item of type 8199` (el 8199 es 0x2007 en decimal) y después,
+corregido el kind, `Unknown map section type 2007`. Los arrays de `d8` empiezan en 2746, 2749, 2755 y 2761:
+**sin alineación de 4** — el `class_data` termina justo donde empieza el primer array.
+
+**Defecto 2 — relleno entre `class_data_item`, y ART recorre el área contigua.** Quedaba el aviso original
+(`field_idx: 8 >= 6`) y la bisección lo acorraló: se generaron 12 variantes del dex (anulando el
+`class_data_off` y el `static_values_off` de cada una de las seis filas de `class_defs`, con el `checksum`
+Adler32 recalculado) y 6 más con las filas anuladas acumulativamente. **Las 18 siguieron dando el mismo
+mensaje**, así que el puntero de la fila no importaba: lo que importa es que el verificador camina por el área
+a partir del offset del mapa, item tras item. Y ahí estaba la diferencia:
+
+| | item 0 | 1 | 2 | 3 | 4 | 5 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `d8` (2659..) | 17 | 24 | 12 | 12 | 12 | 10 (termina en 2746) |
+| el nuestro (2447..) | 20 | 24 | 12 | 12 | 12 | 13 |
+
+Los nuestros llevaban tres ceros de relleno delante de cada item (un intento de alinear a 4 dentro del área), y
+el caminante los leía como los cuatro recuentos de la clase siguiente: de ahí un `field_idx` 8 contra una tabla
+de 6. Corregido en `areaClassData`: los items van pegados y el área se alinea a 1, como la de `d8`. El
+`encoded_field` **no lleva byte de valor** —en el fichero de `d8` el item de `Lcom/myapp/MainActivity;` mide 24
+bytes y termina justo donde empieza el de `R$id`, con dos uleb por campo—, y esa es la lectura que ART acepta.
+
+**Defecto 3 — orden de `proto_ids`.** Tras pegar los items, ART pasó al siguiente aviso:
+`Out-of-order proto_id return types`. Los doce protos de `d8` van con el tipo de retorno ascendente
+(`Landroid/view/View;`, `Landroid/widget/Toast;`, `Ljava/lang/String;`, `Ljava/lang/StringBuilder;` y los ocho
+`V`); el nuestro los ordenaba por `shorty` primero, y el `V` de `void` caía en medio. Corregido el orden en
+`orderTables` (retorno, luego `shorty`, luego parámetros).
+
+**Defecto 4 — el `encoded_value` de un estático sin `ConstantValue`.** El último aviso fue
+`unexpected static field initial value type: 'L' vs 'I'`, sobre `static int total = 5;`: al no ser `final`,
+javac y nuestro emisor no escriben `ConstantValue` en el `.class`, y nosotros anunciábamos el elemento del array
+con el byte `0x1e`, que ART lee como un tipo de objeto. `d8` si lleva el valor (`01 04 05`: tamaño 1, cabecera
+`04`, un byte con el 5) porque propaga el `<clinit>`; nosotros todavía no, así que se anuncia **un cero del tipo
+del campo** —la cabecera `64` (entero de cuatro bytes) que `d8` usa para las constantes de `R`, con ceros—, y el
+`<clinit>` lo sobrescribe al correr, que es lo que habría hecho de todas formas. Los tipos que no sean `I`
+siguen con el comportamiento viejo: **no están medidos en el aparato**.
+
+**Verificación final.** Con los cuatro arreglos: `dexdump` sobre el dex del enlace en Go responde **`rc 0` y 6
+clases**; `pm install -r` → `Success`; `am start -W -S` → `Status: ok`, `LaunchState: COLD`, `TotalTime: 527`, y
+`logcat` trae `Displayed com.myapp/.MainActivity for user 0: +527ms` sin ninguna línea `FATAL`; `pm compile -f
+com.myapp` → `Success` y `dumpsys package dexopt` muestra `[status=verify] [reason=cmdline]` con su
+`base.odex` (`artd ... kOatUpToDate with filter 'verify'`). El dex del fixture pasa de 2392 a **2384 bytes** (los
+ocho bytes de relleno que se iban metiendo), y la suite nativa entera queda en verde. El gate, rehecho después de
+los cuatro arreglos: **41 comprobaciones, 0 fallos**, y el apk del contador que escribe chromium pasa de 10098
+(§54) a **10095 bytes**.
+
+**Y el `onClick` corre en la pantalla.** Con el apk que escribió **chromium** (`$PREFIX/tmp/pestana-apk/
+pestanera-contador.apk`, 10095 bytes; `classes.dex` con sha256 que empieza `a79c1a0e36821918`):
+`pm install -r` → `Success`, `am start -W -S -n com.myapp/.MainActivity` → `Status: ok`,
+`LaunchState: COLD`, `TotalTime: 316`. Dos `input tap 1280 837` (el centro del `com.myapp:id/pulsar`, que
+`uiautomator` reporta en `bounds="[1192,789][1368,885]"`) dejan el botón con `content-desc="pulsos 2"`, y con
+cuatro, `content-desc="muchos 4"` — o sea las **dos ramas del `if`**, la resta sobre el campo de instancia
+capturado (`pulsos = pulsos + 1`), el estático del exterior (`total = total + pulsos`), la concatenación con
+`StringBuilder` y la llamada virtual `setContentDescription`—. El `Toast` también se ve desde fuera: `logcat`
+registra las capas `Toast#3760`/`Toast#3761` en `SurfaceFlinger`, y `FATAL EXCEPTION` aparece **0 veces**.
+
+Con esto el segundo hecho del plan está cerrado sobre el artefacto del navegador, y la suite queda en
+**205 PASS + 2 SKIP** nativa y **183 PASS + 24 SKIP** en el hospedador con forma de navegador.
+
+**Queda por medir** (no bloquea el hecho 2): el `content-desc` de un `static` de tipo objeto sin constante, y en
+general los `encoded_value` que no sean enteros —ahí sigue en pie el comportamiento viejo, sin oráculo—.
+
+**Prueba permanente:** `apkc/dexlayout_test.go` — `verificaLayout` replica en Go las cuatro comprobaciones del
+verificador de ART (kinds del mapa y offsets ascendentes, retorno de los protos no decreciente, recorrido
+contiguo del área de `class_data` con los índices dentro de rango y el `code_off` alineado, y tipo del
+`encoded_value` contra el descriptor del campo). Corre sobre tres ficheros: nuestro dex del fixture, **el dex
+que escribió `d8`** (si la prueba no pasa con el oráculo, la prueba está mal) y la clase del contador con su
+`static int total = 5`.
+

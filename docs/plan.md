@@ -10,7 +10,9 @@ ningún runtime de terceros. Se demuestra con tres hechos, todos comprobables co
 oráculos ajenos a apkc:
 
 1. `apksigner verify --verbose` (en otra máquina) dice v1 y v2 correctos.
-2. El apk se instala en un teléfono real y la actividad arranca.
+2. El apk se instala en un teléfono real y la actividad arranca. *(HECHO el 2026-11-01 con `rish`, el shell de
+   Shizuku, en Android 15, sobre el apk que escribe chromium: instala, arranca, y dos y cuatro pulsos sobre el
+   botón dejan `content-desc="pulsos 2"` y `"muchos 4"` sin un solo `FATAL` —`evidencia.md` §55—.)*
 3. El `classes.dex` producido en el navegador es **idéntico byte a byte** al que produce `d8`
    nativo sobre los mismos `.class` (o diferido con motivo escrito).
 
@@ -38,12 +40,12 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 1 y 2 (runtime JVM prestado) | **cerradas por decisión del usuario el 2026-10-27**: sin conexión y sin terceros. `d8` sobre una JVM wasm **nunca se probó**, y ya no se probará así | `docs/evidencia.md` §15: la pestaña no hace ni una petición fuera de su origen |
 | 2G | **hecha** (rama `web`): lector y escritor de dex en Go. El objetivo medido eran 2844 bytes de `d8`; nuestro dex sobre los mismos `.class` sale **byte a byte igual** al de javac-d8 salvo el `debug_info` (motivo escrito), y `d8` lee el nuestro y lo re-dexa con `rc 0` | `docs/evidencia.md` §13, §20 a §23, §41, §42 |
 | 3 recursos sin `aapt2` | **hecha**: `arscwriter.go`, `axmlwriter.go`, `r.go`, `marco.go`, `enlazar.go` + `arbol.go` + `valores.go` enlazan desde los ficheros de texto; `build --linker go` produce un apk que `apksigner`, `zipalign`, `zipcheck.py` y `aapt2 dump` aprueban | `docs/evidencia.md` §28 a §38 |
-| 1G Java -> `.class` en Go | **hecha para el subconjunto del `studio/` y algo más**: `javafuente.go`, `javaemisor.go`, `compilar.go`; oráculo doble (`javap -c -p` y el dex idéntico) y rechazo por nombre de lo no medido. El subconjunto llega a campos con modificadores, variables locales, `checkcast`, aritmética entera y el `if`/`else` | `docs/evidencia.md` §40 a §43 y §49 a §52 |
+| 1G Java -> `.class` en Go | **hecha para el subconjunto del `studio/` y algo más**: `javafuente.go`, `javaemisor.go`, `compilar.go`; oráculo doble (`javap -c -p` y el dex idéntico) y rechazo por nombre de lo no medido. El subconjunto llega a campos con modificadores, variables locales, `checkcast`, aritmética entera y el `if`/`else`, la concatenación con `StringBuilder` y la anónima que toca un campo del exterior | `docs/evidencia.md` §40 a §43, §49 a §52 y §53-§54 |
 | 4.1 etapas como interfaz | **logrado por otro camino**: no hay interfaz con dos implementaciones, hay banderas (`--linker go`, `--compiler go`) que eligen el módulo de Go en vez del proceso, y `sinProcesos()` se salta el sondeo del SDK. El `os/exec` de siempre sigue ahí para el camino nativo, que es el que funciona con SDK completo | `docs/evidencia.md` §38, §44, §45 |
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
-| el apk en un teléfono real (hecho 2 del objetivo) | **pendiente de dispositivo**: sin `adb` conectado; el apk de la pestaña ya lo aprueban `apksigner` (v1+v2), `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump badging`, falta `install` y ver la actividad arrancar | — |
+| el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
 
@@ -133,13 +135,15 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
 - **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. **Medida sección por
   sección** (§22): `type_ids`, `field_ids` y `method_ids` salen byte a byte iguales; `proto_ids`
   difiere solo en los offsets absolutos; cada `string_data_item` es idéntico. El fichero entero son
-  2392 bytes contra los 2844 de `d8`, y la diferencia está nombrada: no emitimos `debug_info_item`,
+  2384 bytes contra los 2844 de `d8` (eran 2392 hasta el §55), y la diferencia está nombrada: no emitimos `debug_info_item`,
   ni el bloque de anotaciones, ni la cadena con la que `d8` se firma a sí misma. En los cuerpos la
   secuencia de instrucciones, los índices y el número de palabras coinciden en los nueve métodos;
   seis de nueve salen idénticos hasta los números de registro (§21). **El oráculo que cierra el
   paso**: `d8` lee el dex que escribimos y lo re-dexa sin un solo error (`rc 0`), y sobreviven las
-  seis clases, los nueve cuerpos y las tres constantes de `R` leídas de nuestro `static_values`.
-  Falta la prueba de dispositivo, que necesita la Fase 3 (un dex suelto no se instala).
+  seis clases, los nueve cuerpos y las tres constantes de `R` leídas de nuestro `static_values`. La prueba de
+  dispositivo llegó con la Fase 3 y está escrita en el §55: ART, en el propio aparato, lee nuestro dex con
+  `dexdump rc 0` (después de corregir los cuatro defectos de layout que ese párrafo destapó) y el apk del
+  navegador instala, arranca y ejecuta el `onClick`.
 - **2G.3** `class_data_item`, `code_item` y `debug_info_item`: la codificación de instrucciones en sí.
   **Leídos y casados con `javap`** (§20): la cabecera del `code_item` son dieciséis bytes y las
   instrucciones empiezan en +16, con `ins_size` igual al `args_size` de `javap` en los nueve métodos,
