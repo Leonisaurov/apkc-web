@@ -45,6 +45,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
+| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01 con su inventario**: hoy la página compila apps sencillas; faltan bucles, arreglos, `switch`, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. Cada ítem tiene su medición, su oráculo y su coste escrito abajo | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
@@ -493,6 +494,114 @@ Solo si 1+2+3 vivieron.
 - **4.4 Empaquetado y tamaño**: qué se baja a la pestaña y cuánto (android.jar, el runtime, el wasm de
   d8). Publicar el número en `docs/evidencia.md`; si el peso hace el flujo absurdo, eso es un
   resultado, no un detalle.
+
+---
+
+## Fase 5 — cerrar el subconjunto: de «lo que ya está medido» a «una app que se pueda escribir»
+
+**Para qué sirve esta fase.** Lo que hay hoy compila en la pestaña apps del estilo del contador: campos,
+`if`/`else`, cuentas enteras, cadenas con `StringBuilder` y una anónima de `View$OnClickListener`. Eso no es
+un lenguaje: es el subconjunto que fuimos midiendo. La Fase 5 cierra lo que falta **con el mismo método**,
+item por item, y el criterio de éxito no es «el parser lo acepta» sino: *la página compila y firma sin
+procesos ni red una app con bucle sobre un arreglo, un `switch`, un `try/catch`, dos idiomas en `res/values`
+y un icono en `res/drawable`, y esa app se instala y arranca en un teléfono real.*
+
+### La plantilla, igual para todos los ítems (no hay excepciones)
+
+1. **Sonda**: un fuente mínimo que use la construcción, escrito a mano en `$PREFIX/tmp`.
+2. **Oráculos**: `javap -l -v -c` sobre el `.class` de javac 21; `d8 --release` sobre ese `.class`;
+   `/apex/com.android.art/bin/dexdump` (con verificación) y `dexdump -d`/`-a` en el aparato por `rish`;
+   `apksigner`, `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump` para el paquete.
+3. **Emisor/traductor** solo con lo que dijo la medición; lo que la sonda no cubre se queda **rechazado por
+   nombre** con un mensaje que diga qué falta.
+4. **Prueba permanente** que compare contra las palabras/bytes del oráculo (el patrón de
+   `dexinstr_test.go`, `dexdebug_test.go`, `dexanota_test.go` y `dexlayout_test.go`), y una prueba de
+   layout ART que recorra el fichero entero.
+5. **Gate**: un bloque nuevo en `studio/e2e.sh` (o en `prueba-pestana.js` si toca la pestaña) y, cuando el
+   caso lo pide, **el teléfono**: instalar, arrancar y ver la traza o el `content-desc`.
+6. **Párrafo nuevo en `docs/evidencia.md`** con el comando que reproduce cada afirmación, y su commit.
+
+Orden recomendado abajo. Los **costes son hipótesis** (XS/S/M/L/XL), no mediciones: lo que manda este repo es
+que la *tarea de medición* va siempre antes que la estimación de trabajo.
+
+### Inventario, con el sitio exacto que rechaza hoy
+
+| # | Qué falta | Dónde se rechaza ahora | Qué hay que medir antes | Coste |
+| --- | --- | --- | --- | --- |
+| 5.1 | `+=`, `-=`, `*=`, `/=`, `++`, `--` | `javafuente.go:953` | flags y orden del `<init>` ya medidos; solo composición de lo existente | XS |
+| 5.2 | literal `char` y escapes restantes | `javafuente.go:273`, `:369` | cómo baja javac un `char` (entero de 16) y su `ConstantValue` | XS |
+| 5.3 | literales de clase `X.class` | `javaemisor.go:1238`, `:1821` | `ldc` de `CONSTANT_Class` en el `.class` y el `const-class` (formato 21c) en el dex, cuyo opcode se confirma con la sonda | S |
+| 5.4 | llamadas de más de cinco argumentos y cualquier forma `/range` o `/from16` | `dexinstr.go:412`, `:227` | palabras de `d8` sobre una sonda con seis argumentos y con registros `v16` | S |
+| 5.5 | `private`/`protected` y los accesos sintéticos `access$…` | `javafuente.go:534`, `:536`, `:672` | número y orden de los sintéticos que escribe javac (lo que dice el §54: el de *escritura* devuelve el valor) | M |
+| 5.6 | `throws`, el atributo `Exceptions`, métodos abstractos e interfaces propias | `javafuente.go:747` y `javaemisor.go:2502` | `ACC_ABSTRACT`, `interface` como tipo, `invoke-interface` ya medido a medias; `athrow` queda para 5.9 | M |
+| 5.7 | constructores escritos a mano | `javaemisor.go:2499` | dónde baja javac los inicializadores de campo cuando hay ctor propio, y cuál es el `super` implícito | M |
+| 5.8 | `long`, `float`, `double` (dos huecos) | `javaemisor.go:551`, `javafuente.go:1306`, `javaemisor.go:2413` | el `const-wide/16` (y sus hermanas de 32/64 bits) y el `ldc2_w` del `.class`, los `move-wide` de tres formatos, la numeración de locales de dos huecos en la frame (§57), y el `encoded_value` de `J`/`F`/`D` (§55 regla 4) | L |
+| 5.9 | `try`/`catch`/`finally` | `javafuente.go:902` (sentencia) y `dexcode.go:70,81,87` (el `code_item` no escribe tries) | `try_item` + `encoded_catch_handler_list` (orden, `start_insn`/`end_insn`, `handler_off` a una lista de pares `type_addr`/`addr`, `catch_type` 0 para `finally`), el `move-exception` (10x) al entrar al handler y el `throw` (10x), con su opcode confirmado por la sonda, y el relleno a palabra antes de la tabla | L |
+| 5.10 | **bucles** `for`, `while`, `do` | `javafuente.go:902` y `dexinstr.go:359-366` (la rama hacia atrás) | el **punto de fusión de registros** en el destino de la rama: `registers_size`, orden de `ins`/`locals`/temporales y qué registro vive en la cabecera del bucle, medido contra las palabras de `d8` en una escalera de sondas (bucle simple, anidado, con `break`/`continue`, con acumulador de dos huecos); además `goto/16` si el salto pasa de 127 unidades | XL |
+| 5.11 | **arreglos** (`new int[n]`, `s[i]`, `length`, de referencia y multidimensional) | `javafuente.go:820` y su ausencia en el traductor | `new-array` (22c), `array-length` (12x), los `aget`/`aput` por tipo (22x y 23x) y `filled-new-array` con su forma `…/range`; los tipos `[I`/`[Ljava/lang/String;` en `type_ids` y su orden | L |
+| 5.12 | `switch` de entero | `javafuente.go:902` | `tableswitch`/`lookupswitch` del `.class` contra el `packed-switch` y el `sparse-switch` del dex y su relleno a palabra | M |
+| 5.13 | `instanceof` y cast entre referencias | fuera del analizador | `instance-of` (22c) junto al `check-cast` ya medido, y las cadenas/tipos que nombran | S |
+| 5.14 | anónima dentro de método `static` y captura de variables locales effectively-final | `javaemisor.go:1748` | cómo baja javac la captura (`$`valores) en ese caso y qué flags lleva el ctor sintético | M |
+| 5.15 | `Signature` (genéricos) en el dex | decisión escrita en el §58 y §59 | la **troceadura** que hace `d8` de la firma genérica en el array de cadenas de la anotación | M |
+| 5.16 | **recursos**: `res/drawable*` con PNG, `mipmap` y `roundIcon` | `linker.go:113` (un recurso que no es `.xml` no se puede enlazar aquí) | el `type` de recurso `drawable` en la `resources.arsc` (residuo binario fuera de la tabla, entrada literal en el zip y su alineado) y cómo lo declara `aapt2 dump resources` | L |
+| 5.17 | **recursos**: calificadores (`values-es`, `layout-land`, `drawable-hdpi`) y `config` por API | `linker.go:102` | la segunda configuración y sus máscaras (`RES_config_*` medidas en el §28/§30), el orden de `config` dentro del `type`, y el `spec_map` cuando la base no tiene todas las claves | L |
+| 5.18 | **recursos**: tipos que faltan en `values` (`color`, `integer-array`, `string-array`, `plurals`, `bool` con otros valores, `fraction`, `attr`/`styleable`) | `valores.go:278` | por tipo: el `Res_value` correspondiente, si lleva `TYPE_REFERENCE`, y su `R` (los arrays de recursos con `ENTRY` compuestos) | M por tipo |
+| 5.19 | **recursos**: `menu`/`xml` (AXML con raíz que no es `layout`), `raw`, y el `<permission>` del manifiesto | `linker.go:83`, `arbol.go:118`, `:140`, `valores.go:432` | el `ResTable_type` de los XML de recursos (que son `RES_XML_TYPE` y viajan dentro de la tabla), el `raw` como entrada literal sin AXML, y el `Manifest.java` que `aapt2` añade con `<permission>` | M |
+| 5.20 | versión de platform no medida y `--codename`/`--sdk-version` | `linker.go:230` | la tabla nombre↔API que usa `buildVersionCodename`/`versionName` en la cabecera AXML | XS por versión |
+| 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | la pestaña pasa `--keystore` con el de depuración | lectura de PKCS#12/JKS ya hecha (`apkc sign`); falta el camino de v3 (rechazado por nombre en `apkc verify`) y medir qué acepta `apksigner` | S/M |
+| 5.22 | `invokedynamic` (lambdas y references de método) | el lector de `.class` lo rechaza en `refuseOutsideSubset` | la desugración completa: cómo `d8` sintetiza `lambda$…`, quién recibe las variables capturadas y qué `method_type`/`method_handle` llegan al dex | XL |
+
+### Dependencias y orden
+
+- **Primer bloque (semana de cosas pequeñas, desbloquea escribir Java normal):** 5.1, 5.2, 5.3, 5.4, 5.13,
+  5.20. No dependen de nada nuevo y cada uno se cierra con su sonda.
+- **Segundo bloque (dos huecos antes de lo que los usa):** 5.8 **antes** de 5.9/5.10/5.11, porque los
+  locales de dos huecos cambian la numeración de la frame (§57) y cualquier bucle que acumule un `long` la
+  necesita.
+- **Tercer bloque (control de flujo):** 5.10 (bucles) y 5.12 (`switch`) juntos —los dos son *ramas* y
+  comparten el mecanismo de fusión y el `goto/16`—, después 5.9 (`try/catch`), que además toca el
+  `code_item`.
+- **Cuarto bloque (datos):** 5.11 (arreglos), que necesita 5.8 y los tipos `[`.
+- **Quinto bloque (miembros y tipos):** 5.5, 5.6, 5.7, 5.14, 5.15.
+- **Sexto bloque (recursos que hacen que la app parezca una app):** 5.16, 5.17, 5.18, 5.19.
+- **Séptimo (opcional, el más caro):** 5.21, 5.22.
+
+### Hitos con prueba en el teléfono
+
+- **M1** (fin del primer bloque): el contador reescrito con `+=` y `++`, un literal `char`, un
+  `MainActivity.class` y un método de seis argumentos; instalado, arrancado y con la traza de una excepción
+  en la línea exacta. Todavía **sin bucles**: es el hito que deja el Java de todos los días salvo el control
+  de flujo.
+- **M2** (con 5.8): la misma app acumulando en `long` y mostrando un `double` formateado, con la traza de
+  una excepción en la línea exacta (sonda del §60 ampliada).
+- **M3** (con 5.10/5.12/5.11): **una lista de verdad**: arreglo de cadenas, bucle que lo recorre, `switch`
+  por posición y `try/catch` alrededor; instalada, con dos `input tap` y el `content-desc` comprobado.
+- **M4** (con 5.16/5.17): la app con icono en `res/drawable` y textos en `values-es`, instalada y con
+  `aapt2 dump badging`/`resources` aprobando el apk que salió del navegador.
+
+### Fuera de esta fase, con el motivo escrito
+
+- **Kotlin** (el `apk` de kotlin que ve el gate sale del camino con JVM; en Go no hay frontend).
+- **`multianewarray`, `synchronized`/`monitorenter`/`monitorexit`, `assert`, y reflexión** — ninguna sonda;
+  siguen rechazados por nombre.
+- **Más de 65 536 métodos (varios `classes.dex`)** y **.aab con `split` por densidad/idioma**: son fases
+  propias, no ítems de ésta.
+- **Interoperabilidad con Gradle**: no está en la ambición.
+- **`d8` como referencia para lo optimizado**: no imitaremos las reescrituras de `d8` (fusiones de cadena,
+  dead code). El oráculo manda sobre las *palabras y las estructuras*, no sobre el cuerpo optimizado, que ya
+  está aceptado como diferencia en el 2G.4 y medido en el §53.
+
+### Mata la fase (o la parte que toque)
+
+- **5.10**: si la medición del punto de fusión sale que hace falta un **análisis de viveza completo** (un
+  segundo asignador de registros con fusión por `StackMapTable`) para que un bucle verifique en ART, 5.10 deja
+  de ser un ítem y es una fase aparte: se escribe el coste medido y se decide antes de seguir.
+- **5.9/5.11**: si un caso razonable de `try`/arreglo exige estructuras que el formato define con
+  variantes no observables en nuestras sondas (p. ej. `on-demand` de la tabla de handlers por versión de
+  `dex`), se queda como diferencia escrita y el portero lo rechaza por nombre, como hasta ahora.
+- **5.17**: si una segunda configuración con `spec_map` no sale byte a byte igual que `aapt2` en dos
+  sondas distintas, se para y se escribe: los recursos con calificadores son mantenimiento eterno (§
+  «Riesgos transversales»).
 
 ---
 
