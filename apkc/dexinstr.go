@@ -199,11 +199,22 @@ func (p *traduce) guardaLocal(in jvmInstr, n int) {
 // local: el registro dalvik del enésimo hueco JVM. Un long o un double ocupa dos huecos aquí y dos
 // registros allá, así que el número de hueco se pasa tal cual. Si el hueco quedó atado a otro
 // registro (guardaLocal), ese es su registro ahora.
+//
+// Los argumentos van al FINAL de la frame, no al principio como en el `.class`: lo exige el formato
+// y lo comprueba ART. Medido en el aparato (2026-11-01, §56) con un método de cuatro huecos y dos
+// argumentos: nuestro `code_item` decía `registers=10`, `ins=2` y usaba `v6` para `this`, y el
+// verificador cortaba con `instance field access on object that has non-reference type Undefined` —
+// para ART `v6` era un local sin tipo. Con `d8` el mismo cuerpo sale `registers=3`, `ins=2` y
+// `this` en `v1`, o sea los dos últimos registros. Mientras el método no tiene más locales que
+// argumentos las dos cuentas coinciden, y por eso el subconjunto medido hasta aquí salía bien.
 func (p *traduce) local(n int) int {
 	if r, ok := p.renom[n]; ok {
 		return r
 	}
-	return p.base + n
+	if n < p.m.ArgCount {
+		return p.base + p.locales - p.m.ArgCount + n
+	}
+	return p.base + n - p.m.ArgCount
 }
 
 func (p *traduce) palabra(u uint16) { p.w = append(p.w, u) }

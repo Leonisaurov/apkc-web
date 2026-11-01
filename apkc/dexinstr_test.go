@@ -313,3 +313,29 @@ func TestRechazaLoQueNoEstaMedido(t *testing.T) {
 		t.Errorf("the refusal does not say why: %v", err)
 	}
 }
+
+// TestLaFramePoneLosArgumentosArriba: la numeración que ART exige (§56). Con mas locales que
+// argumentos, los `ins` tienen que ser los ULTIMOS registros de la frame; el aparato rechazaba
+// `this` en v6 cuando el item decia registers=10 e ins=2.
+func TestLaFramePoneLosArgumentosArriba(t *testing.T) {
+	m := classMethod{HasCode: true, Name: "onClick", Desc: "(Landroid/view/View;)V",
+		LocalCount: 4, ArgCount: 2, MaxStack: 2}
+	p := &traduce{m: m, locales: m.LocalCount, base: 6}
+	// this, v son los dos primeros huecos JVM; cero y k son locales del cuerpo
+	if got := p.local(0); got != 8 {
+		t.Errorf("`this` sale en v%d, y con registers=10 e ins=2 ART lo espera en v8", got)
+	}
+	if got := p.local(1); got != 9 {
+		t.Errorf("el argumento sale en v%d, se esperaba v9", got)
+	}
+	a, b := p.local(2), p.local(3)
+	if a != 6 || b != 7 {
+		t.Errorf("los locales del cuerpo salen en v%d y v%d, se esperaban v6 y v7 (por debajo de los argumentos)", a, b)
+	}
+	// y cuando los huecos son exactamente los argumentos la cuenta es la de siempre: identidad, que
+	// es lo que dejaron medido los párrafos 50 a 54
+	estrecho := &traduce{m: classMethod{ArgCount: 2}, locales: 2, base: 6}
+	if estrecho.local(0) != 6 || estrecho.local(1) != 7 {
+		t.Errorf("con locales == argumentos la numeración no puede moverse: salen v%d y v%d", estrecho.local(0), estrecho.local(1))
+	}
+}
