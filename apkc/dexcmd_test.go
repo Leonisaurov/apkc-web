@@ -70,8 +70,10 @@ func TestDexEnDiscoLeeLosArbolesYArmaElFichero(t *testing.T) {
 	if len(d.classes) != 6 {
 		t.Errorf("%d class_defs", len(d.classes))
 	}
-	if len(b) != 2392 {
-		t.Errorf("the command wrote %d bytes and the measured assembly is 2392", len(b))
+	// 2384 y no 2392: los class_data_item van pegados, sin el relleno de ocho bytes que metiamos
+	// entre ellos y que solo veia el verificador del aparato (§55).
+	if len(b) != 2384 {
+		t.Errorf("the command wrote %d bytes and the measured assembly is 2384", len(b))
 	}
 	// el archivo por defecto del comando (`build/outputs/classes.dex`) no se crea aqui dentro: si
 	// existiera en esta carpeta, la orden habria escrito donde no la llamamos
@@ -130,8 +132,11 @@ func TestElBinarioDexa(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the command left no file: %v\n%s", err, salida)
 	}
-	if len(b) != 2392 {
-		t.Errorf("the binary wrote %d bytes, the assembly measured is 2392", len(b))
+	// 2384 y no 2392: los class_data_item van pegados, como d8 y como los recorre ART. El relleno
+	// que llevabamos metiendo entre ellos era un defecto que solo veía el verificador del aparato
+	// (medido el 2026-11-01, §55), y pesaba ocho bytes en este fixture.
+	if len(b) != 2384 {
+		t.Errorf("the binary wrote %d bytes, the assembly measured is 2384", len(b))
 	}
 	if _, err := readDex(b); err != nil {
 		t.Errorf("the binary's own output does not read back: %v", err)
