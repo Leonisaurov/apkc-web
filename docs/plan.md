@@ -511,7 +511,10 @@ y un icono en `res/drawable`, y esa app se instala y arranca en un teléfono rea
 1. **Sonda**: un fuente mínimo que use la construcción, escrito a mano en `$PREFIX/tmp`.
 2. **Oráculos**: `javap -l -v -c` sobre el `.class` de javac 21; `d8 --release` sobre ese `.class`;
    `/apex/com.android.art/bin/dexdump` (con verificación) y `dexdump -d`/`-a` en el aparato por `rish`;
-   `apksigner`, `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump` para el paquete.
+   `apksigner`, `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump` para el paquete; y **la ejecución**:
+   `banco/banco.sh` corre el mismo fuente por los cuatro caminos (JVM, nuestro dex, `d8` sobre javac y
+   `d8` sobre lo que emitimos nosotros) con `app_process64` en el aparato, sin instalar nada. Ese es el
+   oráculo que destapó los tres primeros huecos del §61, ninguno visible comparando bytes.
 3. **Emisor/traductor** solo con lo que dijo la medición; lo que la sonda no cubre se queda **rechazado por
    nombre** con un mensaje que diga qué falta.
 4. **Prueba permanente** que compare contra las palabras/bytes del oráculo (el patrón de
@@ -537,7 +540,7 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.7 | constructores escritos a mano | `javaemisor.go:2499` | dónde baja javac los inicializadores de campo cuando hay ctor propio, y cuál es el `super` implícito | M |
 | 5.8 | `long`, `float`, `double` (dos huecos) | `javaemisor.go:551`, `javafuente.go:1306`, `javaemisor.go:2413` | el `const-wide/16` (y sus hermanas de 32/64 bits) y el `ldc2_w` del `.class`, los `move-wide` de tres formatos, la numeración de locales de dos huecos en la frame (§57), y el `encoded_value` de `J`/`F`/`D` (§55 regla 4) | L |
 | 5.9 | `try`/`catch`/`finally` | `javafuente.go:902` (sentencia) y `dexcode.go:70,81,87` (el `code_item` no escribe tries) | `try_item` + `encoded_catch_handler_list` (orden, `start_insn`/`end_insn`, `handler_off` a una lista de pares `type_addr`/`addr`, `catch_type` 0 para `finally`), el `move-exception` (10x) al entrar al handler y el `throw` (10x), con su opcode confirmado por la sonda, y el relleno a palabra antes de la tabla | L |
-| 5.10 | **bucles** `for`, `while`, `do` | `javafuente.go:902` y `dexinstr.go:359-366` (la rama hacia atrás) | el **punto de fusión de registros** en el destino de la rama: `registers_size`, orden de `ins`/`locals`/temporales y qué registro vive en la cabecera del bucle, medido contra las palabras de `d8` en una escalera de sondas (bucle simple, anidado, con `break`/`continue`, con acumulador de dos huecos); además `goto/16` si el salto pasa de 127 unidades | XL |
+| 5.10 | **bucles** `for`, `while`, `do` | `javafuente.go:902` y `dexinstr.go:359-366` (la rama hacia atrás) | el **punto de fusión de registros** en el destino de la rama: `registers_size`, orden de `ins`/`locals`/temporales y qué registro vive en la cabecera del bucle, medido contra las palabras de `d8` en una escalera de sondas (bucle simple, anidado, con `break`/`continue`, con acumulador de dos huecos); además `goto/16` si el salto pasa de 127 unidades. La unión de brazos ya falla hoy sin bucle (5.25) y la diana de `d8` está copiada en el §61 | XL |
 | 5.11 | **arreglos** (`new int[n]`, `s[i]`, `length`, de referencia y multidimensional) | `javafuente.go:820` y su ausencia en el traductor | `new-array` (22c), `array-length` (12x), los `aget`/`aput` por tipo (22x y 23x) y `filled-new-array` con su forma `…/range`; los tipos `[I`/`[Ljava/lang/String;` en `type_ids` y su orden | L |
 | 5.12 | `switch` de entero | `javafuente.go:902` | `tableswitch`/`lookupswitch` del `.class` contra el `packed-switch` y el `sparse-switch` del dex y su relleno a palabra | M |
 | 5.13 | `instanceof` y cast entre referencias | fuera del analizador | `instance-of` (22c) junto al `check-cast` ya medido, y las cadenas/tipos que nombran | S |
@@ -549,6 +552,9 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.19 | **recursos**: `menu`/`xml` (AXML con raíz que no es `layout`), `raw`, y el `<permission>` del manifiesto | `linker.go:83`, `arbol.go:118`, `:140`, `valores.go:432` | el `ResTable_type` de los XML de recursos (que son `RES_XML_TYPE` y viajan dentro de la tabla), el `raw` como entrada literal sin AXML, y el `Manifest.java` que `aapt2` añade con `<permission>` | M |
 | 5.20 | versión de platform no medida y `--codename`/`--sdk-version` | `linker.go:230` | la tabla nombre↔API que usa `buildVersionCodename`/`versionName` en la cabecera AXML | XS por versión |
 | 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | la pestaña pasa `--keystore` con el de depuración | lectura de PKCS#12/JKS ya hecha (`apkc sign`); falta el camino de v3 (rechazado por nombre en `apkc verify`) y medir qué acepta `apksigner` | S/M |
+| 5.23 | `StackMapTable` en el `.class` que emitimos | el emisor no escribe el atributo: `java -Xverify:all` rechaza cualquier método con ramas (`Expecting a stackmap frame at branch target`), medido en el §61 | los once marcos del JVMS 4.10.1 (`same_frame`, `append_frame`, `chop_frame`, `same_locals_1_stack_item…`) contra `javap -v` de javac en las mismas sondas, y el ejecutor del banco con `java -Xverify:all` como oráculo | M |
+| 5.24 | `getstatic`/`putstatic` de una **referencia** (`System.out`) | `dexinstr.go:265`: «a static access of type L: solo se midió el entero» | `sget-object`/`sput-object` (21c) sobre las palabras de `d8`, y el `Ljava/io/PrintStream;` en `type_ids`/`field_ids` | S |
+| 5.25 | temporales en el punto de unión de un `if` con `else` | `dexinstr.go:134` (`toma`): «it needs more temporaries than the max stack javap measured», medido en el §61 | descargar la pila en la unión y revisar el presupuesto `max_stack + locales + 1` (párrafo 50) contra la diana ya escrita arriba en el §61: `registers 3, ins 0, outs 0`, 20 palabras | M |
 | 5.22 | `invokedynamic` (lambdas y references de método) | el lector de `.class` lo rechaza en `refuseOutsideSubset` | la desugración completa: cómo `d8` sintetiza `lambda$…`, quién recibe las variables capturadas y qué `method_type`/`method_handle` llegan al dex | XL |
 
 ### Dependencias y orden
@@ -565,6 +571,8 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 - **Quinto bloque (miembros y tipos):** 5.5, 5.6, 5.7, 5.14, 5.15.
 - **Sexto bloque (recursos que hacen que la app parezca una app):** 5.16, 5.17, 5.18, 5.19.
 - **Séptimo (opcional, el más caro):** 5.21, 5.22.
+- **5.23 y 5.24 tocan antes**: son de la familia «el fuente real lo necesita» (`System.out` y el
+  `.class` verificable), no de control de flujo; 5.25 es el preludio obligado de 5.10.
 
 ### Hitos con prueba en el teléfono
 

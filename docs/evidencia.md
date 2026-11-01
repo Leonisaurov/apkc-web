@@ -3304,5 +3304,74 @@ ambos con seis filas y la última en la línea 23).
 
 Suite tras los tres cambios: **214 PASS + 2 SKIP** nativa y **192 PASS + 24 SKIP** en el hospedador.
 
+## 61. Ejecutar en vez de instalar: `app_process` corre el dex en el terminal y destapó tres cosas
+
+Sugerencia del usuario el 2026-11-01: para no pensar en la app mientras se adquieren instrucciones,
+**ejecutar** lo que este fork compila. Se puede sin instalar nada: `app_process64` del aparato corre un
+`.dex` suelto con un `main`, por `rish`, en un segundo. El comando, medido:
+
+```sh
+base64 -w0 algundex.dex | rish -c 'toybox base64 -d > /data/local/tmp/algo.dex'
+rish -c 'export CLASSPATH=/data/local/tmp/algo.dex; /system/bin/app_process64 /data/local/tmp p.Arranque; echo rc=$?'
+```
+
+El banco quedó versionado en `banco/` (`sh banco/banco.sh`): dos fuentes (`p.Ver`, emitida por
+`apkc compile`; `p.Arranque`, de javac, porque `main` necesita un tipo de array que el analizador aún
+rechaza), y cinco salidas comparadas por el **código de salida del proceso** (`System.exit(total)`). En
+el fuente, `total = 5`, dos llamadas a `cuenta()` que suman de dos en dos con un `if (total > 10)` que
+no llega a activarse: la respuesta es **9**, y la dan los cuatro caminos —
+
+| camino | resultado |
+| --- | --- |
+| JVM sobre las clases de javac | `rc 9` |
+| **nuestro dex** (`apkc compile` + `apkc dex`, 1008 bytes) en `app_process` | `rc 9`, y `dexdump` verificando `rc 0` |
+| `d8` sobre javac (1104 bytes) en `app_process` | `rc 9`, `dexdump rc 0` |
+| `d8` sobre **nuestra `Ver`.class** en `app_process` | `rc 9`, `dexdump rc 0`, y su dex sale **byte a byte idéntico** al de javac (los mismos 1104 bytes: `cmp` mudo) |
+
+Cuatro cosas salieron de aquí, y ninguna las daban los oráculos de bytes.
+
+**1. `invokestatic` de cero argumentos estaba rechazado por error.** El banco no dexaba: `a call of 0
+arguments: 35c goes up to five and invoke/range is not measured here`. Medido en el fichero de `d8`, la
+forma `35c` **sí** existe con recuento cero: `7100 0600 0000` (opcode `0x71`, nibble alto del segundo
+byte = 0, índice del método, y la tercera unidad en cero). Corregido el guardia (`n < 1` sobraba) y
+fijado con `TestLlamadaSinArgumentosSaleTresCincoceta`, que además comprueba el `sget`, el
+`invoke-static {v0}` de `System.exit` y las 12 palabras del cuerpo.
+
+**2. El `.class` que emite este fork no verifica en una JVM real.** `java -Xverify:all` sobre nuestra
+`Ver` dice `VerifyError: Expecting a stackmap frame at branch target 24` en `if_icmple`, y el
+`javap -v` lo confirma: **cero** atributos `StackMapTable` en nuestro `.class`, dos en el de javac. El
+`javap -c -p` del oráculo doble compara las *instrucciones*, no la tabla, y `d8` traga la ausencia
+(`rc 0` dexando nuestra `Ver`), así que el producto no se rompió nunca: lo que falta es
+**interoperabilidad con una JVM** —el `.class` de este fork solo lo consume su propio dexer—. Va al
+plan como **5.23**, y el banco lo señala en cada corrida.
+
+**3. `getstatic`/`putstatic` de una referencia no está medido.** `System.out.println` no pasó de
+`apkc dex`: `a static access of type L: solo se midió el entero` (`dexinstr.go:265`). El banco lo
+evita escribiendo el resultado por `System.exit`. Va como **5.24** (mide `sget-object`/`sput-object`
+y el `Ljava/io/PrintStream;` del pool).
+
+**4. El `if` con `else` pide más temporales de los que cabe.** Con el `else` del fuente de arriba,
+`apkc dex` rechazó: `at pc 30, iconst_4: it needs more temporaries than the max stack javap measured`
+—la pila no se descarga en el punto de unión de los dos brazos, y el presupuesto de temporales
+(`base = max_stack + locales + 1`, párrafo 50) se queda corto. La diana, medida con `dexdump -d` sobre
+`d8 --release` del mismo fuente: `registers 3, ins 0, outs 0`, **20 palabras**, cada sentencia fusionada
+(`sget v0` + `add-int/lit8 v1, v0, #2` + `sput v1`), la comparación invertida **conservando el
+registro del sumando** (`const/16 v2, #int 10` + `if-le v1, v2, +0007`), el brazo `then` dentro del `if`
+seguido de su `return-void`, y el `else` colocado **después** de ese retorno. Ojo con el plegado, que
+parece una errata y no lo es: `total = total - 4` sale `add-int/lit8 v0, v0, #int -2`, porque `v0` es
+el `total` *antes* de sumar los dos —`d8` calcula sobre el registro, no sobre la sentencia—. Va como
+**5.25** y es la antesala directa de los bucles (5.10).
+
+Anotación de paso, para que la comparación de registros no sorprenda: nuestro `main` declara **3**
+registros donde el de `d8` declara **1** (reutiliza el hueco del `String[]` que nadie lee); es la
+diferencia de numeración ya aceptada en el 2G.4, medida otra vez sobre un caso que ahora **corre**.
+
+Suite tras el arreglo del punto 1: **216 PASS + 2 SKIP** nativa (los dos nuevos, del banco:
+`TestLlamadaSinArgumentosSaleTresCincoceta` y `TestNuestrasClasesEmitidasSeDexanYLeyen`) y **194 PASS + 24
+SKIP** en el hospedador con forma de navegador, con las cuentas de tamaño del dex intactas (2680 bytes:
+ninguna sucesión del fixture lleva una llamada sin argumentos) y el gate de `studio/e2e.sh` otra vez en
+orden con los mismos apks de la pestaña (10014, 9725 y 10285 bytes).
+
+
 
 

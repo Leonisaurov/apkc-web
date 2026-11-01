@@ -14,6 +14,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
 | `studio/` | apkc-studio: genera proyectos apkc, traduce su salida para medir fricción **y hace correr `apkc.wasm` en la pestaña** (OPFS + worker) | `cd studio && APKC=<binario> sh e2e.sh`; la pestaña: `APKC_WASM=… node studio/prueba-pestana.js` |
+| `banco/` | **el banco de ejecución**: dos fuentes de prueba y un guion que corre el mismo programa por los cuatro caminos (JVM, `d8` sobre javac, `d8` sobre lo que emitimos, y **nuestro dex en `app_process`**) — sin instalar nada, sin pantalla | `sh banco/banco.sh` (necesita `APKC` compilado, `ANDROID_JAR`, `build-tools` y `rish`) |
 
 ## Reglas del repo
 
@@ -54,8 +55,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
   `env -i`; (b) sin `GOOS=js GOARCH=wasm` el lanzador recibe un ELF y se queja de
   `expected magic word 00 61 73 6d`.
 - Oráculos que no comparten código con apkc: `apksigner verify --verbose`, `jarsigner -verify`,
-  `zipalign -c -p`, `~/Develop/Go/apkc-harness/zipcheck.py`, `javap` (no `dexdump`, que en este
-  teléfono no es ejecutable).
+  `zipalign -c -p`, `~/Develop/Go/apkc-harness/zipcheck.py`, `javap`, `java -Xverify:all` (la JVM del
+  Termux ejecuta **nuestros** `.class`: es el oráculo que destapó el `StackMapTable` que falta, §61) y
+  `dexdump`/`app_process64` **del aparato por `rish`** (no hay `adb`): `/apex/com.android.art/bin/dexdump`
+  verifica y desarma, y `app_process64` con `CLASSPATH` ejecuta un `.dex` suelto **sin instalar nada**
+  (`sh banco/banco.sh` lo hace por los cuatro caminos y compara el código de salida, §61).
 - **Trampas de OPFS/cromium ya conocidas** (detalle completo con síntoma en `docs/evidencia.md` §12):
   `navigator.storage` no existe dentro del worker (la raíz baja desde la página por `postMessage`);
   `crypto`/`performance` son de solo lectura en un worker de módulo; `entries()` rinde
@@ -289,6 +293,20 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   (289 ms) y el de `javac`+`d8` (6,39 s). Suite: **214 PASS + 2 SKIP** nativa, **192 PASS + 24 SKIP** en el
   hospedador; gate de `studio/e2e.sh` en orden (el apk del proyecto generado, 10014 bytes, igual entrada por
   entrada al nativo).
+- **El oráculo que faltaba era un ejecutor, no un comparador de bytes** (§61): `app_process64` del aparato
+  corre un `.dex` suelto con `CLASSPATH` y un `main`, **sin instalar la app** (`base64 -w0 x.dex | rish -c
+  'toybox base64 -d > /data/local/tmp/x.dex'; export CLASSPATH=…; /system/bin/app_process64 /data/local/tmp p.Arranque`).
+  `banco/banco.sh` ejecuta el mismo fuente por cuatro caminos y compara el **código de salida**: JVM,
+  nuestro dex (1008 bytes), `d8` sobre javac y `d8` sobre nuestra `Ver` (1104 bytes, **idénticos entre sí**
+  → el doble oráculo sigue entero); los cuatro dan `rc 9` y `dexdump` verifica `rc 0`. Al ejecutar aparecieron
+  tres cosas que ningún `cmp` ni `javap` enseñaba: **`invokestatic` de cero argumentos estaba rechazado por
+  error** (medido: `d8` escribe `7100 0600 0000`, la forma 35c vale con recuento cero; arreglado en
+  `dexinstr.go` con `TestLlamadaSinArgumentosSaleTresCincoceta`), **nuestro `.class` no verifica en una JVM
+  real** porque al emisor le falta `StackMapTable` en los destinos de rama (`d8` lo acepta, `java
+  -Xverify:all` no: plan 5.23), y dos huecos del traductor que el banco esquiva: `getstatic` de una
+  **referencia** (`System.out`, plan 5.24) y el **presupuesto de temporales en la unión de un `if` con
+  `else`** (plan 5.25, con la diana de `d8` copiada en el §61: `registers 3, ins 0, outs 0`, 20 palabras y el
+  pliegue `total - 4` sobre el registro previo, que sale `add-int/lit8 …, #-2`).
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -314,7 +332,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **214 PASS + 2 SKIP** nativa y **192 PASS + 24 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **216 PASS + 2 SKIP** nativa y **194 PASS + 24 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
