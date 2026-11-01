@@ -96,11 +96,12 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
 - **`apkc dex` existe y corre dentro de wasm** (§23, rama `web`): `.class` -> `classes.dex` en Go, sin
-  `d8` ni proceso. Sobre el proyecto del studio: 2696 bytes (2392 hasta el §55, que quitó el relleno
+  `d8` ni proceso. Sobre el proyecto del studio: 2680 bytes (2392 hasta el §55, que quitó el relleno
   entre `class_data_item`; 2436 desde el §56, que añade el área de depuración; 2696 desde el §59, que emite
-  el bloque de anotaciones; la diferencia con los
-  2844 de `d8` son hoy su marca de origen, un `debug_info_item` y un `type_list` de más y el orden de los
-  ítems del área, todo medido en el §59), con
+  el bloque de anotaciones; 2680 desde el §60, que interna los `type_list` por contenido y suelta la
+  posición de la llave de cierre que el `--release` no escribe). La diferencia con los
+  2844 de `d8` son hoy su marca de origen (descartada a propósito, §60), el orden de los ítems del área de
+  anotaciones y los offsets absolutos, todo medido, con
   `type_ids`/`field_ids`/`method_ids` byte a byte iguales y los
   nueve cuerpos con la misma secuencia de instrucciones, los mismos índices y el mismo número de
   palabras. El oráculo que lo cierra: `d8` lee el dex que escribimos y lo re-dexa con `rc 0`, y el
@@ -145,8 +146,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   memoria), y el aviso de «intermitencia de OPFS» del §39 era en realidad el primero.
 - **Y también el proyecto que la página genera** (§46): con la clase anónima del botón, el `@+id` y el
   `@style`, chromium escribe los cinco ficheros en OPFS con el propio `buildProject`, saca **seis clases y
-  2696 bytes de dex** (2436 hasta el §58; el bloque de anotaciones del §59 los sustituye) y un apk de 10030 bytes **igual entrada por entrada al
-  nativo**, y `d8` releee ese dex con `rc 0`. Lo pide `studio/e2e.sh` (bloque 4c).
+  el dex del fixture (2680 bytes desde el §60; 2696 con el bloque de anotaciones del §59; 2436 hasta el §58)**
+  y un apk igual entrada por entrada al
+  nativo, y `d8` releee ese dex con `rc 0`. Lo pide `studio/e2e.sh` (bloque 4c).
 - **El `android.jar` entra sin red por el camino del usuario y dura** (§46, comprobaciones 9 y 9b): se le
   pone en el `<input type="file">` con `DOM.setFileInputFiles` de CDP, la página lo guarda en OPFS con
   **cero peticiones** en ese tramo, y tras recargar la página sigue ahí (26361808 bytes, sin volver a
@@ -266,6 +268,27 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   proyecto; `pm install -r` `Success`, arranque en frío y `[status=verify]` en `dexopt`. Signature (genéricos)
   sigue sin emitirse: la troceadura que hace `d8` no está medida y el subconjunto de Java no tiene parámetros
   de tipo.
+- **Las dos diferencias que quedaban, resueltas: el `type_list` sobrante era un bug y la marca de `d8` se
+  descarta a propósito** (§60): `areaListas` guardaba cada lista con prefijo de origen (`"i|"`/`"p|"`), así que
+  dos listas **iguales** se escribían dos veces; `d8` las interna **por contenido** —en el fixture el item
+  `[Landroid/view/MenuItem$OnMenuItemClickListener;]` lo apuntan a la vez el proto
+  `(L…OnMenuItemClickListener;)Landroid/view/MenuItem;` y el `class_def` de `MainActivity$1`—, y corregido eso el
+  área sale **byte a byte igual** (ocho listas, offsets `+0 +8 +16 +28 +36 +44 +52 +60`) y el fichero baja a 2680
+  bytes. Medido también que el área no se remata con relleno. La cadena `~~D8{"backend":"dex",…,"sha-1":"…",
+  "version":"9.2.4-dev"}` es la firma con la que `d8` nombra su propia herramienta y su versión sobre un digest
+  del fichero que él escribió: **no se copia** (sería mentira de origen y de digest), y ninguna columna de las
+  tablas la nombra —es la única cadena de más, 53 contra 52—; `TestLaMarcaDeOrigenDeD8NoSeCopia` lo vigila. El
+  tercer punto era la política de líneas: dexando las mismas clases en los dos modos, con `d8 --debug` las nueve
+  sucesiones de posiciones son **las nuestras**, y con `d8 --release` falta en tres cuerpos la última, que es la
+  pegada a la **última instrucción** (la llave de cierre); `apkc` invoca `d8` con `--release` (`build.go`), así que
+  `itemDebug` suelta esa posición cuando hay más de una y el fixture queda con **siete `debug_info_item`, los
+  mismos que declara el mapa de `d8`**. Comprobado en el aparato con una sonda que falla **en `onCreate`** (no
+  necesita ningún toque): la `LineNumberTable` termina en la fila de la llave del método (la 25, pegada al
+  `return-void`) y esa es la que ahora se suelta, y la traza dice
+  `MainActivity.java:17` —la de la sentencia— **en los dos caminos de la herramienta**, el de `--compiler go`
+  (289 ms) y el de `javac`+`d8` (6,39 s). Suite: **214 PASS + 2 SKIP** nativa, **192 PASS + 24 SKIP** en el
+  hospedador; gate de `studio/e2e.sh` en orden (el apk del proyecto generado, 10014 bytes, igual entrada por
+  entrada al nativo).
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -291,7 +314,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **211 PASS + 2 SKIP** nativa y **189 PASS + 24 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **214 PASS + 2 SKIP** nativa y **192 PASS + 24 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

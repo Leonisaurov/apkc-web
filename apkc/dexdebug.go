@@ -41,10 +41,28 @@ const (
 	dbgLineRange    = 15
 )
 
+// palabraUltimoReturn: la unidad dalvik en la que arranca el `return` final del cuerpo, o -1 si el
+// cuerpo no termina en un return (caso no medido: entonces no se suelta ninguna posición). Los cuatro
+// opcodes de vuelta valen 0x0e, 0x0f, 0x10 y 0x11; el primero ocupa una unidad y los otros dos, medido
+// sobre las palabras que escribe este traductor.
+func palabraUltimoReturn(insns []uint16) int {
+	if len(insns) == 0 {
+		return -1
+	}
+	switch insns[len(insns)-1] & 0xff {
+	case 0x0e:
+		return len(insns) - 1
+	case 0x0f, 0x10, 0x11:
+		return len(insns) - 2
+	}
+	return -1
+}
+
 // itemDebug: los bytes del debug_info_item de un método, o nil si el `.class` no trajo líneas o si
 // ninguna de sus pcs aterriza en el cuerpo traducido. `pcs` es la correspondencia JVM pc -> unidad
-// dalvik que el traductor armó para resolver los saltos.
-func (td *dexTables) itemDebug(m classMethod, pcs map[int]int) []byte {
+// dalvik que el traductor armó para resolver los saltos, e `insns` son las palabras del cuerpo, que
+// dicen dónde está la última instrucción.
+func (td *dexTables) itemDebug(m classMethod, pcs map[int]int, insns []uint16) []byte {
 	if len(m.Lines) == 0 || len(pcs) == 0 {
 		return nil
 	}
@@ -77,6 +95,18 @@ func (td *dexTables) itemDebug(m classMethod, pcs map[int]int) []byte {
 		}
 	}
 	puestas = sinRepetidas
+
+	// La politica de posiciones del `d8 --release`, medida en el parrafo 60 dexando las seis clases del
+	// studio en los dos modos: **la posicion pegada a la ultima instruccion del cuerpo no se escribe**,
+	// salvo cuando es tambien la primera (un cuerpo de una sola linea si la conserva, medido en los
+	// cuatro `<init>` del fixture). Sin soltarla, nuestras nueve posiciones salen identicas byte a byte
+	// a las de `d8 --debug`, asi que esto no es un error de traduccion: es elegir el modo. `apkc` invoca a
+	// `d8` con `--release` (build.go), que es lo que sustituye este fork, y las trazas del telefono no
+	// cambian: la linea que se pierde es la llave de cierre, no la de la sentencia.
+	ultima := palabraUltimoReturn(insns)
+	if ultima >= 0 && len(puestas) > 1 && puestas[len(puestas)-1].pc == ultima {
+		puestas = puestas[:len(puestas)-1]
+	}
 
 	cuantos := m.ArgCount
 	if m.Access&accStatic == 0 {
@@ -111,8 +141,10 @@ func (td *dexTables) itemDebug(m classMethod, pcs map[int]int) []byte {
 }
 
 // areaDebug: los items de todos los métodos con cuerpo, deduplicados, con su posición relativa y
-// cuantos distintos hay (el `map_list` declara ese recuento, no el de métodos).
-func (td *dexTables) areaDebug(clases []classFull, pcs map[[2]string]map[int]int) ([]byte, map[[2]string]uint32, int) {
+// cuantos distintos hay (el `map_list` declara ese recuento, no el de métodos). `cuerpos` son las
+// palabras de cada cuerpo, por clase y nombre: hacen falta para saber dónde está la última instrucción.
+func (td *dexTables) areaDebug(clases []classFull, pcs map[[2]string]map[int]int,
+	cuerpos map[[2]string][]uint16) ([]byte, map[[2]string]uint32, int) {
 	buf := []byte{}
 	rels := map[[2]string]uint32{}
 	vistos := map[string]uint32{}
@@ -122,11 +154,11 @@ func (td *dexTables) areaDebug(clases []classFull, pcs map[[2]string]map[int]int
 			if !m.HasCode {
 				continue
 			}
-			item := td.itemDebug(m, pcs[[2]string{cf.Name, m.Name}])
+			clave := [2]string{cf.Name, m.Name}
+			item := td.itemDebug(m, pcs[clave], cuerpos[clave])
 			if len(item) == 0 {
 				continue
 			}
-			clave := [2]string{cf.Name, m.Name}
 			if r, ok := vistos[string(item)]; ok {
 				rels[clave] = r
 				continue

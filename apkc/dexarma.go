@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"hash/adler32"
 	"sort"
+	"strings"
 )
 
 func putU16(b []byte, v uint16) []byte { return append(b, byte(v), byte(v>>8)) }
@@ -77,7 +78,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	// el area de depuracion se arma con las posiciones ya traducidas (van en unidades dalvik, no en
 	// los pcs del `.class`) y va detras del codigo, en el orden en que lo dejo `d8`: su mapa declara
 	// `0x2001` y despues `0x2003`
-	depuracion, relDepuracion, cuantasDepuracion := td.areaDebug(clases, pcsMetodo)
+	depuracion, relDepuracion, cuantasDepuracion := td.areaDebug(clases, pcsMetodo, cuerpos)
 	// las tres areas de anotaciones (formato del §58, emisión y cuentas del §59) se planifican aqui, con
 	// las tablas ya ordenadas; los u32 que se apuntan entre ellas se parchean cuando las bases esten, como
 	// el debug_info
@@ -140,7 +141,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	for _, k := range td.protos {
 		protoIDs = putU32(protoIDs, uint32(td.stringIdx[k.shorty]))
 		protoIDs = putU32(protoIDs, uint32(td.typeIdx[k.ret]))
-		if r, ok := relListas["p|"+k.params]; ok && k.params != "" {
+		if r, ok := relListas[k.params]; ok && k.params != "" {
 			protoIDs = putU32(protoIDs, uint32(base[0x1001])+r)
 			continue
 		}
@@ -172,7 +173,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		} else {
 			classDefs = putU32(classDefs, uint32(td.typeIdx[cf.Super]))
 		}
-		if r, ok := relListas["i|"+cf.Name]; ok {
+		if r, ok := relListas[strings.Join(cf.Interfaces, "")]; ok {
 			classDefs = putU32(classDefs, uint32(base[0x1001])+r)
 		} else {
 			classDefs = putU32(classDefs, 0)
@@ -312,17 +313,21 @@ func (td *dexTables) areaCadenas() ([]byte, []uint32) {
 	return buf, rels
 }
 
-// áreaListas: el área de type_list, una por cada clase con interfaces y por cada proto con
-// parámetros. Las listas idénticas se comparten, como hizo d8 (§19 midió el stride de dos bytes
-// por type_item); una lista vacía no se escribe, porque su offset es cero.
+// áreaListas: el área de type_list. La regla, medida en el §60 sobre el fichero de d8: las listas se
+// internan **por contenido**, sin distinguir la que nombra los parámetros de un proto de la que nombra
+// las interfaces de una clase. En el fixture la lista `[Landroid/view/MenuItem$OnMenuItemClickListener;]`
+// sirve a las dos cosas y d8 la escribe **una vez** (offset +0, apuntada por el proto y por el class_def);
+// este fork la escribía dos porque las claves llevaban prefijo de origen, y de ahí salía el type_list
+// sobrante (nueve contra sus ocho). Una lista vacía no se escribe, porque su offset es cero.
 func (td *dexTables) areaListas(clases []classFull) ([]byte, map[string]uint32, int) {
 	buf := []byte{}
 	rels := map[string]uint32{}
 	cuantas := 0
-	pone := func(clave string, tipos []string) {
+	pone := func(tipos []string) {
 		if len(tipos) == 0 {
 			return
 		}
+		clave := strings.Join(tipos, "")
 		if _, visto := rels[clave]; visto {
 			return
 		}
@@ -340,30 +345,31 @@ func (td *dexTables) areaListas(clases []classFull) ([]byte, map[string]uint32, 
 			buf = putU16(buf, uint16(i))
 		}
 	}
+	// el orden de escritura es el de d8: primero las interfaces de las clases, despues los parametros de
+	// los protos, en el orden ya medido de las dos tablas
 	for _, cf := range clases {
-		pone("i|"+cf.Name, cf.Interfaces)
+		pone(cf.Interfaces)
 	}
 	for _, k := range td.protos {
 		if k.params == "" {
 			continue
 		}
 		_, _, ps := splitDescriptor("(" + k.params + ")V")
-		pone("p|"+k.params, ps)
+		pone(ps)
 	}
-	for uint32(len(buf))%4 != 0 {
-		buf = append(buf, 0)
-	}
+	// cada item se alinea a 4 al entrar, pero el area **no se remata con relleno**: medido en el §60,
+	// d8 la deja en 66 bytes y la seccion siguiente (string_data_item, alineacion 1) empieza justo detras
 	return buf, rels, cuantas
 }
 
-// áreaCodigo: un code_item por método con cuerpo, con su posición dentro del área y el codeItem
-// traducido (el recuento de objetos del map_list sale de ahí), más la correspondencia de pcs que
-// el área de depuración necesita.
-func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint32, map[[2]string]map[int]int, []codeItem, error) {
+// áreaCodigo: un code_item por método con cuerpo, con su posición dentro del área y las palabras del
+// cuerpo traducido (el recuento de objetos del map_list sale de ahí y el área de depuración necesita
+// saber dónde arranca la última instrucción), más la correspondencia de pcs.
+func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint32, map[[2]string]map[int]int, map[[2]string][]uint16, error) {
 	buf := []byte{}
 	rels := map[[2]string]uint32{}
 	pcs := map[[2]string]map[int]int{}
-	cuerpos := []codeItem{}
+	cuerpos := map[[2]string][]uint16{}
 	for _, cf := range clases {
 		for _, m := range cf.Methods {
 			if !m.HasCode {
@@ -388,7 +394,7 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint3
 			for _, w := range ci.insns {
 				buf = putU16(buf, w)
 			}
-			cuerpos = append(cuerpos, ci)
+			cuerpos[clave] = ci.insns
 		}
 	}
 	for uint32(len(buf))%4 != 0 {

@@ -40,7 +40,7 @@ func TestElDexArmadoSeLeeConsigoMismo(t *testing.T) {
 		t.Errorf("the signature or the checksum of what we wrote does not verify: %v", err)
 	}
 	cuentas := map[dexKind]int{0x0001: 52, 0x0002: 23, 0x0003: 9, 0x0004: 4, 0x0005: 17, 0x0006: 6,
-		0x2003: 8, 0x2004: 8, 0x1003: 6, 0x2006: 5}
+		0x2003: 7, 0x2004: 8, 0x1003: 6, 0x2006: 5, 0x1001: 8}
 	for k, q := range cuentas {
 		got := 0
 		for _, e := range d.maps {
@@ -196,8 +196,8 @@ func TestLasTablasFijasSonLasDeD8(t *testing.T) {
 }
 
 // TestLosClassDefsComparanAccesoYOrigenConLosDeD8: type_idx, access_flags, super, source_file y
-// el orden de la tabla. annotations_off y static_values_off salen cero en los nuestros (no se
-// emiten) y eso esta escrito como diferencia, no como igualdad.
+// el orden de la tabla. annotations_off y static_values_off tambien se emiten ya (§55 y §59) y se
+// comprueban por su lado, en el volcado de anotaciones y en las cuentas del class_data.
 func TestLosClassDefsComparanAccesoYOrigenConLosDeD8(t *testing.T) {
 	_, d := armaElFixture(t)
 	d8, err := readDex(fixtureDex(t))
@@ -349,5 +349,130 @@ func TestElClassDataEscritoDiceLosMismosMiembros(t *testing.T) {
 					clase, i, f.valueType, f.value, g.valueType, g.value)
 			}
 		}
+	}
+}
+
+// TestElAreaDeListasEsLaDeD8: el area de type_list byte a byte con la de `d8`, y con la cuenta que él
+// declara. Es la regla que estaba mal escrita aqui: las listas se internan **por contenido**, sin
+// distinguir los parametros de un proto de las interfaces de una clase, asi que en el fixture la lista
+// `[Landroid/view/MenuItem$OnMenuItemClickListener;]` se escribe UNA vez y la apuntan las dos cosas
+// (medido en el parrafo 60; con el prefijo de origen salian nueve listas contra sus ocho).
+func TestElAreaDeListasEsLaDeD8(t *testing.T) {
+	_, d := armaElFixture(t)
+	d8, err := readDex(fixtureDex(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mias, suyas := d.seccion(0x1001), d8.seccion(0x1001)
+	if len(mias) != len(suyas) || !bytes.Equal(mias, suyas) {
+		t.Errorf("el area de type_list mide %d bytes y la de d8 %d", len(mias), len(suyas))
+	}
+	cuantas := func(f *dexFile) int {
+		for _, e := range f.maps {
+			if e.kind == 0x1001 {
+				return int(e.size)
+			}
+		}
+		return -1
+	}
+	if cuantas(d) != 8 || cuantas(d) != cuantas(d8) {
+		t.Errorf("%d listas declaradas nosotros y %d d8; la cuenta medida es 8", cuantas(d), cuantas(d8))
+	}
+	// y la comparticion se ve en los apuntadores: el proto y el class_def van al MISMO offset absoluto.
+	// Se compara el valor absoluto, no la posicion relativa, porque la lista compartida cae en el
+	// primer byte del area y su offset relativo es cero
+	listaDe := func(f *dexFile, off int) uint32 { return dexLittleEndian.Uint32(f.raw[off:]) }
+	protoOff, claseOff := uint32(0), uint32(0)
+	for i := range d.protos {
+		if strings.Contains(descriptorDe(d.protos[i]), "OnMenuItemClickListener") {
+			protoOff = listaDe(d, int(d.offDe(0x0003))+12*i+8)
+		}
+	}
+	for i := range d.classes {
+		if d.classes[i].name == "Lcom/hola/apkcstudio/MainActivity$1;" {
+			claseOff = listaDe(d, int(d.offDe(0x0006))+32*i+12)
+		}
+	}
+	if protoOff == 0 || protoOff != claseOff || protoOff != d.offDe(0x1001) {
+		t.Errorf("la lista compartida no esta compartida: proto en %d, interfaces en %d, area en %d",
+			protoOff, claseOff, d.offDe(0x1001))
+	}
+}
+
+// TestLaMarcaDeOrigenDeD8NoSeCopia: la unica cadena que falta en nuestra tabla es la firma con la que
+// `d8` se nombra a si mismo, y se descarta **a proposito** (medida en el parrafo 60): su contenido es
+//
+//	~~D8{"backend":"dex","compilation-mode":"release","has-checksums":false,"min-api":21,
+//	    "sha-1":"<los 40 hex del fichero>","version":"9.2.4-dev"}
+//
+// o sea que nombran a otra herramienta, con su versión y con un resumen del fichero que ella escribió.
+// Copiarla sería firmar una mentira y además un resumen que no corresponde a nuestros bytes. Lo que se
+// comprueba aquí es que no la copiemos, que sea efectivamente la única cadena de más y que ninguna
+// estructura del fichero la nombre: ni un tipo, ni un shorty, ni un nombre de campo o método, ni un
+// `source_file_idx` (los elementos de las anotaciones se midieron en el §59 y tampoco la nombran).
+func TestLaMarcaDeOrigenDeD8NoSeCopia(t *testing.T) {
+	_, d := armaElFixture(t)
+	d8, err := readDex(fixtureDex(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	marca := -1
+	for i, s := range d8.strings {
+		if strings.HasPrefix(s, "~~") {
+			if marca >= 0 {
+				t.Fatalf("hay dos marcas: #%d y #%d", marca, i)
+			}
+			marca = i
+		}
+	}
+	if marca < 0 {
+		t.Fatal("el fixture de d8 ya no trae la marca de origen: hay que reescribir esta prueba")
+	}
+	if !strings.Contains(d8.strings[marca], `"compilation-mode":"release"`) {
+		t.Errorf("la marca medida no dice release: %s", d8.strings[marca])
+	}
+	for _, s := range d.strings {
+		if strings.HasPrefix(s, "~~") {
+			t.Errorf("nuestra tabla copia una marca de otro compilador: %q", s)
+		}
+	}
+	if len(d8.strings) != len(d.strings)+1 {
+		t.Errorf("%d cadenas las nuestras contra %d de d8: la marca debería ser la única diferencia",
+			len(d.strings), len(d8.strings))
+	}
+	// ninguna columna de las tablas de índices apunta a ella
+	nombrados := map[uint32]bool{}
+	u32 := func(kind dexKind, i uint32, en int) uint32 {
+		base := d8.offDe(kind)
+		if base == 0 {
+			t.Fatalf("el mapa no declara %s", kind)
+		}
+		stride := dexItemStride(kind)
+		if stride == 0 {
+			t.Fatalf("%s no es una tabla de tamano fijo", kind)
+		}
+		return dexLittleEndian.Uint32(d8.raw[base+i*uint32(stride)+uint32(en):])
+	}
+	for i := uint32(0); i < uint32(len(d8.types)); i++ {
+		nombrados[u32(0x0002, i, 0)] = true
+	}
+	for i := uint32(0); i < uint32(len(d8.protos)); i++ {
+		nombrados[u32(0x0003, i, 0)] = true
+	}
+	for i := uint32(0); i < uint32(len(d8.fields)); i++ {
+		nombrados[u32(0x0004, i, 4)] = true
+	}
+	for i := uint32(0); i < uint32(len(d8.methods)); i++ {
+		nombrados[u32(0x0005, i, 4)] = true
+	}
+	for i := uint32(0); i < uint32(len(d8.classes)); i++ {
+		nombrados[u32(0x0006, i, 16)] = true
+	}
+	if nombrados[uint32(marca)] {
+		t.Errorf("la marca #%d sí es nombrada por alguna tabla: no es una cadena huérfana", marca)
+	}
+	// y su string_data_item existe, con su uleb del tamaño en unidades utf-16
+	if item := d8.stringItemBytes(marca); len(item) < 2 || item[len(item)-1] != 0 {
+		t.Errorf("el item de la marca no tiene pinta de string_data_item: % x", item)
 	}
 }

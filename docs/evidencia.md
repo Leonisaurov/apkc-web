@@ -3227,4 +3227,82 @@ sus apks de chromium re-medidos —el del proyecto generado **10030 bytes** (igu
 nativo, `d8` releyendo su dex), el del fuente escrito a mano **9729**, el de la app del contador **10305** y
 el de la pestaña que compila **9255**—. El tiempo del camino sin procesos del contador sigue en **521 ms**.
 
+*(Los números de este párrafo son de antes del §60: después de interna los `type_list` por contenido y de
+adoptar la política de posiciones del `--release`, el fixture mide 2680 bytes, siete `debug_info_item` y ocho
+`type_list`, y el dex del contador 3092.)*
+
+## 60. Las dos diferencias que quedaban: la marca de `d8` se descarta a propósito y el `type_list` sobrante era un bug
+
+Cierra lo que el §59 dejó escrito como diferencia, con las tres cosas que faltaban medidas.
+
+**1. El `type_list` sobrante era un defecto nuestro, y estaba en la clave del internado.** `areaListas`
+guardaba cada lista con prefijo de origen (`"i|"+clase` para las interfaces, `"p|"+parametros` para los
+protos), así que dos listas con **el mismo contenido** se escribían dos veces. Medido sobre el fixture,
+recorriendo el área (cada item mide `4 + 2·size` bytes y el siguiente se alinea a 4) y anotando quién apunta
+a cada una: en el fichero de `d8` el item de `+0`, `[Landroid/view/MenuItem$OnMenuItemClickListener;]`,
+lo apuntan **el proto `(Landroid/view/MenuItem$OnMenuItemClickListener;)Landroid/view/MenuItem;` y el
+`class_def_item` de `MainActivity$1`**; nosotros teníamos dos items iguales (`+0` y `+8`), nueve listas
+contra sus ocho. La regla es entonces: **se interna por contenido, sin distinguir el uso**. Corregido,
+nuestra área sale byte a byte idéntica a la de `d8` (64 bytes, los mismos offsets `+0 +8 +16 +28 +36 +44
++52 +60`) y el fichero baja de 2696 a **2688**. De paso, medida también la terminación del área: `d8` no la
+rellena hasta un múltiplo de cuatro (su área mide 66 hasta el `string_data_item` que sigue), así que se
+quitó el relleno final. Prueba permanente: `TestElAreaDeListasEsLaDeD8`, que compara la sección byte a
+byte, exige 8 listas en los dos mapas y comprueba que el proto y el `class_def` apuntan al mismo offset.
+
+**2. La marca `~~D8{...}` se descarta, y ahora está medida la razón.** Su contenido, leído del fixture
+(byte a byte, con su `string_data_item`):
+
+```
+~~D8{"backend":"dex","compilation-mode":"release","has-checksums":false,"min-api":21,
+     "sha-1":"084a89126ae0596c599143d57a65464646af2831 3","version":"9.2.4-dev"}
+```
+
+Es la firma con la que `d8` nombra su propio trabajo: dice otra herramienta, su versión y **un resumen
+SHA-1 del fichero que escribió**. Copiarla sería doble mentira —el origen y un digest que no corresponde a
+nuestros bytes—, y no es que nadie la necesite: medida también la soledad de esa cadena, ninguna columna de
+las tablas la nombra (ni `type_ids`, ni los `shorty_idx` de `proto_ids`, ni los `name_idx` de campos y
+métodos, ni los `source_file_idx`; los elementos de las anotaciones se inspeccionaron en el §59 y tampoco).
+Es la única cadena de más en su tabla: **53 contra nuestras 52**. Queda escrita la decisión y su prueba en
+`TestLaMarcaDeOrigenDeD8NoSeCopia`, que además falla si el fixture dejara de traerla (para que la
+comprobación no se quede dormida). Emitir una marca propia (`~~apkc{...}`) sería honesto pero añadir a
+propósito una diferencia nueva donde hoy tenemos una medida: no se hace.
+
+**3. El `debug_info_item` de más era la política del modo, y adoptamos la del `--release`.** Volviendo a
+dexar las mismas seis clases y la sonda del §56 en los dos modos —`$PREFIX/tmp/an/r` (2844 bytes, `--release`,
+exactamente el tamaño del fixture: el fixture está hecho así) y `$PREFIX/tmp/an/d` (2852, `--debug`)—: con
+`--debug` las **nueve** sucesiones de posiciones del oráculo son idénticas a las nuestras, y con
+`--release` falta en tres cuerpos la última, que es la que javac pega a la **última instrucción**
+(`onMenuItemClick` pierde la línea 23, `onCreateOptionsMenu` la 26, `onCreate` la 16; los cuatro `<init>`
+de una sola línea conservan la suya, porque es además la primera). La regla medida: **se suelta la posición
+cuya unidad dalvik es el arranque del `return` final, salvo si es la única posición del cuerpo**. Como
+`apkc` invoca a `d8` con `--release` (`build.go`: `{"--lib", androidJar, "--release"}`), el camino en Go
+imita ese modo: `itemDebug` recibe las palabras del cuerpo y `areaCodigo` las devuelve por clase y método.
+Efecto en el fixture: **siete items, los mismos que declara el mapa de `d8`**, y el fichero en **2680
+bytes**; las sucesiones de *números de línea* por cuerpo coinciden con las de `d8 --release` en los nueve
+(`TestLasLineasDeDepuracionSonLasDeD8Release`) y seis de los siete items salen byte a byte iguales —el de
+`onCreate` difiere en la unidad de una posición porque nuestro cuerpo la pone en `+3` y el de `d8` en `+5`,
+diferencia de asignación ya aceptada en el 2G.4—.
+
+**La política no se copió a ciegas: se comprobó en el aparato con una traza.** Sonda nueva
+(`$PREFIX/tmp/e60/traza`), con la división por cero **dentro de `onCreate`** para no necesitar ningún
+toque: línea 16 `int cero = 0;`, línea 17 `int k = 72 / cero;`. Construida dos veces con el mismo binario,
+una por cada camino —`--compiler go` (289 ms, dex 2720 bytes) y `javac`+`d8` (6,39 s, dex 2848)—, las dos
+instaladas y arrancadas (`pm install -r` `Success`, `am start -W -S` `Complete`): las dos trazas dicen
+`E/AndroidRuntime: java.lang.ArithmeticException: divide by zero at
+com.myapp.MainActivity.onCreate(MainActivity.java:17)` —**la línea de la sentencia, no la de la llave**—.
+La `LineNumberTable` de ese `onCreate`, leída con `javap -l` sobre el `.class` que escribe este fork, es
+`14:0 15:5 16:11 17:13 18:18 19:26 25:43`: la última fila (25) es la llave del método, pegada al
+`return-void`, y es justo la que la política del `--release` deja fuera; la 17, la de la división, sigue
+publicada. Es decir: soltar la cola no cuesta precisión en las trazas, y los dos caminos de la herramienta
+coinciden.
+Sobre el contador completo, `dexdump` verificando da `rc 0` en nuestro dex de 3092 bytes y `d8 --release` lo
+re-dexa a 3088 con `rc 0`; comparando con `dexdump -d` contra el dex de `d8` sobre las clases de `javac`, la última
+línea anunciada por cada cuerpo es la misma en los dos (el `onClick` de `d8` publica siete posiciones y el
+nuestro cinco porque el suyo vuelve a pasar por 20 y 21 al reconstruir el `if`, mientras la
+`LineNumberTable` que escribimos va una fila por sentencia: medida en `javap -l` sobre los dos `.class`,
+ambos con seis filas y la última en la línea 23).
+
+Suite tras los tres cambios: **214 PASS + 2 SKIP** nativa y **192 PASS + 24 SKIP** en el hospedador.
+
+
 

@@ -71,10 +71,12 @@ func TestDexEnDiscoLeeLosArbolesYArmaElFichero(t *testing.T) {
 		t.Errorf("%d class_defs", len(d.classes))
 	}
 	// 2436 con las ocho areas del §56 (2384 sin el area de depuracion, 2392 con el relleno que quito
-	// el §55) y **2696** con el bloque de anotaciones del §59: 8 annotation_item, 6 sets, 5 directorios
-	// y sus tres entradas nuevas en el mapa. Las cuentas de area son las mismas que declara d8.
-	if len(b) != 2696 {
-		t.Errorf("the command wrote %d bytes and the measured assembly is 2696", len(b))
+	// el §55), **2696** con el bloque de anotaciones del §59 (8 annotation_item, 6 sets, 5 directorios y
+	// sus tres entradas nuevas en el mapa) y **2680** desde el §60, que interna los type_list por
+	// contenido —ocho listas en vez de nueve, las mismas que declara d8— y suelta la posicion de depuracion
+	// pegada a la ultima instruccion, que es la politica del `--release` que `apkc` invoca
+	if len(b) != 2680 {
+		t.Errorf("the command wrote %d bytes and the measured assembly is 2680", len(b))
 	}
 	// el archivo por defecto del comando (`build/outputs/classes.dex`) no se crea aqui dentro: si
 	// existiera en esta carpeta, la orden habria escrito donde no la llamamos
@@ -133,10 +135,10 @@ func TestElBinarioDexa(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the command left no file: %v\n%s", err, salida)
 	}
-	// 2696 con el bloque de anotaciones del §59 (2436 con el área de depuración del §56, 2384 sin ella,
-	// 2392 con el relleno que quitó el §55)
-	if len(b) != 2696 {
-		t.Errorf("the binary wrote %d bytes, the assembly measured is 2696", len(b))
+	// 2680 desde el §60 (2696 con el bloque de anotaciones del §59, 2436 con el área de depuración del
+	// §56, 2384 sin ella, 2392 con el relleno que quitó el §55)
+	if len(b) != 2680 {
+		t.Errorf("the binary wrote %d bytes, the assembly measured is 2680", len(b))
 	}
 	if _, err := readDex(b); err != nil {
 		t.Errorf("the binary's own output does not read back: %v", err)

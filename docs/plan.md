@@ -131,17 +131,25 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   canónico (los índices salen de `d8`, no de un capricho nuestro) y `map_list`.
   **Hecho y medido**: internadas desde los `.class`, las tablas son iguales en contenido y en orden a
   las de `d8` (§19), y el fichero completo lo ensambla `apkc/dexarma.go` con su `map_list`, su firma
-  `sha1` y su `adler32` (§22). Con el bloque de anotaciones emitido (§59) el fichero entero son **2696 bytes
-  contra los 2844 de `d8`**, con las mismas 17 entradas de `map_list` y las mismas cuentas de área.
+  `sha1` y su `adler32` (§22). Con el bloque de anotaciones emitido (§59) el fichero entero eran 2696 bytes;
+  con los `type_list` internados por contenido (§60) son **2680 contra los 2844 de `d8`**, con las mismas
+  17 entradas de `map_list` y las mismas cuentas de área.
 - **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. **Medida sección por
   sección** (§22): `type_ids`, `field_ids` y `method_ids` salen byte a byte iguales; `proto_ids`
   difiere solo en los offsets absolutos; cada `string_data_item` es idéntico. **Desde el §59 también el
   bloque de anotaciones: los ocho `annotation_item` son los mismos bytes y el volcado `dexdump -a` es
-  idéntico línea por línea**, así que lo que falta para que el fichero entero sea igual se redujo a cuatro
-  cosas medidas: la cadena con la que `d8` se firma a sí mismo (no la copiamos, §22), **8 `debug_info_item`
-  contra sus 7** (dos de nuestros cuerpos llevan una última posición de línea que él descarta; la regla con
-  la que la descarta no está medida), **9 `type_list` contra sus 8** y el orden de los ítems dentro del área
-  de anotaciones. El fichero entero era 2384 bytes hasta el §56 y 2436 hasta el §58 (2392 con el relleno que
+  idéntico línea por línea**, y **desde el §60 también el área de `type_list`: byte a byte igual, ocho
+  listas con los mismos offsets**. Lo que falta para que el fichero entero sea igual son tres cosas, todas
+  medidas y con la decisión escrita: (1) **la cadena con la que `d8` se firma a sí mismo**
+  (`~~D8{…,"sha-1":"…","version":"9.2.4-dev"}`, §60) —se **descarta a propósito**: nombra otra herramienta
+  y trae un digest del fichero que esa escribió; `TestLaMarcaDeOrigenDeD8NoSeCopia` vigilando está—;
+  (2) **el orden de los ítems dentro del área de anotaciones** (mismos bytes, otra sucesión);
+  (3) **la unidad dalvik de algunas posiciones de línea**, que es el reflejo de la diferencia de
+  numeración de registros ya aceptada abajo. Las demás cuentas ya cuadran: **siete `debug_info_item` como
+  los suyos** (§60 adoptó la política de posiciones del `--release`, que es el modo con el que `apkc`
+  invoca a `d8`, y comprobó en el aparato que la traza de una excepción sigue diciendo la línea de la
+  sentencia), 8 `type_list`, 52 cadenas, 23 tipos, 9 protos, 4 campos, 17 métodos, 6 `class_defs`.
+  El fichero entero era 2384 bytes hasta el §56 y 2436 hasta el §58 (2392 con el relleno que
   quitó el §55). En los cuerpos la
   secuencia de instrucciones, los índices y el número de palabras coinciden en los nueve métodos;
   seis de nueve salen idénticos hasta los números de registro (§21). **El oráculo que cierra el
@@ -151,7 +159,8 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   `dexdump rc 0` (después de corregir los cuatro defectos de layout que ese párrafo destapó) y el apk del
   navegador instala, arranca y ejecuta el `onClick`. Con las anotaciones puestas, la misma prueba vuelve a
   pasar: `dexdump` verificando, `pm install` en `Success`, actividad arrancada en frío y `dexdump -a`
-  idéntico al de `d8` sobre el mismo proyecto (§59).
+  idéntico al de `d8` sobre el mismo proyecto (§59); y con la política de líneas del `--release`, otra vez
+  y en los dos caminos de la herramienta (`§60`).
 - **2G.3** `class_data_item`, `code_item` y `debug_info_item`: la codificación de instrucciones en sí.
   **Leídos y casados con `javap`** (§20): la cabecera del `code_item` son dieciséis bytes y las
   instrucciones empiezan en +16, con `ins_size` igual al `args_size` de `javap` en los nueve métodos,
@@ -162,8 +171,10 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   instrucciones, sobre los mismos índices y con el mismo número de palabras que `d8`, y seis de nueve
   salen idénticos hasta los números de registro. **El `debug_info_item` está hecho y medido** (§56):
   formato casado contra las palabras de `d8` con una sonda propia y con `dexdump -d` del aparato, emisor
-  en `apkc/dexdebug.go`, área `0x2003` en el mapa, items idénticos compartiendo offset (nueve cuerpos del
-  fixture dan ocho items, como deduplica `d8`) y trazas con número de línea en el `logcat` del teléfono.
+  en `apkc/dexdebug.go`, área `0x2003` en el mapa, items idénticos compartiendo offset (los nueve cuerpos
+  del fixture dan siete items, los mismos que `d8`: ocho hasta el §59, que contaba la posición de la llave
+  de cierre que el `--release` no escribe, corregido en el §60) y trazas con número de línea en el `logcat`
+  del teléfono.
   **Hecho también el defecto de numeración encontrado de paso (§57)**: el traductor numeraba los locales
   como en el `.class`, así que un método con **más locales que argumentos** producía un dex que ART
   rechazaba con `instance field access on object that has non-reference type Undefined`. Corregido con una
@@ -177,14 +188,17 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   `/range` o `/from16`: el traductor los rechaza por nombre en vez de adivinar la palabra.
 - **2G.4** Comparación byte a byte con `d8` sobre **los mismos `.class`**. Si difiere, `xxd` y escribir
   a qué sección corresponde; se acepta diferencia documentada **solo si el apk se instala y arranca**.
-  **Diferencia escrita y condición cumplida**: tras el §59 la lista es corta y está medida —la cadena
-  `~~D8{…}` con la que `d8` se firma a sí mismo (no la copiamos, §22), un `debug_info_item` de más porque
-  nosotros guardamos una posición de línea final que él descarta (8 contra 7), un `type_list` de más (9
-  contra 8), el orden de los ítems dentro del área de anotaciones y los `parameters_off` absolutos de
-  `proto_ids`—. El **bloque de anotaciones ya no es diferencia: se emite**, y sus ocho `annotation_item`
-  son los mismos bytes que los de `d8` (§59). Lo que quedaba fuera tras el §56 se redujo a eso, y el apk con
-  esa diferencia se instala y arranca desde el §55, con las líneas de
-  depuración leyendo en el `logcat` desde el §56.
+  **Diferencia escrita y condición cumplida**: tras el §60 la lista se queda en tres ítems, todos medidos y
+  con su decisión escrita —la cadena `~~D8{…}` con la que `d8` se firma a sí mismo, **descartada a propósito
+  porque nombra otra herramienta y trae un digest del fichero que esa escribió** (§60, con prueba
+  vigilante), el orden de los ítems dentro del área de anotaciones y los offsets absolutos (`parameters_off`
+  de `proto_ids` y alguna unidad de posición de línea), que son reflejo de la numeración de registros ya
+  aceptada—. Ya **no son diferencia**: el bloque de anotaciones (sus ocho `annotation_item` son los mismos
+  bytes, §59), el área de `type_list` (byte a byte igual, ocho listas, §60) y la cuenta de
+  `debug_info_item` (siete como los suyos, porque adoptamos la política de posiciones del `--release` con la
+  que `apkc` invoca a `d8`, §60). El apk con lo que queda se instala y arranca desde el §55, con las líneas
+  de depuración leyendo en el `logcat` desde el §56 y **la traza de una excepción diciendo la misma línea en
+  los dos caminos de la herramienta desde el §60**.
 - **2G.5** La frontera declarada y probada por separado: lambdas, `invokedynamic`, default methods,
   y cualquier cosa que dependencias ajenas aporten. **Fuera del subconjunto**, con el motivo escrito.
   **Hecha y probada** (§21 y §23): el lector de `.class` rechaza `invokedynamic`, `dynamic` y los
