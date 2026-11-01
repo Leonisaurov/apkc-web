@@ -189,11 +189,14 @@ func readClassFull(data []byte) (classFull, error) {
 					m.Thrown = append(m.Thrown, x.classDescriptor(idx))
 				}
 			case "MethodParameters":
-				// JVMS 4.7.10: un conteo y por cada parametro el indice del nombre (0 si no esta
-				// declarado) y sus flags, que son los del .class y no los del dex
+				// JVMS 4.7.10: el conteo es un u1 (medido sobre el .class de la anonima del studio:
+				// el cuerpo sale 01 00 00 80 10, o sea un parametro, nombre ausente y flags 0x8010 =
+				// final|mandated, que es el valor que d8 copia en la anotacion) y por cada parametro
+				// el indice del nombre, que es 0 cuando no esta declarado, y sus flags: los del .class
+				// y no los del dex
 				m.Parameters = true
 				r := &cursor{b: a.body}
-				for i, n := 0, r.u2(); i < n && !r.failed(); i++ {
+				for i, n := 0, r.u1(); i < n && !r.failed(); i++ {
 					var nombre string
 					if idx := r.u2(); idx != 0 {
 						nombre = p.utf[idx]
@@ -218,15 +221,13 @@ func readClassFull(data []byte) (classFull, error) {
 		case "RuntimeVisibleAnnotations":
 			cf.VisibleAnnotations = a.body
 		case "EnclosingMethod":
-			// JVMS 4.7.7: la clase que envuelve y, cuando los hay, el nombre y el descriptor del
-			// metodo que envuelve. d8 lo convierte en Ldalvik/annotation/EnclosingMethod;.
+			// JVMS 4.7.7: dos u2, la clase que envuelve y UNA entrada del pool con el metodo. d8 lo
+			// convierte en Ldalvik/annotation/EnclosingMethod; con un indice de method_ids, asi que
+			// el nombre y el descriptor hacen falta aqui.
 			cf.EnclosingMethod = true
 			r := &cursor{b: a.body}
 			cf.Enclosing.clase = x.classDescriptor(r.u2())
-			if idx := r.u2(); idx != 0 {
-				cf.Enclosing.nombre = p.utf[r.u2()]
-				cf.Enclosing.desc = p.utf[r.u2()]
-			}
+			cf.Enclosing.nombre, cf.Enclosing.desc = x.metodoDelPool(r.u2())
 		case "EnclosingClass":
 			cf.EnclosingClass = true
 		case "Signature":
@@ -343,6 +344,26 @@ func (x poolIndex) nameAndType(i int) (string, string) {
 		return "", ""
 	}
 	return x.p.utf[int(b[0])<<8|int(b[1])], x.p.utf[int(b[2])<<8|int(b[3])]
+}
+
+// metodoDelPool: nombre y descriptor de la entrada que nombra el segundo campo del atributo
+// EnclosingMethod. Medido con `javap -v` sobre la anonima del studio (2026-11-01): javac 21 deja un
+// NameAndType (#37 = NameAndType #38:#39 -> onCreateOptionsMenu, (Landroid/view/Menu;)Z), no dos
+// indices separados; la especificacion habla de una referencia a metodo, que trae delante el indice
+// de la clase. Se prueban las dos formas y lo que no resulte en un descriptor sale vacio.
+func (x poolIndex) metodoDelPool(i int) (string, string) {
+	nombre, desc := x.nameAndType(i)
+	if nombre != "" && len(desc) > 0 && desc[0] == '(' {
+		return nombre, desc
+	}
+	b := x.p.body[i]
+	if len(b) >= 4 {
+		nombre, desc = x.nameAndType(int(b[2])<<8 | int(b[3]))
+		if nombre != "" && len(desc) > 0 && desc[0] == '(' {
+			return nombre, desc
+		}
+	}
+	return "", ""
 }
 
 // refOf takes a fieldref, methodref or interfaceMethodref apart: owner in descriptor form, plus

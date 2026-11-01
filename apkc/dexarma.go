@@ -78,6 +78,10 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	// los pcs del `.class`) y va detras del codigo, en el orden en que lo dejo `d8`: su mapa declara
 	// `0x2001` y despues `0x2003`
 	depuracion, relDepuracion, cuantasDepuracion := td.areaDebug(clases, pcsMetodo)
+	// las tres areas de anotaciones (formato del §58, emisión y cuentas del §59) se planifican aqui, con
+	// las tablas ya ordenadas; los u32 que se apuntan entre ellas se parchean cuando las bases esten, como
+	// el debug_info
+	plan := td.armaAnotaciones(clases, reglasDeTodas(clases))
 
 	// 2. bases, en el orden de d8
 	off := int(dexHeaderSize)
@@ -105,6 +109,9 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	}
 	poner(0x1001, listas, 4)
 	poner(0x2002, cadenas, 1)
+	// los annotation_item van despues de las cuerdas y antes del class_data, que es el orden en que los
+	// declaro d8 en las dos sondas (§58)
+	poner(0x2004, plan.items, 1)
 	// los class_data_item dependen de los code_off absolutos, que ya se pueden saber
 	absCodigo := map[[2]string]uint32{}
 	for k, r := range relCodigo {
@@ -116,6 +123,9 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	// class_data: es el orden en que lo dejó d8 (class_data 2659..2746, arrays desde 2746, sin
 	// separación y sin alinear: el suyo cae en 2746, que no es múltiplo de cuatro)
 	poner(tipoArrayCodificado, arrays, 1)
+	// y detras de los arrays van los sets y los directorios de anotaciones, como en d8
+	poner(0x1003, plan.sets, 4)
+	poner(0x2006, plan.dirs, 4)
 
 	// 3. ahora sí, los contenidos que nombran offsets absolutos
 	stringIDs := []byte{}
@@ -172,7 +182,13 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		} else {
 			classDefs = putU32(classDefs, uint32(td.stringIdx[cf.SourceFile]))
 		}
-		classDefs = putU32(classDefs, 0) // annotations_off: este fork no emite anotaciones
+		// annotations_off: el directorio de esta clase, o cero si no lleva anotaciones (medido en el §59:
+		// MainActivity sale sin directorio en el fichero de d8)
+		if r, ok := plan.offClase[cf.Name]; ok {
+			classDefs = putU32(classDefs, uint32(base[0x2006])+r)
+		} else {
+			classDefs = putU32(classDefs, 0)
+		}
 		classDefs = putU32(classDefs, uint32(base[0x2000])+relDatos[cf.Name])
 		// static_values_off: el encoded_array_item con las constantes de los campos estaticos, o
 		// cero si la clase no tiene ninguno (medido: R$id, R$layout y R$style lo llevan; las otras
@@ -191,17 +207,21 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		{0x0001, stringIDs}, {0x0002, typeIDs}, {0x0003, protoIDs}, {0x0004, fieldIDs},
 		{0x0005, methodIDs}, {0x0006, classDefs}, {0x2001, codigo}, {0x2003, depuracion},
 		{0x1001, listas},
-		{0x2002, cadenas}, {0x2000, datos}, {tipoArrayCodificado, arrays},
+		{0x2002, cadenas}, {0x2004, plan.items}, {0x2000, datos}, {tipoArrayCodificado, arrays},
+		{0x1003, plan.sets}, {0x2006, plan.dirs},
 	}
+	// los u32 que las areas de anotaciones se apuntan entre si, ya con las bases puestas
+	plan.aplica(base)
 
 	// 4. map_list: las entradas, en orden ascendente de offset, como las escribió d8
 	entradas := [][3]uint32{{uint32(0x0000), 1, 0}}
-	tipos := []dexKind{0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x2001, 0x2003, 0x1001, 0x2002, 0x2000, tipoArrayCodificado}
+	tipos := []dexKind{0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x2001, 0x2003, 0x1001, 0x2002, 0x2004, 0x2000, tipoArrayCodificado, 0x1003, 0x2006}
 	cuantos := map[dexKind]uint32{
 		0x0001: uint32(len(td.strings)), 0x0002: uint32(len(td.types)), 0x0003: uint32(len(td.protos)),
 		0x0004: uint32(len(td.fields)), 0x0005: uint32(len(td.methods)), 0x0006: uint32(len(clases)),
 		0x2001: uint32(len(cuerpos)), 0x2003: uint32(cuantasDepuracion), 0x1001: uint32(cuantasListas),
-		0x2002: uint32(len(td.strings)),
+		0x2002: uint32(len(td.strings)), 0x2004: uint32(plan.nItems), 0x1003: uint32(plan.nSets),
+		0x2006: uint32(plan.nDirs),
 		0x2000: uint32(len(clases)), tipoArrayCodificado: uint32(cuantosArrays),
 	}
 	mapOff := alignUp(off, 4)
@@ -245,8 +265,15 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 		b = putU32(b, cuantos[k])
 		b = putU32(b, uint32(base[k]))
 	}
-	// data_size y data_off: el bloque de datos va del primer code_item al final del class_data
-	b = putU32(b, uint32(base[tipoArrayCodificado]+len(arrays)-base[0x2001]))
+	// data_size y data_off: el bloque de datos va del primer code_item al final de la ultima area que
+	// escribimos (los sets y los directorios de anotaciones quedaron detras de los arrays, §59)
+	finDatos := base[tipoArrayCodificado] + len(arrays)
+	for _, a := range areas {
+		if f := base[a.kind] + len(a.datos); a.kind != 0x0000 && a.kind != 0x1000 && f > finDatos {
+			finDatos = f
+		}
+	}
+	b = putU32(b, uint32(finDatos-base[0x2001]))
 	b = putU32(b, uint32(base[0x2001]))
 
 	for _, a := range areas {

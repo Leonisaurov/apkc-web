@@ -3084,7 +3084,7 @@ además de los argumentos y la numeración nueva cambia algún formato de regist
 ## 58. El bloque de anotaciones, medido byte a byte (y por qué es la diferencia del 2G.4, no el 2G.3)
 
 Es lo único que separa nuestro `classes.dex` del de `d8` desde el §56, aparte de la cadena con la que
-`d8` se firma a sí misma. Está **medido y sin emitir**: `annotations_off` sale cero en nuestras clases. La
+`d8` se firma a sí misma. Está **medido**, y en ese momento aún **sin emitir**: `annotations_off` salía cero en nuestras clases. La
 medición va aquí para que no se vuelva a descubrir a ciegas. Dos sondas —`$PREFIX/tmp/e57/an`, una anónima
 dentro de un método, y `$PREFIX/tmp/e58/an`, con `@Deprecated` en clase, campo, campo estático y método—,
 ambas compiladas con el `javac` del teléfono y el `d8` del SDK y leídas con
@@ -3146,4 +3146,85 @@ que resolverlo por medición y no por ajuste.
 
 Por eso esto pertenece al **2G.4**, no al 2G.3: el 2G.4 acepta la diferencia documentada *si el apk se
 instala y arranca*, y esa condición se cumplió en el §55 y volvería a comprobarse igual al emitirlas.
+**Y se emitió**: el párrafo siguiente escribe el bloque y comprueba contra ese mismo oráculo.
+
+## 59. El bloque de anotaciones **se emite**, y `dexdump -a` ya no distingue el nuestro del de `d8`
+
+Con lo medido en el §58 escrito en `apkc/dexanota.go`, el fixture del studio pasa de **2436 a 2696 bytes** y
+el `map_list` de 14 a **17 entradas** —las mismas que declara `d8` sobre las mismas seis clases—, con las
+tres áreas nuevas en el mismo orden y con las mismas cuentas que él: `annotation_item` **8** (el suyo en 2311),
+`class_annotation_set_item` **6** (en 2484) y `annotations_directory_item` **5** (en 2548). El proyecto del
+contador pasa de 2724 bytes (§54) a **3108** y su apk a 10292. Lo que sigue son tres defectos que salieron
+del camino, no adornos: cada uno se vio porque las tablas dejaron de coincidir byte a byte o porque `dexdump`
+lo contó distinto.
+
+**Defecto 1 — el atributo `EnclosingMethod` son dos `u2`, no tres.** `apkc/classreader.go` leía
+`class_index`, `name_index`, `descriptor_index`; el JVMS 4.7.7 y `javap -v` sobre la anónima del fixture
+(`EnclosingMethod: #35.#37`, y `#37 = NameAndType #38:#39 // onCreateOptionsMenu:(Landroid/view/Menu;)Z`)
+dicen `class_index` y **una sola entrada del pool** que nombra al método. Con la lectura vieja salían
+`nombre=""` y `desc=""`, y el internado se llevaba por delante una cadena vacía, un proto `()""` y un
+`method_id` fantasma: `type_ids`, `field_ids` y `method_ids` dejaron de ser idénticos a los de `d8` (53
+cadenas contra 52, 10 protos contra 9, 18 métodos contra 17). Ahora `metodoDelPool` resuelve las dos formas
+(NameAndType directo, o `CONSTANT_Method`/`Methodref` con el índice de clase delante) y **devuelve vacío si
+el resultado no empieza por `(`**: lo no medido se queda sin emitir en vez de inventarse un índice. Resultado:
+52/23/9/4/17 otra vez, y el test de las tablas fijas vuelve a callar.
+
+**Defecto 2 — `parameters_count` es un `u1`.** Leído como `u2`, el cuerpo `01 00 00 80 10` de la anónima
+(un parámetro, nombre ausente, flags `0x8010` = final|mandated) se desfasaba: el conteo salía 256, el índice
+de nombre se comía los `00 80` y el de los flags se caía del atributo, así que el array emitido decía
+`accessFlags={0}` donde `d8` escribe `{32784}`. Con el `u1` la fila sale `{nombre: access:32784}` y el
+`dexdump -a` del aparato coincide.
+
+**Defecto 3 — `accessFlags` de `@InnerClass` viaja **tal cual lo dejó javac en `InnerClasses`**.** Medido:
+`25` (0x19, public+static+final) para `R$id`, `R$layout` y `R$style`, y `0` para la anónima. Este fork lo
+pasaba por `accesoClaseDex`, que en el dex junta public y static en el mismo bit y habría escrito otro
+número. Los flags del `.class` no se traducen aquí.
+
+**Lo que manda el oráculo, no el manual.** El índice de las listas del directorio es un **`u32` entero**: `d8`
+escribe `06 00 00 00 b4 09 00 00` (método 6, set en 2484) y con un uleb el fichero queda dos bytes desfasado.
+Las reglas de qué va dónde, leídas de su fichero: `@EnclosingMethod` (valor = `method_id` del método que
+envuelve) para la anónima; `@EnclosingClass` (valor = tipo del exterior) para una clase miembro **con nombre**;
+`@InnerClass` para toda clase que tenga su propia fila en `InnerClasses`, con `name` nulo si es anónima;
+`@MemberClasses` en el exterior con un array de los tipos miembro **en el orden de las filas del `.class`**
+(en `R`: style, layout, id, que es como javac las escribe); `@MethodParameters` solo en los métodos cuyo
+`.class` trae el atributo, con los dos arrays paralelos. `MainActivity` no lleva directorio: su
+`annotations_off` es cero, como el nuestro. Los `annotation_item` **se comparten entre destinos**: el
+`@EnclosingClass` que en `d8` está en 2348 (en el nuestro en 2192) lo apuntan `R$id`, `R$layout` y `R$style`;
+por eso diez referencias dan ocho ítems, y ocho declara el mapa. Lo que **no** coincide es el orden de los ítems
+dentro del área (`d8` pone primero el `MethodParameters` de la anónima; nosotros, los de clase) —los bytes de
+cada ítem son los mismos, y así lo comprueba el test.
+
+**No se emite `Signature`**, por el mismo motivo del §58: `d8` copia el atributo troceado a su manera en un
+array de cadenas (`"<T::" "Ljava/lang/CharSequence;" ">" "Ljava/lang/Object;"`) y esa troceadura no está
+medida; además el subconjunto de Java de `apkc compile` no tiene parámetros de tipo.
+
+**Lo que queda distinto sobre las mismas seis clases, contado hoy** (mapeo offset a offset de los dos
+`map_list` y volcado de las dos áreas con el lector del §16): las 52 cadenas (falta la `~~D8{…}` de `d8`, §22),
+**8 `debug_info_item` contra los 7 que declara `d8`** —dos de nuestros items llevan una última posición de
+línea que su equivalente de `d8` no lleva: el nuestro de `onMenuItemClick` es `16 01 00 0e c3 00` y el suyo
+`16 01 00 0e 00`; el nuestro de `onCreateOptionsMenu` es `14 01 00 0e e6 00` y el suyo `14 01 00 0e 00`. Esos
+bytes de más impiden que dos cuerpos compartan el item, y por eso él se queda en siete y nosotros en ocho;
+la regla por la que `d8` descarta esa posición final **no está medida**, y se queda escrita como diferencia—,
+**9 `type_list` contra sus 8**, y el orden de los ítems dentro del área de anotaciones. Todo lo demás —las
+cinco tablas de índices, `class_defs`, los tres directorios, los seis sets y los ocho ítems byte a byte—
+coincide.
+
+**Comprobaciones (aparato Android 15 por `rish`, y tests permanentes).** `apkc/dexanota_test.go` decodifica
+las tres áreas con el lector del §16 y exige que el volcado en texto del nuestro sea **igual línea por línea**
+al del fixture de `d8`, y que el multiconjunto de bytes de los `annotation_item` sea el mismo (8 distintos).
+Sobre el proyecto del contador, construido con `--linker go --compiler go` en 521 ms: `dexdump` **sin `-j`**
+(verificación encendida) sobre nuestro dex → `rc 0`; `d8 --release` lo re-dexa → `rc 0` (3108 → 3092);
+y el bloque `dexdump -a` —21 líneas— sale **idéntico con `diff` mudo** contra (i) el re-dex de `d8` sobre
+nuestro fichero y (ii) el dex que `d8` saca de las clases de `javac` del mismo proyecto
+(`$PREFIX/tmp/e54/proyecto-javac.dex`, 3188 bytes, 19,28 s de build con JVM contra 521 ms nuestros). En
+`pm install -r` → `Success`; `am start -W -S` → `Status: ok`, `LaunchState: COLD`, 1171 ms, `pidof` 5200 vivo,
+y `dumpsys package dexopt` lo marca `[status=verify]`. Como `onCreate` construye el oyente anónimo, esa clase
+anotada se instancia al arrancar: el cargador de ART lee su `annotations_off` sin quejarse. `apksigner` (v1 y
+v2), `zipalign -c -p 4`, `zipcheck.py`, `aapt2 dump badging` y `apkc verify` siguen aprobando el apk. Suite:
+**211 PASS + 2 SKIP** nativa, **189 PASS + 24 SKIP** en el hospedador con forma de navegador. El gate de
+`studio/e2e.sh`, entero y con el cambio hecho: **todo en orden**, con la pestaña en **41 comprobaciones** y
+sus apks de chromium re-medidos —el del proyecto generado **10030 bytes** (igual entrada por entrada al
+nativo, `d8` releyendo su dex), el del fuente escrito a mano **9729**, el de la app del contador **10305** y
+el de la pestaña que compila **9255**—. El tiempo del camino sin procesos del contador sigue en **521 ms**.
+
 

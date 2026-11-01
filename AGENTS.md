@@ -96,9 +96,11 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   bytes, cuyo resultado verifica `apksigner` (v1 y v2), `zipalign -c -p 4`, `jarsigner -verify` y
   `zipcheck.py`. Es la primera pieza de un build real que corre del lado del cliente.
 - **`apkc dex` existe y corre dentro de wasm** (§23, rama `web`): `.class` -> `classes.dex` en Go, sin
-  `d8` ni proceso. Sobre el proyecto del studio: 2436 bytes (2392 hasta el §55, que quitó el relleno
-  entre `class_data_item`, y 2436 desde el §56, que añade el área de depuración; la diferencia con los
-  2844 de `d8` es hoy el bloque de anotaciones y su marca de origen), con
+  `d8` ni proceso. Sobre el proyecto del studio: 2696 bytes (2392 hasta el §55, que quitó el relleno
+  entre `class_data_item`; 2436 desde el §56, que añade el área de depuración; 2696 desde el §59, que emite
+  el bloque de anotaciones; la diferencia con los
+  2844 de `d8` son hoy su marca de origen, un `debug_info_item` y un `type_list` de más y el orden de los
+  ítems del área, todo medido en el §59), con
   `type_ids`/`field_ids`/`method_ids` byte a byte iguales y los
   nueve cuerpos con la misma secuencia de instrucciones, los mismos índices y el mismo número de
   palabras. El oráculo que lo cierra: `d8` lee el dex que escribimos y lo re-dexa con `rc 0`, y el
@@ -143,7 +145,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   memoria), y el aviso de «intermitencia de OPFS» del §39 era en realidad el primero.
 - **Y también el proyecto que la página genera** (§46): con la clase anónima del botón, el `@+id` y el
   `@style`, chromium escribe los cinco ficheros en OPFS con el propio `buildProject`, saca **seis clases y
-  2436 bytes de dex** (los mismos del §42 y del §44) y un apk de 9832 bytes **igual entrada por entrada al
+  2696 bytes de dex** (2436 hasta el §58; el bloque de anotaciones del §59 los sustituye) y un apk de 10030 bytes **igual entrada por entrada al
   nativo**, y `d8` releee ese dex con `rc 0`. Lo pide `studio/e2e.sh` (bloque 4c).
 - **El `android.jar` entra sin red por el camino del usuario y dura** (§46, comprobaciones 9 y 9b): se le
   pone en el `<input type="file">` con `DOM.setFileInputFiles` de CDP, la página lo guarda en OPFS con
@@ -230,7 +232,8 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   Prueba: `TestLaFramePoneLosArgumentosArriba`. En el aparato: la fuente que antes no verificaba ahora da
   `dexdump rc 0`, instala, corre y imprime `ArithmeticException: divide by zero at
   com.myapp.MainActivity$1.onClick(MainActivity.java:21)`.
-- **El 2G.3 está cerrado; lo que separa nuestro fichero del de `d8` son las anotaciones, y están medidas**
+- **El 2G.3 está cerrado; lo que separaba nuestro fichero del de `d8` eran las anotaciones, medidas en el §58
+  y emitidas en el §59**
   (§58): `annotation_item` (`0x2004`, alineación 1) = visibilidad + `type_idx` + `size` + pares
   `name_idx`/`encoded_value`; el `encoded_value` lleva el tipo en los **cinco bits bajos** y la anchura en
   los **tres altos** (`arg + 1` bytes), con `0x1e` null, `0x17` cadena, `0x18` tipo, `0x1a` método y `0x1c`
@@ -243,15 +246,34 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   si el `.class` trae el atributo —lo que javac sí pone en el `<init>` sintético de la anónima; nuestro
   emisor también, y **si al emitir las anotaciones el doble oráculo diverge, eso se resuelve midiendo**,
   no ajustando—. El lector ya guarda esos contenidos (`apkc/classreader.go`: `Enclosing`,
-  `Parametros`, `Signature`); falta el emisor, y es diferencia **aceptada por el 2G.4** porque el apk se
-  instala y arranca desde el §55.
+  `Parametros`, `Signature`), y el emisor está en el párrafo siguiente.
+- **El bloque de anotaciones se emite, y `dexdump -a` ya no distingue el nuestro del de `d8`** (§59):
+  `apkc/dexanota.go` escribe las tres áreas (`0x2004` items, `0x1003` sets, `0x2006` directorios) con sus
+  cuentas en el `map_list` —17 entradas, las mismas de `d8`—, los items idénticos compartidos (10
+  referencias, 8 items) y `annotations_off` cero en quien no lleva nada, como `d8` con `MainActivity`. Reglas
+  que dijo el oráculo: **el índice de las listas del directorio es un `u32` entero** (un uleb desfasa el
+  fichero dos bytes), `accessFlags` de `@InnerClass` **viaja sin traducir** (25 = los flags del `.class`, no
+  `accesoClaseDex`), `@MemberClasses` lleva los tipos miembro **en el orden de las filas del `.class`**, y
+  `@EnclosingClass` es para las miembro **con nombre** (la anónima usa `@EnclosingMethod`). Tres defectos
+  salieron del camino: leer `EnclosingMethod` como tres `u2` cuando son **dos** (el segundo es una entrada del
+  pool con nombre *y* descriptor; de ahí salían una cadena vacía, un proto `()""` y un `method_id` fantasma
+  que rompían la identidad byte a byte de las tablas fijas), el `parameters_count` de `MethodParameters`
+  leído como `u2` siendo **`u1`** (el array de flags salía `{0}` en vez de `{32784}`) y la conversión de flags
+  de `@InnerClass`. Prueba permanente: `apkc/dexanota_test.go` decodifica las tres áreas y exige volcado
+  idéntico y los mismos bytes de item contra el fixture de `d8`. En el aparato, sobre el proyecto del
+  contador: `dexdump` **verificando** `rc 0`, `d8 --release` re-dexa `rc 0`, y el bloque `dexdump -a` de 21
+  líneas sale **igual con `diff` mudo** contra el dex de `d8` hecho desde las clases de `javac` del mismo
+  proyecto; `pm install -r` `Success`, arranque en frío y `[status=verify]` en `dexopt`. Signature (genéricos)
+  sigue sin emitirse: la troceadura que hace `d8` no está medida y el subconjunto de Java no tiene parámetros
+  de tipo.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
   `"muchos 4"`. Es decir: corren las dos ramas del `if`, la suma sobre el campo de instancia capturado, el
   estático del exterior, la concatenación de `StringBuilder`, la llamada virtual y el `Toast` (capas
-  `Toast#…` en `SurfaceFlinger`), con `FATAL EXCEPTION` **0 veces**. Lo que sigue sin medir son los
-  `encoded_value` que no sean enteros.
+  `Toast#…` en `SurfaceFlinger`), con `FATAL EXCEPTION` **0 veces**. Desde el §59 el `encoded_value` de las
+  cadenas, los tipos, los métodos y los arreglos también está medido y emitido: lo único que sigue sin
+  medirse es la troceadura de `Signature`.
 - **`apkc build --linker go --compiler go` no levanta ningun proceso** (parrafo 44): recursos en Go, Java en
   Go, dex en Go, empaquetado y firma en Go. Nativo en frio: 255 ms y `build/app.apk` de 9868 bytes, que
   `apksigner` (v1 y v2), `zipalign -c -p 4`, `aapt2 dump badging`, `aapt2 dump resources` y `zipcheck.py`
@@ -267,9 +289,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   la captura. `apkc/compilar.go` lo expone como comando, en la lista de los que **no** sondean el SDK.
   **El oraculo es doble y paso en los dos binarios**: `javap -c -p` sobre nuestras seis clases imprime las
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
-  **el mismo fichero byte a byte** que sobre las otras: 2436 = 2436, `cmp` mudo. Dentro del hospedador con
+  **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **209 PASS + 2 SKIP** nativa y **187 PASS + 24 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **211 PASS + 2 SKIP** nativa y **189 PASS + 24 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

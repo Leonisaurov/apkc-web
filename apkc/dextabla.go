@@ -184,6 +184,10 @@ func (t *dexTables) collectClasses(classes []classFull) error {
 			}
 		}
 	}
+	// Las areas de anotaciones se escriben despues de ordenar las tablas, pero lo que nombran tiene
+	// que estar internado antes: el metodo que envuelve es un method_id, y el nombre de un miembro,
+	// una cadena. Es idempotente con lo de arriba y lo garantiza.
+	t.internAnotaciones(reglasDeTodas(classes))
 	return nil
 }
 

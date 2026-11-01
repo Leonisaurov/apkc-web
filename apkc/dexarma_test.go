@@ -39,7 +39,8 @@ func TestElDexArmadoSeLeeConsigoMismo(t *testing.T) {
 	if err := d.Integrity(); err != nil {
 		t.Errorf("the signature or the checksum of what we wrote does not verify: %v", err)
 	}
-	cuentas := map[dexKind]int{0x0001: 52, 0x0002: 23, 0x0003: 9, 0x0004: 4, 0x0005: 17, 0x0006: 6, 0x2003: 8}
+	cuentas := map[dexKind]int{0x0001: 52, 0x0002: 23, 0x0003: 9, 0x0004: 4, 0x0005: 17, 0x0006: 6,
+		0x2003: 8, 0x2004: 8, 0x1003: 6, 0x2006: 5}
 	for k, q := range cuentas {
 		got := 0
 		for _, e := range d.maps {
@@ -50,14 +51,18 @@ func TestElDexArmadoSeLeeConsigoMismo(t *testing.T) {
 		// 52 cadenas y no las 53 de d8: la que falta es su propia marca de origen, el string
 		// ~~D8{"backend":"dex",...} que la herramienta se escribe a si misma. Copiarla seria
 		// mentir sobre quien compilo (docs/evidencia.md §22)
+		//
+		// Las tres cuentas de anotaciones (8 items, 6 sets, 5 directorios) son **las mismas que
+		// declara el mapa del fichero de d8**, medida entrada por entrada en el parrafo 59: los
+		// items identicos se comparten entre destinos, como alli.
 		if got != q {
 			t.Errorf("section %s has %d items, expected %d", k, got, q)
 		}
 	}
-	// el map_list declara las doce áreas que escribimos (con la de depuración del §56), la cabecera y
-	// el propio mapa
-	if len(d.maps) != 14 {
-		t.Errorf("%d map_list entries, expected 14 (header, twelve areas, the map itself)", len(d.maps))
+	// el map_list declara las quince áreas que escribimos (las doce del §56 más las tres de
+	// anotaciones del §59), la cabecera y el propio mapa: diecisiete entradas, las mismas que d8
+	if len(d.maps) != 17 {
+		t.Errorf("%d map_list entries, expected 17 (header, fifteen areas, the map itself)", len(d.maps))
 	}
 	n := 0
 	for _, e := range d.maps {
