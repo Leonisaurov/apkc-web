@@ -3021,5 +3021,63 @@ frame (`v8`/`v9`). Mientras `locales == ins` las dos cuentas coinciden, y por es
 hasta hoy (el `onClick` del contador: dos locales y dos argumentos) salía bien. En cuanto un método tiene
 más locales que argumentos el dex sale **inverificable**. Hay que remapear la asignación para que los
 argumentos ocupen la parte alta de la frame, medido contra la numeración de `d8`, y añadir una prueba con
-un método de tres locales y dos argumentos.
+un método de tres locales y dos argumentos. **Arreglado en el §57.**
+
+## 57. La frame: los argumentos van al final, y eso solo lo sabía ART
+
+El defecto del último párrafo del §56, cerrado con medición propia. Lo que decía el aparato al instalar
+una app cuyo `onClick` declaraba dos locales más que argumentos:
+
+```
+E/AndroidRuntime: java.lang.VerifyError: Verifier rejected class com.myapp.MainActivity$1:
+    void com.myapp.MainActivity$1.onClick(android.view.View) failed to verify:
+    [0x0] instance field access on object that has non-reference type Undefined
+```
+
+Medido en nuestro `code_item`: `registers=10`, `ins=2`, y el cuerpo leía `this` en **`v6`**. La numeración
+de `d8` para la misma forma (sonda `probe/Sonda.java` con `largo(String)`: cuatro huecos JVM —`this`,
+`entrada`, `n`, `m`— y dos argumentos) sale `registers=3`, `ins=2`, y `dexdump -d` muestra
+
+```
+0000: invoke-virtual {v2}, Ljava/lang/String;.length:()I   <- entrada = v2, el ultimo registro
+0006: const/4 v0, #int 3                                    <- n, m y los temporales, por debajo
+000d: iput-object v0, v1, Lprobe/Sonda;.nombre              <- this = v1 = registers - ins
+```
+
+O sea: **los `ins_size` registros últimos de la frame son los argumentos**, y los demás locales y los
+temporales van por debajo. Nuestro traductor copiaba el orden del `.class` (hueco JVM `i` → `v(base+i)`),
+que coincide solo cuando no hay locales extra; con dos locales de más los argumentos caían en `v6`/`v7`
+mientras ART miraba `v8`/`v9`, y `v6` no tenía tipo.
+
+El arreglo está en `apkc/dexinstr.go`, una permutación en `local(n)`: el hueco `n < args` pasa a
+`v(base + locales - args + n)` y los demás a `v(base + n - args)`. Con `locales == args` la fórmula es la
+identidad, así que **no mueve ninguna de las sucesiones ya medidas**: las comparaciones con las palabras de
+`d8` de `dexinstr_test.go` siguen pasando sin retocar una sola palabra, y el fixture sigue en 2436 bytes.
+
+Prueba permanente: `TestLaFramePoneLosArgumentosArriba`, que fija la cuenta (`this` en `v8`, el argumento
+en `v9`, los dos locales del cuerpo en `v6` y `v7` con `registers=10` e `ins=2`) y comprueba que con
+`locales == argumentos` la numeración no se mueve.
+
+Y la prueba en el aparato, con la misma fuente que antes no pasaba el verificador —`int cero = 0;` e
+`int k = pulsos / cero;` dentro del `onClick`, la división en la línea 21 del fuente—:
+
+```sh
+rish -c '/apex/com.android.art/bin/dexdump /data/local/tmp/ours.dex >/dev/null 2>&1; echo rc=$?'  # rc=0
+rish -c 'pm install -r /data/local/tmp/rompe.apk'                                                  # Success
+rish -c 'am start -W -S -n com.myapp/.MainActivity; input tap 1280 837'                             # Status: ok
+# logcat:
+E/AndroidRuntime( 6432): java.lang.ArithmeticException: divide by zero
+E/AndroidRuntime( 6432): 	at com.myapp.MainActivity$1.onClick(MainActivity.java:21)
+```
+
+El `VerifyError` desapareció, el método **corrió** y la traza trae la línea exacta de la división: frame y
+depuración vistas desde fuera en la misma corrida. Lo que esto abre es el caso que el subconjunto todavía
+no cubría —cualquier método con variables locales además de los argumentos—, que hasta ahora producía un
+apk que el teléfono rechazaba en silencio hasta el primer toque.
+
+**Cuentas después de este arreglo.** Suite nativa **209 PASS + 2 SKIP**; en el hospedador con forma de
+navegador **187 PASS + 24 SKIP**; gate entero `rc 0` con **41 comprobaciones**. El fixture sigue en 2436
+bytes y el apk del contador de la pestaña en 10169 (ahí `locales == ins`, así que nada se mueve); el apk
+del fuente escrito a mano pasa de 9638 a **9636** —dos bytes menos, porque en `onCreate` hay un local
+además de los argumentos y la numeración nueva cambia algún formato de registro; no lo he desglosado—.
 

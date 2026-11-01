@@ -158,9 +158,9 @@ de sección, **217 objetos** (53 cadenas, 23 tipos, 9 protos, 4 campos, 17 méto
   fixture dan ocho items, como deduplica `d8`) y trazas con número de línea en el `logcat` del teléfono.
   **Lo que queda del punto: el bloque de anotaciones** (`annotation_item` 0x2004, `annotation_set_item`
   0x1003 y `annotations_directory_item` 0x2006, que `d8` sí escribe y nosotros no: `annotations_off` sale
-  cero). Y un defecto de registro encontrado de paso (§56, último párrafo): el traductor numera los
-  locales como en el `.class`, así que un método con **más locales que argumentos** produce un dex que
-  ART rechaza con `instance field access on object that has non-reference type Undefined`.
+  cero). Y un defecto de registro encontrado de paso, **arreglado y medido en el §57**: el traductor
+  numeraba los locales como en el `.class`, así que un método con **más locales que argumentos** producía
+  un dex que ART rechazaba con `instance field access on object that has non-reference type Undefined`.
   **Sin medir a propósito**: `try_item` y `encoded_catch_handler`, porque ninguno de los nueve métodos
   del fixture los tiene; hará falta un fichero con `try` antes de escribirlos. Lo mismo con
   `move-result` de un primitivo, los métodos privados llamados con `invokespecial` y cualquier forma

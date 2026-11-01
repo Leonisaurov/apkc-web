@@ -220,13 +220,16 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   el teléfono: una variante que divide por cero imprime
   `java.lang.ArithmeticException: divide by zero at com.myapp.MainActivity$1.onClick(MainActivity.java:18)`
   —la línea exacta—; antes las trazas salían sin número.
-- **Defecto conocido y SIN arreglar, encontrado al buscar esa traza** (§56, último párrafo): el
-  traductor numera los locales como en el `.class` (`slot i → v(base+i)`), así que los argumentos no
-  caen al final de la frame. Con `locales == ins` coincide por casualidad y todo va bien; en cuanto un
-  método tiene **más locales que argumentos** ART lo rechaza (`instance field access on object that has
-  non-reference type Undefined`, medido: `registers=10`, `ins=2`, el cuerpo usa `v6` para `this`). Hay
-  que permutar `local(n)` para poner los argumentos arriba —identidad cuando `locales == ins`, así que no
-  toca lo ya medido—, con numeración de `d8` como oráculo y prueba en el aparato.
+- **La frame del dex pone los argumentos al final, y eso solo lo comprobaba ART** (§57): el traductor
+  copiaba el orden del `.class` (`slot i → v(base+i)`), que coincide con lo que exige el formato solo
+  cuando `locales == ins`. Con dos locales de más, nuestro `code_item` decía `registers=10`, `ins=2` y leía
+  `this` en `v6`, y el teléfono cortaba con `VerifyError: … instance field access on object that has
+  non-reference type Undefined`. Medida la numeración de `d8` en la misma forma (`registers=3`, `ins=2`,
+  `this` en `v1`) y corregida con una permutación en `local(n)` que es **identidad** cuando
+  `locales == args` —por eso ninguna de las sucesiones ya medidas contra las palabras de `d8` se mueve—.
+  Prueba: `TestLaFramePoneLosArgumentosArriba`. En el aparato: la fuente que antes no verificaba ahora da
+  `dexdump rc 0`, instala, corre y imprime `ArithmeticException: divide by zero at
+  com.myapp.MainActivity$1.onClick(MainActivity.java:21)`.
 - **Queda el bloque de anotaciones** para cerrar del todo el 2G.3: `d8` escribe
   `EnclosingClass`, `InnerClass`, `EnclosingMethod` y `MethodParameters` (lo decodifica `dexdump -a` en
   el aparato) y nosotros dejamos `annotations_off` en cero. Los datos ya salen del `.class` que escribe
@@ -255,7 +258,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2436 = 2436, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **208 PASS + 2 SKIP** nativa y **186 PASS + 24 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **209 PASS + 2 SKIP** nativa y **187 PASS + 24 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
