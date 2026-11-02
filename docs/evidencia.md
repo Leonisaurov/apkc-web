@@ -3343,7 +3343,8 @@ fijado con `TestLlamadaSinArgumentosSaleTresCincoceta`, que además comprueba el
 `javap -c -p` del oráculo doble compara las *instrucciones*, no la tabla, y `d8` traga la ausencia
 (`rc 0` dexando nuestra `Ver`), así que el producto no se rompió nunca: lo que falta es
 **interoperabilidad con una JVM** —el `.class` de este fork solo lo consume su propio dexer—. Va al
-plan como **5.23**, y el banco lo señala en cada corrida.
+plan como **5.23**, y el banco lo señala en cada corrida. *(Cerrado en el §65: la JVM ya verifica y
+ejecuta nuestro `.class`.)*
 
 **3. `getstatic`/`putstatic` de una referencia no está medido.** `System.out.println` no pasó de
 `apkc dex`: `a static access of type L: solo se midió el entero` (`dexinstr.go:265`). El banco lo
@@ -3568,3 +3569,71 @@ en orden.
 
 
 
+
+## 65. El `StackMapTable`: la JVM real ya verifica nuestro `.class`, y los marcos coinciden con los de javac
+
+El ítem 5.23 del plan. Hasta aquí todo el camino de ejecución pasaba por `d8` o por ART, y **ninguno de
+los dos mira el atributo**: `d8` acepta un `.class` sin marcos y ART nunca ve un `.class`. La JVM sí, y
+en el §61 lo dijo con un `Expecting a stackmap frame at branch target` sobre nuestro `.class` en
+`java -Xverify:all`. Es el único oráculo que quedaba sin satisfacer.
+
+**Qué escribe javac, medido con `javap -v`** sobre una sonda con siete métodos (`Sonda.java`, compilada
+con `javac -g`):
+
+- Un cuerpo recto (`int b = a + 1; return b;`) **no lleva el atributo**.
+- Un `if` sin `else` lleva **un** marco, el del destino (pc 12): `frame_type 252 /* append */`,
+  `offset_delta 12`, `locals [int]` — el local que asigna el `then` pasa a estar asignado en la unión.
+- Un `if/else` lleva dos: `same` en el pc 9 (la rama `else`, que no toca el local) y `append` en el 12
+  (`offset_delta 2`), porque por los dos caminos el local quedó asignado.
+- El bucle lleva dos: `append` en la cabecera (`offset_delta 4`, los dos locales) y `same` en la salida
+  (`offset_delta 14` = 19 − 4 − 1).
+- El `switch` lleva uno por destino (`same` en 28, 34 y 40) y uno tras los `goto` (en 43, `append`).
+- Con referencias, el marco del cruce dice `class java/lang/String`, no un comodín.
+
+O sea: **marco en cada destino de salto y en la instrucción que sigue a un salto incondicional o a un
+`return`**, que es "cada comienzo de bloque básico salvo el primero". Y el `offset_delta` del primer
+marco es el pc, no el pc menos algo.
+
+**La forma que rompe la intuición, medida aparte** (`Cab.java`): un bucle cuya cabecera está en el pc 0.
+javac escribe un marco **en el pc 0** (`offset_delta 0`, `same`) aunque ese pc ya tenga el marco
+implícito, y el local declarado dentro del cuerpo (`int x = 1;`) aparece como `top`: la vuelta del bucle
+llega con un entero al hueco que la entrada ve sin asignar. `java -Xverify:all` sobre esa clase no dice
+nada (y el programa ni siquiera tiene `main`: la JVM verifica antes de buscarlo), así que **`top` gana en
+la unión** y un hueco `top` en el marco no prohíbe que llegue un valor: prohíbe usarlo.
+
+**Lo que hace este emisor** (`apkc/jvmframes.go`). Un intérprete abstracto sobre el cuerpo **ya
+parcheado** (las posiciones dependen de los anchos definitivos de los saltos): camina las instrucciones
+con la misma tabla del dexer, calcula el estado de cada comienzo de bloque con una cola de trabajo y une
+los estados que llegan al mismo pc (`top` gana; dos referencias distintas se unen en `Object`; un entero
+y una referencia no se unen y se rechaza por nombre). Los tipos de campos y métodos salen del **pool que
+el emisor acaba de escribir**, no de una segunda copia. Cada marco se escribe como `full_frame` —el JVMS
+lo permite en cualquier posición— y los `top` del final se recortan; no se copia la compresión de javac
+(`same`/`append`) porque lo que el verificador compara es el contenido, no la forma, y una sola forma es
+menos superficie para equivocarse. Sin ramas no hay atributo, como en javac. El analizador comprueba
+además que el alto de pila que calcula no pase del `max_stack` declarado: si pasara, el `.class` no
+verificaría.
+
+**Oráculos.** (1) El barato: `TestLosMarcosSonLosDeJavac` decodifica los dos atributos —el nuestro y el
+del fixture de javac— a un estado por pc y exige que **digan lo mismo**: mismos pcs, mismos locales y
+misma pila, en el `while`, en las dos formas del `switch`, y en `Cab.f` y `Cab.g` (la cabecera en el pc 0
+con y sin local previo). `TestSinRamasNoHayStackMapTable` fija la ausencia en el constructor recto.
+(2) El de verdad: `banco/banco.sh` paso 6 ejecuta nuestra `Ver` con el `Arranque` de javac bajo
+`java -Xverify:all` y compara **texto y código de salida** con la JVM. Antes decía "VerifyError por
+StackMapTable faltante"; ahora dice `jvm con nuestra clase emitida (Xverify:all): rc=102 y salida igual a
+la JVM  ok`. Ese `Ver` lleva el `if`, el `while` y el `switch` del banco, o sea marcos con uniones de
+enteros y una referencia (`System.out`).
+
+Dos defectos propios salieron escribiéndolo, no del oráculo: el intérprete dimensionaba los locales con
+los argumentos del descriptor y rechazaba cualquier local declarado después (`se escribe el hueco 1 y el
+marco tiene 1`) —se rellena con `top` hasta el `max_locals`—, y los casos no ramificados del `switch`
+caían al `return` de error que sigue al `switch` en vez de continuar el flujo.
+
+No cambia ni un byte de lo que ya estaba medido: el dexer ignora el atributo, así que el dex y los apks
+salen iguales. Suite: **227 PASS + 2 SKIP** nativa y **196 PASS + 33 SKIP** en el hospedador (los dos
+tests nuevos necesitan el `android.jar` y allí se saltan); gate de `studio/e2e.sh` en orden, con los
+apks de siempre (10014, 9727 y 10287 bytes).
+
+**Frontera**: `uninitializedThis`/`uninitialized` no se emiten en ningún marco (los `new` van pegados a
+su `<init>` y ningún comienzo de bloque cae en medio, y los constructores llaman a `super` antes de
+cualquier rama); un `long`/`double` en un descriptor lo rechaza el propio analizador por nombre (5.8); y
+arrays siguen fuera (5.11).

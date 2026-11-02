@@ -111,22 +111,22 @@ else
 	echo "  d8 sobre javac y d8 sobre nuestra Ver: $(wc -c < "$TRABAJO/d8/classes.dex" | tr -d ' ') y $(wc -c < "$TRABAJO/d8desde/classes.dex" | tr -d ' ') bytes (forma distinta: javac pliega el primer append en el constructor, §53)"
 fi
 
-# 6. y la comprobación de interoperabilidad que ningun oráculo de bytes daba: nuestro .class NO
-#    verifica en una JVM real, porque al emisor le falta StackMapTable en los destinos de rama. Se
-#    ejecuta la Ver emitida por nosotros con el Arranque de javac, en el arbol de paquetes que exige
-#    el classpath.
+# 6. la interoperabilidad que ningun oraculo de bytes daba: se ejecuta la Ver emitida por nosotros con
+#    el Arranque de javac, en el arbol de paquetes que exige el classpath, con `-Xverify:all`. El
+#    StackMapTable estaba en el plan 5.23 y se cerro en el §65: si vuelve a faltar, la JVM lo dice.
 mkdir -p "$TRABAJO/mix/p"
 cp "$TRABAJO/jc/p/Arranque.class" "$TRABAJO/mix/p/"
 cp "$TRABAJO/nuestro/p/Ver.class" "$TRABAJO/mix/p/"
 set +e
 mixto=$("$JDK/bin/java" -Xverify:all -cp "$TRABAJO/mix" p.Arranque 2>&1); mezcla=$?
 set -e
-if echo "$mixto" | grep -q "StackMapTable\|Expecting a stackmap frame"; then
-	echo "  jvm con nuestra clase emitida: VerifyError por StackMapTable faltante (item 5.23 del plan)"
-elif [ "$mezcla" != "$jvm" ]; then
+if echo "$mixto" | grep -q "VerifyError\|StackMapTable\|Expecting a stackmap frame"; then
+	echo "  jvm con nuestra clase emitida: VerifyError  FALLO"
+	echo "$mixto" | head -3 | sed 's/^/      /'; exit 1
+elif [ "$mezcla" != "$jvm" ] || [ "$mixto" != "$java_out" ]; then
 	echo "  jvm con nuestra clase emitida: rc=$mezcla (la JVM dice $jvm)  FALLO"
 	echo "$mixto" | head -3 | sed 's/^/      /'; exit 1
 else
-	echo "  jvm con nuestra clase emitida: rc=$mezcla igual que la JVM  ok"
+	echo "  jvm con nuestra clase emitida (Xverify:all): rc=$mezcla y salida igual a la JVM  ok"
 fi
 echo "banco: en orden"

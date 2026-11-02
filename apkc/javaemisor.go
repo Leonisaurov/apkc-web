@@ -1112,6 +1112,7 @@ type emisor struct {
 
 	// del metodo actual
 	estatico  bool
+	desc      string
 	vuelta    string
 	locales   map[string]localVar
 	siguiente int
@@ -2756,7 +2757,11 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	e.cargaDe(0, "L")
 	e.invoca(opInvokespec, "java/lang/Object", "<init>", "()V", 1)
 	e.emite(retorno('V'))
-	attrs := attrInfo(e.pool, "Code", e.codeAttr())
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	attrs := attrInfo(e.pool, "Code", codigo)
 	// MethodParameters: conteo u1, y por cada uno nombre u2 y flags u2. El de la captura no tiene nombre.
 	mp := []byte{1}
 	mp = append(mp, u2be(0)...)
@@ -2856,6 +2861,7 @@ func (c *jclas) inicializadoresEstaticos() []jcampo {
 // es del metodo.
 func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.estatico = estatico
+	e.desc = desc
 	e.vuelta = vueltaDe(desc)
 	e.locales = map[string]localVar{}
 	e.siguiente = 0
@@ -2870,9 +2876,18 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.truncado = false
 }
 
-// codeAttr: el atributo Code con su LineNumberTable, en el orden que javac los escribe.
-func (e *emisor) codeAttr() []byte {
+// codeAttr: el atributo Code con su LineNumberTable y, si hay ramas, su StackMapTable, en el orden
+// que javac los escribe. El marco se calcula sobre el cuerpo ya parcheado, porque sus posiciones
+// dependen de los anchos definitivos de los saltos.
+func (e *emisor) codeAttr() ([]byte, error) {
 	e.encadenaGotos()
+	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc)
+	if err != nil {
+		return nil, err
+	}
+	if alto > e.maxProf {
+		return nil, fmt.Errorf("la pila simulada llega a %d y el metodo declara %d: el max_stack no cubre el cuerpo", alto, e.maxProf)
+	}
 	code := u2be(uint16(e.maxProf))
 	code = append(code, u2be(uint16(e.maxLoc))...)
 	code = append(code, u4be(uint32(len(e.codigo)))...)
@@ -2883,8 +2898,13 @@ func (e *emisor) codeAttr() []byte {
 		tabla = append(tabla, u2be(uint16(l.desplazamiento))...)
 		tabla = append(tabla, u2be(uint16(l.linea))...)
 	}
-	code = append(code, u2be(1)...)
-	return append(code, attrInfo(e.pool, "LineNumberTable", tabla)...)
+	if marcos == nil {
+		code = append(code, u2be(1)...)
+		return append(code, attrInfo(e.pool, "LineNumberTable", tabla)...), nil
+	}
+	code = append(code, u2be(2)...)
+	code = append(code, attrInfo(e.pool, "LineNumberTable", tabla)...)
+	return append(code, attrInfo(e.pool, "StackMapTable", marcos)...), nil
 }
 
 // methodInfo: access_flags, nombre, descriptor y sus atributos.
@@ -2946,7 +2966,11 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	if m.esFinal {
 		acc |= accFinal
 	}
-	return e.methodInfo(m.nombre, desc, acc, attrInfo(e.pool, "Code", e.codeAttr()), 1), nil
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, fmt.Errorf("linea %d: %w", m.linea, err)
+	}
+	return e.methodInfo(m.nombre, desc, acc, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // initSintetico: la clase no escribe constructor y javac lo pone: aload_0, invokespecial al <init> del padre
@@ -2971,7 +2995,11 @@ func (e *emisor) initSintetico() ([]byte, error) {
 	if e.c.esPublica {
 		acc = accPublic
 	}
-	return e.methodInfo("<init>", "()V", acc, attrInfo(e.pool, "Code", e.codeAttr()), 1), nil
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	return e.methodInfo("<init>", "()V", acc, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // clinitSintetico: el `static {}` que javac escribe al final, despues de los metodos declarados, solo
@@ -2985,7 +3013,11 @@ func (e *emisor) clinitSintetico() ([]byte, error) {
 		}
 	}
 	e.emite(retorno('V'))
-	return e.methodInfo("<clinit>", "()V", accStatic, attrInfo(e.pool, "Code", e.codeAttr()), 1), nil
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	return e.methodInfo("<clinit>", "()V", accStatic, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // terminaEnRetorno: la ultima sentencia del cuerpo es un return. Con `if` y bucles todavia no se puede

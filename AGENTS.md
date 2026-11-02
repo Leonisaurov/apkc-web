@@ -56,7 +56,8 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
   `expected magic word 00 61 73 6d`.
 - Oráculos que no comparten código con apkc: `apksigner verify --verbose`, `jarsigner -verify`,
   `zipalign -c -p`, `~/Develop/Go/apkc-harness/zipcheck.py`, `javap`, `java -Xverify:all` (la JVM del
-  Termux ejecuta **nuestros** `.class`: es el oráculo que destapó el `StackMapTable` que falta, §61) y
+  Termux ejecuta **nuestros** `.class`: destapó el `StackMapTable` que faltaba en el §61 y lo cierra en
+  el §65) y
   `dexdump`/`app_process64` **del aparato por `rish`** (no hay `adb`): `/apex/com.android.art/bin/dexdump`
   verifica y desarma, y `app_process64` con `CLASSPATH` ejecuta un `.dex` suelto **sin instalar nada**
   (`sh banco/banco.sh` lo hace por los cuatro caminos y compara el código de salida, §61).
@@ -301,9 +302,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   → el doble oráculo sigue entero); los cuatro dan `rc 9` y `dexdump` verifica `rc 0`. Al ejecutar aparecieron
   tres cosas que ningún `cmp` ni `javap` enseñaba: **`invokestatic` de cero argumentos estaba rechazado por
   error** (medido: `d8` escribe `7100 0600 0000`, la forma 35c vale con recuento cero; arreglado en
-  `dexinstr.go` con `TestLlamadaSinArgumentosSaleTresCincoceta`), **nuestro `.class` no verifica en una JVM
-  real** porque al emisor le falta `StackMapTable` en los destinos de rama (`d8` lo acepta, `java
-  -Xverify:all` no: plan 5.23), y dos huecos del traductor que el banco esquiva: `getstatic` de una
+  `dexinstr.go` con `TestLlamadaSinArgumentosSaleTresCincoceta`), **nuestro `.class` no verificaba en una
+  JVM real** porque al emisor le faltaba `StackMapTable` en los destinos de rama (`d8` lo acepta, `java
+  -Xverify:all` no; cerrado en el §65), y dos huecos del traductor que el banco esquiva: `getstatic` de una
   **referencia** (`System.out`, plan 5.24) y el **presupuesto de temporales en la unión de un `if` con
   `else`** (plan 5.25, con la diana de `d8` copiada en el §61: `registers 3, ins 0, outs 0`, 20 palabras y el
   pliegue `total - 4` sobre el registro previo, que sale `add-int/lit8 …, #-2`).
@@ -329,8 +330,8 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   análisis de viveza: los locales van clavados (`guardaLocal`) y en la cabecera del bucle la pila JVM
   está vacía. Nuestro cuerpo sale con el mismo `28f7` y una instrucción de más donde `d8` pliega
   `i + 1` a `add-int/lit8`. En el emisor, `while` es un nodo propio y `for` **se desdobla** como
-  `init; while (cond) { cuerpo; paso }`: el `.class` de los dos es **idéntico al de javac** y el dex
-  **byte a byte** el de javac (`TestElBucleSeDexaIgualQueElDeJavac`, dos fixtures nuevos),
+  `init; while (cond) { cuerpo; paso }`: el `.class` de los dos sale con el **mismo `Code`** que el de
+  javac y el dex **byte a byte** el de javac (`TestElBucleSeDexaIgualQueElDeJavac`, dos fixtures nuevos),
   `TestLaRamaHaciaAtrasSeEscribeComoD8` fija la vuelta en el traductor y `TestDoYTtrySiguenRechazados`
   la frontera (`do`, `try`, `i++` —este último ahora nombrado en el portero—). Ejecutado: el dex
   de javac's `Bucle` traducido por nosotros imprime `10`/`rc 10` en `app_process`, el `.class` nuestro
@@ -352,10 +353,27 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   del fuente**: el analizador acepta `switch` con claves literales enteras y brazos que terminan en
   `break` o `return` (la caída al siguiente se rechaza por nombre) y el emisor escribe
   `tableswitch`/`lookupswitch` con el relleno desde el principio del `Code` y destinos de 32 bits desde
-  el opcode; el `.class` sale **idéntico al de javac** y el dex **byte a byte** el suyo (1432 bytes,
+  el opcode; el `.class` sale **con el mismo `Code`** que el de javac (el `StackMapTable` llegó en el
+  §65) y el dex **byte a byte** el suyo (1432 bytes,
   `TestElSwitchSeEscribeComoJavac`). La elección entre las dos formas es de este emisor (`tableswitch`
   cuando el rango no pasa del doble de los casos): el criterio de javac 21 se sondeó y no es una
   desigualdad sencilla. El banco lleva bucle y `switch`: `total 7|total 9|total 102`, `rc 102`.
+- **El `StackMapTable`, y con él la JVM real** (§65): el único oráculo que quedaba sin satisfacer era
+  `java -Xverify:all`, porque `d8` acepta un `.class` sin marcos y ART nunca ve un `.class`. Medido con
+  `javap -v`: sin ramas no hay atributo; hay marco en cada destino de salto y en la instrucción que sigue
+  a un salto incondicional o a un `return`; el `offset_delta` del primero es su pc; con la cabecera de un
+  bucle en el pc 0 javac escribe un marco con delta 0; y **`top` gana en la unión** (la vuelta del bucle
+  trae un entero al hueco que la entrada ve sin asignar, y la JVM lo acepta: prohíbe usarlo, no que
+  llegue). `apkc/jvmframes.go` es un intérprete abstracto sobre el cuerpo **parcheado** que une estados
+  (`top` gana; dos referencias distintas → `Object`) y escribe **`full_frame`** siempre, recortando los
+  `top` finales —no copia la compresión `same`/`append` de javac porque el verificador compara contenido,
+  no forma—; los tipos de campos y métodos salen del pool ya escrito. Exige además que el alto simulado
+  no pase del `max_stack`. Oráculos: `TestLosMarcosSonLosDeJavac` decodifica los dos atributos (el nuestro
+  y el del fixture de javac) a un estado por pc y exige que digan lo mismo en `while`, las dos formas del
+  `switch` y `Cab.f`/`Cab.g` (cabecera en el pc 0, con y sin local previo), y `TestSinRamasNoHayStackMapTable`
+  fija la ausencia; el paso 6 del banco ejecuta nuestra `Ver` con el `Arranque` de javac bajo
+  `java -Xverify:all` y ahora dice `rc=102 y salida igual a la JVM  ok`. El dex y los apks no cambian
+  (el dexer ignora el atributo).
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -381,7 +399,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **225 PASS + 2 SKIP** nativa y **196 PASS + 31 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **227 PASS + 2 SKIP** nativa y **196 PASS + 33 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
