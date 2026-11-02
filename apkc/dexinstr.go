@@ -23,6 +23,11 @@ const (
 	opMueveResult    = 0x0a // 11x move-result vAA, medido en el parrafo 66 (`0a00` tras un
 	// invoke-static que devuelve I)
 	opMueveResultObj = 0x0c // 11x move-result-object vAA
+
+	// los moves de registro, medidos en el parrafo 71: `move v0, v1` sale `0110` y
+	// `move-object v0, v3` sale `0730` (12x, destino en el nibble bajo y fuente en el alto)
+	opMueve       = 0x01 // 12x move vA, vB
+	opMueveObjeto = 0x07 // 12x move-object vA, vB
 	opConst4         = 0x12 // 11n const/4 vAA, #+B
 	opConst16        = 0x13 // 21c const/16 vAA, #+BBBB
 	opConstAlto16    = 0x15 // 21c const/high16 vAA, #+BBBB0000
@@ -71,6 +76,11 @@ const (
 	opAgetObjeto      = 0x46 // 23x aget-object vAA, vBB, vCC
 	opAput            = 0x4b // 23x aput vAA, vBB, vCC
 	opAputObjeto      = 0x4d // 23x aput-object vAA, vBB, vCC
+
+	// las excepciones, medidas en el parrafo 71 sobre `T` dexado por `d8`: `throw v1` sale `2701`
+	// (11x) y el handler empieza con `move-exception vAA` (0x0d, 11x) cuando la excepcion se usa
+	opMueveExcepcion = 0x0d // 11x move-exception vAA
+	opLanza          = 0x27 // 11x throw vAA
 
 	// la familia de cuentas enteras sobre dos registros, en el orden ad-sub-mul-div-rem que la
 	// sonda verifico en cuatro de sus miembros (add 0xb0, sub 0xb1, div 0xb3, y el shl 0xb8 de la
@@ -204,26 +214,43 @@ func (p *traduce) push(r int) { p.enPila = append(p.enPila, r) }
 // si no el siguiente `toma` escribiría encima de una variable viva.
 func (p *traduce) guardaLocal(in jvmInstr, n int) {
 	r := p.pop(in)
-	if r == p.local(n) {
+	destino := p.local(n)
+	if r == destino {
 		return
 	}
 	if p.renom == nil {
 		p.renom = map[int]int{}
 	}
-	p.renom[n] = r
-	if r >= p.base {
+	// La fusión (el local es el registro del valor, sin instrucción) solo vale en la PRIMERA
+	// escritura de un local que no es argumento y cuando el valor viene de un temporal. Las demás
+	// escrituras sueltan un `move`/`move-object` al registro del local: el registro de un argumento
+	// puede seguir vivo, y dos asignaciones en ramas distintas tienen que caer en el mismo registro
+	// (§71; `atrapa` daba `VerifyError` sin esto). d8 mueve cuando el valor viene de un local o de un
+	// argumento vivo, medido en `Mv2.dos` (`0110`) y `Mv3.usa` (`0730`, `0720`).
+	_, yaAtado := p.renom[n]
+	if !yaAtado && n >= p.m.ArgCount && r < p.base {
+		p.renom[n] = r
+		if p.fijos == nil {
+			p.fijos = map[int]bool{}
+		}
+		p.fijos[r] = true
+		for i, vivo := range p.libres {
+			if vivo == r {
+				p.libres = append(p.libres[:i], p.libres[i+1:]...)
+				break
+			}
+		}
 		return
 	}
-	if p.fijos == nil {
-		p.fijos = map[int]bool{}
+	op := byte(opMueve)
+	if in.name == "astore" || (len(in.name) == 8 && in.name[:6] == "astore") {
+		op = opMueveObjeto
 	}
-	p.fijos[r] = true
-	for i, vivo := range p.libres {
-		if vivo == r {
-			p.libres = append(p.libres[:i], p.libres[i+1:]...)
-			break
-		}
+	if !p.nibble(r, in) || !p.nibble(destino, in) {
+		return
 	}
+	p.palabra(unidad12x(op, destino, r))
+	p.suelta(r)
 }
 
 // local: el registro dalvik del enésimo hueco JVM. Un long o un double ocupa dos huecos aquí y dos
@@ -237,6 +264,27 @@ func (p *traduce) guardaLocal(in jvmInstr, n int) {
 // para ART `v6` era un local sin tipo. Con `d8` el mismo cuerpo sale `registers=3`, `ins=2` y
 // `this` en `v1`, o sea los dos últimos registros. Mientras el método no tiene más locales que
 // argumentos las dos cuentas coinciden, y por eso el subconjunto medido hasta aquí salía bien.
+// esHandler: el pc es el destino de un `catch` de la tabla del `.class`.
+func (p *traduce) esHandler(pc int) bool {
+	for _, tr := range p.m.Tries {
+		if tr.handler == pc {
+			return true
+		}
+	}
+	return false
+}
+
+// indiceDeStore: el hueco que escribe un `astore`/`astore_N`.
+func indiceDeStore(nombre string, in jvmInstr) (int, bool) {
+	switch nombre {
+	case "astore":
+		return int(in.ops[0]), true
+	case "astore_0", "astore_1", "astore_2", "astore_3":
+		return int(nombre[len(nombre)-1]) - '0', true
+	}
+	return 0, false
+}
+
 func (p *traduce) local(n int) int {
 	if r, ok := p.renom[n]; ok {
 		return r
@@ -662,6 +710,23 @@ func (p *traduce) recorre() error {
 			p.pcs = map[int]int{}
 		}
 		p.pcs[in.pc] = len(p.w)
+		// el handler de un try empieza con el `astore` de la excepcion (o con un `pop` si no se
+		// usa): en DEX eso es `move-exception` (medido en el parrafo 71)
+		if p.esHandler(in.pc) {
+			if n, ok := indiceDeStore(in.name, in); ok {
+				r := p.local(n)
+				if !p.octeto(r, in) {
+					return p.err
+				}
+				p.palabra(unidad11x(opMueveExcepcion, r))
+				continue
+			}
+			if in.name == "pop" {
+				continue
+			}
+			p.falla(in, "a handler whose first instruction is "+in.name+", and none of those is measured")
+			return p.err
+		}
 		// mira: la siguiente instruccion JVM. Se usa para saber si el resultado de una llamada se
 		// va a tirar: d8 no emite move-result-object cuando el pop lo consume, y las palabras del
 		// listener del studio lo dejan ver (§21)
@@ -733,6 +798,13 @@ func (p *traduce) recorre() error {
 			p.cuentaEntera(in)
 		case "arraylength":
 			p.longitudArreglo(in)
+		case "athrow":
+			r := p.pop(in)
+			if !p.octeto(r, in) {
+				return p.err
+			}
+			p.palabra(unidad11x(opLanza, r))
+			p.enPila = p.enPila[:0]
 		case "iinc":
 			p.incrementa(in)
 		case "newarray", "anewarray":
@@ -1119,13 +1191,95 @@ func (t *dexTables) codeItemConPc(clase classFull, m classMethod) (codeItem, map
 		return codeItem{}, nil, &traduceError{nombre: m.Name,
 			motivo: "the second pass asked for more temporaries than the first: translator bug"}
 	}
+	tries, handlers, err := armaTries(final, m)
+	if err != nil {
+		return codeItem{}, nil, err
+	}
 	return codeItem{
 		registersSize: uint32(final.base + final.locales),
 		insSize:       uint32(m.ArgCount),
 		outsSize:      uint32(final.outs),
-		triesSize:     0,
+		triesSize:     uint32(len(tries)),
 		debugInfoOff:  0,
 		insnsSize:     uint32(len(final.w)),
 		insns:         final.w,
+		tries:         tries,
+		handlers:      handlers,
 	}, final.pcs, nil
+}
+
+// armaTries traduce la exception_table del `.class` a los try_item y la lista de handlers del dex.
+// Las entradas que comparten rango se agrupan en un try_item (una por tipo atrapado), el fin del
+// `.class` es **exclusivo** y en el dex es start+insn_count, y sin tipo (un `finally`) la lista lleva
+// el handler de "cualquiera" con el tamaño en negativo (JVMS 4.7.3 / DEX `encoded_catch_handler`).
+func armaTries(p *traduce, m classMethod) ([]tryItem, []byte, error) {
+	if len(m.Tries) == 0 {
+		return nil, nil, nil
+	}
+	type grupo struct {
+		start, end int
+		tipos      []classTry
+	}
+	var grupos []grupo
+	indice := map[[2]int]int{}
+	for _, tr := range m.Tries {
+		k := [2]int{tr.start, tr.end}
+		if i, ok := indice[k]; ok {
+			grupos[i].tipos = append(grupos[i].tipos, tr)
+			continue
+		}
+		indice[k] = len(grupos)
+		grupos = append(grupos, grupo{start: tr.start, end: tr.end, tipos: []classTry{tr}})
+	}
+	lista := putUleb(nil, uint32(len(grupos)))
+	items := make([]tryItem, 0, len(grupos))
+	for _, g := range grupos {
+		inicio, ok := p.pcs[g.start]
+		if !ok {
+			return nil, nil, &traduceError{nombre: m.Name,
+				motivo: "a try that starts at a pc which is not an instruction"}
+		}
+		fin, ok := p.pcs[g.end]
+		if !ok {
+			return nil, nil, &traduceError{nombre: m.Name,
+				motivo: "a try that ends at a pc which is not an instruction"}
+		}
+		off := len(lista)
+		n := 0
+		catchAll := -1
+		for _, tr := range g.tipos {
+			if tr.catchType == "" {
+				catchAll = tr.handler
+				continue
+			}
+			n++
+		}
+		if catchAll >= 0 {
+			lista = putSleb(lista, int32(-n))
+		} else {
+			lista = putSleb(lista, int32(n))
+		}
+		for _, tr := range g.tipos {
+			if tr.catchType == "" {
+				continue
+			}
+			unidad, ok := p.pcs[tr.handler]
+			if !ok {
+				return nil, nil, &traduceError{nombre: m.Name,
+					motivo: "a handler at a pc which is not an instruction"}
+			}
+			lista = putUleb(lista, uint32(p.t.typeIdx[tr.catchType]))
+			lista = putUleb(lista, uint32(unidad))
+		}
+		if catchAll >= 0 {
+			unidad, ok := p.pcs[catchAll]
+			if !ok {
+				return nil, nil, &traduceError{nombre: m.Name,
+					motivo: "a catch-all handler at a pc which is not an instruction"}
+			}
+			lista = putUleb(lista, uint32(unidad))
+		}
+		items = append(items, tryItem{start: uint32(inicio), count: uint16(fin - inicio), handlerOff: uint16(off)})
+	}
+	return items, lista, nil
 }

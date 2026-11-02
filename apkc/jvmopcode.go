@@ -80,6 +80,7 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xb0: {"areturn", 0}, // visto en la sonda del parrafo 53: `2: areturn` con el siguiente
 	// desplazamiento en 3, o sea un byte y ningun operando. El traductor ya lo escribia desde el
 	// parrafo 50, pero la tabla del caminante no lo tenia y el dexer se paraba en el 0xb0.
+	0xbf: {"athrow", 0}, // medido en el parrafo 71: `13: athrow` con el siguiente desplazamiento en 14
 	0xb1: {"return", 0},
 	0xb2: {"getstatic", 2},
 	0xb3: {"putstatic", 2},

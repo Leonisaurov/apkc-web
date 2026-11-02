@@ -210,6 +210,30 @@ type jpara struct {
 
 func (jpara) jstmtPuede() {}
 
+// jtry: `try { … } catch (T e) { … }`, con un solo catch y sin `finally` (los dos se rechazan por
+// nombre). La forma de javac, medida en el parrafo 71: el cuerpo protegido, un `goto` al final, el
+// handler que empieza con el `astore` de la excepción y el cuerpo del catch.
+type jtry struct {
+	cuerpo jstmt
+	tipo   string
+	excep  string
+	atrapa jstmt
+	// lineaAtrapa es el renglon del `catch`: javac lo anota en el pc del handler (medido en el
+	// parrafo 71) y no anota el del `try`
+	lineaAtrapa int
+	donde       pos
+}
+
+func (jtry) jstmtPuede() {}
+
+// jlanza: `throw expr;`.
+type jlanza struct {
+	e     jexpr
+	donde pos
+}
+
+func (jlanza) jstmtPuede() {}
+
 // jswitch: `switch (selector) { case k: cuerpo break; … default: cuerpo }`. El selector tiene que ser
 // un entero y las claves literales enteros; cada caso **tiene que terminar en `break` o en `return`**
 // (la caída de un caso al siguiente no está medida y se rechaza por nombre). Se midió en el §64 qué
@@ -316,6 +340,7 @@ var palabrasJava = map[string]bool{
 	"boolean": true, "int": true, "long": true, "float": true, "double": true, "byte": true, "short": true,
 	"char": true, "switch": true, "case": true, "default": true, "break": true, "continue": true, "throw": true, "native": true,
 	"synchronized": true, "volatile": true, "transient": true, "instanceof": true, "do": true,
+	"finally": true,
 }
 
 // simbolesJava, de mas largo a mas corto para que `>>` no se lea como dos `>`.
@@ -1213,7 +1238,51 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		}
 		return jhacer{cuerpo: cuerpo, cond: cond, donde: pos{linea}}, true, nil
 	case a.es('k', "try"):
-		return nil, false, fmt.Errorf("linea %d: la sentencia %q no esta medida en este compilador", linea, a.actual().valor)
+		a.avanzar()
+		cuerpo, _, err := a.sentencia()
+		if err != nil {
+			return nil, false, err
+		}
+		if !a.es('k', "catch") {
+			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch` (o con `finally`) no esta medido", linea)
+		}
+		lineaAtrapa := a.actual().donde.linea
+		a.avanzar()
+		if err := a.comerSimbolo("("); err != nil {
+			return nil, false, err
+		}
+		tipo, err := a.tipo()
+		if err != nil {
+			return nil, false, err
+		}
+		if a.actual().kind != 'i' {
+			return nil, false, fmt.Errorf("linea %d: el catch no nombra su excepcion", linea)
+		}
+		excep := a.avanzar().valor
+		if err := a.comerSimbolo(")"); err != nil {
+			return nil, false, err
+		}
+		atrapa, _, err := a.sentencia()
+		if err != nil {
+			return nil, false, err
+		}
+		if a.es('k', "catch") {
+			return nil, false, fmt.Errorf("linea %d: mas de un `catch` en el mismo `try` no esta medido", linea)
+		}
+		if a.es('k', "finally") {
+			return nil, false, fmt.Errorf("linea %d: `finally` no esta medido", linea)
+		}
+		return jtry{cuerpo: cuerpo, tipo: tipo, excep: excep, atrapa: atrapa, lineaAtrapa: lineaAtrapa, donde: pos{linea}}, true, nil
+	case a.es('k', "throw"):
+		a.avanzar()
+		e, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jlanza{e: e, donde: pos{linea}}, true, nil
 	}
 	// declaracion local o expresion
 	tipoActual := a.actual()
@@ -1365,6 +1434,22 @@ func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
 }
 
 func (a *analizadorJava) expresionUnaria() (jexpr, error) {
+	if a.es('p', "-") {
+		// solo el menos de un literal entero: javac lo dobla (`-1` es `iconst_m1`) y el resto de la
+		// negacion sigue sin medir
+		donde := a.actual().donde
+		a.avanzar()
+		t := a.actual()
+		if t.kind != 'n' {
+			return nil, fmt.Errorf("linea %d: la negacion de algo que no es un literal entero no esta medida", donde.linea)
+		}
+		a.avanzar()
+		n, err := enteroJava(t.valor)
+		if err != nil {
+			return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+		}
+		return jlit{tipoJ: 'i', entero: -n, donde: donde}, nil
+	}
 	if a.es('p', "++") || a.es('p', "--") {
 		donde := a.actual().donde
 		delta := int32(1)

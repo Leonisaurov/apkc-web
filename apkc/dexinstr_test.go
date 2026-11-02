@@ -154,7 +154,7 @@ func TestTraduceBranquiasContraLasPalabrasDeD8(t *testing.T) {
 			nombre: "plegable", desc: "(I)I", pila: 1, locales: 2, args: 2,
 			code: []byte{0x1b, 0x9a, 0x00, 0x08, 0x04, 0x3c, 0xa7, 0x00, 0x05,
 				0x05, 0x3c, 0x1b, 0xac},
-			quieren: "if-nez v, +4 | const/4 v, 1 | goto +2 | const/4 v, 2 | return v",
+			quieren: "if-nez v, +5 | const/4 v, 1 | move v, v | goto +3 | const/4 v, 2 | move v, v | return v",
 		},
 		{
 			// tres branquias anidadas que caen al mismo sitio: es `tresNiveles` de la sonda, y
@@ -187,8 +187,9 @@ func TestTraduceBranquiasContraLasPalabrasDeD8(t *testing.T) {
 // TestLaRamaHaciaAtrasSeEscribeComoD8: el bucle `int i = 0; while (i > 0) { i = 1; } return i;` que
 // javac escribe como `iconst_0, istore_1, [cabecera] iload_1, ifle 11, iconst_1, istore_1, goto 2,
 // iload_1, ireturn` **sí** se traduce desde el §63: la medición sobre `d8` dio `goto 0001` con `28f7`
-// (opcode 0x28 y desplazamiento -9 en el byte alto). Aquí la cabecera cae en la palabra 1 (la 0 es el
-// `const/4` que guarda el cero en el local) y la vuelta salta -3 palabras.
+// (opcode 0x28 y desplazamiento -9 en el byte alto). Desde el §71 las dos escrituras del local, que
+// es un argumento, sueltan un `move` al registro fijo del local (un argumento no se funde: su valor
+// puede seguir vivo), así que el cuerpo mide 8 palabras en vez de 6 y la vuelta salta -4.
 func TestLaRamaHaciaAtrasSeEscribeComoD8(t *testing.T) {
 	td, clases := tablaDeLasSeis(t)
 	bucle := classMethod{HasCode: true, Name: "mientras", Desc: "(I)I",
@@ -198,27 +199,27 @@ func TestLaRamaHaciaAtrasSeEscribeComoD8(t *testing.T) {
 	if err != nil {
 		t.Fatalf("el bucle no se tradujo: %v", err)
 	}
-	if len(ci.insns) != 6 {
-		t.Fatalf("salieron %d palabras (%04x) y la traduccion medida tiene 6", len(ci.insns), ci.insns)
+	if len(ci.insns) != 8 {
+		t.Fatalf("salieron %d palabras (%04x) y la traduccion medida tiene 8", len(ci.insns), ci.insns)
 	}
-	// 1: la cabecera, con el `if-lez` (0x3d) de la condicion contra cero
-	if ci.insns[1]&0xff != 0x3d {
-		t.Errorf("la cabecera no es el `if-lez` medido: %#04x", ci.insns[1])
+	// 2: la cabecera, con el `if-lez` (0x3d) de la condicion contra cero
+	if ci.insns[2]&0xff != 0x3d {
+		t.Errorf("la cabecera no es el `if-lez` medido: %#04x", ci.insns[2])
 	}
-	// 4: el `goto` 10t con el desplazamiento en el byte alto, negativo y a la cabecera
-	if ci.insns[4]&0xff != 0x28 {
-		t.Fatalf("la vuelta no es el `goto` 10t (0x28): %#04x", ci.insns[4])
+	// 6: el `goto` 10t con el desplazamiento en el byte alto, negativo y a la cabecera
+	if ci.insns[6]&0xff != 0x28 {
+		t.Fatalf("la vuelta no es el `goto` 10t (0x28): %#04x", ci.insns[6])
 	}
-	salto := int(int8(ci.insns[4] >> 8))
-	if salto != -3 {
-		t.Errorf("la vuelta salta %d palabras y la forma medida es -3", salto)
+	salto := int(int8(ci.insns[6] >> 8))
+	if salto != -4 {
+		t.Errorf("la vuelta salta %d palabras y la forma medida es -4", salto)
 	}
-	if destino := 4 + salto; destino != 1 {
-		t.Errorf("el `goto` cae en la palabra %d y la cabecera es la 1", destino)
+	if destino := 6 + salto; destino != 2 {
+		t.Errorf("el `goto` cae en la palabra %d y la cabecera es la 2", destino)
 	}
-	// 5: el retorno del valor que vivia en el local
-	if ci.insns[5]&0xff != 0x0f {
-		t.Errorf("la ultima palabra no es `return` (0x0f): %#04x", ci.insns[5])
+	// 7: el retorno del valor que vivia en el local
+	if ci.insns[7]&0xff != 0x0f {
+		t.Errorf("la ultima palabra no es `return` (0x0f): %#04x", ci.insns[7])
 	}
 }
 

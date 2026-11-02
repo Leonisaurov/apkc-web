@@ -237,6 +237,12 @@ func (t *dexTables) collectCode(m classMethod, p *pool) error {
 			}
 		}
 	}
+	// los tipos de la exception_table también: el handler los nombra por type_idx (parrafo 71)
+	for _, tr := range m.Tries {
+		if tr.catchType != "" {
+			t.internType(tr.catchType)
+		}
+	}
 	return nil
 }
 

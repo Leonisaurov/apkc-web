@@ -403,6 +403,11 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 	case jhacer:
 		ctx.registrarSentencia(v.cuerpo)
 		ctx.registrarExpresion(v.cond)
+	case jtry:
+		ctx.registrarSentencia(v.cuerpo)
+		ctx.registrarSentencia(v.atrapa)
+	case jlanza:
+		ctx.registrarExpresion(v.e)
 	case jswitch:
 		ctx.registrarExpresion(v.selector)
 		for _, c := range v.casos {
@@ -1200,6 +1205,8 @@ type emisor struct {
 	// switch apila el suyo mientras emite su cuerpo (parrafo 70)
 	quiebres  []int
 	continuar []int
+	// excepciones es la exception_table del Code (parrafo 71)
+	excepciones []entradaTry
 }
 
 type parcheSalto struct {
@@ -2697,6 +2704,81 @@ func (e *emisor) incremento(v jincr) error {
 	})
 }
 
+// entradaTry: una fila de la exception_table del Code (JVMS 4.7.3). `fin` es exclusivo y `tipo` es el
+// descriptor de la clase atrapada (vacio sería un catch-all, que el subconjunto del fuente no escribe).
+type entradaTry struct {
+	inicio, fin, handler int
+	tipo                 string
+}
+
+// intenta: `try { … } catch (T e) { … }`. La forma de javac, medida en el parrafo 71 sobre `T`:
+// cuerpo protegido, un `goto` al final (solo si el cuerpo puede caer), el handler que empieza con el
+// `astore` de la excepción —que es el único valor que el verificador deja en la pila ahí—, el cuerpo
+// del catch, y la fila (inicio, fin, handler, tipo) en la tabla del `Code`.
+func (e *emisor) intenta(v jtry) error {
+	desc, err := e.ctx.descriptorDe(v.tipo)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	inicio := len(e.codigo)
+	if err := e.stm(v.cuerpo); err != nil {
+		return err
+	}
+	// javac saca del rango protegido el `return`/`goto` final (no pueden lanzar) pero deja dentro
+	// el `athrow`: medido en el parrafo 71 (`lee`: 0..3, con el `ireturn` en 3; `T.f`: 0..10, con el
+	// `athrow` en 9)
+	fin := e.finProtegido(inicio, len(e.codigo))
+	salida := e.nuevaEtiqueta()
+	if !terminaEnSalida(v.cuerpo) {
+		e.saltoEmite(opGOTO, salida, 0)
+	}
+	handler := len(e.codigo)
+	e.marcaLinea(v.lineaAtrapa)
+	indice := e.reserva(v.excep, desc)
+	e.sube() // la excepción que el verificador deja en la pila al entrar al handler
+	e.guardaDe(indice, desc)
+	if err := e.stm(v.atrapa); err != nil {
+		return err
+	}
+	e.cierra(salida)
+	e.excepciones = append(e.excepciones, entradaTry{inicio: inicio, fin: fin, handler: handler, tipo: desc})
+	return nil
+}
+
+// finProtegido: el fin del rango de un try, recortando un `return`/`goto` final. Es lo que hace
+// javac: el rango acaba donde empieza esa instrucción porque no puede lanzar, mientras que un
+// `athrow` sí queda dentro (si no, el catch no vería su propio `throw`).
+func (e *emisor) finProtegido(inicio, fin int) int {
+	lista, err := walkJvmCode(e.codigo)
+	if err != nil || len(lista) == 0 {
+		return fin
+	}
+	ultima := lista[len(lista)-1]
+	if ultima.pc < inicio {
+		return fin
+	}
+	switch ultima.name {
+	case "goto", "return", "ireturn", "areturn":
+		return ultima.pc
+	}
+	return fin
+}
+
+// lanza: `throw expr;` es `athrow` (0xbf), medido en el parrafo 71 sobre `T.lanza`.
+func (e *emisor) lanza(v jlanza) error {
+	e.marcaLinea(v.donde.linea)
+	d, err := e.exp(v.e)
+	if err != nil {
+		return err
+	}
+	if !esTipoDeReferencia(d) {
+		return fmt.Errorf("linea %d: se lanza un %s, que no es una referencia", v.donde.linea, d)
+	}
+	e.emite(0xbf)
+	e.baja(1)
+	return nil
+}
+
 func (e *emisor) stm(s jstmt) error {
 	switch v := s.(type) {
 	case jstmtExpr:
@@ -2836,6 +2918,10 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		e.saltoEmite(opGOTO, e.quiebres[len(e.quiebres)-1], 0)
 		return nil
+	case jtry:
+		return e.intenta(v)
+	case jlanza:
+		return e.lanza(v)
 	case jcontinua:
 		if len(e.continuar) == 0 {
 			return fmt.Errorf("linea %d: un `continue` fuera de un bucle", v.donde.linea)
@@ -3240,6 +3326,7 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.siguienteEtiqueta = 0
 	e.quiebres = nil
 	e.continuar = nil
+	e.excepciones = nil
 	e.prof = 0
 	e.maxProf = 0
 	e.maxLoc = 0
@@ -3251,7 +3338,7 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 // dependen de los anchos definitivos de los saltos.
 func (e *emisor) codeAttr() ([]byte, error) {
 	e.encadenaGotos()
-	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc)
+	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc, e.excepciones)
 	if err != nil {
 		return nil, err
 	}
@@ -3262,7 +3349,19 @@ func (e *emisor) codeAttr() ([]byte, error) {
 	code = append(code, u2be(uint16(e.maxLoc))...)
 	code = append(code, u4be(uint32(len(e.codigo)))...)
 	code = append(code, e.codigo...)
-	code = append(code, u2be(0)...) // exception_table_length: el subconjunto no lanza ni atrapa
+	code = append(code, u2be(uint16(len(e.excepciones)))...)
+	for _, ex := range e.excepciones {
+		code = append(code, u2be(uint16(ex.inicio))...)
+		code = append(code, u2be(uint16(ex.fin))...)
+		code = append(code, u2be(uint16(ex.handler))...)
+		if ex.tipo == "" {
+			code = append(code, u2be(0)...)
+		} else {
+			// catch_type es una Class con el nombre INTERNO (`java/lang/X`), no el descriptor:
+			// `javap` imprime el Utf8 tal cual y con `L…;` salía `Class "Ljava/lang/X;"` (§71)
+			code = append(code, u2be(uint16(e.pool.clase(internoDeDescriptor(ex.tipo))))...)
+		}
+	}
 	tabla := u2be(uint16(len(e.lineas)))
 	for _, l := range e.lineas {
 		tabla = append(tabla, u2be(uint16(l.desplazamiento))...)
@@ -3424,6 +3523,11 @@ func terminaEnSalida(s jstmt) bool {
 			}
 		}
 		return true
+	case jlanza:
+		return true
+	case jtry:
+		// un `try/catch` no cae si el cuerpo y el catch salen los dos
+		return terminaEnSalida(v.cuerpo) && terminaEnSalida(v.atrapa)
 	}
 	return false
 }

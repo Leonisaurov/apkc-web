@@ -3855,3 +3855,63 @@ cinco caminos dan `total 7|total 9|total 102|10|3|2|4` con `rc 102`.
 
 Suite: **236 PASS + 2 SKIP** nativa y **196 PASS + 42 SKIP** en el hospedador; gate de `studio/e2e.sh`
 en orden.
+
+## 71. `try/catch` y `throw`: la tabla de excepciones, y el defecto de locales que destapó ART
+
+El ítem 5.9, el último grande de control de flujo. Medido con `T`, que tiene un `try` que devuelve
+desde dentro, un `throw` y un `try` con catch que se ejecuta.
+
+**El `.class`**, de `javap -c -v`:
+
+```
+lee:     0 aload_0 ; 1 iload_1 ; 2 iaload ; 3 ireturn
+         4 astore_2 ; 5 iconst_m1 ; 6 ireturn
+         Exception table: from 0 to 3, target 4, Class java/lang/ArrayIndexOutOfBoundsException
+atrapa:  ... 8 goto 14 ; 11 astore_2 ; 12 iconst_2 ; 13 istore_1 ; 14 iload_1 ; 15 ireturn
+         Exception table: from 2 to 8, target 11
+lanza:   ... 13 athrow ; 14 return
+```
+
+Cuatro reglas que dijo el oráculo, no el manual: el `to` de la tabla es **exclusivo**; el handler
+empieza con el `astore` de la excepción (el único valor que el verificador deja en la pila); el rango
+**excluye un `return`/`goto` final** —no pueden lanzar— pero **incluye el `athrow`** (`T.f` mide
+`0..10` con el `athrow` en 9, y `g` mide `0..1` con el `ireturn` en 1); y `catch_type` es una `Class`
+con el nombre **interno**, no el descriptor (con `Ljava/lang/X;` javap imprimía
+`Class "Ljava/lang/X;"`).
+
+**El dex**, de `dexdump -d`: `try_item` (start, insn_count, handler_off) detrás de las palabras, con un
+relleno de una unidad si el cuerpo tiene un número impar, y la `encoded_catch_handler_list` detrás
+(`uleb` de tamaño, `sleb` de cuántos tipos —negativo si hay catch-all—, pares tipo/destino). `throw`
+es `0x27` (`2701`) y el handler que usa la excepción empieza con `move-exception` (`0x0d`); `d8` lo
+omite cuando nadie la usa (en `atrapa` su `astore` desaparece y el handler arranca en el `const/4`).
+
+**El defecto que encontró ART, y era de fondo.** El primer intento corrió y ART cortó con
+`VerifyError: int T.atrapa(int): [0x8] register v2 has type Undefined`. La causa no era el try: era el
+modelo de locales del traductor. `istore` **fundía** el local con el registro del valor (sin
+instrucción), y con dos asignaciones en caminos distintos —`r = 1` en el try y `r = 2` en el catch—
+la segunda fusión reescribía el mapa y una de las dos rutas quedaba con un registro sin definir.
+Medido en `d8` con `Mv2` y `Mv3`: cuando el valor viene de un local o de un argumento vivo, `d8`
+**mueve** (`move v0, v1` = `0110`, `move-object v0, v3` = `0730`). El traductor ahora funde solo la
+**primera** escritura de un local que no es argumento y cuando el valor viene de un temporal; el resto
+sueltan `move`/`move-object` al registro del local. Los nueve cuerpos del fixture no cambian (sus
+locales se escriben una vez o en el mismo registro).
+
+**Los marcos**: el handler es un comienzo de bloque con la excepción encima de la pila y los locales
+unidos sobre todo el rango protegido (`same_locals_1_stack_item` en `lee`, `full_frame` en `atrapa`).
+El analizador añade esa arista por cada instrucción protegida.
+
+**Ejecutado**: nuestro dex de `T` en `app_process` da `9`, `-1`, `2`, `1` con `rc 0` —lo mismo que la
+JVM—, `dexdump` verifica `rc 0`; la JVM con `-Xverify:all` sobre nuestras clases también. El banco
+lleva `Ver.leeSeguro` y los cinco caminos dan `total 7|total 9|total 102|10|3|2|4|7|-1` con `rc 102`.
+`TestElTrySeDexaComoJavac` compara por método (registros, `tries` y palabras) y no el fichero entero:
+la `LineNumberTable` de un `try` sigue la política de este emisor, y javac anota además el `goto` de
+salida con la línea de la llave del catch.
+
+De paso entró el **menos de un literal entero** (`return -1;` era `iconst_m1`): el analizador dobla el
+signo y el resto de la negación sigue fuera.
+
+Suite: **237 PASS + 2 SKIP** nativa y **196 PASS + 43 SKIP** en el hospedador; gate de `studio/e2e.sh`
+en orden.
+
+**Frontera**: `finally`, más de un `catch` por `try`, `catch` de un tipo que no sea clase y la
+negación de algo que no sea un literal entero se rechazan por nombre.

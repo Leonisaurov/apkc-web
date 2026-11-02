@@ -75,4 +75,13 @@ public class Ver {
         }
         return s;
     }
+
+    // Un `try/catch` (§71): el índice fuera de rango se atrapa y devuelve -1.
+    public static int leeSeguro(int[] v, int i) {
+        try {
+            return v[i];
+        } catch (ArrayIndexOutOfBoundsException e) {
+            return -1;
+        }
+    }
 }

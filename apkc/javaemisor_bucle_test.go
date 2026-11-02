@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -139,20 +138,5 @@ func codeItemDeMetodo(d *dexFile, nombre string) (codeItem, error) {
 	return codeItem{}, errors.New("el método no aparece en el class_data")
 }
 
-// TestTrySigueRechazado: la frontera escrita. `while`, `for`, `switch` y `do-while` (este desde el
-// §69) entraron midiendo; `try` sigue saliendo por su nombre.
-func TestTrySigueRechazado(t *testing.T) {
-	casos := []struct{ nombre, fuente, pista string }{
-		{"try", "package p;\npublic class A { public static void f() { try { f(); } catch (RuntimeException e) { f(); } } }\n", "try"},
-	}
-	for _, c := range casos {
-		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/A.java", contenido: c.fuente}}, jarDelSDK(t))
-		if err == nil {
-			t.Errorf("%s: se aceptó una sentencia que no está medida", c.nombre)
-			continue
-		}
-		if !strings.Contains(err.Error(), c.pista) {
-			t.Errorf("%s: el mensaje no nombra %q: %v", c.nombre, c.pista, err)
-		}
-	}
-}
+// (La frontera de lo que no está medido vive ahora en `TestElTryDelFuenteRechazaLoNoMedido`: `try`
+// entró midiendo en el §71.)

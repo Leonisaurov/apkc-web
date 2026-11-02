@@ -409,6 +409,17 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   con el `iinc` del paso). Por eso el `for` tiene nodo propio, `jpara`, con el paso fuera del cuerpo;
   el dex de `Corte` sale byte a byte el de javac. De paso se corrigió que `anonimasDe` no recorría
   `if`/`while`/`switch`: una anónima dentro de un `if` no se compilaba.
+- **`try`/`catch` y `throw`, y el defecto de locales que destapó ART** (§71): medido que el rango de la
+  exception_table es exclusivo, **excluye un `return`/`goto` final e incluye el `athrow`**, que el
+  handler empieza en el `astore` y que `catch_type` lleva el nombre **interno** (no el descriptor). En
+  el dex: `try_item` + `encoded_catch_handler_list` (con el relleno de una unidad si el cuerpo es
+  impar), `move-exception` 0x0d y `throw` 0x27; `d8` omite el `move-exception` si nadie usa la
+  excepción. ART cortó el primer intento con `VerifyError … register v2 has type Undefined`: la fusión
+  de `istore` (local = registro del valor) no vale con **dos asignaciones en caminos distintos**, y el
+  traductor ahora funde solo la primera escritura de un local que no es argumento desde un temporal y
+  suelta `move`/`move-object` (`0110`, `0730`) en el resto. Marcos del handler con la excepción en la
+  pila y los locales unidos sobre el rango. El banco lleva `leeSeguro` y los cinco caminos dan
+  `total 7|total 9|total 102|10|3|2|4|7|-1`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -434,7 +445,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **236 PASS + 2 SKIP** nativa y **196 PASS + 42 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **237 PASS + 2 SKIP** nativa y **196 PASS + 43 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

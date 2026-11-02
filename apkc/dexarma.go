@@ -402,6 +402,19 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint3
 			for _, w := range ci.insns {
 				buf = putU16(buf, w)
 			}
+			if ci.triesSize > 0 {
+				// si el cuerpo tiene un numero impar de palabras, un relleno de una unidad antes de
+				// la tabla (format del code_item); los try_item y despues la lista de handlers
+				if ci.insnsSize%2 != 0 {
+					buf = putU16(buf, 0)
+				}
+				for _, tr := range ci.tries {
+					buf = putU32(buf, tr.start)
+					buf = putU16(buf, tr.count)
+					buf = putU16(buf, tr.handlerOff)
+				}
+				buf = append(buf, ci.handlers...)
+			}
 			cuerpos[clave] = ci.insns
 		}
 	}
@@ -603,12 +616,8 @@ func accesoMetodoDex(m classMethod) uint32 {
 	return a
 }
 
-// claseCabe: lo que este ensamblador todavía no puede escribir, dicho antes de gastar bytes.
+// claseCabe: lo que este ensamblador todavía no puede escribir, dicho antes de gastar bytes. Desde el
+// parrafo 71 los `try` ya se escriben, así que hoy no queda nada que rechazar aquí.
 func (td *dexTables) claseCabe(cf classFull) error {
-	for _, m := range cf.Methods {
-		if m.HasCode && len(m.Tries) > 0 {
-			return fmt.Errorf("%s%s has a try block: try_item is not measured here", cf.Name, m.Name)
-		}
-	}
 	return nil
 }

@@ -82,12 +82,30 @@ type codeItem struct {
 	debugInfoOff  uint32 // +8, cae dentro del area debug_info_item del mapa
 	insnsSize     uint32 // +12
 	insns         []uint16
+	// la tabla de excepciones (parrafo 71): los try_item van detras de las insns, con un relleno de
+	// una unidad si el cuerpo tiene un numero impar de palabras, y la lista de handlers detras
+	tries    []tryItem
+	handlers []byte
 }
 
-// tamanoEnBytes: la cabecera mas sus palabras. Sin tries por ahora, que es el caso de los nueve
-// metodos del fixture; un try anyadido cambia la cuenta y se medira cuando haga falta.
+// tryItem: 8 bytes, con las direcciones en unidades de codigo y el handler como desplazamiento en
+// bytes desde el principio de la lista de handlers.
+type tryItem struct {
+	start      uint32
+	count      uint16
+	handlerOff uint16
+}
+
+// tamanoEnBytes: la cabecera mas sus palabras, mas la tabla de excepciones cuando la hay.
 func (c codeItem) tamanoEnBytes() int {
-	return 16 + 2*int(c.insnsSize)
+	n := 16 + 2*int(c.insnsSize)
+	if c.triesSize > 0 {
+		if c.insnsSize%2 != 0 {
+			n += 2
+		}
+		n += 8*int(c.triesSize) + len(c.handlers)
+	}
+	return n
 }
 
 // readCodeItem reads the item at off, words at +16 and the size as the u32 it is (+12, whose high
@@ -411,6 +429,14 @@ func desmontaPalabras(palabras []uint16) ([]string, error) {
 // sin tabla al lado.
 func formatoDalvik(op byte) (string, byte, bool) {
 	switch op {
+	case 0x01:
+		return "move", '2', true
+	case 0x07:
+		return "move-object", '2', true
+	case 0x0d:
+		return "move-exception", 'x', true
+	case 0x27:
+		return "throw", 'x', true
 	case 0x0e:
 		return "return-void", '0', true
 	case 0x0c:

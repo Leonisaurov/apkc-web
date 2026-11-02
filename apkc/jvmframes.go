@@ -559,6 +559,11 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		return nil, false, nil
 	case op == 0xb1:
 		return nil, false, nil
+	case op == 0xbf: // athrow: se come la referencia y el bloque no sigue
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+		return nil, false, nil
 	case op >= 0xb2 && op <= 0xb5:
 		idx := u2De(in.ops, 0)
 		_, desc, err := a.lector.refDe(idx)
@@ -674,7 +679,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 
 // framesDeMetodo devuelve el cuerpo del StackMapTable (sin el nombre ni el largo) y el alto maximo
 // que alcanzo la pila simulada. Si no hay ningun marco, el atributo no va.
-func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool *poolBuilder, maxLoc int) ([]byte, int, error) {
+func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool *poolBuilder, maxLoc int, tries []entradaTry) ([]byte, int, error) {
 	lector := pool.lector()
 	instrs, err := walkJvmCode(code)
 	if err != nil {
@@ -719,6 +724,10 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 			return nil, 0, fmt.Errorf("un salto apunta al final del cuerpo")
 		}
 	}
+	// los handlers de un try son comienzos de bloque: el verificador les da una pila con la excepcion
+	for _, tr := range tries {
+		comienzos[tr.handler] = true
+	}
 
 	args, err := tiposDeArgs(desc)
 	if err != nil {
@@ -749,6 +758,30 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 			in, ok := porPC[cur]
 			if !ok {
 				return nil, 0, fmt.Errorf("el flujo llega al pc %d, que no es una instruccion", cur)
+			}
+			// cada instrucción protegida puede lanzar: el handler recibe sus locales con la
+			// excepción encima de la pila (JVMS 4.10.1.6, medido en el §71 sobre `T`)
+			for _, tr := range tries {
+				if cur < tr.inicio || cur >= tr.fin {
+					continue
+				}
+				tipo := verifRef("java/lang/Throwable")
+				if tr.tipo != "" {
+					t, err := tipoDeDesc(tr.tipo)
+					if err != nil {
+						return nil, 0, err
+					}
+					tipo = t
+				}
+				entrada := estadoFrame{locales: append([]tipoVerif(nil), a.est.locales...), pila: []tipoVerif{tipo}}
+				cambio, err := fusiona(estados, tr.handler, entrada)
+				if err != nil {
+					return nil, 0, fmt.Errorf("pc %d: %w", tr.handler, err)
+				}
+				if cambio && !enCola[tr.handler] {
+					cola = append(cola, tr.handler)
+					enCola[tr.handler] = true
+				}
 			}
 			sucesores, sigue, err := a.aplica(in)
 			if err != nil {
