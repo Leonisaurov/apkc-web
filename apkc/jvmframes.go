@@ -24,17 +24,19 @@ import (
 	"strings"
 )
 
-// tipoVerif es un verification_type_info: entero, referencia (con su nombre interno; vacio es el
-// tipo null) o top (un hueco sin asignar en alguna rama).
+// tipoVerif es un verification_type_info: entero, largo, referencia (con su nombre interno; vacio es el
+// tipo null), la SEGUNDA MITAD de un valor ancho o top (un hueco sin asignar en alguna rama).
 type tipoVerif struct {
-	etiqueta byte // 'i' entero, 'l' referencia, 't' top
+	etiqueta byte // 'i' entero, 'j' largo, 's' segunda mitad, 'l' referencia, 't' top
 	clase    string
 }
 
 var (
-	verifTop  = tipoVerif{etiqueta: 't'}
-	verifInt  = tipoVerif{etiqueta: 'i'}
-	verifNulo = tipoVerif{etiqueta: 'l'}
+	verifTop     = tipoVerif{etiqueta: 't'}
+	verifInt     = tipoVerif{etiqueta: 'i'}
+	verifNulo    = tipoVerif{etiqueta: 'l'}
+	verifLargo   = tipoVerif{etiqueta: 'j'}
+	verifSegundo = tipoVerif{etiqueta: 's'}
 )
 
 func verifRef(clase string) tipoVerif { return tipoVerif{etiqueta: 'l', clase: clase} }
@@ -43,6 +45,10 @@ func (t tipoVerif) String() string {
 	switch t.etiqueta {
 	case 'i':
 		return "entero"
+	case 'j':
+		return "largo"
+	case 's':
+		return "segunda mitad de un ancho"
 	case 'l':
 		if t.clase == "" {
 			return "null"
@@ -139,6 +145,8 @@ func (l *lectorPool) tipoDeConstante(i int) (tipoVerif, error) {
 		return verifRef("java/lang/String"), nil
 	case 7: // Class
 		return verifRef("java/lang/Class"), nil
+	case 5: // Long (`ldc2_w`, parrafo 74)
+		return verifLargo, nil
 	}
 	return tipoVerif{}, fmt.Errorf("un `ldc` de la etiqueta %d del pool no esta medido", e[0])
 }
@@ -161,6 +169,10 @@ func tipoDeDesc(desc string) (tipoVerif, error) {
 		// un arreglo es una referencia cuyo tipo de verificacion se nombra con su propio descriptor:
 		// medido en `Arreglos.copia` (parrafo 66), donde javac escribe `locals = [ class "[I", int ]`.
 		return verifRef(desc), nil
+	case 'J':
+		// el largo ocupa DOS huecos: medido en `javap -v` de la sonda `F`, donde el append de javac
+		// escribe `locals = [ long ]` para un local que va del hueco 3 al 4 (parrafo 74)
+		return verifLargo, nil
 	}
 	return tipoVerif{}, fmt.Errorf("el tipo %q de un descriptor no esta medido", desc)
 }
@@ -291,6 +303,21 @@ type analisis struct {
 
 func (a *analisis) empuja(t tipoVerif) { a.est.pila = append(a.est.pila, t) }
 
+// altoPilas: la profundidad en PALABRAS, que es la unidad de `max_stack` para el verificador: un
+// `long` vale dos. Medido al ejecutar la sonda `L`: con `max_stack=1` y un `ldc2_w` la JVM corta con
+// `Operand stack overflow … Exceeded max stack size`, y javac escribe `stack=2` (parrafo 74).
+func altoPilas(pila []tipoVerif) int {
+	n := 0
+	for _, t := range pila {
+		if t.etiqueta == 'j' {
+			n += 2
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 func (a *analisis) saca() (tipoVerif, error) {
 	if len(a.est.pila) == 0 {
 		return tipoVerif{}, fmt.Errorf("la pila esta vacia")
@@ -307,6 +334,18 @@ func (a *analisis) sacaEntero() error {
 	}
 	if t.etiqueta != 'i' {
 		return fmt.Errorf("se esperaba un entero y hay %s", t)
+	}
+	return nil
+}
+
+// sacaLargo: lo que deja un `ladd`, un `ldiv` o un `lreturn` en la pila (parrafo 74).
+func (a *analisis) sacaLargo() error {
+	t, err := a.saca()
+	if err != nil {
+		return err
+	}
+	if t.etiqueta != 'j' {
+		return fmt.Errorf("se esperaba un largo y hay %s", t)
 	}
 	return nil
 }
@@ -331,7 +370,7 @@ func (a *analisis) cargaLocal(idx int, que byte) error {
 		return fmt.Errorf("se lee el hueco %d sin asignar en algun camino", idx)
 	}
 	if t.etiqueta != que {
-		return fmt.Errorf("el hueco %d tiene %s y se carga como %s", idx, t, map[byte]string{'i': "entero", 'l': "referencia"}[que])
+		return fmt.Errorf("el hueco %d tiene %s y se carga como %s", idx, t, nombreTipoVerif(que))
 	}
 	a.empuja(t)
 	return nil
@@ -346,10 +385,31 @@ func (a *analisis) guardaLocal(idx int, que byte) error {
 		return err
 	}
 	if t.etiqueta != que {
-		return fmt.Errorf("se guarda %s en el hueco %d y se esperaba %s", t, idx, map[byte]string{'i': "un entero", 'l': "una referencia"}[que])
+		return fmt.Errorf("se guarda %s en el hueco %d y se esperaba %s", t, idx, nombreTipoVerif(que))
 	}
 	a.est.locales[idx] = t
+	if t.etiqueta == 'j' {
+		// el largo ocupa tambien el hueco siguiente, que el verificador no nombra: medido en la sonda
+		// `F`, donde `long x` vive en los huecos 3 y 4 (parrafo 74)
+		if idx+1 >= len(a.est.locales) {
+			return fmt.Errorf("el largo del hueco %d se sale del marco de %d huecos", idx, len(a.est.locales))
+		}
+		a.est.locales[idx+1] = verifSegundo
+	}
 	return nil
+}
+
+// nombreTipoVerif: como se dice la etiqueta en los mensajes.
+func nombreTipoVerif(que byte) string {
+	switch que {
+	case 'i':
+		return "un entero"
+	case 'j':
+		return "un largo"
+	case 'l':
+		return "una referencia"
+	}
+	return "top"
 }
 
 func salto16(in jvmInstr) int { return in.pc + int(int16(uint16(in.ops[0])<<8|uint16(in.ops[1]))) }
@@ -471,6 +531,56 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, fmt.Errorf("el `dup` con la pila vacia")
 		}
 		a.empuja(a.est.pila[len(a.est.pila)-1])
+	case op == 0x09 || op == 0x0a: // lconst_0, lconst_1 (medidos en `W.cero` y `F.conComparacion`)
+		a.empuja(verifLargo)
+	case op == 0x14: // ldc2_w: la constante larga del pool
+		t, err := a.lector.tipoDeConstante(u2De(in.ops, 0))
+		if err != nil {
+			return nil, false, err
+		}
+		if t.etiqueta != 'j' {
+			return nil, false, fmt.Errorf("el ldc2_w del indice %d no trae un largo", u2De(in.ops, 0))
+		}
+		a.empuja(t)
+	case op == 0x16: // lload
+		if err := a.cargaLocal(int(in.ops[0]), 'j'); err != nil {
+			return nil, false, err
+		}
+	case op >= 0x1e && op <= 0x21: // lload_0 .. lload_3
+		if err := a.cargaLocal(int(op-0x1e), 'j'); err != nil {
+			return nil, false, err
+		}
+	case op == 0x37: // lstore
+		if err := a.guardaLocal(int(in.ops[0]), 'j'); err != nil {
+			return nil, false, err
+		}
+	case op >= 0x3f && op <= 0x42: // lstore_0 .. lstore_3
+		if err := a.guardaLocal(int(op-0x3f), 'j'); err != nil {
+			return nil, false, err
+		}
+	case op == 0x61 || op == 0x65 || op == 0x69 || op == 0x6d || op == 0x71: // ladd, lsub, lmul, ldiv, lrem
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifLargo)
+	case op == 0x85: // i2l
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifLargo)
+	case op == 0x88: // l2i
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
+	case op == 0xad: // lreturn
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		return nil, false, nil
 	case op == 0x5a: // dup_x1: [objeto, valor] -> [valor, objeto, valor], medido en el access$002 (parrafo 72)
 		if len(a.est.pila) < 2 {
 			return nil, false, fmt.Errorf("el `dup_x1` con menos de dos valores")
@@ -744,7 +854,14 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 	if !estatico {
 		inicial.locales = append(inicial.locales, verifRef(propio))
 	}
-	inicial.locales = append(inicial.locales, args...)
+	for _, t := range args {
+		inicial.locales = append(inicial.locales, t)
+		if t.etiqueta == 'j' {
+			// un argumento largo ocupa el hueco y el siguiente (medido en `F.conRama`: `a` en 0-1 y
+			// `n` en 2, parrafo 74)
+			inicial.locales = append(inicial.locales, verifSegundo)
+		}
+	}
 	// los huecos declarados despues de los argumentos existen desde el principio como top: el
 	// verificador los da por no asignados hasta que una instruccion los escribe
 	for len(inicial.locales) < maxLoc {
@@ -794,8 +911,8 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 			if err != nil {
 				return nil, 0, fmt.Errorf("pc %d (%s): %w", cur, in.name, err)
 			}
-			if len(a.est.pila) > alto {
-				alto = len(a.est.pila)
+			if altoPilas(a.est.pila) > alto {
+				alto = altoPilas(a.est.pila)
 			}
 			for _, s := range sucesores {
 				cambio, err := fusiona(estados, s, a.est)
@@ -858,12 +975,22 @@ func codificaFrames(estados map[int]estadoFrame, orden []int, pool *poolBuilder)
 		}
 		cuerpo = append(cuerpo, 255)
 		cuerpo = append(cuerpo, u2be(uint16(delta))...)
-		n := len(est.locales)
-		for n > 0 && est.locales[n-1].etiqueta == 't' {
+		var lista []tipoVerif
+		for _, t := range est.locales {
+			if t.etiqueta == 's' {
+				// la segunda mitad de un ancho NO es una variable: javac escribe un solo `long` en la
+				// lista de locales y el hueco extra cuenta para max_locals (medido en `F.conRama`,
+				// donde el append dice `locals = [ long ]` para el local de los huecos 3 y 4)
+				continue
+			}
+			lista = append(lista, t)
+		}
+		n := len(lista)
+		for n > 0 && lista[n-1].etiqueta == 't' {
 			n--
 		}
 		cuerpo = append(cuerpo, u2be(uint16(n))...)
-		for _, t := range est.locales[:n] {
+		for _, t := range lista[:n] {
 			cuerpo = append(cuerpo, codificaTipo(t, pool)...)
 		}
 		cuerpo = append(cuerpo, u2be(uint16(len(est.pila)))...)
@@ -881,6 +1008,9 @@ func codificaTipo(t tipoVerif, pool *poolBuilder) []byte {
 	switch t.etiqueta {
 	case 'i':
 		return []byte{1}
+	case 'j':
+		// ITEM_Long 4; la segunda mitad del hueco no se escribe (parrafo 74)
+		return []byte{4}
 	case 'l':
 		if t.clase == "" {
 			return []byte{5}

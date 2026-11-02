@@ -314,13 +314,14 @@ func TestRechazaLoQueNoEstaMedido(t *testing.T) {
 	td, clases := tablaDeLasSeis(t)
 	cf := clases[1] // MainActivity
 
-	// ladd (0x61) no esta en la tabla: el caminante lo dice por su byte. (Iadd estuvo aquí hasta el
-	// parrafo 50, que lo midio y lo ingreso en la tabla con sus cuatro hermanos.)
+	// 0xd2 (`impdep1`, el byte que la JVM deja para implementaciones) no esta en la tabla: el caminante
+	// lo dice por su byte. (Iadd estuvo aqui hasta el parrafo 50, que lo midio y lo ingreso con sus
+	// cuatro hermanos, y ladd desde el parrafo 74.)
 	sinMedir := classMethod{HasCode: true, Name: "suma", Desc: "()I", LocalCount: 1, ArgCount: 1, MaxStack: 2,
-		Code: []byte{0x03, 0x61}}
+		Code: []byte{0x03, 0xd2}}
 	if _, err := td.codeItemDe(cf, sinMedir); err == nil {
 		t.Error("an opcode outside the measured table was accepted")
-	} else if !strings.Contains(err.Error(), "0x61") {
+	} else if !strings.Contains(err.Error(), "0xd2") {
 		t.Errorf("the refusal does not name the byte: %v", err)
 	}
 

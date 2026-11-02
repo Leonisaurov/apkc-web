@@ -449,6 +449,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   Sonda `B` (campo estático con inicializador, suma sobre `new int[] {1,2,3}` y `.length` de un
   `String[]`): JVM `-Xverify:all`, nuestro dex en ART (`dexdump rc 0`) y el dex de `d8` sobre nuestras
   clases dan `6`/`9`/`2`; el banco lleva `Ver.inicial` y los cinco caminos coinciden.
+- **El `long` en el `.class`, medido hasta el último hueco** (§74): dos huecos de local y **dos palabras
+  de pila** (con `max_stack` contado por elementos la JVM corta con `Operand stack overflow` en un
+  `<clinit>` que empieza con `ldc2_w`), la entrada `Long` del pool reserva su segunda posición
+  (`agregarDos`), `1L`/`0L` salen como `lconst_1`/`lconst_0` y todo lo demás por `ldc2_w` incluso `2L`,
+  y el ensanchado va **en el sitio del operando** (`n + m` largo es `iload_0; i2l; lload_1; ladd`), lo
+  que obligó a saber el tipo de los dos lados antes de escribirlos (`tipoPrevisto`). Los marcos ponen
+  `ITEM_Long` una sola vez por variable y la segunda mitad no se escribe. Nuestro `L` sale con el mismo
+  `Code`, `max_stack` y `max_locals` que el de javac y la JVM lo ejecuta (`306`/`8`); el dex todavía lo
+  rechaza por nombre, con las formas de `d8` ya medidas (`const-wide/16` 0x16, `mul-long` 0x9d,
+  `add-long/2addr` 0xbb, `sget-wide` 0x61, `sput-wide` 0x68, `return-wide` 0x10, `move-result-wide`
+  0x0b y argumentos que valen dos registros). `double` no lo arma ni el léxico (`1.0`); siguen sin medir
+  `lcmp`, `dup2`/`pop2`, los arreglos de largos y el `ConstantValue` de un `static final long`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -474,11 +486,11 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **243 PASS + 2 SKIP** nativa y **196 PASS + 49 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **245 PASS + 2 SKIP** nativa y **196 PASS + 51 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
-  tipos de dos huecos, anotaciones que no sean `@Override`.
+  tipos de punto flotante y el `long` en el dex (el `.class` ya se emite, párrafo 74), anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

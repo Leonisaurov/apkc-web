@@ -68,6 +68,27 @@ var jvmMeasured = map[byte]jvmOpcode{
 	// `iinc` (parrafo 67): index de local y constante de un byte con signo, medido en `Inc`
 	// (`iinc 1, 1` y `iinc 1, -1`)
 	0x84: {"iinc", 2},
+	// `long` (parrafo 74): los numeros del JVMS, confirmados al caminar el `Code` que escribio javac
+	// sobre la sonda `L` —`lload_0; lload_2; ldc2_w #7; lmul; ladd; lreturn`— y al ejecutarlo
+	0x09: {"lconst_0", 0},
+	0x0a: {"lconst_1", 0},
+	0x14: {"ldc2_w", 2},
+	0x1e: {"lload_0", 0},
+	0x1f: {"lload_1", 0},
+	0x20: {"lload_2", 0},
+	0x21: {"lload_3", 0},
+	0x3f: {"lstore_0", 0},
+	0x40: {"lstore_1", 0},
+	0x41: {"lstore_2", 0},
+	0x42: {"lstore_3", 0},
+	0x61: {"ladd", 0},
+	0x65: {"lsub", 0},
+	0x69: {"lmul", 0},
+	0x6d: {"ldiv", 0},
+	0x71: {"lrem", 0},
+	0x85: {"i2l", 0},
+	0x88: {"l2i", 0},
+	0xad: {"lreturn", 0},
 	// arreglos (parrafo 66): el ancho sale de `javap -c` de la sonda `Arreglos`, donde
 	// `newarray int` va de 1 a 3, `anewarray #7` de 1 a 4 y `arraylength` de 1 a 2
 	0x2e: {"iaload", 0},

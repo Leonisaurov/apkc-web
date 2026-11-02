@@ -372,11 +372,6 @@ public class C {
     void f() { if (true) return; }
 }
 `, "if"},
-		{"un long", `package p;
-public class C {
-    void f() { long x = 1L; }
-}
-`, "long"},
 		{"una anotacion que no es Override", `package p;
 public class C {
     @Deprecated

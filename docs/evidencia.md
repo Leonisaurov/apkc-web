@@ -4053,3 +4053,67 @@ interoperabilidad: salida `total 7|total 9|total 102|10|3|2|4|7|-1|10|6`, `rc 10
 los cuatro dex. El `dexdump` del banco se lee ahora en la **misma** llamada a `rish` que lo ejecuta:
 con dos llamadas seguidas el cliente leía el fichero de estado antes de que el aparato lo terminara
 de escribir, y el veredicto salía con el `rc` vacío.
+
+## 74. El `long` en el `.class`: dos huecos, dos palabras y la constante `Long` del pool
+
+**El pool, con `javap -v` sobre `L`**: una entrada `Long` (tag 5) **ocupa dos posiciones** —`#7 = Long 2l`
+y la siguiente es `#9`; el #8 no existe—, así que el escritor reserva un hueco (`agregarDos`) y
+`serializar` lo cuenta sin escribir bytes.
+
+**Los huecos de local, con `javap -v -c` sobre `F.conRama(long a, int n)` con un `long x` dentro**:
+`locals=5` con `a` en 0-1, `n` en 2 y `x` en 3-4. El `StackMapTable` de javac es un `append` con
+`locals = [ long ]`: **una** entrada para las dos mitades. El marco `full_frame` de este emisor hace lo
+mismo: la segunda mitad se marca `verifSegundo` en el modelo y no se escribe.
+
+**Las palabras de pila, con `javap -v -c` sobre `L.cuenta(long,long)`**: `stack=6` (dos largos dentro y
+uno fuera, dos palabras cada uno). Destapado ejecutando: con `max_stack` contado por *elementos* la JVM
+corta `VerifyError: Operand stack overflow … Exceeded max stack size` en el `<clinit>` que empieza con
+`ldc2_w`; el conteo es por **palabras** y javac escribe 2 para un solo largo.
+
+**Los opcodes, leídos de `javap -c` sobre `L` y `W` y confirmados al ejecutar**: `lconst_0` 0x09,
+`lconst_1` 0x0a, `ldc2_w` 0x14 (dos bytes de índice), `lload` 0x16 / `lload_0..3` 0x1e..0x21, `lstore`
+0x37 / `lstore_0..3` 0x3f..0x42, `ladd` 0x61, `lsub` 0x65, `lmul` 0x69, `ldiv` 0x6d, `lrem` 0x71,
+`i2l` 0x85, `l2i` 0x88, `lreturn` 0xad. `1L` y `0L` salen como `lconst_1`/`lconst_0` y cualquier otro
+por `ldc2_w`, incluso `2L`.
+
+**El ensanchado, con `javap -c` sobre `W`**: `long x = 0` es `lconst_0` (el literal se escribe ancho),
+`return n;` con `n` entero es `iload_0; i2l`, y `n + m` con `m` largo es **`iload_0; i2l; lload_1; ladd`**
+—el entero se ensancha en su propio sitio, antes de cargar el otro lado—, así que el emisor necesita el
+tipo de los dos operandos *antes* de escribirlos: por eso aparece `tipoPrevisto`.
+
+**Lo que ya estaba medido del lado del dex** (de `dexdump -d` sobre `d8 --release` con la misma sonda), y
+que nuestro traductor todavía **no** escribe: `const-wide/16` 0x16 (`1600 0200`, dos unidades),
+`mul-long` 0x9d en forma 23x, `add-long/2addr` 0xbb, `sget-wide` 0x61, `sput-wide` 0x68, `return-wide`
+0x10, `move-result-wide` 0x0b, y en la frame los argumentos largos valen **dos registros**: `cuenta:(JJ)J`
+sale con `registers=6, ins=4` y `imprime:(J)V` con `registers=3, ins=2`, con `invoke-static {v0, v1}`
+para un solo argumento largo. También midió `d8` que reasigna el par muerto (`mul-long v4, v4, v0`
+escribe encima del segundo argumento).
+
+**Añadido con dos sondas más** (`V`: conversiones, campo de instancia ancho, constantes de 17 y 5
+dígitos; `M`: las cuatro cuentas y una copia): `int-to-long v0, v2` es **0x81** y `long-to-int v1, v0`
+**0x84** (12x); `iget-wide` **0x53** y `iput-wide` **0x5a** (22c, el par destino en el nibble bajo);
+`const-wide/16` **0x16** (`1600 0100`, dos unidades), `const-wide/32` **0x17** (`1700 7011 0100`, tres)
+y `const-wide` entero **0x18** con los ocho bytes en little-endian en cuatro unidades
+(`1800 cb04 fb71 1f01` para `1234567890123L`); la familia 23x larga va de **0x9b** (suma) a **0x9f**
+(residuo) —`mul-long v4, v4, v0` medido como `9d04 0400`— y la `/2addr` de **0xbb** (suma) a **0xbf**
+(residuo), con `div-long/2addr v0, v2` = `be20` y `add-long/2addr v0, v4` = `bb40`. `return-wide` es
+**0x10** y `move-result-wide` **0x0b**. La frame cuenta los argumentos **en palabras**: `cuenta:(JJ)J`
+sale `registers=6, ins=4`, `imprime:(J)V` `registers=3, ins=2`, `escribeCampo:(LV;J)V` `ins=3`, y una
+llamada con un largo es `invoke-static {v0, v1}` (dos registros para un argumento). `d8` además
+reutiliza el par del operando muerto (`add-long/2addr v0, v4` encima de una constante) y no emite nada
+para `long b = a; return b;` (`return-wide v0` a secas).
+
+**Ejecutado**: la sonda `L` compilada por este fork corre en la JVM con `-Xverify:all` y da `306` y `8`
+(`rc 0`). Nuestro traductor de bytecode todavía la rechaza por nombre (`at pc 1, ladd: outside the
+measured subset`), que es la frontera siguiente.
+
+**Pruebas**: `apkc/javaemisor_largo_test.go` compara método a método contra `javac --release 8 -g`, con
+`max_stack` y `max_locals` incluidos, y fija los rechazos de `double`, del arreglo de largos y de la
+comparación de largos. La prueba de la frontera del dexer cambió de byte (`0x61` ya está medido; queda
+`0xd2`).
+
+Suite: **245 PASS + 2 SKIP** nativa y **196 PASS + 51 SKIP** en el hospedador.
+
+**Frontera**: `float` y `double` (el léxico ni siquiera arma `1.0`), arreglos de largos (`laload` /
+`lastore` sin medir), `lcmp` y las ramas sobre largos, `dup2`/`pop2`, el `ConstantValue` de un
+`static final long`, el `access$` de un campo ancho (pide `dup2_x1` y `pop2`) y todo el `long` en el dex.

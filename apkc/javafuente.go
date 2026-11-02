@@ -27,9 +27,10 @@ type jexpr interface{ jexprPuede() }
 
 // jlit es un literal: cadena, entero, booleano o nulo.
 type jlit struct {
-	tipoJ    byte // 's' cadena, 'i' entero, 'b' booleano, 'n' nulo
+	tipoJ    byte // 's' cadena, 'i' entero, 'j' entero largo, 'b' booleano, 'n' nulo
 	texto    string
 	entero   int32
+	largo    int64
 	booleano bool
 	donde    pos
 }
@@ -1455,6 +1456,13 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 			return nil, fmt.Errorf("linea %d: la negacion de algo que no es un literal entero no esta medida", donde.linea)
 		}
 		a.avanzar()
+		if esLiteralLargo(t.valor) {
+			n, err := enteroLargoJava(t.valor)
+			if err != nil {
+				return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+			}
+			return jlit{tipoJ: 'j', largo: -n, donde: donde}, nil
+		}
 		n, err := enteroJava(t.valor)
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
@@ -1605,6 +1613,13 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		return jlit{tipoJ: 's', texto: t.valor, donde: t.donde}, nil
 	case t.kind == 'n':
 		a.avanzar()
+		if esLiteralLargo(t.valor) {
+			n, err := enteroLargoJava(t.valor)
+			if err != nil {
+				return nil, fmt.Errorf("linea %d: %w", t.donde.linea, err)
+			}
+			return jlit{tipoJ: 'j', largo: n, donde: t.donde}, nil
+		}
 		n, err := enteroJava(t.valor)
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", t.donde.linea, err)
@@ -1819,11 +1834,37 @@ func sinPaquete(nombre string) string {
 	return nombre
 }
 
-// enteroJava: los literales numericos del subconjunto, con hexo y con la L de long rechazada si no cabe.
+// esLiteralLargo y enteroLargoJava: el sufijo `L`/`l` que el lexico ya se llevo dentro del token
+// numerico. Medido con `javap -c` sobre la sonda `L` (parrafo 74): `2L` sale como `ldc2_w #7` con una
+// entrada `Long` del pool, y `1L` como `lconst_1`.
+func esLiteralLargo(texto string) bool {
+	if texto == "" {
+		return false
+	}
+	c := texto[len(texto)-1]
+	return c == 'L' || c == 'l'
+}
+
+func enteroLargoJava(texto string) (int64, error) {
+	limpio := strings.ReplaceAll(texto, "_", "")
+	limpio = limpio[:len(limpio)-1]
+	base := 10
+	if strings.HasPrefix(limpio, "0x") || strings.HasPrefix(limpio, "0X") {
+		base = 16
+		limpio = limpio[2:]
+	}
+	n, err := strconv.ParseInt(limpio, base, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s no es un entero de 64 bits", texto)
+	}
+	return n, nil
+}
+
+// enteroJava: los literales numericos de 32 bits del subconjunto; el largo va por enteroLargoJava.
 func enteroJava(texto string) (int32, error) {
 	limpio := strings.ReplaceAll(texto, "_", "")
 	if strings.HasSuffix(limpio, "L") || strings.HasSuffix(limpio, "l") {
-		return 0, fmt.Errorf("un literal long (%s) no esta medido en el emisor", texto)
+		return 0, fmt.Errorf("%s es un literal long, que se lee por otro camino", texto)
 	}
 	base := 10
 	if strings.HasPrefix(limpio, "0x") || strings.HasPrefix(limpio, "0X") {

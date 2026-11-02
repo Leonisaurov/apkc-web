@@ -89,7 +89,16 @@ var descPrimitivo = map[string]string{
 	"long": "J", "float": "F", "double": "D", "void": "V",
 }
 
-var deDosHuecosOPuntoFlotante = map[byte]bool{'J': true, 'F': true, 'D': true}
+// puntoFlotante son los tipos que este emisor todavia no escribe: ocupan dos huecos y llevan sus
+// propias constates (`fconst_*`/`dconst_*`) y su comparacion. El `long` entro medido en el parrafo 74.
+var puntoFlotante = map[byte]bool{'F': true, 'D': true}
+
+// esAncho: los descriptores que ocupan DOS huecos de local y dos palabras de pila (`J`, `F`, `D`).
+// Medido con `javap -v` sobre la sonda `F`: `conRama(long a, int n)` con un local `long x` sale con
+// `locals=5` y los huecos 0-1 para `a`, 2 para `n` y 3-4 para `x`.
+func esAncho(desc string) bool {
+	return desc != "" && (desc[0] == 'J' || desc[0] == 'F' || desc[0] == 'D')
+}
 
 // ----- el constant pool -----
 
@@ -121,6 +130,26 @@ func (p *poolBuilder) entero(v int32) int {
 	b := []byte{3, 0, 0, 0, 0}
 	binary.BigEndian.PutUint32(b[1:], uint32(v))
 	return p.agregar(fmt.Sprintf("i\x00%d", v), b)
+}
+
+// largo8: la entrada `Long` (tag 5) del pool, que **ocupa dos posiciones**: medido en `javap -v` de la
+// sonda `L`, donde `#7 = Long 2l` va seguido de `#9` (el #8 no existe). El hueco se reserva con una
+// entrada sin bytes, que `serializar` no escribe pero sí cuenta.
+func (p *poolBuilder) largo8(v int64) int {
+	b := []byte{5, 0, 0, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint64(b[1:], uint64(v))
+	return p.agregarDos(fmt.Sprintf("j\x00%d", v), b)
+}
+
+// agregarDos: una entrada de ocho bytes seguida del hueco que ocupa su segunda posicion.
+func (p *poolBuilder) agregarDos(clave string, e []byte) int {
+	if i, ok := p.indices[clave]; ok {
+		return i
+	}
+	p.entradas = append(p.entradas, e, nil)
+	i := len(p.entradas) - 1
+	p.indices[clave] = i
+	return i
 }
 
 // cadena: tag 8 con el indice de su utf8. En el pool un String es el indice, no el texto.
@@ -201,12 +230,20 @@ func carga(desc byte) (breve byte, conIndice byte) {
 	if desc == 'I' || desc == 'B' || desc == 'C' || desc == 'S' || desc == 'Z' {
 		return 0x1a, 0x15
 	}
+	// `long`: lload_0 0x1e y lload 0x16, medidos en `javap -c` de la sonda `W` (parrafo 74)
+	if desc == 'J' {
+		return 0x1e, 0x16
+	}
 	return 0x2a, 0x19
 }
 
 func guarda(desc byte) (breve byte, conIndice byte) {
 	if desc == 'I' || desc == 'B' || desc == 'C' || desc == 'S' || desc == 'Z' {
 		return 0x3b, 0x36
+	}
+	// lstore_0 0x3f y lstore 0x37 (parrafo 74)
+	if desc == 'J' {
+		return 0x3f, 0x37
 	}
 	return 0x4b, 0x3a
 }
@@ -217,6 +254,8 @@ func retorno(desc byte) byte {
 		return 0xb1
 	case 'I', 'B', 'C', 'S', 'Z':
 		return 0xac
+	case 'J':
+		return 0xad
 	default:
 		return 0xb0
 	}
@@ -665,8 +704,8 @@ func (ctx *contextoJava) descriptorDe(tipo string) (string, error) {
 		return "[" + elem, nil
 	}
 	if d, ok := descPrimitivo[tipo]; ok {
-		if deDosHuecosOPuntoFlotante[d[0]] {
-			return "", fmt.Errorf("el tipo %s ocupa dos huecos de variable o es de punto flotante: no esta medido en este emisor", tipo)
+		if puntoFlotante[d[0]] {
+			return "", fmt.Errorf("el tipo %s es de punto flotante: no esta medido en este emisor", tipo)
 		}
 		return d, nil
 	}
@@ -1339,6 +1378,49 @@ func (e *emisor) sube() {
 	}
 }
 
+// subeDos: empujar un `long` (o un `double` cuando se mida), que ocupa DOS palabras de pila. La JVM lo
+// exige: con `max_stack=1` y un `ldc2_w` escribe `VerifyError: Operand stack overflow … Exceeded max
+// stack size` (medido al primera sonda `L` del parrafo 74, y javac pone `stack=2` para un solo largo).
+func (e *emisor) subeDos() {
+	e.prof += 2
+	if e.prof > e.maxProf {
+		e.maxProf = e.prof
+	}
+}
+
+// subePor: una palabra, o dos si el descriptor es ancho.
+func (e *emisor) subePor(desc string) {
+	if esAncho(desc) {
+		e.subeDos()
+		return
+	}
+	e.sube()
+}
+
+// bajaPor: el contrario de subePor.
+func (e *emisor) bajaPor(desc string) {
+	if esAncho(desc) {
+		e.baja(2)
+		return
+	}
+	e.baja(1)
+}
+
+// palabrasDeArgs: cuanto ocupa en la pila la lista de argumentos de un descriptor, que es lo que
+// `invoca` baja: un `long` cuenta por dos (parrafo 74).
+func palabrasDeArgs(desc string) int {
+	_, _, ps := splitDescriptor(desc)
+	n := 0
+	for _, p := range ps {
+		if esAncho(p) {
+			n += 2
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 func (e *emisor) baja(n int) {
 	e.prof -= n
 }
@@ -1458,7 +1540,13 @@ func (e *emisor) marcaLinea(linea int) {
 
 func (e *emisor) reserva(nombre string, desc string) int {
 	i := e.siguiente
-	e.siguiente++
+	paso := 1
+	if esAncho(desc) {
+		// `long` ocupa DOS huecos: medido en `javap -v` de la sonda `F`, donde `conRama(long a, int n)`
+		// declara `locals=5` y el local `long x` cae en el hueco 3 (parrafo 74)
+		paso = 2
+	}
+	e.siguiente += paso
 	if e.siguiente > e.maxLoc {
 		e.maxLoc = e.siguiente
 	}
@@ -1475,7 +1563,7 @@ func (e *emisor) cargaDe(indice int, desc string) {
 	} else {
 		e.emite(conIndice, byte(indice))
 	}
-	e.sube()
+	e.subePor(desc)
 }
 
 func (e *emisor) guardaDe(indice int, desc string) {
@@ -1485,7 +1573,7 @@ func (e *emisor) guardaDe(indice int, desc string) {
 	} else {
 		e.emite(conIndice, byte(indice))
 	}
-	e.baja(1)
+	e.bajaPor(desc)
 }
 
 // cargaEntero: iconst, bipush, sipush o ldc con el indice de un Integer del pool, igual que javac.
@@ -1537,7 +1625,7 @@ func (e *emisor) getfield(idx int) {
 	e.sube()
 }
 
-// putfield se come el receptor y el valor; putstatic solo el valor. Medido en `javap -c`: el `<init>` de
+// putstatic se come el receptor y el valor; putstatic solo el valor. Medido en `javap -c`: el `<init>` de
 // `private int oculto = 3` es `aload_0; iconst_3; putfield #7`, y el `<clinit>` de `static int shared = 5`
 // es `iconst_5; putstatic #53`, sin receptor.
 func (e *emisor) putfield(idx int) {
@@ -1548,6 +1636,34 @@ func (e *emisor) putfield(idx int) {
 func (e *emisor) putstatic(idx int) {
 	e.emite(opPutstatic, byte(idx>>8), byte(idx))
 	e.baja(1)
+}
+
+// Las cuatro formas con descriptor: un campo `long` (o `double`) mueve DOS palabras, no una. Medido en
+// `javap -v` de la sonda `L`, cuyo `<clinit>` es `ldc2_w #17; putstatic #14` con `stack=2` (parrafo 74).
+func (e *emisor) getfieldDe(idx int, desc string) {
+	e.getfield(idx)
+	if esAncho(desc) {
+		e.sube()
+	}
+}
+
+func (e *emisor) putfieldDe(idx int, desc string) {
+	e.putfield(idx)
+	if esAncho(desc) {
+		e.baja(1)
+	}
+}
+
+func (e *emisor) getstaticDe(idx int, desc string) {
+	e.emite(opGetstatic, byte(idx>>8), byte(idx))
+	e.subePor(desc)
+}
+
+func (e *emisor) putstaticDe(idx int, desc string) {
+	e.putstatic(idx)
+	if esAncho(desc) {
+		e.baja(1)
+	}
 }
 
 // inicializador escribe el valor de un campo con su destino, en la forma que javac deja en el binario y con
@@ -1570,9 +1686,9 @@ func (e *emisor) inicializador(f jcampo) error {
 		return fmt.Errorf("linea %d: el campo %s es %s y su inicializador deja %s", f.donde.linea, f.nombre, desc, d)
 	}
 	if f.esEstatico {
-		e.putstatic(idx)
+		e.putstaticDe(idx, desc)
 	} else {
-		e.putfield(idx)
+		e.putfieldDe(idx, desc)
 	}
 	return nil
 }
@@ -1590,12 +1706,23 @@ func (e *emisor) invoca(opcode byte, dueño, nombre, desc string, enPila int) {
 	e.usarDescriptor(desc)
 	e.emite(opcode, byte(idx>>8), byte(idx))
 	if esInterface {
-		e.emite(byte(enPila), 0)
+		// el byte de `invokeinterface` son PALABRAS de argumento incluido el receptor (JVMS 6.5): un
+		// `long` cuenta dos, que no es el `enPila` de los llamadores cuando hay un ancho de por medio
+		e.emite(byte(palabrasDeArgs(desc)+1), 0)
 	}
-	e.baja(enPila)
+	e.baja(palabrasDeArgs(desc) + enPilaReceptor(opcode))
 	if v := vueltaDe(desc); v != "" && v != "V" {
-		e.sube()
+		e.subePor(v)
 	}
+}
+
+// enPilaReceptor: el receptor de una llamada virtual, especializada o de constructor es una palabra;
+// el estatico no lleva. `enPila` de los llamadores sigue contando argumentos y receptor por separado.
+func enPilaReceptor(opcode byte) int {
+	if opcode == opInvokestat {
+		return 0
+	}
+	return 1
 }
 
 // ----- expresiones -----
@@ -1645,6 +1772,20 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			}
 			e.sube()
 			return "Z", nil
+		case 'j':
+			// medido en `javap -c` de `W`: `long x = 0` es `lconst_0` (0x09), `1L` es `lconst_1`
+			// (0x0a) y cualquier otro va por `ldc2_w` (0x14) con el indice de una entrada `Long`
+			switch v.largo {
+			case 0:
+				e.emite(0x09)
+			case 1:
+				e.emite(0x0a)
+			default:
+				idx := e.pool.largo8(v.largo)
+				e.emite(0x14, byte(idx>>8), byte(idx))
+			}
+			e.subePor("J")
+			return "J", nil
 		case 's':
 			e.ldc(e.pool.cadena(v.texto))
 			e.sube()
@@ -1704,6 +1845,7 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			return e.concatenar(v)
 		}
 		codes := map[string]byte{"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem}
+		codesLargo := map[string]byte{"+": 0x61, "-": 0x65, "*": 0x69, "/": 0x6d, "%": 0x71}
 		code, esAritmetica := codes[v.op]
 		if !esAritmetica {
 			return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
@@ -1711,6 +1853,33 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		if plegado, esConstante := plegarEntero(v); esConstante {
 			e.cargaEntero(plegado)
 			return "I", nil
+		}
+		// `int + long`: javac **ensancha el entero antes de la cuenta** y en el orden del fuente
+		// (`W.suma` mide `iload_0; i2l; lload_1; ladd`, parrafo 74). Para poder meter ese `i2l` en su
+		// sitio hay que saber el tipo de los dos lados **antes** de escribirlos, y eso solo da cuando
+		// el tipo se puede prever sin emitir.
+		tIzq, okIzq := e.tipoPrevisto(v.izq)
+		tDer, okDer := e.tipoPrevisto(v.der)
+		if (okIzq && tIzq == "J") || (okDer && tDer == "J") {
+			if !okIzq || !okDer {
+				return "", fmt.Errorf("linea %d: `%s` con un largo y un operando cuyo tipo no se puede saber antes de escribirlo: el `i2l` va en el sitio de javac y adivinarlo aqui no esta medido",
+					v.donde.linea, v.op)
+			}
+			di, err := e.expA(v.izq, "J")
+			if err != nil {
+				return "", err
+			}
+			dd, err := e.expA(v.der, "J")
+			if err != nil {
+				return "", err
+			}
+			if di != "J" || dd != "J" {
+				return "", fmt.Errorf("linea %d: `%s` aplicado a %s y %s: la cuenta larga solo se midio entre enteros y largos",
+					v.donde.linea, v.op, di, dd)
+			}
+			e.emite(codesLargo[v.op])
+			e.baja(2) // dos largos (cuatro palabras) dentro, uno (dos) fuera
+			return "J", nil
 		}
 		izq, err := e.exp(v.izq)
 		if err != nil {
@@ -1969,7 +2138,7 @@ func (e *emisor) cadenaDeCampos(desc string, segs []string, linea int) (string, 
 			return "", fmt.Errorf("linea %d: %s.%s es estatico: sacarlo de una instancia no esta medido", linea, dueño, seg)
 		}
 		idx := e.pool.campo(dueño, seg, cr.desc)
-		e.getfield(idx)
+		e.getfieldDe(idx, cr.desc)
 		actual = cr.desc
 	}
 	return actual, nil
@@ -2009,8 +2178,7 @@ func (e *emisor) accesoEstatico(interno string, segs []string, linea int) (strin
 			return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede nombrar por el tipo", linea, tipo, seg)
 		}
 		idx := e.pool.campo(tipo, seg, cr.desc)
-		e.emite(opGetstatic, byte(idx>>8), byte(idx))
-		e.sube()
+		e.getstaticDe(idx, cr.desc)
 		return cr.desc, nil
 	}
 	return "", fmt.Errorf("linea %d: no se resuelve %s.%s", linea, interno, strings.Join(segs, "."))
@@ -2061,6 +2229,10 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 	}
 	estatico := cr.acceso&accStatic != 0
 	if dueño != e.interno && cr.acceso&accPrivate != 0 {
+		if esAncho(cr.desc) {
+			// el access$ de un campo ancho usa `dup2_x1`/`dup2` y el `pop2` del llamador: no esta medido
+			return "", false
+		}
 		// el campo privado del exterior: la anonima pasa por `access$NN0` (parrafo 72)
 		nombreAcc, descAcc := e.ctx.accesorPara(dueño, nombre, cr.desc, true, false, estatico)
 		enPila := 0
@@ -2076,15 +2248,14 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 	}
 	if estatico {
 		idx := e.pool.campo(dueño, nombre, cr.desc)
-		e.emite(opGetstatic, byte(idx>>8), byte(idx))
-		e.sube()
+		e.getstaticDe(idx, cr.desc)
 		return cr.desc, true
 	}
 	if e.estatico {
 		return "", false
 	}
 	e.cargaDelDuenio(dueño)
-	e.getfield(e.pool.campo(dueño, nombre, cr.desc))
+	e.getfieldDe(e.pool.campo(dueño, nombre, cr.desc), cr.desc)
 	return cr.desc, true
 }
 
@@ -2486,6 +2657,8 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		switch v.tipoJ {
 		case 'i':
 			return "I", nil
+		case 'j':
+			return "J", nil
 		case 'b':
 			return "Z", nil
 		case 's':
@@ -2526,8 +2699,123 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
 		}
 		return "[" + d, nil
+	case jllamada:
+		// una llamada sin receptor escrito: la vuelta de su unica candidata en esa aridad (medido al
+		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74)
+		if v.base != nil || v.super {
+			return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+		}
+		cands, err := e.ctx.candidatos(e.interno, v.nombre, len(v.args))
+		if err != nil || len(cands) != 1 {
+			return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+		}
+		return vueltaDe(cands[0].desc), nil
 	}
 	return "", fmt.Errorf("linea %d: el tipo de un argumento de %T no esta medido", lineaDeExpr(x), x)
+}
+
+// tipoPrevisto: el descriptor que va a salir de una expresion, **sin escribir su codigo**. Hace falta
+// para saber si una cuenta es larga antes de emitir el lado izquierdo, que es donde javac mete el
+// `i2l` (parrafo 74). Lo que no se puede prever sin emitir sale con ok falso y el llamador lo dice.
+func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
+	switch v := x.(type) {
+	case jlit:
+		switch v.tipoJ {
+		case 'i':
+			return "I", true
+		case 'j':
+			return "J", true
+		case 'b':
+			return "Z", true
+		case 's':
+			return "Ljava/lang/String;", true
+		}
+		return "", false
+	case jthis:
+		if v.nombre != "" || e.estatico {
+			return "", false
+		}
+		return "L" + e.interno + ";", true
+	case jindice:
+		if b, ok := v.base.(jacceso); ok && b.base == nil {
+			if lv, ok := e.locales[b.nombre]; ok && len(lv.desc) > 0 && lv.desc[0] == '[' {
+				return lv.desc[1:], true
+			}
+		}
+		return "", false
+	case jnuevoArreglo:
+		d, err := e.ctx.descriptorDe(v.tipo)
+		if err != nil {
+			return "", false
+		}
+		return "[" + d, true
+	case jacceso:
+		segs, base := aplanar(v)
+		if base != nil || len(segs) == 0 {
+			return "", false
+		}
+		if lv, ok := e.locales[segs[0]]; ok {
+			if len(segs) == 1 {
+				return lv.desc, true
+			}
+			return "", false
+		}
+		if len(segs) == 1 {
+			dueño, cr, ok := e.duenioDelCampo(segs[0])
+			if !ok || dueño == "" {
+				return "", false
+			}
+			return cr.desc, true
+		}
+		if interno, err := e.ctx.resolverSimple(segs[0]); err == nil {
+			d, err := e.descDeAccesoEstatico(interno, segs[1:])
+			if err != nil {
+				return "", false
+			}
+			return d, true
+		}
+		return "", false
+	case joperador:
+		// una cuenta es larga si alguno de sus dos lados lo es, y entera si los dos lo son; lo que
+		// mezcla tipos que no se pueden prever sale con ok falso (parrafo 74)
+		di, okI := e.tipoPrevisto(v.izq)
+		dd, okD := e.tipoPrevisto(v.der)
+		if okI && di == "J" || okD && dd == "J" {
+			return "J", true
+		}
+		if okI && okD && di == "I" && dd == "I" {
+			return "I", true
+		}
+		return "", false
+	case jllamada:
+		if v.base != nil || v.super {
+			return "", false
+		}
+		cands, err := e.ctx.candidatos(e.interno, v.nombre, len(v.args))
+		if err != nil || len(cands) != 1 {
+			return "", false
+		}
+		return vueltaDe(cands[0].desc), true
+	}
+	return "", false
+}
+
+// expA: emite la expresion y, si el hueco que hay que llenar es ancho y lo que sale es un entero, mete
+// el `i2l` (0x85) que javac pone en su lugar.
+func (e *emisor) expA(x jexpr, deseado string) (string, error) {
+	d, err := e.exp(x)
+	if err != nil {
+		return "", err
+	}
+	if d == deseado {
+		return d, nil
+	}
+	if deseado == "J" && d == "I" {
+		e.emite(0x85)
+		e.sube() // el entero era una palabra y el largo son dos
+		return "J", nil
+	}
+	return d, nil
 }
 
 // ----- sentencias -----
@@ -2902,6 +3190,11 @@ func (e *emisor) incremento(v jincr) error {
 		delta = -delta
 	}
 	lit := jlit{tipoJ: 'i', entero: delta, donde: v.donde}
+	if d, ok := e.tipoPrevisto(v.destino); ok && d == "J" {
+		// en un largo no hay `iinc`: javac escribe `lconst_1` y `ladd` (parrafo 74), no un entero que
+		// luego hay que ensanchar
+		lit = jlit{tipoJ: 'j', largo: int64(delta), donde: v.donde}
+	}
 	return e.stm(jasign{
 		destino: v.destino,
 		valor:   joperador{izq: v.destino, op: op, der: lit, donde: v.donde},
@@ -3011,7 +3304,7 @@ func (e *emisor) stm(s jstmt) error {
 			e.emite(retorno('V'))
 			return nil
 		}
-		d, err := e.exp(v.e)
+		d, err := e.expA(v.e, e.vuelta)
 		if err != nil {
 			return err
 		}
@@ -3022,7 +3315,7 @@ func (e *emisor) stm(s jstmt) error {
 			return fmt.Errorf("linea %d: el metodo devuelve %s y se devuelve un %s", v.donde.linea, e.vuelta, d)
 		}
 		e.emite(retorno(d[0]))
-		e.baja(1)
+		e.bajaPor(d)
 		return nil
 	case jdecl:
 		e.marcaLinea(v.donde.linea)
@@ -3034,7 +3327,7 @@ func (e *emisor) stm(s jstmt) error {
 		if v.valor == nil {
 			return nil
 		}
-		dv, err := e.exp(v.valor)
+		dv, err := e.expA(v.valor, d)
 		if err != nil {
 			return err
 		}
@@ -3054,7 +3347,7 @@ func (e *emisor) stm(s jstmt) error {
 			return fmt.Errorf("linea %d: una asignacion con mas de un nombre en el destino no esta medida", v.donde.linea)
 		}
 		if lv, ok := e.locales[segs[0]]; ok {
-			dv, err := e.exp(v.valor)
+			dv, err := e.expA(v.valor, lv.desc)
 			if err != nil {
 				return err
 			}
@@ -3077,6 +3370,9 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		esEstatico := cr.acceso&accStatic != 0
 		if dueño != e.interno && cr.acceso&accPrivate != 0 {
+			if esAncho(cr.desc) {
+				return fmt.Errorf("linea %d: escribir el campo %s, que es ancho y privado del exterior: el access$ con `dup2_x1` y el `pop2` del llamador no estan medidos", v.donde.linea, segs[0])
+			}
 			// campo privado del exterior: la escritura pasa por `access$NN2`, que devuelve el valor y deja
 			// un `pop` en el llamador (parrafo 72). El accesor se apunta **antes** de bajar el valor porque
 			// asi lo crea javac: en `secreto = secreto + 2` el de escritura es el 002 y el de lectura el 000.
@@ -3124,9 +3420,9 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		idx := e.pool.campo(dueño, segs[0], cr.desc)
 		if esEstatico {
-			e.putstatic(idx)
+			e.putstaticDe(idx, cr.desc)
 		} else {
-			e.putfield(idx)
+			e.putfieldDe(idx, cr.desc)
 		}
 		return nil
 	case jbloque:

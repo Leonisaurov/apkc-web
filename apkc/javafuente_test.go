@@ -281,7 +281,7 @@ func TestLexicoRechazaCaracteresYComentarios(t *testing.T) {
 		{"class A { } /* sin cerrar", "sin cerrar"},
 		{"class A { void a() { int x = 1; } }\n¥", "no es de este subconjunto"},
 		{"class A { void a() { String s = \"sin cerrar; } }", "una cadena sin cerrar"},
-		{"class A { long x = 3L; }", "long"},
+		{"class A { double x = 1.0; }", "punto"},
 	}
 	for _, c := range casos {
 		_, err := parsearJava(c.fuente)
