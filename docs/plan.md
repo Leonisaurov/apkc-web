@@ -45,7 +45,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
-| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan arreglos, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while` y `for`, §63)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)** y **5.11 (arreglos y `main(String[])`, §66)**; lo que sigue es 5.9 (`try/catch`) | la sección «Fase 5» de este plan |
+| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan arreglos, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while` y `for`, §63)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)**, **5.11 (arreglos y `main(String[])`, §66)** y **5.1 (`++`/`--`, §67)**; lo que sigue es 5.9 (`try/catch`) | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
@@ -532,7 +532,7 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 
 | # | Qué falta | Dónde se rechaza ahora | Qué hay que medir antes | Coste |
 | --- | --- | --- | --- | --- |
-| 5.1 | `+=`, `-=`, `*=`, `/=`, `++`, `--` | `javafuente.go:953` | flags y orden del `<init>` ya medidos; solo composición de lo existente | XS |
+| 5.1 | `+=`, `-=`, `*=`, `/=`, `++`, `--` | **HECHO `++` y `--`** (§67): medidos `iinc` (`i++`/`i--`), el `++` de un campo estático (`getstatic; iconst_1; iadd; putstatic`) y el de instancia (`aload_0; dup; getfield; …; putfield`, que el traductor baja al `iget; add-int/lit8; iput` de d8); el dex sale byte a byte el de javac y el banco los usa en `i++` y `j++`. **Faltan** `+=`, `-=`, `*=` y `/=` (composición de lo medido, sin sonda propia) y `++`/`--` como valor | — | XS |
 | 5.2 | literal `char` y escapes restantes | `javafuente.go:273`, `:369` | cómo baja javac un `char` (entero de 16) y su `ConstantValue` | XS |
 | 5.3 | literales de clase `X.class` | `javaemisor.go:1238`, `:1821` | `ldc` de `CONSTANT_Class` en el `.class` y el `const-class` (formato 21c) en el dex, cuyo opcode se confirma con la sonda | S |
 | 5.4 | llamadas de más de cinco argumentos y cualquier forma `/range` o `/from16` | `dexinstr.go:412`, `:227` | palabras de `d8` sobre una sonda con seis argumentos y con registros `v16` | S |
@@ -581,9 +581,9 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 - **Lo primero de todo fue el ejecutor** (§61): antes de tocar un ítem, `banco/banco.sh` corre el fuente
   por los cuatro caminos. En una tarde destapó cinco cosas que ningún oráculo de bytes veía (5.23 a
   5.27 y el `invokestatic` sin argumentos).
-- **Lo que sigue**: **5.9 (`try/catch`)**, que además toca el `code_item`; después 5.1 (`++`/`--`), que
-  hoy se rechaza por nombre, y `do-while`/`break`/`continue` sobre la forma ya medida; y el
-  inicializador `new T[] {…}` (5.11, `filled-new-array`).
+- **Lo que sigue**: **5.9 (`try/catch`)**, que además toca el `code_item`; después `do-while` y
+  `break`/`continue` sobre la forma ya medida, los `+=`/`-=`/`*=`/`/=` y el inicializador
+  `new T[] {…}` (5.11, `filled-new-array`).
 
 ### Hitos con prueba en el teléfono
 

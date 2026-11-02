@@ -421,6 +421,8 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 	case jindice:
 		ctx.registrarExpresion(v.base)
 		ctx.registrarExpresion(v.indice)
+	case jincr:
+		ctx.registrarExpresion(v.destino)
 	case jllamada:
 		if v.base != nil {
 			ctx.registrarExpresion(v.base)
@@ -495,6 +497,8 @@ func anonimasDe(c *jclas) []*jclas {
 		case jindice:
 			expr(v.base)
 			expr(v.indice)
+		case jincr:
+			expr(v.destino)
 		}
 	}
 	for _, m := range c.metodos {
@@ -1471,6 +1475,8 @@ func lineaDeExpr(x jexpr) int {
 		return v.donde.linea
 	case jindice:
 		return v.donde.linea
+	case jincr:
+		return v.donde.linea
 	case joperador:
 		return v.donde.linea
 	case jnegacion:
@@ -1544,6 +1550,8 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return e.nuevoArreglo(v)
 	case jindice:
 		return e.leeIndice(v)
+	case jincr:
+		return "", fmt.Errorf("linea %d: `++`/`--` como valor no esta medido; uselo como sentencia", v.donde.linea)
 	case joperador:
 		// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49):
 		// dos palabras dentro, una fuera. Antes de emitir se prueba el plegado de constantes, que javac
@@ -2512,9 +2520,46 @@ func (e *emisor) resuelveAtras(id int) error {
 	return nil
 }
 
+// incremento: `i++`, `--i` y el paso de un `for`, como sentencia. En un local javac escribe `iinc`
+// (medido en el parrafo 67: `iinc 1, 1` para `i++` y `iinc 1, -1` para `i--`); en un campo la forma
+// de javac es `destino = destino ± 1`, que el traductor ya sabe bajar, así que se arma ese `jasign`.
+func (e *emisor) incremento(v jincr) error {
+	e.marcaLinea(v.donde.linea)
+	if acc, esAcceso := v.destino.(jacceso); esAcceso {
+		segs, base := aplanar(acc)
+		if base == nil && len(segs) == 1 {
+			if lv, ok := e.locales[segs[0]]; ok {
+				if !esEnteroDesc(lv.desc) {
+					return fmt.Errorf("linea %d: `++`/`--` sobre %s, que no es un entero", v.donde.linea, lv.desc)
+				}
+				if lv.indice > 255 {
+					return fmt.Errorf("linea %d: el local %s no cabe en el indice de un `iinc`", v.donde.linea, segs[0])
+				}
+				e.emite(0x84, byte(lv.indice), byte(int8(v.delta)))
+				return nil
+			}
+		}
+	}
+	op := "+"
+	if v.delta < 0 {
+		op = "-"
+	}
+	uno := jlit{tipoJ: 'i', entero: 1, donde: v.donde}
+	return e.stm(jasign{
+		destino: v.destino,
+		valor:   joperador{izq: v.destino, op: op, der: uno, donde: v.donde},
+		donde:   v.donde,
+	})
+}
+
 func (e *emisor) stm(s jstmt) error {
 	switch v := s.(type) {
 	case jstmtExpr:
+		// `i++` como sentencia (y el paso de un `for`) no es una expresion que se evalue y se tire:
+		// javac escribe `iinc` en un local, medido en el parrafo 67
+		if inc, esInc := v.e.(jincr); esInc {
+			return e.incremento(inc)
+		}
 		e.marcaLinea(lineaDeExpr(v.e))
 		d, err := e.exp(v.e)
 		if err != nil {

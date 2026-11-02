@@ -244,7 +244,7 @@ func TestParsearRechazaLoQueNoSeEmite(t *testing.T) {
 		razon  string
 	}{
 		{"class A { void a() { do { a(); } while (true); } }", "un do-while", "no esta medida"},
-		{"class A { void a() { int i = 0; i++; } }", "un ++", "++"},
+		{"class A { void a() { int i = 1; int j = i > 0 ? 1 : 2; } }", "un ternario", "no es de este subconjunto"},
 		{"class A { void a() { int[] v = new int[] {1, 2}; } }", "un inicializador de arreglo", "inicializador"},
 		{"class A { void a() { try { } catch (E e) { } } }", "un try", "no esta medida"},
 		{"class A { @Deprecated void a() {} }", "una anotacion que no es Override", "@Deprecated"},

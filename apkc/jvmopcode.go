@@ -64,6 +64,9 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x68: {"imul", 0},
 	0x6c: {"idiv", 0},
 	0x70: {"irem", 0},
+	// `iinc` (parrafo 67): index de local y constante de un byte con signo, medido en `Inc`
+	// (`iinc 1, 1` y `iinc 1, -1`)
+	0x84: {"iinc", 2},
 	// arreglos (parrafo 66): el ancho sale de `javap -c` de la sonda `Arreglos`, donde
 	// `newarray int` va de 1 a 3, `anewarray #7` de 1 a 4 y `arraylength` de 1 a 2
 	0x2e: {"iaload", 0},

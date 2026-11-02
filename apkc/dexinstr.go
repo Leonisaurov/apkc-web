@@ -509,6 +509,20 @@ func (p *traduce) cuentaEntera(in jvmInstr) {
 	}
 }
 
+// incrementa: `iinc` (0x84) de un local sale `add-int/lit8 vA, vB, #+C` (0xd8), medido en el
+// parrafo 67 sobre `Inc.local` (`d800 0001` para `i++` y `d800 00ff` para `i--`). Es la forma 22b:
+// el opcode con el destino en el byte alto, y el registro fuente con la constante al lado.
+func (p *traduce) incrementa(in jvmInstr) {
+	n := int(in.ops[0])
+	c := int(int8(in.ops[1]))
+	r := p.local(n)
+	if !p.octeto(r, in) {
+		return
+	}
+	p.palabra(uint16(0xd8) | uint16(r&0xff)<<8)
+	p.palabra(uint16(r&0xff) | uint16(byte(c))<<8)
+}
+
 // longitudArreglo: `array-length` (12x). Sale el alto en un temporal y la referencia se libera; `d8`
 // a veces reusa el registro de la referencia como destino (`array-length v0, v0`), pero eso es una
 // decisión de vivos y el resultado ejecuta igual.
@@ -719,6 +733,8 @@ func (p *traduce) recorre() error {
 			p.cuentaEntera(in)
 		case "arraylength":
 			p.longitudArreglo(in)
+		case "iinc":
+			p.incrementa(in)
 		case "newarray", "anewarray":
 			p.nuevoArreglo(in)
 		case "iaload", "aaload":

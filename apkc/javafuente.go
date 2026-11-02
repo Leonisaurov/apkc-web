@@ -104,6 +104,17 @@ type jindice struct {
 
 func (jindice) jexprPuede() {}
 
+// jincr: `i++`, `--i` y el paso de un `for`. Como sentencia se emite `iinc` en un local —medido en
+// el parrafo 67— o la lectura-cuenta-escritura de un campo; como **valor** no esta medido y el emisor
+// lo rechaza por nombre.
+type jincr struct {
+	destino jexpr
+	delta   int32
+	donde   pos
+}
+
+func (jincr) jexprPuede() {}
+
 // jstmt es una sentencia del subconjunto.
 type jstmt interface{ jstmtPuede() }
 
@@ -274,7 +285,7 @@ var palabrasJava = map[string]bool{
 
 // simbolesJava, de mas largo a mas corto para que `>>` no se lea como dos `>`.
 var simbolesJava = []string{
-	"...", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", ">>", "<<",
+	"...", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", ">>", "<<", "++", "--",
 	"{", "}", "(", ")", "[", "]", ";", ",", ".", "=", ">", "<", "!", "+", "-", "*", "/", "&", "|", "^", ":", "@", "%",
 }
 
@@ -1244,6 +1255,19 @@ func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
 }
 
 func (a *analizadorJava) expresionUnaria() (jexpr, error) {
+	if a.es('p', "++") || a.es('p', "--") {
+		donde := a.actual().donde
+		delta := int32(1)
+		if a.actual().valor == "--" {
+			delta = -1
+		}
+		a.avanzar()
+		e, err := a.expresionUnaria()
+		if err != nil {
+			return nil, err
+		}
+		return jincr{destino: e, delta: delta, donde: donde}, nil
+	}
 	if a.es('p', "!") {
 		donde := a.actual().donde
 		a.avanzar()
@@ -1313,6 +1337,14 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 				return nil, err
 			}
 			e = jindice{base: e, indice: indice, donde: donde}
+		case a.es('p', "++") || a.es('p', "--"):
+			donde := a.actual().donde
+			delta := int32(1)
+			if a.actual().valor == "--" {
+				delta = -1
+			}
+			a.avanzar()
+			e = jincr{destino: e, delta: delta, donde: donde}
 		case a.es('p', "("):
 			args, err := a.argumentos()
 			if err != nil {

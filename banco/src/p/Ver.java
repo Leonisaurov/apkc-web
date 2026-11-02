@@ -20,7 +20,7 @@ public class Ver {
         int i = 0;
         while (i < n) {
             total = total + i;
-            i = i + 1;
+            i++;
         }
     }
 
@@ -39,13 +39,11 @@ public class Ver {
         int i = 0;
         while (i < v.length) {
             v[i] = i + 1;
-            i = i + 1;
+            i++;
         }
         int s = 0;
-        i = 0;
-        while (i < v.length) {
-            s = s + v[i];
-            i = i + 1;
+        for (int j = 0; j < v.length; j++) {
+            s = s + v[j];
         }
         return s;
     }

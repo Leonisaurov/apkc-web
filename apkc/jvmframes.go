@@ -454,6 +454,14 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		if err := a.guardaLocal(int(op-0x4b), 'l'); err != nil {
 			return nil, false, err
 		}
+	case op == 0x84: // iinc: no toca la pila, solo el local
+		if len(in.ops) < 2 {
+			return nil, false, fmt.Errorf("el iinc se corta")
+		}
+		n := int(in.ops[0])
+		if n >= len(a.est.locales) || a.est.locales[n].etiqueta != 'i' {
+			return nil, false, fmt.Errorf("el iinc sobre el hueco %d, que no es un entero asignado", n)
+		}
 	case op == 0x57:
 		if _, err := a.saca(); err != nil {
 			return nil, false, err

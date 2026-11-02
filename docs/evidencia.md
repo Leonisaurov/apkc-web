@@ -3494,8 +3494,9 @@ de modo que los cuatro caminos imprimen `total 7`, `total 9` y `total 42` y sale
 nuestro dex de punta a punta, `d8` sobre javac y `d8` sobre nuestra `Ver`, los tres dex con `dexdump
 verificando rc 0`.
 
-**Frontera, con motivo**: no hay `do-while`, ni `break`/`continue`, ni `i++`, ni bucles con valores vivos
-distintos de un local, ni `goto/16`; y el `+` de cadenas en un fuente compilado por **javac 21** sale
+**Frontera, con motivo**: no hay `do-while`, ni `break`/`continue`, ni bucles con valores vivos
+distintos de un local, ni `goto/16`; *(y `i++`, que se nombraba aquí, entró en el §67)*; y el `+` de
+cadenas en un fuente compilado por **javac 21** sale
 como `invokedynamic` y el dexer lo rechaza (plan 5.22), que es la razón de que el `Arranque` del banco
 imprima enteros y no cadenas.
 
@@ -3725,3 +3726,45 @@ bytes). El banco: cinco caminos y `jvm con nuestra clase emitida (Xverify:all)` 
 desde el fuente (el traductor sí acepta el atype; el emisor del fuente solo escribe `int`), pasar un
 arreglo a un parámetro `Object` (`asignable` no conoce la jerarquía de arreglos; se rechaza por
 nombre) y `arraycopy` no están medidos.
+
+## 67. `i++` y `--i`: `iinc` en el `.class`, `add-int/lit8` en el dex
+
+El ítem 5.1, el que se nombraba en el portero desde el §63. Medido con `Inc`, un fuente con `i++` e
+`i--` dentro de un bucle, un `++` sobre un campo estático y otro sobre uno de instancia:
+
+```
+javac                                   d8 (dexdump -d)
+i++    iinc 1, 1                        d800 0001   add-int/lit8 v0, v0, #1
+i--    iinc 1, -1                       d800 00ff   add-int/lit8 v0, v0, #-1
+total++  getstatic; iconst_1; iadd;     sget; add-int/lit8; sput
+         putstatic
+propio++ aload_0; dup; getfield;        iget v0, v1; add-int/lit8 v0, v0, #1;
+         iconst_1; iadd; putfield       iput v0, v1     (el `dup` desaparece)
+```
+
+`iinc` (0x84) lleva el índice del local y una constante de un byte con signo; en DEX es la 22b
+`add-int/lit8 vA, vB, #+C` (0xd8), con el destino en el byte alto de la primera unidad y el fuente con
+la constante al lado. La forma 22b se conocía del plegado `i + 1` del §63; ahora está medida también
+para el decremento.
+
+**El emisor.** El analizador acepta `++` y `--` como tokens propios (antes se leían dos `+`), en
+prefijo y en sufijo, y como paso de un `for`. Como sentencia: si el destino es un local se escribe
+`iinc` —la forma de javac, no un `iload`/`iconst`/`iadd`/`istore`, que daría el mismo resultado con un
+`.class` distinto—; si es un campo se arma `destino = destino ± 1`, que es `getstatic; iconst_1;
+iadd/isub; putstatic` o el `aload_0; dup; getfield; …; putfield` de javac. **Como valor** (`x = i++`)
+no está medido y se rechaza por nombre: javac tiene que conservar el valor viejo y eso es otra forma.
+`+=` y `-=` siguen rechazados.
+
+**Oráculo doble**: el dex de nuestra `Inc` es **byte a byte** el de las clases de javac (sin contar el
+`dup`, que en el traductor es una copia de la pila y no una instrucción: la lectura-cuenta-escritura
+del campo de instancia sale igual). `TestElIncrementoSeDexaIgualQueElDeJavac` lo fija.
+
+**Ejecutado**: el banco usa ahora `i++` en `Ver.suma` y un `for (int j = 0; …; j++)` en
+`Ver.sumaArreglo`, y los cinco caminos siguen dando `total 7|total 9|total 102|10` con `rc 102` y
+`dexdump` verificando —incluido el camino "todo nuestro", con las dos fuentes compiladas y dexadas por
+este fork—; la JVM con `-Xverify:all` sobre nuestras clases también.
+
+Suite: **232 PASS + 2 SKIP** nativa y **196 PASS + 38 SKIP** en el hospedador; gate de `studio/e2e.sh`
+en orden con los apks de siempre (10014, 9727 y 10287 bytes).
+
+**Frontera**: `++`/`--` como valor, `+=`/`-=`, y `++` sobre algo que no sea una variable.
