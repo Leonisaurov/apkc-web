@@ -3915,3 +3915,86 @@ en orden.
 
 **Frontera**: `finally`, más de un `catch` por `try`, `catch` de un tipo que no sea clase y la
 negación de algo que no sea un literal entero se rechazan por nombre.
+
+## 72. `private`/`protected` y los `access$NNN` de javac, por los dos dexers
+
+**Los flags, con `javap -v`** sobre `Dentro` (`private void oculto()`, `protected int medio()`): un
+método privado es `0x0002` y uno protegido `0x0004`, los mismos bits que §49 midió en un campo; no hay
+nada más en el `method_info`. Dentro de la propia clase, `oculto()` sale como
+`aload_0; invokespecial #13 // Method oculto:()V` —javac llama a un privado con `invokespecial`, no con
+`invokevirtual`— y `medio()` como `invokevirtual`.
+
+**La anónima no toca el privado: javac le fabrica métodos.** Sobre `Fuera` (un `private int secreto`,
+un `private void oculto()` y una anónima que hace `secreto = secreto + 2; oculto();`), `javap -p` de la
+clase exterior añade tres métodos **al final**, después de los declarados y antes del `<clinit>`:
+`static int access$002(p.Fuera, int)`, `static int access$000(p.Fuera)` y `static void
+access$100(p.Fuera)`, los tres con flags `0x1008` (`ACC_STATIC|ACC_SYNTHETIC`). El nombre es
+`access$` + **posición del miembro** × 100 + **sentido** (`0` leer o llamar, `2` escribir), con tres
+dígitos: `access$000`/`access$002` son el primer miembro, `access$100` el segundo. La posición es una
+sola secuencia para campos y métodos y se asigna por **orden de primera creación**, no de declaración:
+con `b` tocado antes que `a`, `b` es el 0 y `a` el 1. Una escritura crea su accesor **antes** de la
+lectura del lado derecho (`secreto = secreto + 2` deja `002` antes de `000`), y las anónimas se
+procesan antes que las clases anidadas con nombre (con `Interior` declarada antes del método que crea
+la anónima, los dos accesores de la anónima salen primero).
+
+**Los cuerpos, todos de `javap -c -p`** y con una sola fila de `LineNumberTable` en la línea de la
+**declaración de la clase** (no la del miembro):
+
+| miembro | access$ | cuerpo |
+| --- | --- | --- |
+| campo de instancia, leer | `000` | `aload_0; getfield; ireturn` |
+| campo de instancia, escribir | `002` | `aload_0; iload_1; dup_x1; putfield; ireturn` (devuelve el valor) |
+| campo `String`, escribir | `202` | `aload_0; aload_1; dup_x1; putfield; areturn` |
+| campo estático, leer | `300` | `getstatic; ireturn` |
+| campo estático, escribir | `302` | `iload_0; dup; putstatic; ireturn` |
+| método de instancia | `400` | `aload_0; invokespecial; return`/`ireturn` |
+| método estático | `500` | `invokestatic; return` |
+
+**Los sitios de llamada, de la anónima:** leer es `aload_0; getfield this$0; invokestatic
+access$000:(LExterior;)I`; escribir carga la captura, deja el valor y acaba en
+`invokestatic access$002; pop`; un método privado es `aload_0; getfield this$0; invokestatic
+access$100` (sin `invokespecial` desde la anónima). Un método **no** privado del exterior se llama con
+la captura y `invokevirtual`, y uno estático con `invokestatic` sin receptor.
+
+**En el dex**, de `dexdump -d` sobre `d8`:
+- `access$000` es `iget v0, v0` + `return v0` (d8 reutiliza el registro del argumento; nuestro
+  asignador usa uno más, `iget v0, v1`, porque el argumento no se declara muerto).
+- `access$002` es `5901 0400` (`iput v1, v0`) + `0f01` (`return v1`): el `dup_x1` no deja ninguna
+  instrucción; las tres entradas de la pila comparten el registro del valor y `suelta` no lo recicla
+  mientras otra entrada viva lo nombre.
+- `access$100` es `7010 0f00 0000` (`invoke-direct {v0}`) —un privado de la propia clase es
+  `invoke-direct`— y el estático `access$500` es `invoke-static`; el campo estático es `sget`
+  (`6000 0800`).
+
+Y el reparto del `class_data` cambió: **un método privado de instancia es un método directo** (junto a
+constructores y estáticos). Sin eso `dexdump` corta el fichero con `Direct/virtual method
+11(LQ;.lee) not in expected list 0`.
+
+**Dos defectos que solo destapó ejecutar.** (1) `java -Xverify:all` rechazó el primer `.class` con
+`ClassFormatError: Arguments can't fit into locals in class file Q`: el accesor escribía
+`max_locals=0` aunque su descriptor pidiera argumentos; ahora `max_locals` es el número de huecos del
+descriptor (el accesor siempre es `static`, aunque el miembro no lo sea). (2) `dexdump` rechazó el dex
+por la lista directa del párrafo anterior.
+
+**Ejecutado.** Sonda `Q`: un `private int n`, un `private static int total`, `sube()`, `suma(int)`,
+`lee()` privados y una anónima que hace `n = n + 2; sube(); suma(3); total = total + lee();`.
+- Nuestro `.class` en la JVM (`java -Xverify:all`): `3` y `6`, `rc 0`.
+- Nuestro dex (compilador + dexer en Go): `dexdump rc 0`, `app_process` imprime `3` y `6`, `rc 0`.
+- `d8 --release` sobre **nuestras** clases: `rc 0`, su dex también imprime `3` y `6` con `rc 0`.
+- El banco lleva `Ver.privados` (campo de instancia, campo estático y tres métodos privados tocados
+  desde una anónima; devuelve `10`) y los cinco caminos dan la misma salida, ahora
+  `total 7|total 9|total 102|10|3|2|4|7|-1|10`, y el sexto —la `Ver` nuestra con el `Arranque` de
+  javac bajo `-Xverify:all`— `rc=102 y salida igual a la JVM`. `d8` y los caminos de la JVM reciben
+  también `Ver$1.class`: la anónima es un fichero aparte y sin él `d8` pide un *nest mate* y la JVM
+  muere en `privados`.
+
+**Pruebas permanentes**: `apkc/javaemisor_privada_test.go` compara campo a campo, método a método
+(nombres, descriptores, flags y orden) y, para cada cuerpo, la sucesión de instrucciones **con el
+miembro resuelto por nombre** contra `javac --release 8 -g` —comparar el `Code` crudo no vale porque
+los índices del pool se ordenan distinto—; incluye las dos formas de la frontera.
+`apkc/dexprivada_test.go` fija que privados y accesores están en la lista directa y las formas
+`iget`/`iput`+`return`/`invoke-direct`/`invoke-static`/`sget`.
+
+**Frontera**: una clase anidada `private` (javac le añade un constructor sintético `(Exterior$1)` y
+una clase marcador `Exterior$1`) y una `protected` con nombre y sin `static` (pide la captura
+`this$0`) se rechazan por nombre; `protected` en campos y métodos sí entra.

@@ -486,7 +486,10 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[2]string]uint32) (
 			continue
 		}
 		accesoDe[idx] = m
-		if m.Name == "<init>" || m.Access&accStatic != 0 {
+		if m.Name == "<init>" || m.Name == "<clinit>" || m.Access&(accStatic|accPrivate) != 0 {
+			// en DEX son directos los constructores, los estaticos y los privados: un metodo privado de
+			// instancia se llama con invoke-direct y el verificador espera verlo en la lista directa
+			// (`Direct/virtual method ... not in expected list`, destapado por el access$ de javac)
 			directos = append(directos, idx)
 			continue
 		}

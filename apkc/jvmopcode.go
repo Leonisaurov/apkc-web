@@ -59,6 +59,7 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x4e: {"astore_3", 0},
 	0x57: {"pop", 0},
 	0x59: {"dup", 0},
+	0x5a: {"dup_x1", 0},
 	0x60: {"iadd", 0},
 	0x64: {"isub", 0},
 	0x68: {"imul", 0},

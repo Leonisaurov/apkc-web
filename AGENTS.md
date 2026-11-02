@@ -420,6 +420,22 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   suelta `move`/`move-object` (`0110`, `0730`) en el resto. Marcos del handler con la excepción en la
   pila y los locales unidos sobre el rango. El banco lleva `leeSeguro` y los cinco caminos dan
   `total 7|total 9|total 102|10|3|2|4|7|-1`.
+- **`private`/`protected` y los `access$NNN` de javac** (§72): los flags de un método son `0x0002` y
+  `0x0004`, y un privado de la propia clase se llama con `invokespecial`. Una anónima no toca el
+  privado del exterior: javac escribe al final de su `ClassFile` (entre los métodos declarados y el
+  `<clinit>`) `access$` + posición del miembro × 100 + sentido (`0` leer o llamar, `2` escribir), con
+  posición por orden de **primera creación** compartida entre campos y métodos; la escritura se crea
+  antes que la lectura del lado derecho y las anónimas se procesan antes que las anidadas con nombre.
+  Cuerpos: `iget`, `aload_0; iload_1; dup_x1; putfield; ireturn` (devuelve el valor, el llamador pone
+  el `pop`), `getstatic`, `iload_0; dup; putstatic; ireturn`, `invokespecial`/`invokestatic`; flags
+  `0x1008` y una fila de línea con la declaración de la clase. En el dex un privado de instancia es
+  método **directo** (si no, `dexdump`: `Direct/virtual method … not in expected list`),
+  `invokespecial` es `invoke-direct` y el `dup_x1` no emite nada (las tres entradas comparten registro).
+  Destapado ejecutando: el `.class` del accesor escribía `max_locals=0` y la JVM lo rechazaba con
+  `Arguments can't fit into locals`. Sonda `Q` (campo y métodos privados tocados desde una anónima):
+  JVM `-Xverify:all`, nuestro dex en ART y `d8` sobre nuestras clases dan `3`/`6`; el banco lleva
+  `Ver.privados` (devuelve `10`) y los cinco caminos coinciden. Frontera por nombre: una clase anidada
+  `private` (constructor sintético y clase marcador) o `protected` con nombre y sin `static` (`this$0`).
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -445,7 +461,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **237 PASS + 2 SKIP** nativa y **196 PASS + 43 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **240 PASS + 2 SKIP** nativa y **196 PASS + 46 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

@@ -765,6 +765,19 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(p.enPila[len(p.enPila)-1])
+		case "dup_x1":
+			if len(p.enPila) < 2 {
+				p.falla(in, "dup_x1 with fewer than two values on the JVM stack")
+				return p.err
+			}
+			// [objeto, valor] -> [valor, objeto, valor]. Las tres entradas comparten registros y no se
+			// emite nada: suelta solo recicla cuando ninguna entrada viva lo nombra (lo mismo que `dup`).
+			// d8 lo baja igual: el `access$002` de la sonda sale `iput v1, v0` + `return v1` (parrafo 72).
+			valor := p.pop(in)
+			objeto := p.pop(in)
+			p.push(valor)
+			p.push(objeto)
+			p.push(valor)
 		case "return":
 			p.palabra(uint16(opRetornaV))
 		case "ireturn":
@@ -1087,6 +1100,18 @@ func esObjeto(desc string) bool {
 	return desc != "" && (desc[0] == 'L' || desc[0] == '[')
 }
 
+// metodoPrivado: la clase que se traduce declara ese metodo con ACC_PRIVATE. Es lo que distingue un
+// `invokespecial` de un metodo privado (que d8 baja a `invoke-direct`) de una llamada a un constructor o
+// a un padre, que la propia instruccion no separa.
+func (p *traduce) metodoPrivado(nombre, desc string) bool {
+	for _, m := range p.clase.Methods {
+		if m.Name == nombre && m.Desc == desc {
+			return m.Access&accPrivate != 0
+		}
+	}
+	return false
+}
+
 func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 	owner, nombre, desc, _ := p.x.refOf(dexU16(in.ops))
 	metodo, ok := p.t.methodIdx[methodKey{owner: owner, proto: protoKeyOf(desc), desc: desc, name: nombre}]
@@ -1112,8 +1137,12 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 			// medido: el super.onCreate del fixture sale como invoke-super (0x6f), no como
 			// invoke-direct, así que el reparto de invokespecial depende del destino
 			op = opInvocaSuper
+		case owner == p.clase.Name && p.metodoPrivado(nombre, desc):
+			// un metodo privado de la propia clase es invoke-direct (0x70), medido en el parrafo 72
+			// sobre el access$100 de javac: `7010 0f00 0000` contra `Lp/Fuera;.oculto:()V`
+			op = opInvocaDirecto
 		default:
-			p.falla(in, "an invokespecial that is neither a constructor nor a super call: a private method, not measured here")
+			p.falla(in, "an invokespecial that is neither a constructor, a super call nor a private method of this class, not measured here")
 			return
 		}
 	}

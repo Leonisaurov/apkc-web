@@ -20,6 +20,7 @@ public class Arranque {
         corto[0] = 7;
         System.out.println(Ver.leeSeguro(corto, 0));
         System.out.println(Ver.leeSeguro(corto, 5));
+        System.out.println(new Ver().privados());
         int t = Ver.total;
         System.exit(t);
     }

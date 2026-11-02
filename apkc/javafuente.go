@@ -274,14 +274,16 @@ type jcampo struct {
 }
 
 type jmetodo struct {
-	nombre     string
-	retorno    string // "" si constructor
-	params     []jparam
-	cuerpo     []jstmt
-	esEstatico bool
-	esPublico  bool
-	esFinal    bool
-	linea      int
+	nombre      string
+	retorno     string // "" si constructor
+	params      []jparam
+	cuerpo      []jstmt
+	esEstatico  bool
+	esPublico   bool
+	esPrivado   bool
+	esProtegido bool
+	esFinal     bool
+	linea       int
 	// lineaFin es la llave que cierra el cuerpo: javac anota ahi el `return` implicito de un metodo void,
 	// medido en el parrafo 40 (line 16 en la plantilla, que es donde esta el `}` de onCreate).
 	lineaFin int
@@ -765,6 +767,18 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 			if esAbstracta {
 				return nil, fmt.Errorf("linea %d: una clase anidada abstracta no esta medida", linea)
 			}
+			if esPrivado || esProtegido {
+				// medido en el parrafo 72: una anidada privada lleva en su propio ClassFile solo ACC_SUPER
+				// (0x0020) pero la fila del InnerClasses dice `static`, y javac le añade un constructor
+				// sintetico `(Exterior$1)` y una clase marcador `Exterior$1`; una protegida sí es publica en
+				// su ClassFile, pero las anidadas con nombre que no son `static` piden la captura `this$0`,
+				// que este emisor no escribe. Las dos se rechazan por nombre.
+				modificador := "private"
+				if esProtegido {
+					modificador = "protected"
+				}
+				return nil, fmt.Errorf("linea %d: una clase anidada %s no esta medida: cambia los flags del ClassFile y del InnerClasses, y javac le añade constructor sintetico y clase marcador", linea, modificador)
+			}
 			anidada, err := a.clase(c)
 			if anidada != nil {
 				// los modificadores los consumio este bucle, no la declaracion: sin esto la anidada perderia
@@ -781,18 +795,12 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 	}
 cuerpo:
 	_ = esAbstracta
-	// `private` y `protected` se midieron en los flags de un campo (0x0002 y 0x0004, parrafo 49); en un
-	// metodo todavia no se leyeron, así que se rechazan aqui y no en el emisor, que es mas lejos del fuente
+	// `private` y `protected` en un metodo son los flags ACC_PRIVATE (0x0002) y ACC_PROTECTED (0x0004),
+	// medidos en el parrafo 72 con `javap -v`; en un campo ya venian del parrafo 49. Un miembro privado
+	// del exterior que usa una anonima pasa por los metodos sinteticos `access$NNN`, que mide ese mismo
+	// parrafo.
 	leerMetodo := func(retorno string) (interface{}, error) {
-		if esPrivado || esProtegido {
-			modificador := "private"
-			if esProtegido {
-				modificador = "protected"
-			}
-			return nil, fmt.Errorf("linea %d: un metodo %s no esta medido contra javap: los unicos flags leidos son los de un campo",
-				linea, modificador)
-		}
-		return a.metodo(c, retorno, esEstatico, esFinal, esPublico, linea)
+		return a.metodo(c, retorno, esEstatico, esFinal, esPublico, esPrivado, esProtegido, linea)
 	}
 	if a.es('k', "void") {
 		a.avanzar()
@@ -833,8 +841,9 @@ cuerpo:
 }
 
 // metodo lee la firma y el cuerpo. `retorno` viene vacio para el constructor.
-func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, esPublico bool, linea int) (jmetodo, error) {
-	m := jmetodo{retorno: retorno, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico, linea: linea}
+func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, esPublico, esPrivado, esProtegido bool, linea int) (jmetodo, error) {
+	m := jmetodo{retorno: retorno, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico,
+		esPrivado: esPrivado, esProtegido: esProtegido, linea: linea}
 	if retorno == c.nombre {
 		m.nombre = "<init>"
 		a.avanzar() // el nombre, que ya sabemos cual es

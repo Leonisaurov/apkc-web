@@ -45,7 +45,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
-| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan arreglos, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while`, `for`, `do-while`, `break`/`continue`, §63, §69 y §70)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)**, **5.11 (arreglos y `main(String[])`, §66)**, **5.1 (`++`/`--` y `+=`/`-=`, §67 y §68)** y **5.9 (`try`/`catch` y `throw`, §71)**; el bloque de control de flujo está cerrado, y lo que sigue es 5.8 (`long`/`double`), 5.5 (miembros privados) y los recursos | la sección «Fase 5» de este plan |
+| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan `try/catch`/`finally`, `long`/`float`/`double`, `char`, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while`, `for`, `do-while`, `break`/`continue`, §63, §69 y §70)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)**, **5.11 (arreglos y `main(String[])`, §66)**, **5.1 (`++`/`--` y `+=`/`-=`, §67 y §68)**, **5.9 (`try`/`catch` y `throw`, §71)** y **5.5 (`private`/`protected` y `access$…`, §72)**; el bloque de control de flujo está cerrado, y lo que sigue es 5.8 (`long`/`double`) y los recursos | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
@@ -536,7 +536,7 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.2 | literal `char` y escapes restantes | `javafuente.go:273`, `:369` | cómo baja javac un `char` (entero de 16) y su `ConstantValue` | XS |
 | 5.3 | literales de clase `X.class` | `javaemisor.go:1238`, `:1821` | `ldc` de `CONSTANT_Class` en el `.class` y el `const-class` (formato 21c) en el dex, cuyo opcode se confirma con la sonda | S |
 | 5.4 | llamadas de más de cinco argumentos y cualquier forma `/range` o `/from16` | `dexinstr.go:412`, `:227` | palabras de `d8` sobre una sonda con seis argumentos y con registros `v16` | S |
-| 5.5 | `private`/`protected` y los accesos sintéticos `access$…` | `javafuente.go:534`, `:536`, `:672` | número y orden de los sintéticos que escribe javac (lo que dice el §54: el de *escritura* devuelve el valor) | M |
+| 5.5 | `private`/`protected` y los accesos sintéticos `access$…` | **HECHO** (§72): medidos los flags `0x0002`/`0x0004` y que un privado de la propia clase se llama con `invokespecial`. La anónima toca los privados del exterior por los `access$NNN` que javac escribe al final del `ClassFile` (flags `0x1008`): nombre = `access$` + posición del miembro × 100 + sentido (`0` leer/llamar, `2` escribir), posición por orden de primera creación y compartida por campos y métodos; cuerpos medidos para campo de instancia/estático y método de instancia/estático (el de escritura devuelve el valor y el llamador pone el `pop`). En el dex: privado de instancia = método **directo**, `invokespecial` = `invoke-direct`, y el `dup_x1` del accesor de escritura no emite nada. Frontera: una clase anidada `private` (constructor sintético y clase marcador) o `protected` con nombre y sin `static` (`this$0`) se rechazan por nombre | — | hecho |
 | 5.6 | `throws`, el atributo `Exceptions`, métodos abstractos e interfaces propias | `javafuente.go:747` y `javaemisor.go:2502` | `ACC_ABSTRACT`, `interface` como tipo, `invoke-interface` ya medido a medias; `athrow` queda para 5.9 | M |
 | 5.7 | constructores escritos a mano | `javaemisor.go:2499` | dónde baja javac los inicializadores de campo cuando hay ctor propio, y cuál es el `super` implícito | M |
 | 5.8 | `long`, `float`, `double` (dos huecos) | `javaemisor.go:551`, `javafuente.go:1306`, `javaemisor.go:2413` | el `const-wide/16` (y sus hermanas de 32/64 bits) y el `ldc2_w` del `.class`, los `move-wide` de tres formatos, la numeración de locales de dos huecos en la frame (§57), y el `encoded_value` de `J`/`F`/`D` (§55 regla 4) | L |
@@ -581,9 +581,9 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 - **Lo primero de todo fue el ejecutor** (§61): antes de tocar un ítem, `banco/banco.sh` corre el fuente
   por los cuatro caminos. En una tarde destapó cinco cosas que ningún oráculo de bytes veía (5.23 a
   5.27 y el `invokestatic` sin argumentos).
-- **Lo que sigue**: 5.8 (`long`/`float`/`double`), que cambia la numeración de la frame; 5.5
-  (`private`/`protected` y los `access$…`); el inicializador `new T[] {…}` (5.11), `finally` y más de
-  un `catch` (5.9), y los recursos con PNG y calificadores (5.16 y 5.17).
+- **Lo que sigue**: 5.8 (`long`/`float`/`double`), que cambia la numeración de la frame; el
+  inicializador `new T[] {…}` (5.11), `finally` y más de un `catch` (5.9), y los recursos con PNG y
+  calificadores (5.16 y 5.17).
 
 ### Hitos con prueba en el teléfono
 

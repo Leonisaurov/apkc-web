@@ -31,13 +31,17 @@ anywhere. The output goes where the dexer looks for it, one file per class, name
 (R and R$layout are separate files, exactly like javac leaves them).
 
 Only the measured subset compiles: declarations, @Override (which leaves no trace in the class file),
-calls on this, on a written receiver, on a type and on super, string and integer literals, inlined
-"static final int" constants like R.layout.main, fields and local variables, integer arithmetic, an
-if or if-else over one of the comparisons javac inverts (docs/evidencia.md §49 and §52), string
-concatenation through the StringBuilder chain and the constant folding that javac does with it (§53),
-and anonymous classes with the this$0 field javac gives them. Anything else - a loop, an array, a long,
-a condition that is a bare boolean, an annotation other than @Override, a class the classpath does not
-name - stops the command with its line, before writing a single file.
+calls on this, on a written receiver, on a type and on super, string, integer, boolean and null
+literals, inlined "static final int" constants like R.layout.main, fields (private/protected and
+static included, with the access$NNN synthetics javac gives an anonymous class), local variables,
+integer arithmetic, ++/-- and +=/-=, an if or if-else over one of the comparisons javac inverts
+(docs/evidencia.md §49 and §52), while, for and do-while with break and continue (§63, §69, §70), a
+switch of integer literals (§64), try/catch and throw (§71), arrays (new T[n], v[i], .length, §66),
+string concatenation through the StringBuilder chain and the constant folding that javac does with it
+(§53), and anonymous classes with the this$0 field javac gives them. Anything else - a long, a float,
+a char, a condition that is a bare boolean, finally or a second catch, a nested private class, an
+annotation other than @Override, a class the classpath does not name - stops the command with its
+line, before writing a single file.
 
 Type names resolve against the android.jar passed in, reading only the entries the sources mention.
 `)

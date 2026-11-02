@@ -471,6 +471,13 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, fmt.Errorf("el `dup` con la pila vacia")
 		}
 		a.empuja(a.est.pila[len(a.est.pila)-1])
+	case op == 0x5a: // dup_x1: [objeto, valor] -> [valor, objeto, valor], medido en el access$002 (parrafo 72)
+		if len(a.est.pila) < 2 {
+			return nil, false, fmt.Errorf("el `dup_x1` con menos de dos valores")
+		}
+		valor := a.est.pila[len(a.est.pila)-1]
+		objeto := a.est.pila[len(a.est.pila)-2]
+		a.est.pila = append(a.est.pila[:len(a.est.pila)-2], valor, objeto, valor)
 	case op == 0x60 || op == 0x64 || op == 0x68 || op == 0x6c || op == 0x70:
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err

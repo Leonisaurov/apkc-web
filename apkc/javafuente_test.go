@@ -248,7 +248,7 @@ func TestParsearRechazaLoQueNoSeEmite(t *testing.T) {
 		{"class A { @Deprecated void a() {} }", "una anotacion que no es Override", "@Deprecated"},
 		{"class A { private int x; }", "un campo private", ""},
 		{"class A { protected int x; }", "un campo protected", ""},
-		{"class A { private void a() {} }", "un metodo private", "private"},
+		{"class A { private void a() {} }", "un metodo private", ""},
 		{"class A { interface I {} }", "una interface escrita a mano", "interface"},
 		{"class A { }", "un fuente sin metodos no es rechazo", ""},
 	}

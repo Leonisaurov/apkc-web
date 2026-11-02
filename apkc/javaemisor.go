@@ -45,6 +45,7 @@ const (
 	opLdc        = 0x12
 	opPop        = 0x57
 	opDup        = 0x59
+	opDupX1      = 0x5a
 	opGetstatic  = 0xb2
 	opPutstatic  = 0xb3
 	opGetfield   = 0xb4
@@ -328,6 +329,31 @@ type contextoJava struct {
 	orden   []*jclas // en el orden del fuente, para resolver sin depender del azar de un mapa
 	propias map[string]*jclas
 	archivo string // el SourceFile que anota javac: el nombre del fuente, sin rutas
+
+	// accesores son los metodos sinteticos `access$NNN` que javac escribe en el exterior cuando una
+	// anonima toca un miembro suyo privado (parrafo 72). Se guardan por dueño y en orden de creacion:
+	// el numero que va en el nombre es esa posicion, y el orden es el que javac deja en el ClassFile
+	// (cuerpos del exterior primero, clases anidadas despues).
+	accesores map[string][]accesorSintetico
+	accesorID map[string]accesorSintetico
+	// accesorNumero da el indice de cada miembro privado (campos y metodos comparten la secuencia):
+	// leer y escribir un mismo campo llevan el mismo indice y distinto ultimo digito, medido en el
+	// parrafo 72 (`access$000` y `access$002` para el primer miembro).
+	accesorNumero map[string]int
+}
+
+// accesorSintetico: un `access$NNN` del exterior. El cuerpo se deduce del miembro y del sentido: leer
+// un campo, escribirlo (y devolver el valor: es lo que hace javac y por eso el llamador emite un `pop`)
+// o llamar a un metodo privado.
+type accesorSintetico struct {
+	nombre      string
+	desc        string
+	duenio      string
+	miembro     string
+	miembroDesc string
+	campo       bool
+	escritura   bool
+	estatico    bool
 }
 
 // internoDeDescriptor: el lector de la Fase 2 guarda `this_class` y `super_class` en forma de descriptor
@@ -944,6 +970,12 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 			if m.esPublico {
 				acceso |= accPublic
 			}
+			if m.esPrivado {
+				acceso |= accPrivate
+			}
+			if m.esProtegido {
+				acceso |= accProtected
+			}
 			if m.esEstatico {
 				acceso |= accStatic
 			}
@@ -1014,6 +1046,12 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 				if f.esPublico {
 					acc |= accPublic
 				}
+				if f.esPrivado {
+					acc |= accPrivate
+				}
+				if f.esProtegido {
+					acc |= accProtected
+				}
 				if f.esEstatico {
 					acc |= accStatic
 				}
@@ -1069,8 +1107,52 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 	return campoResuelto{}, fmt.Errorf("el campo %s no esta en %s ni en sus padres", nombre, dueño)
 }
 
-// ----- la entrada: un fuente, sus clases -----
+// accesorPara devuelve el `access$NNN` del exterior con el que una anonima toca un miembro privado, y lo
+// apunta si es la primera vez. Medido en el parrafo 72: el nombre es `access$` + posicion*100 + sentido
+// (0 para leer un campo o llamar a un metodo, 2 para escribir un campo), con tres digitos
+// (`access$000`, `access$102`); la posicion es el orden en que javac crea los accesores, compartido
+// entre campos y metodos.
+func (ctx *contextoJava) accesorPara(duenio, miembro, miembroDesc string, campo, escritura, estatico bool) (string, string) {
+	clave := fmt.Sprintf("%s|%s|%s|%v|%v|%v", duenio, miembro, miembroDesc, campo, escritura, estatico)
+	if a, ok := ctx.accesorID[clave]; ok {
+		return a.nombre, a.desc
+	}
+	memoria := fmt.Sprintf("%s|%s|%s|%v|%v", duenio, miembro, miembroDesc, campo, estatico)
+	numero, ok := ctx.accesorNumero[memoria]
+	if !ok {
+		numero = len(ctx.accesorNumero)
+		ctx.accesorNumero[memoria] = numero
+	}
+	// el ultimo digito es el sentido: 0 para leer un campo o llamar a un metodo, 2 para escribir un
+	// campo. Medido: `access$300` es el metodo del tercer miembro, no `access$301` (parrafo 72).
+	sentido := 0
+	if campo && escritura {
+		sentido = 2
+	}
+	nombre := fmt.Sprintf("access$%03d", numero*100+sentido)
+	var desc string
+	switch {
+	case campo && estatico && escritura:
+		desc = "(" + miembroDesc + ")" + miembroDesc
+	case campo && estatico:
+		desc = "()" + miembroDesc
+	case campo && escritura:
+		desc = "(L" + duenio + ";" + miembroDesc + ")" + miembroDesc
+	case campo:
+		desc = "(L" + duenio + ";)" + miembroDesc
+	case estatico:
+		desc = miembroDesc
+	default:
+		desc = "(L" + duenio + ";" + miembroDesc[1:]
+	}
+	a := accesorSintetico{nombre: nombre, desc: desc, duenio: duenio, miembro: miembro,
+		miembroDesc: miembroDesc, campo: campo, escritura: escritura, estatico: estatico}
+	ctx.accesores[duenio] = append(ctx.accesores[duenio], a)
+	ctx.accesorID[clave] = a
+	return nombre, desc
+}
 
+// ----- la entrada: un fuente, sus clases -----
 type claseEmitida struct {
 	interno string
 	datos   []byte
@@ -1097,7 +1179,9 @@ func compilarProyectoJava(fuentes []fuenteJava, rutaJar string) ([]claseEmitida,
 		return nil, err
 	}
 	defer busc.cerrar()
-	ctx := &contextoJava{busc: busc, propias: map[string]*jclas{}}
+	ctx := &contextoJava{busc: busc, propias: map[string]*jclas{},
+		accesores: map[string][]accesorSintetico{}, accesorID: map[string]accesorSintetico{},
+		accesorNumero: map[string]int{}}
 	type parseado struct {
 		a    *archivoJava
 		nomb string
@@ -1143,13 +1227,11 @@ func baseDeNombre(nombre string) string {
 	return nombre
 }
 
-// emmitirArbol escribe la clase y, despues, sus anidadas: cada una es su propio fichero.
+// emmitirArbol escribe la clase y sus anidadas: cada una es su propio fichero. Las hijas van **antes** que
+// la clase porque al emitirlas se apuntan los `access$NNN` del exterior que una anonima necesita, y esos
+// metodos sinteticos se escriben al final del ClassFile del exterior (medido en el parrafo 72).
 func (ctx *contextoJava) emmitirArbol(c *jclas) ([]claseEmitida, error) {
-	datos, err := ctx.emmitirClase(c)
-	if err != nil {
-		return nil, fmt.Errorf("linea %d: %w", c.linea, err)
-	}
-	salida := []claseEmitida{{interno: internoDe(c.paquete, c.nombre), datos: datos}}
+	salida := []claseEmitida{}
 	// las anonimas que crea el cuerpo de esta clase son su propio fichero, con su captura
 	for _, a := range anonimasDe(c) {
 		hijas, err := ctx.emmitirArbol(a)
@@ -1165,7 +1247,11 @@ func (ctx *contextoJava) emmitirArbol(c *jclas) ([]claseEmitida, error) {
 		}
 		salida = append(salida, hijas...)
 	}
-	return salida, nil
+	datos, err := ctx.emmitirClase(c)
+	if err != nil {
+		return nil, fmt.Errorf("linea %d: %w", c.linea, err)
+	}
+	return append(salida, claseEmitida{interno: internoDe(c.paquete, c.nombre), datos: datos}), nil
 }
 
 // ----- el emisor de una clase -----
@@ -1932,14 +2018,10 @@ func (e *emisor) duenioDelCampo(nombre string) (string, campoResuelto, bool) {
 	if e.c.anonima {
 		externo := e.encierreInterno()
 		if cr, err := e.ctx.buscarCampo(externo, nombre); err == nil {
-			if cr.acceso&accPrivate != 0 {
-				// medido en el parrafo 54 con el mismo contador en privado: si el campo del exterior es
-				// privado, javac no escribe el getfield contra el campo sino contra dos metodos suyos
-				// sinteticos —`access$000(Lp/Contador;)I` para leer y `access$002(Lp/Contador;I)I` para
-				// escribir, y el de escritura devuelve el valor, de ahi el `pop`—. Ni el nombre ni el
-				// orden de esos metodos estan medidos, asi que el nombre se rechaza por nombre.
-				return "", campoResuelto{}, false
-			}
+			// si el campo del exterior es privado, javac no escribe el getfield contra el campo sino contra
+			// sus metodos sinteticos `access$NNN` (parrafo 72: `access$000` para leer, `access$002` para
+			// escribir, y el de escritura devuelve el valor, de ahi el `pop`); los dos llamadores lo
+			// distinguen por el flag y pasan por el accesor
 			return externo, cr, true
 		}
 	}
@@ -1967,7 +2049,22 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 		e.cargaEntero(cr.valor)
 		return cr.desc, true
 	}
-	if cr.acceso&accStatic != 0 {
+	estatico := cr.acceso&accStatic != 0
+	if dueño != e.interno && cr.acceso&accPrivate != 0 {
+		// el campo privado del exterior: la anonima pasa por `access$NN0` (parrafo 72)
+		nombreAcc, descAcc := e.ctx.accesorPara(dueño, nombre, cr.desc, true, false, estatico)
+		enPila := 0
+		if !estatico {
+			if e.estatico {
+				return "", false
+			}
+			e.cargaDelDuenio(dueño)
+			enPila = 1
+		}
+		e.invoca(opInvokestat, dueño, nombreAcc, descAcc, enPila)
+		return cr.desc, true
+	}
+	if estatico {
 		idx := e.pool.campo(dueño, nombre, cr.desc)
 		e.emite(opGetstatic, byte(idx>>8), byte(idx))
 		e.sube()
@@ -2031,6 +2128,54 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
 			return vueltaDe(cand.desc), nil
 		}
+		// Una anonima resuelve el nombre suelto primero en si misma y, si no hay ninguna candidata, en la
+		// clase que la creo (parrafo 72): un metodo no privado del exterior se llama con la captura
+		// (`aload_0; getfield this$0; invokevirtual`) y uno privado por su `access$NN0`, que es un
+		// `invokestatic` con la captura como primer argumento. Un estatico del exterior no lleva receptor.
+		if e.c.anonima {
+			cands, err := e.ctx.candidatos(e.interno, l.nombre, argc)
+			if err == nil && len(cands) == 0 {
+				externo := e.encierreInterno()
+				tipos := make([]string, 0, argc)
+				for _, arg := range l.args {
+					d, err := e.tipoEstimado(arg)
+					if err != nil {
+						return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+					}
+					tipos = append(tipos, d)
+				}
+				cand, err := e.ctx.buscarMetodo(externo, l.nombre, argc, tipos)
+				if err != nil {
+					return "", fmt.Errorf("linea %d: no existe %s con %d argumentos en %s ni en el exterior %s: %w",
+						l.donde.linea, l.nombre, argc, e.interno, externo, err)
+				}
+				if cand.acceso&accStatic != 0 {
+					if _, err := e.argumentos(l.args); err != nil {
+						return "", err
+					}
+					if cand.acceso&accPrivate != 0 {
+						// tambien un estatico privado pasa por su accessor, que no lleva receptor
+						nombreAcc, descAcc := e.ctx.accesorPara(externo, l.nombre, cand.desc, false, false, true)
+						e.invoca(opInvokestat, externo, nombreAcc, descAcc, argc)
+					} else {
+						e.invoca(opInvokestat, externo, l.nombre, cand.desc, argc)
+					}
+					return vueltaDe(cand.desc), nil
+				}
+				e.cargaDe(0, "L")
+				e.getfield(e.pool.campo(e.interno, "this$0", "L"+externo+";"))
+				if _, err := e.argumentos(l.args); err != nil {
+					return "", err
+				}
+				if cand.acceso&accPrivate != 0 {
+					nombreAcc, descAcc := e.ctx.accesorPara(externo, l.nombre, cand.desc, false, false, false)
+					e.invoca(opInvokestat, externo, nombreAcc, descAcc, argc+1)
+				} else {
+					e.invoca(opInvokevirt, externo, l.nombre, cand.desc, argc+1)
+				}
+				return vueltaDe(cand.desc), nil
+			}
+		}
 		// receptor implicito: el Methodref va contra la clase actual, medido en el parrafo 40
 		e.cargaDe(0, "L")
 		tipos, err := e.argumentos(l.args)
@@ -2042,7 +2187,12 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			return "", fmt.Errorf("linea %d: no existe %s con %d argumentos en %s ni en sus padres: %w",
 				l.donde.linea, l.nombre, argc, e.interno, err)
 		}
-		e.invoca(opInvokevirt, e.interno, l.nombre, cand.desc, argc+1)
+		opcode := byte(opInvokevirt)
+		if cand.acceso&accPrivate != 0 {
+			// un metodo privado de la propia clase se invoca con `invokespecial`, medido en el parrafo 72
+			opcode = opInvokespec
+		}
+		e.invoca(opcode, e.interno, l.nombre, cand.desc, argc+1)
 		return vueltaDe(cand.desc), nil
 	}
 	if acc, esAcceso := l.base.(jacceso); esAcceso && acc.base == nil && e.locales[acc.nombre].desc == "" {
@@ -2085,6 +2235,13 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 	var opcode byte = opInvokevirt
 	if accesosReceptor&accInterface != 0 {
 		opcode = opInvointf
+	}
+	if cand.acceso&accPrivate != 0 {
+		if receptor != e.interno {
+			return "", fmt.Errorf("linea %d: %s.%s es privado y se llama desde %s", l.donde.linea, receptor, l.nombre, e.interno)
+		}
+		// `this.metodoPrivado()`: javac tambien escribe `invokespecial` (parrafo 72)
+		opcode = opInvokespec
 	}
 	e.invoca(opcode, receptor, l.nombre, cand.desc, argc+1)
 	return vueltaDe(cand.desc), nil
@@ -2864,13 +3021,40 @@ func (e *emisor) stm(s jstmt) error {
 		// exterior, y entonces el receptor es la captura (parrafo 54).
 		dueño, cr, encontrado := e.duenioDelCampo(segs[0])
 		if !encontrado {
-			return fmt.Errorf("linea %d: asignar a %s: no es una variable local ni un campo de esta clase; si es campo del exterior y es privado, javac lo resuelve con sus metodos sinteticos access$NNN y eso no esta medido",
+			return fmt.Errorf("linea %d: asignar a %s: no es una variable local ni un campo de esta clase ni del exterior que la anonima captura",
 				v.donde.linea, segs[0])
 		}
 		if cr.constante {
 			return fmt.Errorf("linea %d: %s es una constante final y javac no la deja reasignar", v.donde.linea, segs[0])
 		}
 		esEstatico := cr.acceso&accStatic != 0
+		if dueño != e.interno && cr.acceso&accPrivate != 0 {
+			// campo privado del exterior: la escritura pasa por `access$NN2`, que devuelve el valor y deja
+			// un `pop` en el llamador (parrafo 72). El accesor se apunta **antes** de bajar el valor porque
+			// asi lo crea javac: en `secreto = secreto + 2` el de escritura es el 002 y el de lectura el 000.
+			nombreAcc, descAcc := e.ctx.accesorPara(dueño, segs[0], cr.desc, true, true, esEstatico)
+			enPila := 1
+			if !esEstatico {
+				if e.estatico {
+					return fmt.Errorf("linea %d: asignar a %s sin `this`, en un metodo estatico, no es Java", v.donde.linea, segs[0])
+				}
+				e.cargaDelDuenio(dueño)
+				enPila = 2
+			}
+			dv, err := e.exp(v.valor)
+			if err != nil {
+				e.baja(enPila - 1)
+				return err
+			}
+			if dv != cr.desc {
+				e.baja(enPila - 1)
+				return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, segs[0], cr.desc, dv)
+			}
+			e.invoca(opInvokestat, dueño, nombreAcc, descAcc, enPila)
+			e.emite(opPop)
+			e.baja(1)
+			return nil
+		}
 		if !esEstatico {
 			if e.estatico {
 				return fmt.Errorf("linea %d: asignar a %s sin `this`, en un metodo estatico, no es Java", v.donde.linea, segs[0])
@@ -3065,6 +3249,16 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		b, err := e.metodoDeClassFile(m)
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", m.linea, err)
+		}
+		metodos = append(metodos, b...)
+		conte++
+	}
+	// los `access$NNN` que pidieron las anidadas, en el orden en que se crearon; javac los escribe entre
+	// los metodos declarados y el `<clinit>` (medido en el parrafo 72)
+	for _, a := range e.ctx.accesores[e.interno] {
+		b, err := e.accesorDeClassFile(a)
+		if err != nil {
+			return nil, err
 		}
 		metodos = append(metodos, b...)
 		conte++
@@ -3429,6 +3623,12 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	if m.esPublico {
 		acc |= accPublic
 	}
+	if m.esPrivado {
+		acc |= accPrivate
+	}
+	if m.esProtegido {
+		acc |= accProtected
+	}
 	if m.esEstatico {
 		acc |= accStatic
 	}
@@ -3487,6 +3687,83 @@ func (e *emisor) clinitSintetico() ([]byte, error) {
 		return nil, err
 	}
 	return e.methodInfo("<clinit>", "()V", accStatic, attrInfo(e.pool, "Code", codigo), 1), nil
+}
+
+// accesorDeClassFile: el `access$NNN` con el que una anonima toca un miembro privado del exterior. La
+// forma se midio en el parrafo 72 sobre `javap -c -p`: leer un campo es `aload_0; getfield; ireturn`, leer
+// uno estatico `getstatic; ireturn`; escribir usa `dup_x1` (instancia) o `dup` (estatico) y devuelve el
+// valor, de ahi el `pop` del llamador; un metodo privado se invoca con `invokespecial` y uno estatico con
+// `invokestatic`. Los flags son ACC_STATIC|ACC_SYNTHETIC (0x1008) y la unica fila de la LineNumberTable
+// apunta a la linea de la declaracion de la clase.
+func (e *emisor) accesorDeClassFile(a accesorSintetico) ([]byte, error) {
+	e.preparaMetodo(a.desc, true)
+	// max_locals tiene que caber los argumentos aunque el cuerpo no reserve ninguno: la JVM rechaza el
+	// fichero con `Arguments can't fit into locals` si el descriptor pide mas huecos (destapado por
+	// `java -Xverify:all` sobre esta sonda antes de corregirlo). El accessor es siempre estatico, asi que
+	// el descriptor dice todos los huecos; `a.estatico` habla del miembro, no del metodo sintetico.
+	_, _, args := splitDescriptor(a.desc)
+	e.maxLoc = len(args)
+	e.marcaLinea(e.c.linea)
+	switch {
+	case a.campo && a.estatico && !a.escritura:
+		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
+		e.emite(opGetstatic, byte(idx>>8), byte(idx))
+		e.sube()
+		e.emite(retorno(a.miembroDesc[0]))
+		e.baja(1)
+	case a.campo && a.estatico:
+		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
+		e.cargaDe(0, a.miembroDesc)
+		e.emite(opDup)
+		e.sube()
+		e.putstatic(idx)
+		e.emite(retorno(a.miembroDesc[0]))
+		e.baja(1)
+	case a.campo && !a.escritura:
+		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
+		e.cargaDe(0, "L")
+		e.getfield(idx)
+		e.emite(retorno(a.miembroDesc[0]))
+		e.baja(1)
+	case a.campo:
+		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
+		e.cargaDe(0, "L")
+		e.cargaDe(1, a.miembroDesc)
+		e.emite(opDupX1)
+		e.sube()
+		e.putfield(idx)
+		e.emite(retorno(a.miembroDesc[0]))
+		e.baja(1)
+	default:
+		_, vuelta, params := splitDescriptor(a.miembroDesc)
+		base := 0
+		if !a.estatico {
+			e.cargaDe(0, "L")
+			base = 1
+		}
+		for i, p := range params {
+			e.cargaDe(base+i, p)
+		}
+		opcode := byte(opInvokestat)
+		if !a.estatico {
+			opcode = opInvokespec
+		}
+		e.invoca(opcode, a.duenio, a.miembro, a.miembroDesc, base+len(params))
+		if vuelta == "V" {
+			e.emite(retorno('V'))
+		} else {
+			e.emite(retorno(vuelta[0]))
+			e.baja(1)
+		}
+	}
+	if e.prof != 0 {
+		return nil, fmt.Errorf("el access$%s deja %d valores en la pila al cerrar", a.nombre, e.prof)
+	}
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	return e.methodInfo(a.nombre, a.desc, accStatic|accSynthetic, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // terminaEnRetorno: la ultima sentencia del cuerpo es un return. Con `if` y bucles todavia no se puede

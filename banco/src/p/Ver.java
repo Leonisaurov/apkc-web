@@ -84,4 +84,29 @@ public class Ver {
             return -1;
         }
     }
+
+    // Miembros privados y una anónima que los toca (§72): el campo y los métodos privados del exterior
+    // salen de javac como `access$NNN`, y el dex los llama con invoke-direct/invoke-static. El valor que
+    // se devuelve (10) es el que comprueba que los cinco caminos hicieron lo mismo.
+    private int pulsos = 0;
+    private static int oculto = 0;
+
+    private void sube() { pulsos = pulsos + 1; }
+
+    private static void guarda() { oculto = oculto + 2; }
+
+    private int lee() { return pulsos; }
+
+    public int privados() {
+        Runnable r = new Runnable() {
+            public void run() {
+                pulsos = pulsos + 3;
+                sube();
+                guarda();
+                oculto = oculto + lee();
+            }
+        };
+        r.run();
+        return pulsos + oculto;
+    }
 }
