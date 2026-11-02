@@ -40,13 +40,23 @@ const (
 	// referencia se midieron el 2026-11-01 sobre `System.out.println` (parrafo 62):
 	// `sget-object v0, field@0` es `6200 0000` y `sput-object v1, field@1` es `6901 0100`, o sea la
 	// misma forma 21c y el mismo hueco de dos opcodes entre el entero y el de objeto (wide en medio).
-	opSget          = 0x60 // 21c sget vAA, field@BBBB
-	opSput          = 0x67 // 21c sput vAA, field@BBBB
-	opSgetObject    = 0x62 // 21c sget-object vAA, field@BBBB
-	opSputObject    = 0x69 // 21c sput-object vAA, field@BBBB
-	opCheckcastDex  = 0x1f // 21c check-cast vAA, type@BBBB
-	opRetornaObjeto = 0x11 // 11x return-object vAA
-	opIput          = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
+	opSget       = 0x60 // 21c sget vAA, field@BBBB
+	opSput       = 0x67 // 21c sput vAA, field@BBBB
+	opSgetObject = 0x62 // 21c sget-object vAA, field@BBBB
+	opSputObject = 0x69 // 21c sput-object vAA, field@BBBB
+
+	// Los dos switch, medidos en el parrafo 64: `d8` escribe `packed-switch v0, +0x30` (0x2b) con el
+	// payload `0100` + tamaño + first_key + destinos detrás de todos los cuerpos, y en `--debug`
+	// `sparse-switch v0, +0x20` (0x2c) con `0200` + tamaño + pares (clave, destino) ascendentes. En los
+	// dos, si ninguna clave casa se sigue por la instrucción siguiente, así que el defecto se escribe
+	// como un `goto` de una unidad detrás del switch.
+	opCambioEmpaquetado = 0x2b // 31t packed-switch vAA, +BBBBBBBB
+	opCambioDisperso    = 0x2c // 31t sparse-switch vAA, +BBBBBBBB
+	identEmpaquetado    = 0x0100
+	identDisperso       = 0x0200
+	opCheckcastDex      = 0x1f // 21c check-cast vAA, type@BBBB
+	opRetornaObjeto     = 0x11 // 11x return-object vAA
+	opIput              = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
 
 	// la familia de cuentas enteras sobre dos registros, en el orden ad-sub-mul-div-rem que la
 	// sonda verifico en cuatro de sus miembros (add 0xb0, sub 0xb1, div 0xb3, y el shl 0xb8 de la
@@ -91,16 +101,17 @@ type traduce struct {
 	x         poolIndex
 	clase     classFull
 	m         classMethod
-	base      int          // primer registro de los locales: cuántos temporales se usan
-	locales   int          // m.LocalCount, medido sobre el .class
-	enPila    []int        // registro de cada entrada de la pila JVM
-	libres    []int        // temporales ya muertos
-	renom     map[int]int  // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
-	fijos     map[int]bool // temporal que quedó atado a un local: ya no es reusable
-	pcs       map[int]int  // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
-	saltos    []parcheDEX  // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
-	siguiente int          // próximo temporal nuevo
-	pico      int          // el mayor número de temporal usado
+	base      int           // primer registro de los locales: cuántos temporales se usan
+	locales   int           // m.LocalCount, medido sobre el .class
+	enPila    []int         // registro de cada entrada de la pila JVM
+	libres    []int         // temporales ya muertos
+	renom     map[int]int   // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
+	fijos     map[int]bool  // temporal que quedó atado a un local: ya no es reusable
+	pcs       map[int]int   // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
+	saltos    []parcheDEX   // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
+	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
+	siguiente int           // próximo temporal nuevo
+	pico      int           // el mayor número de temporal usado
 	w         []uint16
 	outs      int // la llamada más ancha, que es el outs_size del §20
 	err       error
@@ -603,6 +614,8 @@ func (p *traduce) recorre() error {
 			p.salto(ifEntreDos[in.name], destinoDe(in), 2, in)
 		case "goto":
 			p.salto(opSalto, destinoDe(in), 0, in)
+		case "tableswitch", "lookupswitch":
+			p.saltoTabla(in)
 		default:
 			p.falla(in, "outside the measured subset")
 		}
@@ -612,6 +625,104 @@ func (p *traduce) recorre() error {
 	}
 	if err := p.parchaSaltos(); err != nil {
 		return err
+	}
+	return p.cierraCargas()
+}
+
+// cargaSwitch: el payload de un switch, que se escribe al final del método —`d8` lo deja detrás de
+// todos los cuerpos— cuando ya se sabe en qué unidad cayó cada destino.
+type cargaSwitch struct {
+	desde     int      // unidad de la instrucción de switch, desde donde se cuenta el desplazamiento
+	datos     []uint16 // ident, tamaño y claves (o first_key); los destinos van a cero hasta el parcheo
+	destinos  []int    // pcs JVM de los destinos, en el orden de los pares
+	enDestino []int    // unidad de `datos` donde va cada destino
+}
+
+// saltoTabla: `tableswitch`/`lookupswitch` del `.class` a `packed-switch`/`sparse-switch`. La clave
+// sale de la pila JVM y queda en el registro del switch; el payload se encola y se escribe al final,
+// y el defecto se emite como un `goto` detrás del switch porque en DEX el «ninguna clave casa» es el
+// pase de lista y en el `.class` es un destino explícito.
+func (p *traduce) saltoTabla(in jvmInstr) {
+	r := p.pop(in)
+	if !p.nibble(r, in) {
+		return
+	}
+	be := func(b []byte) int32 {
+		return int32(uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3]))
+	}
+	empaquetado := in.op == 0xaa
+	c := cargaSwitch{desde: len(p.w)}
+	op := byte(opCambioEmpaquetado)
+	if !empaquetado {
+		op = opCambioDisperso
+	}
+	p.palabra(uint16(op) | uint16(r&0xff)<<8)
+	p.palabra(0) // desplazamiento al payload, que se conoce en cierraCargas
+	p.palabra(0)
+	defecto := in.pc + int(be(in.ops[0:4]))
+	if empaquetado {
+		bajo, alto := be(in.ops[4:8]), be(in.ops[8:12])
+		n := int(alto-bajo) + 1
+		if n <= 0 || 12+4*n > len(in.ops) {
+			p.falla(in, "a tableswitch whose key range does not match its operands")
+			return
+		}
+		c.datos = []uint16{identEmpaquetado, uint16(n), uint16(uint32(bajo)), uint16(uint32(bajo) >> 16)}
+		for k := 0; k < n; k++ {
+			c.destinos = append(c.destinos, in.pc+int(be(in.ops[12+4*k:])))
+			c.enDestino = append(c.enDestino, len(c.datos))
+			c.datos = append(c.datos, 0, 0)
+		}
+	} else {
+		n := int(be(in.ops[4:8]))
+		if n < 0 || 8+8*n > len(in.ops) {
+			p.falla(in, "a lookupswitch whose pair count does not match its operands")
+			return
+		}
+		// `sparse-switch-payload` lleva **todas las claves y después todos los destinos**, no pares
+		// intercalados: medido en el volcado de `d8` del §64, 26 unidades = ident + tamaño + 6 claves +
+		// 6 destinos. Intercalarlos hace que ART lea una clave como destino y corte con
+		// `invalid target offset 1000`.
+		c.datos = []uint16{identDisperso, uint16(n)}
+		destinos := make([]int, 0, n)
+		for k := 0; k < n; k++ {
+			clave := be(in.ops[8+8*k:])
+			c.datos = append(c.datos, uint16(uint32(clave)), uint16(uint32(clave)>>16))
+			destinos = append(destinos, in.pc+int(be(in.ops[12+8*k:])))
+		}
+		for _, pc := range destinos {
+			c.destinos = append(c.destinos, pc)
+			c.enDestino = append(c.enDestino, len(c.datos))
+			c.datos = append(c.datos, 0, 0)
+		}
+	}
+	p.cargas = append(p.cargas, c)
+	p.salto(opSalto, defecto, 0, in)
+}
+
+// cierraCargas escribe los payloads detrás del último cuerpo, alineados a cuatro bytes como los deja
+// `d8`, y parchea con la distancia en unidades el operando de cada switch y cada destino.
+func (p *traduce) cierraCargas() error {
+	for _, c := range p.cargas {
+		for len(p.w)%2 != 0 {
+			p.w = append(p.w, 0)
+		}
+		inicio := len(p.w)
+		datos := append([]uint16(nil), c.datos...)
+		for k, pc := range c.destinos {
+			unidad, ok := p.pcs[pc]
+			if !ok {
+				return &traduceError{pc: pc, nombre: p.m.Name,
+					motivo: "a switch that points at a pc which is not the start of an instruction"}
+			}
+			rel := int32(unidad - c.desde)
+			datos[c.enDestino[k]] = uint16(rel)
+			datos[c.enDestino[k]+1] = uint16(uint32(rel) >> 16)
+		}
+		p.w = append(p.w, datos...)
+		rel := int32(inicio - c.desde)
+		p.w[c.desde+1] = uint16(rel)
+		p.w[c.desde+2] = uint16(uint32(rel) >> 16)
 	}
 	return nil
 }

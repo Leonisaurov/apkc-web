@@ -586,7 +586,10 @@ const accConstructor = 0x10000
 
 func accesoMetodoDex(m classMethod) uint32 {
 	a := accesoDex(m.Access)
-	if m.Name == "<init>" {
+	// `ACC_CONSTRUCTOR` lo llevan los dos inicializadores: el aviso del verificador del aparato lo
+	// dijo con nombre sobre un `<clinit>` sin él —«<clinit> didn't have expected constructor access
+	// flag» y «not marked as constructor», parrafo 64—, y con el bit puesto el fichero corre.
+	if m.Name == "<init>" || m.Name == "<clinit>" {
 		a |= accConstructor
 	}
 	return a

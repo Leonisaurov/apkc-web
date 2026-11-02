@@ -337,6 +337,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   también, y el banco lleva un `while` (los cuatro caminos: `total 7|total 9|total 42`, `rc 42`, `dexdump
   rc 0`). Ojo al preparar fuentes para el dexer: **javac 21 compila el `+` de cadenas con
   `invokedynamic`**, que este fork rechaza (5.22); por eso el `Arranque` del banco imprime enteros.
+- **El `switch` del `.class` ya se dexa; el del fuente, todavía no** (§64): `tableswitch` (`0xaa`) y
+  `lookupswitch` (`0xab`) se caminan con el relleno hasta el múltiplo de cuatro **contado desde el
+  principio del `Code`**, y salen como `packed-switch` (`0x2b`) / `sparse-switch` (`0x2c`) con el
+  payload al final del cuerpo, alineado a cuatro bytes: `0x0100`+tamaño+`first_key`+destinos, y
+  `0x0200`+tamaño+**todas las claves y después todos los destinos**. Intercalar clave y destino pasa el
+  `dexdump` y lo corta ART en ejecución (`invalid target offset 1000 … target index 1`). En DEX el
+  «ninguna clave casa» es el pase de lista, así que el `default` se emite como un `goto` detrás del
+  switch en vez de reordenar bloques como hace `d8` —que además **rebaja** las switches pequeñas a
+  cadenas de `if-eq` en `--release`, y solo en `--debug` deja ver el `sparse-switch`—. Y ART exige
+  `ACC_CONSTRUCTOR` en `<clinit>` con el mismo bit que en `<init>` (`TestElClinitLlevaConstructor`).
+  Probado con `Ramas` (densa de ocho y dispersa de tres) en los tres caminos: nuestro dex, la JVM y el
+  dex de `d8` sobre nuestras clases dan `100/105/999/3/9`, `rc 240`, `dexdump rc 0`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -362,7 +374,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **221 PASS + 2 SKIP** nativa y **194 PASS + 29 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **223 PASS + 2 SKIP** nativa y **196 PASS + 29 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

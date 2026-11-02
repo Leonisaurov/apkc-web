@@ -3501,6 +3501,54 @@ imprima enteros y no cadenas.
 Suite: **221 PASS + 2 SKIP** nativa y **194 PASS + 29 SKIP** en el hospedador; gate de `studio/e2e.sh`
 en orden.
 
+## 64. El `switch`: `packed-switch` y `sparse-switch` medidos, y el `<clinit>` que ART exigía
+
+El dexer ya traduce `switch`, con las dos formas y sus payloads medidos en el aparato. Lo que se midió
+primero, con javac 21 y `d8`:
+
+- **El `.class`**: `tableswitch` (opcode `0xaa`) con relleno hasta el siguiente múltiplo de cuatro
+  **contado desde el principio del `Code`** —la tabla de la sonda está en el pc 1 y sus operandos empiezan
+  en el 4, o sea `00 00 00` de relleno— y `lookupswitch` (`0xab`) con la misma regla. Los dos llevan
+  `default` primero y, después, `low`/`high` y los destinos, o el número de pares y los pares
+  (clave, destino). Cada destino es un desplazamiento **desde el opcode**, con signo.
+- **El dex de `d8`**: la tabla densa sale como `packed-switch v0, +0x30` (opcode `0x2b`) y el payload
+  —`ident 0x0100`, tamaño, `first_key`, destinos— **al final del cuerpo**, alineado a cuatro bytes y
+  detrás de todos los bloques; 20 unidades para ocho claves. La dispersa pequeña **no** sale como
+  `sparse-switch`: en `--release` `d8` la **rebaja a una cadena de `if-eq`** (con los cuerpos
+  reordenados y `return` en vez de `goto`), y hay que ir a `--debug` para ver `sparse-switch v0, +0x20`
+  (`0x2c`) con `ident 0x0200`, tamaño y 26 unidades para seis claves.
+
+**Lo que el formato no dice y el volcado sí: en el payload disperso van primero TODAS las claves y
+después TODOS los destinos**, no pares intercalados (26 = 1 + 1 + 6 + 6). Intercalarlos pasó el
+`dexdump` —que verifica— y lo cazó ART en ejecución: `VerifyError: Verifier rejected class: invalid
+target offset 1000 (end 0x24) in switch payload`, o sea leyó una clave como destino. Y **en DEX, si
+ninguna clave casa se sigue por la instrucción siguiente**, así que el `default` del `.class` (un destino
+explícito) se escribe como un `goto` de una unidad detrás del switch en vez de reordenar bloques como
+hace `d8`.
+
+**Y un defecto que solo ART veía**: nuestro `<clinit>` salía con `access 0x0008 (STATIC)` y el
+verificador avisó —«`<clinit>` didn't have expected constructor access flag», «not marked as
+constructor»— antes de cortar la clase. Lleva `ACC_CONSTRUCTOR` como los `<init>` (0x10000), y corregido
+el fichero corre. Va con `TestElClinitLlevaConstructor`.
+
+**Ejecutado, tres caminos iguales**: `Ramas` (densa de ocho casos y dispersa de tres) llamada desde un
+`Arranque` que imprime cada `total`. Nuestro dex en `app_process` da `100`, `105`, `999`, `3`, `9` y
+`rc 240`; la JVM con las mismas clases, lo mismo; y el dex de `d8` sobre nuestras clases, lo mismo. Los
+tres pasan `dexdump` verificando con `rc 0`. Pruebas permanentes: `TestElSwitchSeDexaComoPackedYSparse`
+(las dos formas, los dos idents, las tres claves ascendentes y los destinos detrás de ellas, más el
+layout del fichero) y la del `<clinit>`.
+
+**Frontera**: el **analizador** todavía no lee `switch` del fuente (siguiente mitad de 5.12); lo que está
+medido y hecho es el traductor, que es lo que hace falta para dexar clases de javac, y por eso el banco
+sigue sin un `switch` en `p.Ver`.
+
+Efecto colateral medido en el gate: el bit nuevo del `<clinit>` cambia los apks de la pestaña de **9720 a
+9727** y de **10280 a 10287** bytes (el atributo de acceso del método pasa de un byte a tres en el
+`class_data`), y siguen saliendo **igual entrada por entrada** al nativo.
+
+Suite: **223 PASS + 2 SKIP** nativa y **196 PASS + 29 SKIP** en el hospedador; gate de `studio/e2e.sh`
+en orden.
+
 
 
 

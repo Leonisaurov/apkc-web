@@ -105,6 +105,38 @@ type jvmInstr struct {
 	op   byte
 	name string
 	ops  []byte
+	// relleno: los bytes de alineación que van entre el opcode y los operandos en `tableswitch` y
+	// `lookupswitch`, contados desde el principio del Code (medido en el parrafo 64: la tabla de la
+	// sonda está en el pc 1 y sus operandos empiezan en el 4, o sea tres bytes de relleno).
+	relleno int
+}
+
+var jvmSwitch = map[byte]string{0xaa: "tableswitch", 0xab: "lookupswitch"}
+
+// anchoDeSwitch: cuántos bytes de operandos tiene un switch empezando en `base` (ya sin el relleno).
+func anchoDeSwitch(op byte, code []byte, base int) (int, error) {
+	if op == 0xaa {
+		if base+12 > len(code) {
+			return 0, &jvmWalkError{pc: base, op: op, what: "the switch header runs past the end of the code"}
+		}
+		alto := int(int32(uint32(code[base+8])<<24 | uint32(code[base+9])<<16 |
+			uint32(code[base+10])<<8 | uint32(code[base+11])))
+		bajo := int(int32(uint32(code[base+4])<<24 | uint32(code[base+5])<<16 |
+			uint32(code[base+6])<<8 | uint32(code[base+7])))
+		if alto < bajo-1 || alto-bajo > 1<<16 {
+			return 0, &jvmWalkError{pc: base, op: op, what: "a tableswitch with a key range that makes no sense"}
+		}
+		return 12 + 4*(alto-bajo+1), nil
+	}
+	if base+8 > len(code) {
+		return 0, &jvmWalkError{pc: base, op: op, what: "the switch header runs past the end of the code"}
+	}
+	n := int(int32(uint32(code[base+4])<<24 | uint32(code[base+5])<<16 |
+		uint32(code[base+6])<<8 | uint32(code[base+7])))
+	if n < 0 || n > 1<<16 {
+		return 0, &jvmWalkError{pc: base, op: op, what: "a lookupswitch with a pair count that makes no sense"}
+	}
+	return 8 + 8*n, nil
 }
 
 // destinoDe: el pc al que salta una branquia JVM. El desplazamiento va en bytes desde el principio
@@ -121,6 +153,20 @@ func walkJvmCode(code []byte) ([]jvmInstr, error) {
 	out := []jvmInstr{}
 	for i := 0; i < len(code); {
 		op := code[i]
+		if nombre, esSwitch := jvmSwitch[op]; esSwitch {
+			relleno := (4 - (i+1)%4) % 4
+			base := i + 1 + relleno
+			ancho, err := anchoDeSwitch(op, code, base)
+			if err != nil {
+				return nil, err
+			}
+			if base+ancho > len(code) {
+				return nil, &jvmWalkError{pc: i, op: op, what: "the switch runs past the end of the code"}
+			}
+			out = append(out, jvmInstr{pc: i, op: op, name: nombre, ops: code[base : base+ancho], relleno: relleno})
+			i = base + ancho
+			continue
+		}
 		k, ok := jvmMeasured[op]
 		if !ok {
 			return nil, &jvmWalkError{pc: i, op: op,
