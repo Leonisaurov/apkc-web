@@ -3818,3 +3818,40 @@ Frontera: `do` con una condición que no sea una comparación (`while (true)`) s
 
 Suite tras los dos: **234 PASS + 2 SKIP** nativa y **196 PASS + 40 SKIP** en el hospedador; gate de
 `studio/e2e.sh` en orden con los apks de siempre.
+
+## 70. `break` y `continue`: el destino de cada uno, medido
+
+Medido con `Corte`, que corta un `while` con `break` y salta con `continue` en un `for` y en un
+`do-while`:
+
+```
+while:      break    → goto 24   (después del bucle)
+for:        continue → goto 21   (¡el `iinc` del PASO, no la condición!)
+do-while:   continue → goto 19   (la condición)
+```
+
+Es lo que no se podía componer con el desdoblamiento del `for` en `init; while (cond) { cuerpo; paso }`
+del §63: ahí el `continue` habría saltado a la condición, y javac lo manda al paso. Por eso el
+analizador tiene ahora un nodo propio, `jpara{cuerpo, cond, paso}`, cuyo `paso` vive **fuera** del
+cuerpo: el emisor lo escribe detrás (el `.class` sale igual que con el desdoblamiento, y el dex de
+`Para` sigue byte a byte el de javac) y apila el destino de `continue` en la etiqueta que abre justo
+antes del paso.
+
+**El emisor.** Dos pilas de contextos: `quiebres` (el fin de cada bucle y de cada `switch`, que es a
+donde va `break`) y `continuar` (la cabecera del `while`, la condición del `do-while` y el paso del
+`for`). `break` dentro de un brazo de `switch` —también anidado en un `if`— sale del switch porque el
+switch apila su fin. Un `continue` hacia una etiqueta ya cerrada (la cabecera del `while`) se parchea
+en el acto con `resuelveAtras`; el resto son saltos hacia adelante que `cierra` completa. Fuera de
+sitio, los dos se rechazan por nombre.
+
+**Un defecto de camino encontrado al tocarlo**: `anonimasDe`, que decide qué clases anónimas se
+emiten, no recorría `if`, `while` ni `switch` —solo bloques, declaraciones y asignaciones—, así que un
+`new OnClickListener() { … }` dentro de un `if` no se compilaba. Ahora recorre las cuatro formas.
+
+Oráculo doble: el dex de nuestra `Corte` es **byte a byte** el de javac
+(`TestElCorteSeDexaComoJavac`), y `TestRompeYContinuaFueraDeSitio` fija los dos rechazos. El banco
+lleva `primerIgual(5)` (un `while` con `break`, 2) y `sinDos(4)` (un `for` con `continue`, 4): los
+cinco caminos dan `total 7|total 9|total 102|10|3|2|4` con `rc 102`.
+
+Suite: **236 PASS + 2 SKIP** nativa y **196 PASS + 42 SKIP** en el hospedador; gate de `studio/e2e.sh`
+en orden.

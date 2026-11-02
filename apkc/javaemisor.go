@@ -394,6 +394,12 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 	case jmientras:
 		ctx.registrarExpresion(v.cond)
 		ctx.registrarSentencia(v.cuerpo)
+	case jpara:
+		ctx.registrarExpresion(v.cond)
+		ctx.registrarSentencia(v.cuerpo)
+		if v.paso != nil {
+			ctx.registrarSentencia(v.paso)
+		}
 	case jhacer:
 		ctx.registrarSentencia(v.cuerpo)
 		ctx.registrarExpresion(v.cond)
@@ -469,6 +475,34 @@ func anonimasDe(c *jclas) []*jclas {
 			expr(v.valor)
 		case jbloque:
 			for _, st := range v.sentencias {
+				sent(st)
+			}
+		case jif:
+			expr(v.cond)
+			sent(v.entonces)
+			if v.siNo != nil {
+				sent(v.siNo)
+			}
+		case jmientras:
+			expr(v.cond)
+			sent(v.cuerpo)
+		case jpara:
+			expr(v.cond)
+			sent(v.cuerpo)
+			if v.paso != nil {
+				sent(v.paso)
+			}
+		case jhacer:
+			sent(v.cuerpo)
+			expr(v.cond)
+		case jswitch:
+			expr(v.selector)
+			for _, c := range v.casos {
+				for _, st := range c.cuerpo {
+					sent(st)
+				}
+			}
+			for _, st := range v.defecto {
 				sent(st)
 			}
 		}
@@ -1162,6 +1196,10 @@ type emisor struct {
 	parches4          []parcheSalto4
 	etiquetas         map[int]int
 	siguienteEtiqueta int
+	// quiebres y continuar son las pilas de destinos de `break` y `continue`: cada bucle y cada
+	// switch apila el suyo mientras emite su cuerpo (parrafo 70)
+	quiebres  []int
+	continuar []int
 }
 
 type parcheSalto struct {
@@ -2413,8 +2451,48 @@ func (e *emisor) mientras(v jmientras) error {
 		return err
 	}
 	e.saltoEmite(op, fin, consume)
-	if err := e.stm(v.cuerpo); err != nil {
+	e.quiebres = append(e.quiebres, fin)
+	e.continuar = append(e.continuar, cabeza)
+	err = e.stm(v.cuerpo)
+	e.quiebres = e.quiebres[:len(e.quiebres)-1]
+	e.continuar = e.continuar[:len(e.continuar)-1]
+	if err != nil {
 		return err
+	}
+	e.saltoEmite(opGOTO, cabeza, 0)
+	if err := e.resuelveAtras(cabeza); err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	e.cierra(fin)
+	return nil
+}
+
+// para: `for (init; cond; paso) cuerpo`. Es el `while` con el paso delante del `goto` de vuelta, y
+// `continue` apunta al paso (medido en el parrafo 70: `goto 21` con el `iinc` del paso en 21).
+func (e *emisor) para(v jpara) error {
+	e.marcaLinea(v.donde.linea)
+	cabeza := e.nuevaEtiqueta()
+	fin := e.nuevaEtiqueta()
+	paso := e.nuevaEtiqueta()
+	e.cierra(cabeza)
+	op, consume, err := e.condicionBranca(v.cond)
+	if err != nil {
+		return err
+	}
+	e.saltoEmite(op, fin, consume)
+	e.quiebres = append(e.quiebres, fin)
+	e.continuar = append(e.continuar, paso)
+	err = e.stm(v.cuerpo)
+	e.quiebres = e.quiebres[:len(e.quiebres)-1]
+	e.continuar = e.continuar[:len(e.continuar)-1]
+	if err != nil {
+		return err
+	}
+	e.cierra(paso)
+	if v.paso != nil {
+		if err := e.stm(v.paso); err != nil {
+			return err
+		}
 	}
 	e.saltoEmite(opGOTO, cabeza, 0)
 	if err := e.resuelveAtras(cabeza); err != nil {
@@ -2430,15 +2508,23 @@ func (e *emisor) mientras(v jmientras) error {
 // que salta cuando la condición NO se cumple), se le pasa la comparación negada.
 func (e *emisor) hacer(v jhacer) error {
 	cabeza := e.nuevaEtiqueta()
+	cond := e.nuevaEtiqueta()
+	fin := e.nuevaEtiqueta()
 	e.cierra(cabeza)
+	e.quiebres = append(e.quiebres, fin)
+	e.continuar = append(e.continuar, cond)
 	// javac no anota la linea del `do`: el primer renglon del cuerpo es el que cae en la cabecera
-	if err := e.stm(v.cuerpo); err != nil {
+	err := e.stm(v.cuerpo)
+	e.quiebres = e.quiebres[:len(e.quiebres)-1]
+	e.continuar = e.continuar[:len(e.continuar)-1]
+	if err != nil {
 		return err
 	}
 	// y la condicion lleva la linea del `while` (medido: `line 8: 13` en `Doo.hasta`)
 	if linea := lineaDeExpr(v.cond); linea > 0 {
 		e.marcaLinea(linea)
 	}
+	e.cierra(cond)
 	negada, err := niegaComparacion(v.cond, v.donde.linea)
 	if err != nil {
 		return err
@@ -2451,6 +2537,7 @@ func (e *emisor) hacer(v jhacer) error {
 	if err := e.resuelveAtras(cabeza); err != nil {
 		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
 	}
+	e.cierra(fin)
 	return nil
 }
 
@@ -2522,9 +2609,12 @@ func (e *emisor) cambio(v jswitch) error {
 		}
 	}
 	e.baja(1) // el switch consume el valor del selector
+	// un `break` dentro de un brazo (aunque este anidado en un `if`) sale del switch: se apila su fin
+	e.quiebres = append(e.quiebres, fin)
 	for _, c := range casos {
 		e.cierra(etiqueta[c.valor])
 		if err := e.stm(jbloque{sentencias: c.cuerpo, donde: c.donde}); err != nil {
+			e.quiebres = e.quiebres[:len(e.quiebres)-1]
 			return err
 		}
 		// el `goto` al final solo lo escribe javac detrás del brazo que acaba en `break`; el que
@@ -2536,9 +2626,11 @@ func (e *emisor) cambio(v jswitch) error {
 	if v.defecto != nil {
 		e.cierra(defecto)
 		if err := e.stm(jbloque{sentencias: v.defecto, donde: v.donde}); err != nil {
+			e.quiebres = e.quiebres[:len(e.quiebres)-1]
 			return err
 		}
 	}
+	e.quiebres = e.quiebres[:len(e.quiebres)-1]
 	e.cierra(fin)
 	return nil
 }
@@ -2734,8 +2826,29 @@ func (e *emisor) stm(s jstmt) error {
 		return e.branca(v)
 	case jmientras:
 		return e.mientras(v)
+	case jpara:
+		return e.para(v)
 	case jhacer:
 		return e.hacer(v)
+	case jrompe:
+		if len(e.quiebres) == 0 {
+			return fmt.Errorf("linea %d: un `break` fuera de un bucle o de un `switch`", v.donde.linea)
+		}
+		e.saltoEmite(opGOTO, e.quiebres[len(e.quiebres)-1], 0)
+		return nil
+	case jcontinua:
+		if len(e.continuar) == 0 {
+			return fmt.Errorf("linea %d: un `continue` fuera de un bucle", v.donde.linea)
+		}
+		destino := e.continuar[len(e.continuar)-1]
+		e.saltoEmite(opGOTO, destino, 0)
+		// la vuelta de un `while` apunta a una etiqueta ya cerrada: se parchea ahora, no al cerrar
+		if _, cerrada := e.etiquetas[destino]; cerrada {
+			if err := e.resuelveAtras(destino); err != nil {
+				return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+			}
+		}
+		return nil
 	case jswitch:
 		return e.cambio(v)
 	}
@@ -3125,6 +3238,8 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.parches = nil
 	e.etiquetas = nil
 	e.siguienteEtiqueta = 0
+	e.quiebres = nil
+	e.continuar = nil
 	e.prof = 0
 	e.maxProf = 0
 	e.maxLoc = 0

@@ -403,6 +403,12 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   la `LineNumberTable` que dijo javac: **no hay fila para el `do`** y la condición lleva la del
   `while`. Los dex de `Mas` y `Doo` salen byte a byte los de javac; el banco lleva `do { k++; }
   while (k < n)` y los cinco caminos dan `total 7|total 9|total 102|10|3`.
+- **`break` y `continue`, con su destino medido** (§70): `break` sale al fin del bucle o del switch (el
+  switch también apila su fin, para el `break` anidado en un `if` de un brazo); `continue` va a la
+  cabecera del `while`, a la **condición** del `do-while` y al **paso** del `for` (medido: `goto 21`
+  con el `iinc` del paso). Por eso el `for` tiene nodo propio, `jpara`, con el paso fuera del cuerpo;
+  el dex de `Corte` sale byte a byte el de javac. De paso se corrigió que `anonimasDe` no recorría
+  `if`/`while`/`switch`: una anónima dentro de un `if` no se compilaba.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -428,7 +434,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **234 PASS + 2 SKIP** nativa y **196 PASS + 40 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **236 PASS + 2 SKIP** nativa y **196 PASS + 42 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

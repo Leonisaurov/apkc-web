@@ -56,4 +56,23 @@ public class Ver {
         } while (k < n);
         return k;
     }
+
+    // `break` y `continue` (§70): el primero sale del bucle, el segundo salta al paso del `for`.
+    public static int primerIgual(int n) {
+        int i = 0;
+        while (i < n) {
+            if (i == 2) { break; }
+            i++;
+        }
+        return i;
+    }
+
+    public static int sinDos(int n) {
+        int s = 0;
+        for (int i = 0; i < n; i++) {
+            if (i == 2) { continue; }
+            s = s + i;
+        }
+        return s;
+    }
 }

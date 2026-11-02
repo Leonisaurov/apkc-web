@@ -186,6 +186,30 @@ type jhacer struct {
 
 func (jhacer) jstmtPuede() {}
 
+// jrompe y jcontinua: `break;` y `continue;`. El destino lo pone el emisor con la pila de contextos
+// (el fin del bucle o del switch; la cabecera, la condición o el paso del bucle), que es lo que
+// escribe javac: medido en el parrafo 70, `continue` en un `for` salta al paso y en un `do-while` a
+// la condición.
+type jrompe struct{ donde pos }
+
+func (jrompe) jstmtPuede() {}
+
+type jcontinua struct{ donde pos }
+
+func (jcontinua) jstmtPuede() {}
+
+// jpara: `for (init; cond; paso) cuerpo`. El `init` queda fuera (el analizador lo devuelve en un
+// `jbloque`); el `paso` vive aquí y no dentro del cuerpo para que `continue` salte a él, que es lo
+// que hace javac (medido en el parrafo 70: el `continue` es un `goto` al `iinc` del paso).
+type jpara struct {
+	cuerpo jstmt
+	cond   jexpr
+	paso   jstmt
+	donde  pos
+}
+
+func (jpara) jstmtPuede() {}
+
 // jswitch: `switch (selector) { case k: cuerpo break; … default: cuerpo }`. El selector tiene que ser
 // un entero y las claves literales enteros; cada caso **tiene que terminar en `break` o en `return`**
 // (la caída de un caso al siguiente no está medida y se rechaza por nombre). Se midió en el §64 qué
@@ -1139,15 +1163,32 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		// mismo desdoblamiento que javac: el cuerpo y despues el paso, dentro del `while`
-		piezas = append([]jstmt{cuerpo}, piezas...)
-		m := jmientras{cond: cond, cuerpo: jbloque{sentencias: piezas, donde: pos{linea}}, donde: pos{linea}}
-		if inicio == nil {
-			return m, true, nil
+		// el paso se guarda aparte del cuerpo: `continue` salta a él (parrafo 70)
+		paso := jstmt(nil)
+		if len(piezas) == 1 {
+			paso = piezas[0]
+		} else if len(piezas) > 1 {
+			return nil, false, fmt.Errorf("linea %d: mas de una sentencia en el paso de un `for`", linea)
 		}
-		return jbloque{sentencias: []jstmt{inicio, m}, donde: pos{linea}}, true, nil
+		p := jpara{cuerpo: cuerpo, cond: cond, paso: paso, donde: pos{linea}}
+		if inicio == nil {
+			return p, true, nil
+		}
+		return jbloque{sentencias: []jstmt{inicio, p}, donde: pos{linea}}, true, nil
 	case a.es('k', "switch"):
 		return a.cambio(linea)
+	case a.es('k', "break"):
+		a.avanzar()
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jrompe{donde: pos{linea}}, true, nil
+	case a.es('k', "continue"):
+		a.avanzar()
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jcontinua{donde: pos{linea}}, true, nil
 	case a.es('k', "do"):
 		a.avanzar()
 		cuerpo, _, err := a.sentencia()

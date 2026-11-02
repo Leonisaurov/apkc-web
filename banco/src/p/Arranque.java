@@ -14,6 +14,8 @@ public class Arranque {
         Ver.cuenta();
         System.out.println(Ver.sumaArreglo(4));
         System.out.println(Ver.alMenosUna(3));
+        System.out.println(Ver.primerIgual(5));
+        System.out.println(Ver.sinDos(4));
         int t = Ver.total;
         System.exit(t);
     }
