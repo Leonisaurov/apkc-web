@@ -395,6 +395,14 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `Inc` es **byte a byte** el de javac. El analizador acepta `++`/`--` como tokens (en prefijo, sufijo
   y paso de `for`); como **valor** se rechaza por nombre, y `+=`/`-=` siguen fuera. El banco usa
   `i++` y un `for` con `j++` en los cinco caminos.
+- **`+=`/`-=` y `do-while`** (§68 y §69): javac baja `x += lit` a `iinc` cuando el literal cabe en un
+  byte y a la lectura-cuenta-escritura cuando no (`*=`, `/=` y deltas grandes); el analizador reescribe
+  el caso del literal al nodo del incremento y compone el resto. El `do-while` es el cuerpo primero y
+  la condición **directa** saltando atrás (`if_icmplt 2`), al revés que el `while`; `condicionBranca`
+  devuelve la forma que salta al no cumplirse, así que se le pasa la comparación negada. Dos filas de
+  la `LineNumberTable` que dijo javac: **no hay fila para el `do`** y la condición lleva la del
+  `while`. Los dex de `Mas` y `Doo` salen byte a byte los de javac; el banco lleva `do { k++; }
+  while (k < n)` y los cinco caminos dan `total 7|total 9|total 102|10|3`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -420,7 +428,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **232 PASS + 2 SKIP** nativa y **196 PASS + 38 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **234 PASS + 2 SKIP** nativa y **196 PASS + 40 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

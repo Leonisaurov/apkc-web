@@ -394,6 +394,9 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 	case jmientras:
 		ctx.registrarExpresion(v.cond)
 		ctx.registrarSentencia(v.cuerpo)
+	case jhacer:
+		ctx.registrarSentencia(v.cuerpo)
+		ctx.registrarExpresion(v.cond)
 	case jswitch:
 		ctx.registrarExpresion(v.selector)
 		for _, c := range v.casos {
@@ -2421,6 +2424,51 @@ func (e *emisor) mientras(v jmientras) error {
 	return nil
 }
 
+// hacer: `do { cuerpo } while (cond)`. La cabecera es la primera instrucción del cuerpo y la vuelta
+// lleva la condición **directa**: `if (cond)` salta a la cabecera, que es lo que escribe javac
+// (`if_icmplt 2`, medido en el parrafo 69). Como `condicionBranca` devuelve la forma invertida (la
+// que salta cuando la condición NO se cumple), se le pasa la comparación negada.
+func (e *emisor) hacer(v jhacer) error {
+	cabeza := e.nuevaEtiqueta()
+	e.cierra(cabeza)
+	// javac no anota la linea del `do`: el primer renglon del cuerpo es el que cae en la cabecera
+	if err := e.stm(v.cuerpo); err != nil {
+		return err
+	}
+	// y la condicion lleva la linea del `while` (medido: `line 8: 13` en `Doo.hasta`)
+	if linea := lineaDeExpr(v.cond); linea > 0 {
+		e.marcaLinea(linea)
+	}
+	negada, err := niegaComparacion(v.cond, v.donde.linea)
+	if err != nil {
+		return err
+	}
+	op, consume, err := e.condicionBranca(negada)
+	if err != nil {
+		return err
+	}
+	e.saltoEmite(op, cabeza, consume)
+	if err := e.resuelveAtras(cabeza); err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	return nil
+}
+
+// niegaComparacion: el contrario de una comparación, para que `condicionBranca` (que escribe la
+// forma que salta al NO cumplirse) salte al cumplirse. Solo comparaciones, como el `while`.
+func niegaComparacion(x jexpr, linea int) (jexpr, error) {
+	op, esOp := x.(joperador)
+	if !esOp {
+		return nil, fmt.Errorf("linea %d: un `do-while` solo se mide con una comparacion", linea)
+	}
+	contrarios := map[string]string{"<": ">=", ">": "<=", "==": "!=", "!=": "==", "<=": ">", ">=": "<"}
+	contrario, ok := contrarios[op.op]
+	if !ok {
+		return nil, fmt.Errorf("linea %d: el operador %q en un `do-while` no esta medido", linea, op.op)
+	}
+	return joperador{izq: op.izq, op: contrario, der: op.der, donde: op.donde}, nil
+}
+
 // cambio: `switch` del fuente a `tableswitch` o `lookupswitch`, con la forma medida en el §64: el
 // relleno va del opcode al siguiente múltiplo de cuatro **contado desde el principio del `Code`**, y
 // cada destino es un entero de 32 bits con signo desde el principio de la instrucción. La elección de
@@ -2520,9 +2568,10 @@ func (e *emisor) resuelveAtras(id int) error {
 	return nil
 }
 
-// incremento: `i++`, `--i` y el paso de un `for`, como sentencia. En un local javac escribe `iinc`
-// (medido en el parrafo 67: `iinc 1, 1` para `i++` y `iinc 1, -1` para `i--`); en un campo la forma
-// de javac es `destino = destino ± 1`, que el traductor ya sabe bajar, así que se arma ese `jasign`.
+// incremento: `i++`, `--i`, `i += n` y el paso de un `for`, como sentencia. En un local javac escribe
+// `iinc` cuando la constante cabe en un byte (medido en el parrafo 67: `iinc 1, 1`, `iinc 1, -1`, y
+// en `Mas`, `i += 2` → `iinc 0, 2`); si no cabe, usa `iload; iconst; iadd; istore`. En un campo la
+// forma de javac es `destino = destino ± delta`, que el traductor ya sabe bajar.
 func (e *emisor) incremento(v jincr) error {
 	e.marcaLinea(v.donde.linea)
 	if acc, esAcceso := v.destino.(jacceso); esAcceso {
@@ -2532,22 +2581,26 @@ func (e *emisor) incremento(v jincr) error {
 				if !esEnteroDesc(lv.desc) {
 					return fmt.Errorf("linea %d: `++`/`--` sobre %s, que no es un entero", v.donde.linea, lv.desc)
 				}
-				if lv.indice > 255 {
-					return fmt.Errorf("linea %d: el local %s no cabe en el indice de un `iinc`", v.donde.linea, segs[0])
+				if v.delta >= -128 && v.delta <= 127 {
+					if lv.indice > 255 {
+						return fmt.Errorf("linea %d: el local %s no cabe en el indice de un `iinc`", v.donde.linea, segs[0])
+					}
+					e.emite(0x84, byte(lv.indice), byte(int8(v.delta)))
+					return nil
 				}
-				e.emite(0x84, byte(lv.indice), byte(int8(v.delta)))
-				return nil
 			}
 		}
 	}
 	op := "+"
-	if v.delta < 0 {
+	delta := v.delta
+	if delta < 0 {
 		op = "-"
+		delta = -delta
 	}
-	uno := jlit{tipoJ: 'i', entero: 1, donde: v.donde}
+	lit := jlit{tipoJ: 'i', entero: delta, donde: v.donde}
 	return e.stm(jasign{
 		destino: v.destino,
-		valor:   joperador{izq: v.destino, op: op, der: uno, donde: v.donde},
+		valor:   joperador{izq: v.destino, op: op, der: lit, donde: v.donde},
 		donde:   v.donde,
 	})
 }
@@ -2681,6 +2734,8 @@ func (e *emisor) stm(s jstmt) error {
 		return e.branca(v)
 	case jmientras:
 		return e.mientras(v)
+	case jhacer:
+		return e.hacer(v)
 	case jswitch:
 		return e.cambio(v)
 	}

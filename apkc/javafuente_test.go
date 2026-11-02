@@ -243,7 +243,6 @@ func TestParsearRechazaLoQueNoSeEmite(t *testing.T) {
 		nombre string
 		razon  string
 	}{
-		{"class A { void a() { do { a(); } while (true); } }", "un do-while", "no esta medida"},
 		{"class A { void a() { int i = 1; int j = i > 0 ? 1 : 2; } }", "un ternario", "no es de este subconjunto"},
 		{"class A { void a() { int[] v = new int[] {1, 2}; } }", "un inicializador de arreglo", "inicializador"},
 		{"class A { void a() { try { } catch (E e) { } } }", "un try", "no esta medida"},
@@ -252,7 +251,6 @@ func TestParsearRechazaLoQueNoSeEmite(t *testing.T) {
 		{"class A { protected int x; }", "un campo protected", ""},
 		{"class A { private void a() {} }", "un metodo private", "private"},
 		{"class A { interface I {} }", "una interface escrita a mano", "interface"},
-		{"class A { void a() { x += 1; } }", "un mas-igual", "+="},
 		{"class A { }", "un fuente sin metodos no es rechazo", ""},
 	}
 	for _, c := range casos {

@@ -3768,3 +3768,53 @@ Suite: **232 PASS + 2 SKIP** nativa y **196 PASS + 38 SKIP** en el hospedador; g
 en orden con los apks de siempre (10014, 9727 y 10287 bytes).
 
 **Frontera**: `++`/`--` como valor, `+=`/`-=`, y `++` sobre algo que no sea una variable.
+
+## 68. `+=` y `-=`: `iinc` si el literal cabe, lectura-cuenta-escritura si no
+
+La mitad que faltaba del 5.1. Medido con `Mas`, que suma y resta sobre un campo y sobre un local:
+
+```
+total += 2     getstatic; iconst_2; iadd; putstatic
+i += 2         iinc 0, 2            ← javac pliega el literal en el propio iinc
+i -= 3         iinc 0, -3
+i += 7         iinc 1, 7            (sobre un local ya cargado)
+i *= 3         iload_0; iconst_3; imul; istore_0   ← el producto no se pliega
+```
+
+O sea: javac usa `iinc` cuando el operador es `+` o `-` **y** el literal cabe en un byte; para `*=`,
+`/=` y para un delta que no cabe, compone la lectura-cuenta-escritura. El analizador reescribe
+`x += lit` como el mismo nodo de incremento del §67 (que ya sabe que en un local es `iinc` y en un
+campo `destino = destino ± lit`), y deja `x op= expr` como `x = x op expr` cuando el valor no es un
+literal entero. `>>=`, `<<=`, `&=` y los demás siguen fuera: el tokenizador ni los arma.
+
+Oráculo doble: el dex de nuestra `Mas` es **byte a byte** el de javac
+(`TestElMasIgualSeDexaComoJavac`). El banco imprime además `Ver.alMenosUna(3)` con su `do-while`, así
+que los cinco caminos dan `total 7|total 9|total 102|10|3` y `rc 102`.
+
+## 69. El `do-while`: el cuerpo primero y la condición directa
+
+Medido con `Doo`. javac escribe el cuerpo y **después** la condición directa saltando hacia atrás a la
+primera instrucción del cuerpo:
+
+```
+0: iconst_0 ; 1: istore_1          int i = 0
+2: getstatic total ; 5: iload_1 ; 6: iadd ; 7: putstatic
+10: iinc 1, 1
+13: iload_1 ; 14: iload_0 ; 15: if_icmplt 2   ← `i < n`: salta ATRÁS si se cumple
+18: return
+```
+
+Es el espejo del `while`, que invierte la condición para salir. `condicionBranca` escribe la forma que
+salta cuando la condición **no** se cumple, así que el emisor le pasa la comparación negada
+(`i < n` → `i >= n`, cuyo salto es `if_icmplt`). El `StackMapTable` gana un marco en la cabecera: en
+`Doo.hasta` es `append` en el pc 2, el primer renglón del cuerpo.
+
+Dos detalles de la `LineNumberTable`, medidos de javac: **no hay fila para el `do`** —la cabecera
+lleva la línea del primer renglón del cuerpo— y la condición lleva la línea del `while`
+(`line 8: 13`). Con eso, el dex de nuestro `Doo` es **byte a byte** el de javac
+(`TestElDoWhileSeDexaComoJavac`); con el `do` anotado de más, la tabla de líneas se apartaba.
+
+Frontera: `do` con una condición que no sea una comparación (`while (true)`) se rechaza por nombre.
+
+Suite tras los dos: **234 PASS + 2 SKIP** nativa y **196 PASS + 40 SKIP** en el hospedador; gate de
+`studio/e2e.sh` en orden con los apks de siempre.

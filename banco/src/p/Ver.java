@@ -47,4 +47,13 @@ public class Ver {
         }
         return s;
     }
+
+    // Un `do-while` (§69): el cuerpo corre al menos una vez y la condición vuelve a la cabecera.
+    public static int alMenosUna(int n) {
+        int k = 0;
+        do {
+            k++;
+        } while (k < n);
+        return k;
+    }
 }

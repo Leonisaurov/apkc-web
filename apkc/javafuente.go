@@ -175,6 +175,17 @@ type jmientras struct {
 
 func (jmientras) jstmtPuede() {}
 
+// jhacer: `do { cuerpo } while (cond);`. La forma de javac es el cuerpo primero y después la
+// condición **directa** saltando hacia atrás a su cabecera (medido en el parrafo 69: `if_icmplt 2`),
+// al revés que el `while`, que invierte la condición para salir.
+type jhacer struct {
+	cuerpo jstmt
+	cond   jexpr
+	donde  pos
+}
+
+func (jhacer) jstmtPuede() {}
+
 // jswitch: `switch (selector) { case k: cuerpo break; … default: cuerpo }`. El selector tiene que ser
 // un entero y las claves literales enteros; cada caso **tiene que terminar en `break` o en `return`**
 // (la caída de un caso al siguiente no está medida y se rechaza por nombre). Se midió en el §64 qué
@@ -1103,19 +1114,20 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		}
 		piezas := []jstmt{}
 		if !a.es('p', ")") {
-			// el paso puede ser una llamada o una asignacion, que en este subconjunto es sentencia y no
-			// expresion: se lee el destino y, si viene el `=`, se arma el jasign
+			// el paso puede ser una llamada, `i++` o una asignacion (tambien `+=`), que en este
+			// subconjunto es sentencia y no expresion: se lee el destino y, si viene un operador de
+			// asignacion, se arma la sentencia
 			dst, err := a.expresion()
 			if err != nil {
 				return nil, false, err
 			}
-			if a.es('p', "=") {
+			if op, esAsig := operadorDeAsignacion(a.actual()); esAsig {
 				a.avanzar()
 				valor, err := a.expresion()
 				if err != nil {
 					return nil, false, err
 				}
-				piezas = append(piezas, jasign{destino: dst, valor: valor, donde: pos{linea}})
+				piezas = append(piezas, asignacion(dst, op, valor, pos{linea}))
 			} else {
 				piezas = append(piezas, jstmtExpr{e: dst})
 			}
@@ -1136,7 +1148,30 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		return jbloque{sentencias: []jstmt{inicio, m}, donde: pos{linea}}, true, nil
 	case a.es('k', "switch"):
 		return a.cambio(linea)
-	case a.es('k', "do"), a.es('k', "try"):
+	case a.es('k', "do"):
+		a.avanzar()
+		cuerpo, _, err := a.sentencia()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerPalabra("while"); err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo("("); err != nil {
+			return nil, false, err
+		}
+		cond, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(")"); err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jhacer{cuerpo: cuerpo, cond: cond, donde: pos{linea}}, true, nil
+	case a.es('k', "try"):
 		return nil, false, fmt.Errorf("linea %d: la sentencia %q no esta medida en este compilador", linea, a.actual().valor)
 	}
 	// declaracion local o expresion
@@ -1174,7 +1209,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if a.es('p', "=") {
+	if op, esAsig := operadorDeAsignacion(a.actual()); esAsig {
 		a.avanzar()
 		valor, err := a.expresion()
 		if err != nil {
@@ -1183,17 +1218,51 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return jasign{destino: e, valor: valor, donde: pos{linea}}, true, nil
-	}
-	if a.es('p', "+") || a.es('p', "-") {
-		if a.i+1 < len(a.toks) && a.toks[a.i+1].valor == "=" {
-			return nil, false, fmt.Errorf("linea %d: un `+=` o `-=` no esta medido en este compilador", linea)
-		}
+		return asignacion(e, op, valor, pos{linea}), true, nil
 	}
 	if err := a.comerSimbolo(";"); err != nil {
 		return nil, false, err
 	}
 	return jstmtExpr{e: e}, true, nil
+}
+
+// operadorDeAsignacion: los cinco que acepta este subconjunto. `>>=`, `<<=`, `&=` y los demás no
+// están medidos y el tokenizador ni siquiera los arma.
+func operadorDeAsignacion(t tokenJava) (string, bool) {
+	if t.kind != 'p' {
+		return "", false
+	}
+	switch t.valor {
+	case "=", "+=", "-=", "*=", "/=":
+		return t.valor, true
+	}
+	return "", false
+}
+
+// asignacion arma la sentencia. `x = v` es un `jasign`; `x += v` con un literal entero es `jincr`
+// cuando el operador es `+` o `-`, porque javac lo baja a `iinc` si el literal cabe en un byte
+// (medido en `Mas`: `i += 2` es `iinc 0, 2`, `i -= 3` es `iinc 0, -3`, `i *= 3` es `iload;
+// iconst_3; imul; istore`). Lo demás se compone como `x = x op v`, que es exactamente la forma de
+// javac para un campo (`getstatic; iconst_2; iadd; putstatic`).
+func asignacion(destino jexpr, op string, valor jexpr, donde pos) jstmt {
+	if op == "=" {
+		return jasign{destino: destino, valor: valor, donde: donde}
+	}
+	base := strings.TrimSuffix(op, "=")
+	if base == "+" || base == "-" {
+		if lit, esLit := valor.(jlit); esLit && lit.tipoJ == 'i' {
+			delta := lit.entero
+			if base == "-" {
+				delta = -delta
+			}
+			return jstmtExpr{e: jincr{destino: destino, delta: delta, donde: donde}}
+		}
+	}
+	return jasign{
+		destino: destino,
+		valor:   joperador{izq: destino, op: base, der: valor, donde: donde},
+		donde:   donde,
+	}
 }
 
 func esFinalDeClaracion(tipo string) bool { return strings.HasPrefix(tipo, "final ") }

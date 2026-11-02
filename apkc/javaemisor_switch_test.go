@@ -98,13 +98,12 @@ func TestElSwitchSeEscribeComoJavac(t *testing.T) {
 }
 
 // TestElSwitchDelFuenteRechazaLoNoMedido: la caída de un caso al siguiente, una clave que no es
-// literal entero y una clave repetida se rechazan por nombre; `do` y `try` siguen fuera.
+// literal entero y una clave repetida se rechazan por nombre; `try` sigue fuera.
 func TestElSwitchDelFuenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
 		{"caida", "package p;\npublic class A { static int t; public static void f(int n) { switch (n) { case 0: t = 1; case 1: t = 2; break; } } }\n", "caida"},
 		{"clave", "package p;\npublic class A { static int t; static final int K = 3; public static void f(int n) { switch (n) { case K: t = 1; break; } } }\n", "literal entero"},
 		{"repetida", "package p;\npublic class A { static int t; public static void f(int n) { switch (n) { case 1: t = 1; break; case 1: t = 2; break; } } }\n", "dos veces"},
-		{"do", "package p;\npublic class A { static int t; public static void f(int n) { do { n = n + 1; } while (n < 3); } }\n", "do"},
 		{"try", "package p;\npublic class A { static int t; public static void f() { try { f(); } catch (RuntimeException e) { f(); } } }\n", "try"},
 	}
 	for _, c := range casos {

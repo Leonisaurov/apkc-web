@@ -13,6 +13,7 @@ public class Arranque {
         Ver.elige(1);
         Ver.cuenta();
         System.out.println(Ver.sumaArreglo(4));
+        System.out.println(Ver.alMenosUna(3));
         int t = Ver.total;
         System.exit(t);
     }
