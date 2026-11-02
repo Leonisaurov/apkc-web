@@ -45,7 +45,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
-| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan arreglos, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while` y `for`, §63)**, **5.12 (`switch`, §64)** y **5.23 (`StackMapTable`, §65)**; lo que sigue es 5.11 (arreglos) y 5.9 (`try/catch`) | la sección «Fase 5» de este plan |
+| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan arreglos, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while` y `for`, §63)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)** y **5.11 (arreglos y `main(String[])`, §66)**; lo que sigue es 5.9 (`try/catch`) | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
@@ -512,8 +512,9 @@ y un icono en `res/drawable`, y esa app se instala y arranca en un teléfono rea
 2. **Oráculos**: `javap -l -v -c` sobre el `.class` de javac 21; `d8 --release` sobre ese `.class`;
    `/apex/com.android.art/bin/dexdump` (con verificación) y `dexdump -d`/`-a` en el aparato por `rish`;
    `apksigner`, `zipalign -c -p 4`, `zipcheck.py` y `aapt2 dump` para el paquete; y **la ejecución**:
-   `banco/banco.sh` corre el mismo fuente por los cuatro caminos (JVM, nuestro dex, `d8` sobre javac y
-   `d8` sobre lo que emitimos nosotros) con `app_process64` en el aparato, sin instalar nada. Ese es el
+   `banco/banco.sh` corre el mismo fuente por los caminos (JVM, nuestro dex, `d8` sobre javac, `d8` sobre
+   lo que emitimos y, desde el §66, nuestro dex con nuestro `main`) con `app_process64` en el aparato,
+   sin instalar nada. Ese es el
    oráculo que destapó los tres primeros huecos del §61, ninguno visible comparando bytes.
 3. **Emisor/traductor** solo con lo que dijo la medición; lo que la sonda no cubre se queda **rechazado por
    nombre** con un mensaje que diga qué falta.
@@ -541,7 +542,7 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.8 | `long`, `float`, `double` (dos huecos) | `javaemisor.go:551`, `javafuente.go:1306`, `javaemisor.go:2413` | el `const-wide/16` (y sus hermanas de 32/64 bits) y el `ldc2_w` del `.class`, los `move-wide` de tres formatos, la numeración de locales de dos huecos en la frame (§57), y el `encoded_value` de `J`/`F`/`D` (§55 regla 4) | L |
 | 5.9 | `try`/`catch`/`finally` | `javafuente.go:902` (sentencia) y `dexcode.go:70,81,87` (el `code_item` no escribe tries) | `try_item` + `encoded_catch_handler_list` (orden, `start_insn`/`end_insn`, `handler_off` a una lista de pares `type_addr`/`addr`, `catch_type` 0 para `finally`), el `move-exception` (10x) al entrar al handler y el `throw` (10x), con su opcode confirmado por la sonda, y el relleno a palabra antes de la tabla | L |
 | 5.10 | **bucles** `for`, `while`, `do` | **HECHO `while` y `for`** (§63): medido el `goto` 10t con desplazamiento negativo (`28f7`) y la forma de javac; el traductor ya acepta la rama hacia atrás (sin análisis de viveza: locales clavados y pila vacía en la cabecera), el analizador escribe `while` y desdobla `for` en `init; while (cond) { cuerpo; paso }` con el **`Code` idéntico al de javac** (el atributo `StackMapTable` se añadió después, §65, y el dex no cambia), y el dex sale byte a byte el de javac en los dos (`TestElBucleSeDexaIgualQueElDeJavac`), además de correr en ART y en el banco. Frontera escrita: `do-while`, `break`/`continue`, `i++` y `goto/16` siguen rechazados por nombre | — | hecho |
-| 5.11 | **arreglos** (`new int[n]`, `s[i]`, `length`, de referencia y multidimensional) | `javafuente.go:820` y su ausencia en el traductor | `new-array` (22c), `array-length` (12x), los `aget`/`aput` por tipo (22x y 23x) y `filled-new-array` con su forma `…/range`; los tipos `[I`/`[Ljava/lang/String;` en `type_ids` y su orden | L |
+| 5.11 | **arreglos** (`new int[n]`, `s[i]`, `length`, de referencia y multidimensional) | **HECHO** (§66): medidos `new-array` (0x23, 22c), `array-length` (0x21, 12x), `aget`/`aget-object` (0x44/0x46, 23x) y `aput`/`aput-object` (0x4b/0x4d); el analizador lee `T[]`, `new T[n]`, `v[i]` (lectura y destino) y `.length`; el dex de nuestra `Arreglos` es byte a byte el de javac. Ejecutar en ART destapó dos defectos: la cabecera con desplazamiento en una tabla vacía (`field_ids_off` tiene que ser 0) y la cuenta que pisaba un operando vivo (`v[i] = i + 1` daba 3), corregida con las tres formas que usa `d8` (`/2addr` izquierda, `/2addr` derecha conmutativa, 23x). Un `main(String[])` compilado y dexado solo por este fork corre en ART con la misma salida que la JVM. Frontera: el inicializador `new T[] {…}`, más de una dimensión y `arraycopy` | — | hecho |
 | 5.12 | `switch` de entero | **HECHO** (§64): el dexer camina `tableswitch`/`lookupswitch` (relleno hasta el múltiplo de cuatro desde el principio del `Code`) y escribe `packed-switch`/`sparse-switch` con el payload al final (identes `0x0100`/`0x0200`; en el disperso **todas las claves y luego todos los destinos**), y el analizador lee `switch` del fuente (brazos que terminan en `break`/`return`; la caída al siguiente se rechaza por nombre) con el `.class` **idéntico al de javac** salvo el `StackMapTable` que se añadió en el §65, y el dex **byte a byte** el suyo. Ojo: ART exige `ACC_CONSTRUCTOR` en `<clinit>`, medido por su propio aviso | — | hecho |
 | 5.13 | `instanceof` y cast entre referencias | fuera del analizador | `instance-of` (22c) junto al `check-cast` ya medido, y las cadenas/tipos que nombran | S |
 | 5.14 | anónima dentro de método `static` y captura de variables locales effectively-final | `javaemisor.go:1748` | cómo baja javac la captura (`$`valores) en ese caso y qué flags lleva el ctor sintético | M |
@@ -569,7 +570,8 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 - **Tercer bloque (control de flujo):** 5.10 (bucles) y 5.12 (`switch`) juntos —los dos son *ramas* y
   comparten el mecanismo de fusión y el `goto/16`—, después 5.9 (`try/catch`), que además toca el
   `code_item`.
-- **Cuarto bloque (datos):** 5.11 (arreglos), que necesita 5.8 y los tipos `[`.
+- **Cuarto bloque (datos):** 5.11 (arreglos), **hecho sin 5.8** (§66): los tipos `[` entraron con el
+  subconjunto que el fuente escribe (`int[]`, `String[]`) y la frame los nombra con su descriptor.
 - **Quinto bloque (miembros y tipos):** 5.5, 5.6, 5.7, 5.14, 5.15.
 - **Sexto bloque (recursos que hacen que la app parezca una app):** 5.16, 5.17, 5.18, 5.19.
 - **Séptimo (opcional, el más caro):** 5.21, 5.22.
@@ -579,9 +581,9 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 - **Lo primero de todo fue el ejecutor** (§61): antes de tocar un ítem, `banco/banco.sh` corre el fuente
   por los cuatro caminos. En una tarde destapó cinco cosas que ningún oráculo de bytes veía (5.23 a
   5.27 y el `invokestatic` sin argumentos).
-- **Lo que sigue**: **5.11 (arreglos)**, que es lo que hace falta para una lista de verdad y para
-  `main(String[])`, y **5.9 (`try/catch`)**; después 5.1 (`++`/`--`), que hoy se rechaza por nombre, y
-  `do-while`/`break`/`continue` sobre la forma ya medida.
+- **Lo que sigue**: **5.9 (`try/catch`)**, que además toca el `code_item`; después 5.1 (`++`/`--`), que
+  hoy se rechaza por nombre, y `do-while`/`break`/`continue` sobre la forma ya medida; y el
+  inicializador `new T[] {…}` (5.11, `filled-new-array`).
 
 ### Hitos con prueba en el teléfono
 

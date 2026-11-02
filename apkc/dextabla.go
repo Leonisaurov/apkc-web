@@ -222,6 +222,19 @@ func (t *dexTables) collectCode(m classMethod, p *pool) error {
 			t.internMethod(owner, desc, name)
 		case "new":
 			t.internType(x.classDescriptor(dexU16(in.ops)))
+		case "newarray":
+			// el atype del JVMS 4.9 a su descriptor de arreglo: lo que el traductor va a pedir
+			if len(in.ops) < 1 {
+				return fmt.Errorf("newarray without its atype")
+			}
+			if desc, ok := tiposNewArray[in.ops[0]]; ok {
+				t.internType(desc)
+			}
+		case "anewarray":
+			clase := x.classDescriptor(dexU16(in.ops))
+			if clase != "" {
+				t.internType("[" + clase)
+			}
 		}
 	}
 	return nil

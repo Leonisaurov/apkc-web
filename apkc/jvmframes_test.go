@@ -60,7 +60,7 @@ func marcosDeClase(datos []byte, metodo string) (marcosMetodo, error) {
 		return marcosMetodo{}, err
 	}
 	c.u2()
-	propia := p.classOf(c.u2())
+	propia := p.utf[p.class[c.u2()]]
 	c.u2()
 	c.u2s()
 	for i, n := 0, c.u2(); i < n && !c.failed(); i++ {
@@ -213,7 +213,10 @@ func leeTipoDeMarco(c *cursor, p *pool) (tipoVerif, error) {
 	case 5:
 		return verifNulo, nil
 	case 7:
-		return verifRef(p.classOf(c.u2())), nil
+		// el nombre tal cual esta en el pool, sin `internalName`: un arreglo se nombra con su
+		// descriptor (`[I`) y `internalName` lo dejaria en vacio, que es el tipo null.
+		idx := c.u2()
+		return verifRef(p.utf[p.class[idx]]), nil
 	case 6:
 		return tipoVerif{etiqueta: 'u', clase: "this"}, nil
 	case 8:

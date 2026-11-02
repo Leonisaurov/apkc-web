@@ -416,6 +416,11 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 		if v.cuerpo != nil {
 			ctx.registrar(v.cuerpo)
 		}
+	case jnuevoArreglo:
+		ctx.registrarExpresion(v.largo)
+	case jindice:
+		ctx.registrarExpresion(v.base)
+		ctx.registrarExpresion(v.indice)
 	case jllamada:
 		if v.base != nil {
 			ctx.registrarExpresion(v.base)
@@ -485,6 +490,11 @@ func anonimasDe(c *jclas) []*jclas {
 			}
 		case jcast:
 			expr(v.dentro)
+		case jnuevoArreglo:
+			expr(v.largo)
+		case jindice:
+			expr(v.base)
+			expr(v.indice)
 		}
 	}
 	for _, m := range c.metodos {
@@ -559,6 +569,19 @@ func (ctx *contextoJava) tipoAInterno(nombre string) (string, error) {
 
 // descriptorDe: como se escribe un tipo del fuente dentro de un descriptor.
 func (ctx *contextoJava) descriptorDe(tipo string) (string, error) {
+	if strings.HasSuffix(tipo, "[]") {
+		// un arreglo se escribe con un corchete delante del descriptor del elemento: `int[]` -> `[I`,
+		// `String[]` -> `[Ljava/lang/String;`, `int[][]` -> `[[I`. Es la forma que midio `javap -v`
+		// sobre `Arreglos` (parrafo 66).
+		elem, err := ctx.descriptorDe(strings.TrimSuffix(tipo, "[]"))
+		if err != nil {
+			return "", err
+		}
+		if elem == "V" {
+			return "", fmt.Errorf("un arreglo de void no existe")
+		}
+		return "[" + elem, nil
+	}
 	if d, ok := descPrimitivo[tipo]; ok {
 		if deDosHuecosOPuntoFlotante[d[0]] {
 			return "", fmt.Errorf("el tipo %s ocupa dos huecos de variable o es de punto flotante: no esta medido en este emisor", tipo)
@@ -1444,6 +1467,10 @@ func lineaDeExpr(x jexpr) int {
 		return v.donde.linea
 	case jnuevo:
 		return v.donde.linea
+	case jnuevoArreglo:
+		return v.donde.linea
+	case jindice:
+		return v.donde.linea
 	case joperador:
 		return v.donde.linea
 	case jnegacion:
@@ -1513,6 +1540,10 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return e.llamada(v)
 	case jnuevo:
 		return e.nuevo(v)
+	case jnuevoArreglo:
+		return e.nuevoArreglo(v)
+	case jindice:
+		return e.leeIndice(v)
 	case joperador:
 		// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49):
 		// dos palabras dentro, una fuera. Antes de emitir se prueba el plegado de constantes, que javac
@@ -1764,6 +1795,13 @@ func (e *emisor) acceso(a jacceso) (string, error) {
 func (e *emisor) cadenaDeCampos(desc string, segs []string, linea int) (string, error) {
 	actual := desc
 	for _, seg := range segs {
+		if seg == "length" && len(actual) > 0 && actual[0] == '[' {
+			// `v.length` es `arraylength` (0xbe), medido en el §66; no es un campo, así que no pasa
+			// por el pool ni por el jar
+			e.emite(0xbe)
+			actual = "I"
+			continue
+		}
 		if len(actual) == 0 || actual[0] != 'L' {
 			return "", fmt.Errorf("linea %d: %s no es un objeto, no se le puede sacar %s", linea, actual, seg)
 		}
@@ -2078,6 +2116,113 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	return "L" + interno + ";", nil
 }
 
+// atypeDe: el atype del JVMS 4.9 para el `newarray` de un elemento primitivo. Los ocho son la tabla
+// entera; el subconjunto del fuente solo escribe `int`.
+var atypeDe = map[byte]byte{'Z': 4, 'C': 5, 'F': 6, 'D': 7, 'B': 8, 'S': 9, 'I': 10, 'J': 11}
+
+// nuevoArreglo: `new T[n]`. El largo se evalua primero y sale `newarray`/`anewarray`, como javac en
+// la sonda `Arreglos` del parrafo 66 (`iconst_3; newarray int` y `iload_0; anewarray String`). El
+// `anewarray` lleva la clase del ELEMENTO en el pool, no la del arreglo (`anewarray #7 // class
+// java/lang/String`).
+func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
+	elem, err := e.ctx.descriptorDe(v.tipo)
+	if err != nil {
+		return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	d, err := e.exp(v.largo)
+	if err != nil {
+		return "", err
+	}
+	if d != "I" {
+		return "", fmt.Errorf("linea %d: el largo de un arreglo es %s y no un entero", v.donde.linea, d)
+	}
+	if elem[0] == 'L' || elem[0] == '[' {
+		interno := elem
+		if elem[0] == 'L' {
+			interno = elem[1 : len(elem)-1]
+			e.usar(interno)
+		}
+		idx := e.pool.clase(interno)
+		e.emite(0xbd, byte(idx>>8), byte(idx))
+	} else {
+		atype, ok := atypeDe[elem[0]]
+		if !ok {
+			return "", fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, v.tipo)
+		}
+		e.emite(0xbc, atype)
+	}
+	e.baja(1) // el largo
+	e.sube()  // el arreglo
+	return "[" + elem, nil
+}
+
+// leeIndice: `v[i]`. El elemento sale por `iaload` (0x2e) o `aaload` (0x32), medidos en el §66.
+func (e *emisor) leeIndice(v jindice) (string, error) {
+	base, err := e.exp(v.base)
+	if err != nil {
+		return "", err
+	}
+	if len(base) == 0 || base[0] != '[' {
+		return "", fmt.Errorf("linea %d: se indexa un %s, que no es un arreglo", v.donde.linea, base)
+	}
+	d, err := e.exp(v.indice)
+	if err != nil {
+		return "", err
+	}
+	if d != "I" {
+		return "", fmt.Errorf("linea %d: el indice es %s y no un entero", v.donde.linea, d)
+	}
+	elem := base[1:]
+	switch elem[0] {
+	case 'I':
+		e.emite(0x2e)
+	case 'L', '[':
+		e.emite(0x32)
+	default:
+		return "", fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, elem)
+	}
+	e.baja(2)
+	e.sube()
+	return elem, nil
+}
+
+// escribeIndice: `v[i] = x`, la sentencia. La pila JVM lleva receptor, indice y valor en ese orden,
+// y sale `iastore`/`aastore` (medidos: `aput v2, v0, v1` en el §66).
+func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
+	base, err := e.exp(v.base)
+	if err != nil {
+		return err
+	}
+	if len(base) == 0 || base[0] != '[' {
+		return fmt.Errorf("linea %d: se indexa un %s, que no es un arreglo", v.donde.linea, base)
+	}
+	d, err := e.exp(v.indice)
+	if err != nil {
+		return err
+	}
+	if d != "I" {
+		return fmt.Errorf("linea %d: el indice es %s y no un entero", v.donde.linea, d)
+	}
+	dv, err := e.exp(valor)
+	if err != nil {
+		return err
+	}
+	elem := base[1:]
+	if dv != elem {
+		return fmt.Errorf("linea %d: el arreglo es %s y se le asigna un %s", v.donde.linea, elem, dv)
+	}
+	switch elem[0] {
+	case 'I':
+		e.emite(0x4f)
+	case 'L', '[':
+		e.emite(0x53)
+	default:
+		return fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, elem)
+	}
+	e.baja(3)
+	return nil
+}
+
 // tipoEstimado: el descriptor de un argumento que va en un constructor, sin volver a emitirlo. En el
 // subconjunto medido los argumentos de un `new` son literales o variables, y ambos se saben aqui.
 func (e *emisor) tipoEstimado(x jexpr) (string, error) {
@@ -2113,6 +2258,13 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
 	case jthis:
 		return "L" + e.interno + ";", nil
+	case jindice:
+		if acc, ok := v.base.(jacceso); ok && acc.base == nil {
+			if lv, ok := e.locales[acc.nombre]; ok && len(lv.desc) > 0 && lv.desc[0] == '[' {
+				return lv.desc[1:], nil
+			}
+		}
+		return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
 	}
 	return "", fmt.Errorf("linea %d: el tipo de un argumento de %T no esta medido", lineaDeExpr(x), x)
 }
@@ -2416,6 +2568,9 @@ func (e *emisor) stm(s jstmt) error {
 		return nil
 	case jasign:
 		e.marcaLinea(v.donde.linea)
+		if ind, esIndice := v.destino.(jindice); esIndice {
+			return e.escribeIndice(ind, v.valor)
+		}
 		acc, esAcceso := v.destino.(jacceso)
 		segs, base := aplanar(acc)
 		if !esAcceso || base != nil || len(segs) != 1 {

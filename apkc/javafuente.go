@@ -85,6 +85,25 @@ type jnuevo struct {
 
 func (jnuevo) jexprPuede() {}
 
+// jnuevoArreglo: `new Tipo[n]`. El inicializador `new Tipo[] {…}` no esta medido (pide
+// `filled-new-array`, que todavia no se ha medido) y se rechaza por nombre al leerlo.
+type jnuevoArreglo struct {
+	tipo  string
+	largo jexpr
+	donde pos
+}
+
+func (jnuevoArreglo) jexprPuede() {}
+
+// jindice: `v[i]`, para leer y para asignar (el destino de un `jasign` puede ser uno).
+type jindice struct {
+	base   jexpr
+	indice jexpr
+	donde  pos
+}
+
+func (jindice) jexprPuede() {}
+
 // jstmt es una sentencia del subconjunto.
 type jstmt interface{ jstmtPuede() }
 
@@ -846,8 +865,14 @@ func (a *analizadorJava) tipo() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// los corchetes del arreglo van pegados al nombre, en el orden del fuente: `String[]`,
+	// `int[][]`. El descriptor los lee el emisor (`descriptorDe`), que ya sabe escribirlos.
 	for a.es('p', "[") {
-		return "", fmt.Errorf("linea %d: un tipo de array (%s[]) no esta medido en este compilador", a.actual().donde.linea, nombre)
+		a.avanzar()
+		if err := a.comerSimbolo("]"); err != nil {
+			return "", err
+		}
+		nombre += "[]"
 	}
 	return nombre, nil
 }
@@ -1173,12 +1198,13 @@ func (a *analizadorJava) pareceDeclaracion() bool {
 		return false
 	}
 	i++
-	// un `[` despues del tipo es una declaracion de array: se deja pasar para que el mensaje lo
-	// nombre el lector de tipos, que es donde esta medida la negativa
-	if i < len(a.toks) && a.toks[i].kind == 'i' {
-		return true
+	// los corchetes del tipo de arreglo: `int[] v` o `String[][] v`. Solo cuentan los vacios; un
+	// `v[i]` no es una declaracion, es un indice, y aqui se distingue por eso.
+	for i+1 < len(a.toks) && a.toks[i].kind == 'p' && a.toks[i].valor == "[" &&
+		a.toks[i+1].kind == 'p' && a.toks[i+1].valor == "]" {
+		i += 2
 	}
-	if i < len(a.toks) && a.toks[i].valor == "[" {
+	if i < len(a.toks) && a.toks[i].kind == 'i' {
 		return true
 	}
 	return false
@@ -1276,6 +1302,17 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 				continue
 			}
 			e = jacceso{base: e, nombre: t.valor, donde: t.donde}
+		case a.es('p', "["):
+			donde := a.actual().donde
+			a.avanzar()
+			indice, err := a.expresion()
+			if err != nil {
+				return nil, err
+			}
+			if err := a.comerSimbolo("]"); err != nil {
+				return nil, err
+			}
+			e = jindice{base: e, indice: indice, donde: donde}
 		case a.es('p', "("):
 			args, err := a.argumentos()
 			if err != nil {
@@ -1373,6 +1410,23 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		tipo, err := a.nombrePunto()
 		if err != nil {
 			return nil, err
+		}
+		if a.es('p', "[") {
+			a.avanzar()
+			if a.es('p', "]") {
+				return nil, fmt.Errorf("linea %d: el inicializador `new %s[] {…}` no esta medido; escriba `new %s[n]`", t.donde.linea, tipo, tipo)
+			}
+			largo, err := a.expresion()
+			if err != nil {
+				return nil, err
+			}
+			if err := a.comerSimbolo("]"); err != nil {
+				return nil, err
+			}
+			if a.es('p', "[") || a.es('p', "{") {
+				return nil, fmt.Errorf("linea %d: un arreglo de mas de una dimension o con inicializador no esta medido", t.donde.linea)
+			}
+			return jnuevoArreglo{tipo: tipo, largo: largo, donde: t.donde}, nil
 		}
 		if !a.es('p', "(") {
 			return nil, fmt.Errorf("linea %d: un `new %s` sin constructor no esta medido", t.donde.linea, tipo)

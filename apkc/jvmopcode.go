@@ -64,6 +64,15 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x68: {"imul", 0},
 	0x6c: {"idiv", 0},
 	0x70: {"irem", 0},
+	// arreglos (parrafo 66): el ancho sale de `javap -c` de la sonda `Arreglos`, donde
+	// `newarray int` va de 1 a 3, `anewarray #7` de 1 a 4 y `arraylength` de 1 a 2
+	0x2e: {"iaload", 0},
+	0x32: {"aaload", 0},
+	0x4f: {"iastore", 0},
+	0x53: {"aastore", 0},
+	0xbc: {"newarray", 1},
+	0xbd: {"anewarray", 2},
+	0xbe: {"arraylength", 0},
 	0xac: {"ireturn", 0},
 	0xb0: {"areturn", 0}, // visto en la sonda del parrafo 53: `2: areturn` con el siguiente
 	// desplazamiento en 3, o sea un byte y ningun operando. El traductor ya lo escribia desde el

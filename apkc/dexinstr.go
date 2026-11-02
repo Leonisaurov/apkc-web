@@ -20,6 +20,8 @@ package main
 const (
 	opRetorna        = 0x0f // 11x return vAA
 	opRetornaV       = 0x0e // 10x return-void
+	opMueveResult    = 0x0a // 11x move-result vAA, medido en el parrafo 66 (`0a00` tras un
+	// invoke-static que devuelve I)
 	opMueveResultObj = 0x0c // 11x move-result-object vAA
 	opConst4         = 0x12 // 11n const/4 vAA, #+B
 	opConst16        = 0x13 // 21c const/16 vAA, #+BBBB
@@ -57,6 +59,18 @@ const (
 	opCheckcastDex      = 0x1f // 21c check-cast vAA, type@BBBB
 	opRetornaObjeto     = 0x11 // 11x return-object vAA
 	opIput              = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
+
+	// los arreglos, medidos en el parrafo 66 sobre `Arreglos` dexado por `d8` y desarmado con
+	// `dexdump -d` del aparato: `array-length v0, v0` sale `2100` (12x, destino en el nibble bajo y
+	// fuente en el alto), `new-array v0, v0, [I` sale `2300 0500` (22c: registros en el byte alto y el
+	// type_id detrás), `aget v2, v3, v1` sale `4402 0301` (23x: op | AA, después BB | CC<<8), y las
+	// variantes de objeto están en el mismo hueco: `aget-object` 0x46, `aput` 0x4b, `aput-object` 0x4d.
+	opLongitudArreglo = 0x21 // 12x array-length vA, vB
+	opNuevoArreglo    = 0x23 // 22c new-array vA, vB, type@CCCC
+	opAget            = 0x44 // 23x aget vAA, vBB, vCC
+	opAgetObjeto      = 0x46 // 23x aget-object vAA, vBB, vCC
+	opAput            = 0x4b // 23x aput vAA, vBB, vCC
+	opAputObjeto      = 0x4d // 23x aput-object vAA, vBB, vCC
 
 	// la familia de cuentas enteras sobre dos registros, en el orden ad-sub-mul-div-rem que la
 	// sonda verifico en cuatro de sus miembros (add 0xb0, sub 0xb1, div 0xb3, y el shl 0xb8 de la
@@ -246,6 +260,15 @@ func (p *traduce) nibble(r int, in jvmInstr) bool {
 	return true
 }
 
+// octeto: los registros de una 23x van en ocho bits cada uno.
+func (p *traduce) octeto(r int, in jvmInstr) bool {
+	if r < 0 || r > 0xff {
+		p.falla(in, "register v"+itoa(r)+" does not fit the eight-bit registers of the three-register form")
+		return false
+	}
+	return true
+}
+
 // unidad11x: op en la mitad baja, registro en la alta. Medido con 0x030f (return v3) y 0x020c
 // (move-result-object v2) de d8.
 func unidad11x(op byte, a int) uint16 {
@@ -262,6 +285,19 @@ func unidad11n(op byte, a, b int) uint16 {
 // y en 0x015b (iput-object v1, v0): el destino en el nibble bajo, la fuente en el alto.
 func unidad12x(op byte, a, b int) uint16 {
 	return uint16(op) | uint16((b&0xf)<<4|a&0xf)<<8
+}
+
+// unidad23x: el opcode y el primer registro en una unidad, y los otros dos (segundo en el nibble
+// bajo) en la siguiente. Medido en `4402 0301` (aget v2, v3, v1) y `4b02 0001` (aput v2, v0, v1).
+func unidad23x(op byte, a, b, c int) (uint16, uint16) {
+	return uint16(op) | uint16(a&0xff)<<8, uint16(b&0xf) | uint16(c&0xf)<<8
+}
+
+// tiposNewArray: el atype del JVMS 4.9 para `newarray` y el array que nombra. Los ocho son la tabla
+// entera; el subconjunto medido solo escribe `int` desde el fuente, y los demás se aceptan si un
+// `.class` los trae porque la traducción es la misma.
+var tiposNewArray = map[byte]string{
+	4: "[Z", 5: "[C", 6: "[F", 7: "[D", 8: "[B", 9: "[S", 10: "[I", 11: "[J",
 }
 
 // indice: la segunda unidad de un 21c, de un 22c y de un 35c. Un índice fuera de u16 no se recorta:
@@ -414,22 +450,145 @@ func (p *traduce) parchaSaltos() error {
 // cuentaEntera: iadd, isub, imul, idiv, irem. Dalvik los escribe sobre el primer operando
 // (`/2addr`), que es lo que salió de la sonda: `add(a,b)` es 0x21b0 = add-int/2addr v1, v2 y
 // `sub(a,b)` 0x21b1, con el resultado quedándose en v1, de donde sale el `return v1` (0x010f).
+//
+// Pero `/2addr` escribe sobre un registro que la pila puede estar usando más abajo, y eso no se vio
+// hasta ejecutar `v[i] = i + 1` en ART: el índice y el sumando eran el mismo registro y el `iadd`
+// pisaba el índice. Medido en el parrafo 66 con `Vivo`/`Vivo2`, `d8` tiene tres formas:
+//
+//   - la izquierda muere: `/2addr` sobre ella (lo de siempre);
+//   - la izquierda vive y la operación conmuta (suma, producto): `/2addr` sobre la DERECHA
+//     (`add-int/2addr v2, v1` para `i + j`, con v1 vivo como índice);
+//   - la izquierda vive y no conmuta (resta, división, residuo): la forma de tres registros
+//     (`sub-int v2, v1, v2` = `9102 0102`, `div-int` = `9302 0102`, `rem-int` = `9402 0102`).
 func (p *traduce) cuentaEntera(in jvmInstr) {
-	ops := map[string]byte{"iadd": opSumaInt2, "isub": opRestaInt2, "imul": opMultiplica2,
+	dos := map[string]byte{"iadd": opSumaInt2, "isub": opRestaInt2, "imul": opMultiplica2,
 		"idiv": opDivide2, "irem": opResiduo2}
-	op, ok := ops[in.name]
+	tres := map[string]byte{"iadd": 0x90, "isub": 0x91, "imul": 0x92, "idiv": 0x93, "irem": 0x94}
+	op, ok := dos[in.name]
 	if !ok {
 		p.falla(in, "an arithmetic opcode this translator does not know")
 		return
 	}
+	conmuta := in.name == "iadd" || in.name == "imul"
 	b := p.pop(in)
 	a := p.pop(in)
-	if !p.nibble(a, in) || !p.nibble(b, in) {
+	vivo := func(r int) bool {
+		for _, v := range p.enPila {
+			if v == r {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case !vivo(a):
+		if !p.nibble(a, in) || !p.nibble(b, in) {
+			return
+		}
+		p.palabra(unidad12x(op, a, b))
+		p.push(a)
+		p.suelta(b)
+	case conmuta && !vivo(b):
+		if !p.nibble(b, in) || !p.nibble(a, in) {
+			return
+		}
+		p.palabra(unidad12x(op, b, a))
+		p.push(b)
+		p.suelta(a)
+	default:
+		r := p.toma(in)
+		if !p.octeto(r, in) || !p.octeto(a, in) || !p.octeto(b, in) {
+			return
+		}
+		u1, u2 := unidad23x(tres[in.name], r, a, b)
+		p.palabra(u1)
+		p.palabra(u2)
+		p.push(r)
+		p.suelta(a)
+		p.suelta(b)
+	}
+}
+
+// longitudArreglo: `array-length` (12x). Sale el alto en un temporal y la referencia se libera; `d8`
+// a veces reusa el registro de la referencia como destino (`array-length v0, v0`), pero eso es una
+// decisión de vivos y el resultado ejecuta igual.
+func (p *traduce) longitudArreglo(in jvmInstr) {
+	a := p.pop(in)
+	r := p.toma(in)
+	if !p.nibble(a, in) || !p.nibble(r, in) {
 		return
 	}
-	p.palabra(unidad12x(op, a, b))
-	p.push(a)
-	p.suelta(b)
+	p.palabra(unidad12x(opLongitudArreglo, r, a))
+	p.push(r)
+	p.suelta(a)
+}
+
+// nuevoArreglo: `newarray` (primitivo, atype) y `anewarray` (de referencia) salen como `new-array`
+// 22c con el type_id del arreglo: `[I` para `new int[n]` y `[Ljava/lang/String;` para `new
+// String[n]`. Medido en `Arreglos` (§66).
+func (p *traduce) nuevoArreglo(in jvmInstr) {
+	var desc string
+	if in.name == "newarray" {
+		d, ok := tiposNewArray[in.ops[0]]
+		if !ok {
+			p.falla(in, "a newarray of atype "+itoa(int(in.ops[0]))+", which is not one of the eight")
+			return
+		}
+		desc = d
+	} else {
+		clase := p.x.classDescriptor(dexU16(in.ops))
+		if clase == "" {
+			p.falla(in, "an anewarray of a class that is not in the pool")
+			return
+		}
+		desc = "[" + clase
+	}
+	largo := p.pop(in)
+	r := p.toma(in)
+	if !p.nibble(largo, in) || !p.nibble(r, in) {
+		return
+	}
+	p.palabra(uint16(opNuevoArreglo) | uint16((largo&0xf)<<4|r&0xf)<<8)
+	if !p.indice(p.t.typeIdx[desc], in, "the type_id of new-array") {
+		return
+	}
+	p.push(r)
+	p.suelta(largo)
+}
+
+// leeArreglo: `iaload`/`aaload` (23x). La pila JVM trae el arreglo y detrás el índice.
+func (p *traduce) leeArreglo(in jvmInstr) {
+	op := byte(opAget)
+	if in.name == "aaload" {
+		op = opAgetObjeto
+	}
+	indice := p.pop(in)
+	arreglo := p.pop(in)
+	r := p.toma(in)
+	a, b := unidad23x(op, r, arreglo, indice)
+	p.palabra(a)
+	p.palabra(b)
+	p.push(r)
+	p.suelta(arreglo)
+	p.suelta(indice)
+}
+
+// escribeArreglo: `iastore`/`aastore` (23x). La pila JVM trae el arreglo, el índice y el valor; el
+// primer registro de la instrucción es el valor (medido: `aput v2, v0, v1` para `v[i] = x`).
+func (p *traduce) escribeArreglo(in jvmInstr) {
+	op := byte(opAput)
+	if in.name == "aastore" {
+		op = opAputObjeto
+	}
+	valor := p.pop(in)
+	indice := p.pop(in)
+	arreglo := p.pop(in)
+	a, b := unidad23x(op, valor, arreglo, indice)
+	p.palabra(a)
+	p.palabra(b)
+	p.suelta(arreglo)
+	p.suelta(indice)
+	p.suelta(valor)
 }
 
 // invoca escribe un 35c: primera unidad con el opcode, el recuento de argumentos en los bits 4..7 y
@@ -558,6 +717,14 @@ func (p *traduce) recorre() error {
 			p.accesoEstatico(in, in.name == "putstatic")
 		case "iadd", "isub", "imul", "idiv", "irem":
 			p.cuentaEntera(in)
+		case "arraylength":
+			p.longitudArreglo(in)
+		case "newarray", "anewarray":
+			p.nuevoArreglo(in)
+		case "iaload", "aaload":
+			p.leeArreglo(in)
+		case "iastore", "aastore":
+			p.escribeArreglo(in)
 		case "checkcast":
 			desc := p.x.classDescriptor(dexU16(in.ops))
 			r := p.pop(in)
@@ -891,8 +1058,15 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 		r := p.toma(in)
 		p.palabra(unidad11x(opMueveResultObj, r))
 		p.push(r)
+	case ret[0] == 'I' || ret[0] == 'B' || ret[0] == 'C' || ret[0] == 'S' || ret[0] == 'Z':
+		r := p.toma(in)
+		if !p.nibble(r, in) {
+			return
+		}
+		p.palabra(unidad11x(opMueveResult, r))
+		p.push(r)
 	default:
-		p.falla(in, "a call returning "+string(ret[0])+": move-result (0x0a) is not measured in this fork")
+		p.falla(in, "a call returning "+string(ret[0])+": move-result-wide (0x0b) is not measured in this fork")
 	}
 }
 

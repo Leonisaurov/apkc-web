@@ -158,7 +158,9 @@ func tipoDeDesc(desc string) (tipoVerif, error) {
 		}
 		return verifRef(desc[1 : len(desc)-1]), nil
 	case '[':
-		return tipoVerif{}, fmt.Errorf("un array (%s) en el StackMapTable no esta medido: plan 5.11", desc)
+		// un arreglo es una referencia cuyo tipo de verificacion se nombra con su propio descriptor:
+		// medido en `Arreglos.copia` (parrafo 66), donde javac escribe `locals = [ class "[I", int ]`.
+		return verifRef(desc), nil
 	}
 	return tipoVerif{}, fmt.Errorf("el tipo %q de un descriptor no esta medido", desc)
 }
@@ -474,6 +476,74 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		return nil, false, nil
+	case op == 0x2e: // iaload
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
+	case op == 0x32: // aaload
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		arreglo, err := a.sacaRef()
+		if err != nil {
+			return nil, false, err
+		}
+		elem := verifRef("java/lang/Object")
+		if len(arreglo.clase) > 1 && arreglo.clase[0] == '[' {
+			elem = verifRef(arreglo.clase[1:])
+		}
+		a.empuja(elem)
+	case op == 0x4f: // iastore
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+	case op == 0x53: // aastore
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+	case op == 0xbe: // arraylength
+		arreglo, err := a.sacaRef()
+		if err != nil {
+			return nil, false, err
+		}
+		if len(arreglo.clase) == 0 || arreglo.clase[0] != '[' {
+			return nil, false, fmt.Errorf("el `arraylength` sobre %s, que no es un arreglo", arreglo)
+		}
+		a.empuja(verifInt)
+	case op == 0xbc: // newarray
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		desc, ok := tiposNewArray[in.ops[0]]
+		if !ok {
+			return nil, false, fmt.Errorf("el atype %d de newarray no esta medido", in.ops[0])
+		}
+		a.empuja(verifRef(desc))
+	case op == 0xbd: // anewarray
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		clase, err := a.lector.claseDe(u2De(in.ops, 0))
+		if err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifRef("[" + clase))
 	case op == 0xb0:
 		if _, err := a.sacaRef(); err != nil {
 			return nil, false, err

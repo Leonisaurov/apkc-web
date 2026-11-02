@@ -262,7 +262,15 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	b = putU32(b, 0)                   // link_size
 	b = putU32(b, 0)                   // link_off
 	b = putU32(b, uint32(mapOff))      // map_off
-	for _, k := range tipos[:6] {      // las cinco tablas de índices y class_defs: size, off
+	for _, k := range tipos[:6] { // las cinco tablas de índices y class_defs: size, off
+		// una tabla vacia va con desplazamiento CERO, no con el de donde iria: ART lo exige al
+		// verificar (`Offset(228) should be zero when size is zero for field-ids`, visto con una
+		// clase sin campos en el parrafo 66)
+		if cuantos[k] == 0 {
+			b = putU32(b, 0)
+			b = putU32(b, 0)
+			continue
+		}
 		b = putU32(b, cuantos[k])
 		b = putU32(b, uint32(base[k]))
 	}

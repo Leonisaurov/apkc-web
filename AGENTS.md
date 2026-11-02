@@ -14,7 +14,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
 | `studio/` | apkc-studio: genera proyectos apkc, traduce su salida para medir fricción **y hace correr `apkc.wasm` en la pestaña** (OPFS + worker) | `cd studio && APKC=<binario> sh e2e.sh`; la pestaña: `APKC_WASM=… node studio/prueba-pestana.js` |
-| `banco/` | **el banco de ejecución**: dos fuentes de prueba y un guion que corre el mismo programa por los cuatro caminos (JVM, `d8` sobre javac, `d8` sobre lo que emitimos, y **nuestro dex en `app_process`**) — sin instalar nada, sin pantalla | `sh banco/banco.sh` (necesita `APKC` compilado, `ANDROID_JAR`, `build-tools` y `rish`) |
+| `banco/` | **el banco de ejecución**: dos fuentes de prueba y un guion que corre el mismo programa por los cinco caminos (JVM, `d8` sobre javac, `d8` sobre lo que emitimos, **nuestro dex en `app_process`** y, desde el §66, **nuestro dex con nuestro `main`**, sin javac ni d8) — sin instalar nada, sin pantalla | `sh banco/banco.sh` (necesita `APKC` compilado, `ANDROID_JAR`, `build-tools` y `rish`) |
 
 ## Reglas del repo
 
@@ -374,6 +374,20 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   fija la ausencia; el paso 6 del banco ejecuta nuestra `Ver` con el `Arranque` de javac bajo
   `java -Xverify:all` y ahora dice `rc=102 y salida igual a la JVM  ok`. El dex y los apks no cambian
   (el dexer ignora el atributo).
+- **Los arreglos, y un `main(String[])` que corre en ART sin javac ni d8** (§66): el `.class` usa
+  `newarray`/`anewarray`/`arraylength`/`iaload`/`iastore`/`aaload`/`aastore` y el dex `new-array`
+  (0x23, 22c), `array-length` (0x21, 12x), `aget`/`aget-object` (0x44/0x46) y `aput`/`aput-object`
+  (0x4b/0x4d), todos 23x con `op|AA` y `BB|CC<<8`. El analizador lee `T[]` en declaraciones y
+  parámetros, `new T[n]`, `v[i]` (lectura y destino) y `v.length`; el inicializador `new T[] {…}` y más
+  de una dimensión se rechazan por nombre. El dex de la sonda `Arreglos` (diez métodos) es **byte a
+  byte** el de javac. Ejecutar destapó dos defectos: **una tabla vacía escribía su desplazamiento en la
+  cabecera** (`field_ids_off` tiene que ser 0; ART: `Offset(228) should be zero when size is zero`) y
+  **la cuenta pisaba un operando vivo** (`v[i] = i + 1` daba 3 en ART y 5 en la JVM): `d8` usa `/2addr`
+  sobre la izquierda, `/2addr` sobre la **derecha** si conmuta (izquierda viva) y la forma de tres
+  registros (0x90 suma … 0x94 residuo) si no. También se midió `move-result` entero (`0a00`).
+  `TestLaCuentaNoPisaUnOperandoVivo` fija las palabras. Y el banco tiene un quinto camino: las dos
+  fuentes compiladas y dexadas solo por este fork (`main(String[])` incluido) corren en `app_process`
+  con el mismo texto y `rc` que la JVM (`total 7|total 9|total 102|10`, `rc 102`).
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -399,7 +413,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **227 PASS + 2 SKIP** nativa y **196 PASS + 33 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **231 PASS + 2 SKIP** nativa y **196 PASS + 37 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

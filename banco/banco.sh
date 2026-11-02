@@ -40,6 +40,15 @@ mkdir -p "$TRABAJO/jc" "$TRABAJO/scr" "$TRABAJO/nuestro" "$TRABAJO/d8" "$TRABAJO
 	echo "banco: apkc compile fallo"; tail -3 "$TRABAJO/compile.log"; exit 1; }
 cp "$TRABAJO/jc/p/Arranque.class" "$TRABAJO/nuestro/p/"
 
+# 1b. el camino "todo nuestro" (§66): las DOS fuentes compiladas por `apkc compile` —el `main` con
+#     `String[]` incluido— y dexadas por `apkc dex`. Ni javac ni d8 en el camino.
+mkdir -p "$TRABAJO/todo"
+"$APKC" compile --android-jar "$JAR" -o "$TRABAJO/todo" \
+	"$AQUI/banco/src/p/Ver.java" "$AQUI/banco/src/p/Arranque.java" >"$TRABAJO/todo.log" 2>&1 || {
+	echo "banco: apkc compile (todo nuestro) fallo"; tail -3 "$TRABAJO/todo.log"; exit 1; }
+"$APKC" dex -o "$TRABAJO/todo.dex" "$TRABAJO/todo" >"$TRABAJO/tododex.log" 2>&1 || {
+	echo "banco: apkc dex (todo nuestro) fallo"; tail -3 "$TRABAJO/tododex.log"; exit 1; }
+
 # 2. los tres dex: el nuestro (nuestra Ver + javac Arranque), el de d8 sobre javac, y el de d8
 #    sobre nuestra Ver (para separar "el emisor escribe bien" de "el traductor dexa bien")
 "$APKC" dex -o "$TRABAJO/nuestro.dex" "$TRABAJO/nuestro" >"$TRABAJO/dex.log" 2>&1 || {
@@ -96,9 +105,11 @@ veredicto() { # alias de dex, descripcion
 sube bnuestro "$TRABAJO/nuestro.dex"
 sube bd8 "$TRABAJO/d8/classes.dex"
 sube bd8desde "$TRABAJO/d8desde/classes.dex"
+sube btodo "$TRABAJO/todo.dex"
 veredicto bnuestro "nuestro dex (Go de punta a punta)"
 veredicto bd8 "dex de d8 sobre javac"
 veredicto bd8desde "dex de d8 sobre nuestra Ver"
+veredicto btodo "nuestro dex con nuestro main (sin javac ni d8)"
 
 # 5. el doble oráculo: se informa, no se exige. `d8` sobre nuestra `Ver` y sobre la de javac no salen
 #    iguales porque el código de las dos clases no es el mismo (javac pliega `new StringBuilder();

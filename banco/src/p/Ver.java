@@ -31,4 +31,22 @@ public class Ver {
             default: total = total + 1;
         }
     }
+
+    // Arreglos: el alta, `.length`, el indice que se lee y se escribe, y la cuenta que pisa un
+    // operando vivo (§66). `sumaArreglo(4)` es 10.
+    public static int sumaArreglo(int n) {
+        int[] v = new int[n];
+        int i = 0;
+        while (i < v.length) {
+            v[i] = i + 1;
+            i = i + 1;
+        }
+        int s = 0;
+        i = 0;
+        while (i < v.length) {
+            s = s + v[i];
+            i = i + 1;
+        }
+        return s;
+    }
 }

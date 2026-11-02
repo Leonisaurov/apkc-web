@@ -3637,3 +3637,91 @@ apks de siempre (10014, 9727 y 10287 bytes).
 su `<init>` y ningún comienzo de bloque cae en medio, y los constructores llaman a `super` antes de
 cualquier rama); un `long`/`double` en un descriptor lo rechaza el propio analizador por nombre (5.8); y
 arrays siguen fuera (5.11).
+
+## 66. Arreglos: el `main(String[])` compilado y dexado solo por nosotros corre en ART
+
+El ítem 5.11, el que faltaba para una lista de verdad y para `main(String[])`. Se midió como siempre:
+una sonda `Arreglos` con alta (`new int[n]`, `new String[n]`), `.length`, lectura y escritura de un
+elemento, y dos métodos con bucle; compilada con `javac -g`, dexada por `d8 --release` y desarmada con
+`dexdump -d` del aparato.
+
+**La forma del `.class`**, de `javap -c`: `iconst_3; newarray int`, `iload_0; anewarray #7 // class
+java/lang/String`, `aload_0; arraylength`, `aload_0; iload_1; iaload`, `aload_0; iload_1; iload_2;
+iastore`, y lo mismo con `aaload`/`aastore` para las referencias. **La forma del dex**, del volcado:
+
+```
+array-length v0, v3     2130      12x: destino en el nibble bajo, fuente en el alto
+new-array v0, v0, [I    2300 0500 22c: registros en el byte alto, type_id en la unidad siguiente
+aget v2, v3, v1         4402 0301 23x: op|AA, después BB|CC<<8
+aput v2, v0, v1         4b02 0001 23x, con el valor primero
+aget-object · aput-object   0x46 · 0x4d
+```
+
+con el tipo `[I` (o `[Ljava/lang/String;`) en `type_ids`. En el `.class` el `anewarray` nombra la clase
+del **elemento** (`java/lang/String`), no la del arreglo.
+
+**El emisor ya escribe arreglos.** El analizador acepta `T[]` en declaraciones, parámetros y vueltas
+(el tipo se guarda como el texto del fuente con sus corchetes), `new T[n]`, `v[i]` —de lectura y como
+destino de una asignación— y `v.length` (`arraylength`). `descriptorDe` escribe `[` delante del
+descriptor del elemento, así que `int[]` es `[I`, `String[]` es `[Ljava/lang/String;` y `int[][]` sería
+`[[I`. El inicializador `new T[] {…}` y más de una dimensión se rechazan por nombre (piden
+`filled-new-array`, que todavía no se ha medido). Trampa que costó un defecto: `pareceDeclaracion`
+miraba «un `[` detrás del nombre» y confundía `v[i] = x` con una declaración; ahora solo son
+declaración los corchetes **vacíos** seguidos de un nombre.
+
+**El traductor.** `newarray` (primitivo por atype), `anewarray` (clase del elemento), `arraylength`,
+`iaload`/`aaload`, `iastore`/`aastore`, con las formas de arriba, y `new-array`/`anewarray` internan su
+tipo de arreglo en `collectCode`. El oráculo doble: nuestro dex de nuestra `Arreglos` es **byte a byte**
+el de las clases de javac del mismo fuente (diez métodos, `cmp` mudo), o sea que el `Code` emitido es el
+de javac y el traductor los baja igual.
+
+**Ejecutar encontró dos defectos que ningún `cmp` veía, y uno era grave.** El primero, del dexer, al
+verificar con `dexdump`: una tabla vacía escribía su desplazamiento en la cabecera y ART corta con
+`Offset(228) should be zero when size is zero for field-ids`; una clase sin campos jamás lo había
+tocado. El segundo lo destapó ART al correr `v[i] = i + 1` y sacar `3` donde la JVM saca `5`: el `iadd`
+se escribía como `/2addr` sobre el registro de la **izquierda**, que era `i`… y `i` también estaba en
+la pila como índice, así que el índice quedaba pisado y el `aput` escribía `v[i] = i`. Medido en `d8`
+con `Vivo`/`Vivo2`, la cuenta entera tiene **tres formas** según quién muera:
+
+```
+v[i] = i + 1   d800 0201   add-int/lit8 v0, v2, #1     (22b, resultado en un registro nuevo)
+v[i] = i + j   b012        add-int/2addr v2, v1        (la izquierda vive; conmuta, va a la derecha)
+v[i] = i / j   9302 0102   div-int v2, v1, v2          (no conmuta: tres registros, 23x)
+v[i] = i - j   9102 0102   sub-int v2, v1, v2
+v[i] = i % j   9402 0102   rem-int v2, v1, v2
+```
+
+y la familia 23x es `0x90` suma, `0x91` resta, `0x92` producto, `0x93` división, `0x94` residuo.
+`cuentaEntera` ahora mira la pila simulada: si la izquierda no vive, `/2addr` sobre ella (lo de
+siempre); si vive y la operación conmuta y la derecha no vive, `/2addr` sobre la derecha; y si no,
+la forma de tres registros en un temporal. `TestLaCuentaNoPisaUnOperandoVivo` fija las palabras de los
+dos casos (`1210 b020 004b 0201 000e` y `0091 0302 004b 0201 000e`).
+
+**`move-result` de un entero (0x0a), medido de paso.** El camino "todo nuestro" del banco llamó a un
+método que devuelve `I` y el traductor solo tenía `move-result-object`: medido en `Mr.h`, `d8` escribe
+`0a00` —la 11x gemela—, y ahora se emite para los cinco enteros; `long`/`double` siguen rechazados
+por nombre.
+
+**El hecho que se buscaba: un `main(String[])` que compila y dexa este fork, y corre en el aparato.**
+Fuente con `int[] v = new int[4]`, dos bucles, `v.length`, `v[i] = i + 1`, una copia a otro arreglo y
+cuatro `System.out.println`. `apkc compile` (34 ms) y `apkc dex` (1076 bytes) y en `app_process`:
+`4`, `5`, `4`, `1`, `rc 0`, `dexdump` verificando; y la JVM con `-Xverify:all` sobre las mismas clases
+dice lo mismo. Antes de arreglar el alias, ART imprimía `4`, `3`, `4`, `0`: el fallo no da
+`VerifyError`, da un número. El banco tiene ahora un quinto camino con esa forma —las dos fuentes
+compiladas por nosotros, sin javac ni d8—: `nuestro dex con nuestro main (sin javac ni d8): rc=102 y
+salida igual a la JVM  ok`, con la salida `total 7|total 9|total 102|10` de los cinco caminos.
+
+**Los marcos, con arreglos.** El tipo de verificación de un arreglo es `ITEM_Object` con una `Class`
+cuyo nombre es el **descriptor** (`class "[I"`, medido en `Arreglos.copia`), y así se escribe; la unión
+de dos arreglos distintos da `Object`, que es lo que el verificador acepta. El decodificador del test
+tuvo que dejar de usar `internalName` (que convierte `[I` en el tipo null) y leer el nombre del pool
+tal cual. `TestLosMarcosDeUnArregloSonLosDeJavac` compara `suma` y `copia` expandidos contra javac.
+
+Suite: **231 PASS + 2 SKIP** nativa y **196 PASS + 37 SKIP** en el hospedador (los cuatro tests nuevos
+piden el `android.jar`); gate de `studio/e2e.sh` en orden con los apks de siempre (10014, 9727 y 10287
+bytes). El banco: cinco caminos y `jvm con nuestra clase emitida (Xverify:all)` en orden.
+
+**Frontera**: el inicializador `new T[] {…}`, más de una dimensión, los arreglos de `char`/`boolean`
+desde el fuente (el traductor sí acepta el atype; el emisor del fuente solo escribe `int`), pasar un
+arreglo a un parámetro `Object` (`asignable` no conoce la jerarquía de arreglos; se rechaza por
+nombre) y `arraycopy` no están medidos.

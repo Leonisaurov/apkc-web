@@ -1,10 +1,10 @@
 package p;
 
-// El banco se ejecuta con `app_process` en el aparato, que exige un `main(String[])`. Este fork
-// todavia no emite tipos de array (parrafo 5, item 5.11 del plan), asi que esta clase la compila
-// javac y la nuestra (`p.Ver`) la escribe `apkc compile`: se dexan las dos con `apkc dex` y el
-// resultado se compara con el de la JVM sobre las mismas fuentes. Sin `+` de cadenas aqui: javac 21 lo
-// baja con `invokedynamic` y el dexer lo rechaza por nombre (plan 5.22).
+// El banco se ejecuta con `app_process` en el aparato, que exige un `main(String[])`. Desde el §66
+// este fork **si** emite tipos de array, asi que el banco compila esta fuente de dos maneras: con
+// javac (para el camino de la JVM y el de `d8`) y con `apkc compile` (el camino "todo nuestro", que
+// corre el dex escrito por nosotros sin javac ni d8 de por medio). Aqui no hay `+` de cadenas: javac 21
+// lo baja con `invokedynamic` y el dexer lo rechaza por nombre (plan 5.22).
 public class Arranque {
     public static void main(String[] args) {
         Ver.cuenta();
@@ -12,6 +12,7 @@ public class Arranque {
         Ver.suma(3);
         Ver.elige(1);
         Ver.cuenta();
+        System.out.println(Ver.sumaArreglo(4));
         int t = Ver.total;
         System.exit(t);
     }
