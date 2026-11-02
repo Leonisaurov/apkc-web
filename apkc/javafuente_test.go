@@ -243,7 +243,8 @@ func TestParsearRechazaLoQueNoSeEmite(t *testing.T) {
 		nombre string
 		razon  string
 	}{
-		{"class A { void a() { for (int i=0;i<3;i++) {} } }", "un for", "no esta medida"},
+		{"class A { void a() { do { a(); } while (true); } }", "un do-while", "no esta medida"},
+		{"class A { void a() { int i = 0; i++; } }", "un ++", "++"},
 		{"class A { void a() { int[] v; } }", "un array", "array"},
 		{"class A { void a() { try { } catch (E e) { } } }", "un try", "no esta medida"},
 		{"class A { @Deprecated void a() {} }", "una anotacion que no es Override", "@Deprecated"},

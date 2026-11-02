@@ -135,6 +135,16 @@ type jif struct {
 
 func (jif) jstmtPuede() {}
 
+// jmientras: `while (cond) cuerpo`. `for` no tiene nodo propio: se desdobla en el analizador como
+// javac lo escribe —`init; while (cond) { cuerpo; paso }`— medido en el parrafo 63.
+type jmientras struct {
+	cond   jexpr
+	cuerpo jstmt
+	donde  pos
+}
+
+func (jmientras) jstmtPuede() {}
+
 // jparam, jcampo y jmetodo son las partes declarativas.
 type jparam struct {
 	tipo   string
@@ -899,7 +909,82 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			siNo = s
 		}
 		return jif{cond: cond, entonces: entonces, siNo: siNo, donde: pos{linea}}, true, nil
-	case a.es('k', "for"), a.es('k', "while"), a.es('k', "do"), a.es('k', "switch"), a.es('k', "try"):
+	case a.es('k', "while"):
+		a.avanzar()
+		if err := a.comerSimbolo("("); err != nil {
+			return nil, false, err
+		}
+		cond, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(")"); err != nil {
+			return nil, false, err
+		}
+		cuerpo, _, err := a.sentencia()
+		if err != nil {
+			return nil, false, err
+		}
+		return jmientras{cond: cond, cuerpo: cuerpo, donde: pos{linea}}, true, nil
+	case a.es('k', "for"):
+		a.avanzar()
+		if err := a.comerSimbolo("("); err != nil {
+			return nil, false, err
+		}
+		var inicio jstmt
+		if a.es('p', ";") {
+			a.avanzar()
+		} else {
+			s, _, err := a.sentencia() // se come su propio `;`
+			if err != nil {
+				return nil, false, err
+			}
+			inicio = s
+		}
+		if a.es('p', ";") {
+			return nil, false, fmt.Errorf("linea %d: un `for` sin condicion no esta medido", linea)
+		}
+		cond, err := a.expresion()
+		if err != nil {
+			return nil, false, err
+		}
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		piezas := []jstmt{}
+		if !a.es('p', ")") {
+			// el paso puede ser una llamada o una asignacion, que en este subconjunto es sentencia y no
+			// expresion: se lee el destino y, si viene el `=`, se arma el jasign
+			dst, err := a.expresion()
+			if err != nil {
+				return nil, false, err
+			}
+			if a.es('p', "=") {
+				a.avanzar()
+				valor, err := a.expresion()
+				if err != nil {
+					return nil, false, err
+				}
+				piezas = append(piezas, jasign{destino: dst, valor: valor, donde: pos{linea}})
+			} else {
+				piezas = append(piezas, jstmtExpr{e: dst})
+			}
+		}
+		if err := a.comerSimbolo(")"); err != nil {
+			return nil, false, err
+		}
+		cuerpo, _, err := a.sentencia()
+		if err != nil {
+			return nil, false, err
+		}
+		// mismo desdoblamiento que javac: el cuerpo y despues el paso, dentro del `while`
+		piezas = append([]jstmt{cuerpo}, piezas...)
+		m := jmientras{cond: cond, cuerpo: jbloque{sentencias: piezas, donde: pos{linea}}, donde: pos{linea}}
+		if inicio == nil {
+			return m, true, nil
+		}
+		return jbloque{sentencias: []jstmt{inicio, m}, donde: pos{linea}}, true, nil
+	case a.es('k', "do"), a.es('k', "switch"), a.es('k', "try"):
 		return nil, false, fmt.Errorf("linea %d: la sentencia %q no esta medida en este compilador", linea, a.actual().valor)
 	}
 	// declaracion local o expresion
@@ -1221,6 +1306,10 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 	}
 	if t.kind == 'k' && esNombreDeTipo(t.valor) {
 		return nil, fmt.Errorf("linea %d: el tipo %q no va suelto en una expresion", t.donde.linea, t.valor)
+	}
+	if t.kind == 'p' && (t.valor == "+" || t.valor == "-") {
+		// el caso real es `i++` dentro de un `for`: se nombra para que el portero diga que falta (5.1)
+		return nil, fmt.Errorf("linea %d: un `++`/`--` no esta medido en este compilador", t.donde.linea)
 	}
 	return nil, fmt.Errorf("linea %d: %q no es una expresion que este parser reconozca", t.donde.linea, t.valor)
 }

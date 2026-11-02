@@ -378,23 +378,21 @@ func (p *traduce) parchaSaltos() error {
 			donde = len(p.w) // se salta al hueco que hay despues de la ultima instruccion
 		}
 		rel := donde - s.desde
-		if rel < 0 {
-			// una rama hacia atras es un bucle: aqui el destino se alcanza con la pila JVM en el
-			// mismo sitio pero con registros repartidos por dos caminos distintos, y ese reparto
-			// no lo midio ninguna sonda. `d8` lo resuelve con analisis de viveza; nosotros lo
-			// rechazamos por nombre hasta que alguien lo mida.
-			return &traduceError{nombre: p.m.Name,
-				motivo: "a backward branch of " + itoa(rel) + " code units: a loop, whose register merge at the target is not measured here"}
-		}
+		// Las ramas hacia atrás son bucles, y están medidas: `d8` escribe el cuerpo del bucle con un
+		// `goto` 10t de desplazamiento negativo —`28f7`, o sea -9 unidades, medido en el §63 sobre un
+		// `while` de javac— y la salida con un 22t hacia adelante. El reparto de registros no cambia
+		// porque los locales van clavados (`guardaLocal`) y en la cabecera del bucle la pila JVM está
+		// vacía, que es lo que exige el verificador para los dos caminos. Lo que no cabe en el formato
+		// se sigue rechazando por nombre.
 		if s.enMitadAlta {
-			if rel > 127 {
+			if rel < -128 || rel > 127 {
 				return &traduceError{nombre: p.m.Name,
-					motivo: "a goto of " + itoa(rel) + " code units: the 10t form reaches 127 and goto/16 is not measured here"}
+					motivo: "a goto of " + itoa(rel) + " code units: the 10t form reaches +-127 and goto/16 is not measured here"}
 			}
 			p.w[s.en] |= uint16(rel&0xff) << 8
 			continue
 		}
-		if rel > 32767 {
+		if rel < -32768 || rel > 32767 {
 			return &traduceError{nombre: p.m.Name, motivo: "a branch offset that does not fit sixteen bits"}
 		}
 		p.w[s.en] = uint16(rel)

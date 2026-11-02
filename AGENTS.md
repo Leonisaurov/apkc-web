@@ -323,6 +323,20 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   javac difieren de forma (javac pliega el primer `append` en el constructor `StringBuilder(String)`):
   el banco lo informa y exige sólo que ejecuten igual. Pruebas: `apkc/javaemisor_sobrecarga_test.go`
   (tres, saltan sin jar).
+- **Los bucles entraron midiendo el `goto` de vuelta** (§63): `d8` escribe la vuelta con el `goto` 10t y
+  el desplazamiento **negativo en el byte alto** (`28f7`, -9 unidades) y la salida con un 22t; el
+  traductor rechazaba `rel < 0` «porque el reparto de registros no está medido», y no hace falta
+  análisis de viveza: los locales van clavados (`guardaLocal`) y en la cabecera del bucle la pila JVM
+  está vacía. Nuestro cuerpo sale con el mismo `28f7` y una instrucción de más donde `d8` pliega
+  `i + 1` a `add-int/lit8`. En el emisor, `while` es un nodo propio y `for` **se desdobla** como
+  `init; while (cond) { cuerpo; paso }`: el `.class` de los dos es **idéntico al de javac** y el dex
+  **byte a byte** el de javac (`TestElBucleSeDexaIgualQueElDeJavac`, dos fixtures nuevos),
+  `TestLaRamaHaciaAtrasSeEscribeComoD8` fija la vuelta en el traductor y `TestDoSwitchYTtrySiguenRechazados`
+  la frontera (`do`, `switch`, `try`, `i++` —este último ahora nombrado en el portero—). Ejecutado: el dex
+  de javac's `Bucle` traducido por nosotros imprime `10`/`rc 10` en `app_process`, el `.class` nuestro
+  también, y el banco lleva un `while` (los cuatro caminos: `total 7|total 9|total 42`, `rc 42`, `dexdump
+  rc 0`). Ojo al preparar fuentes para el dexer: **javac 21 compila el `+` de cadenas con
+  `invokedynamic`**, que este fork rechaza (5.22); por eso el `Arranque` del banco imprime enteros.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -348,7 +362,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **219 PASS + 2 SKIP** nativa y **194 PASS + 27 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **221 PASS + 2 SKIP** nativa y **194 PASS + 29 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

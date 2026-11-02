@@ -3443,6 +3443,64 @@ Suite: **219 PASS + 2 SKIP** nativa (tres nuevas: dos de sobrecarga y la del rec
 **194 PASS + 27 SKIP** en el hospedador, donde las tres nuevas se saltan si no hay `android.jar`
 montado; el gate de `studio/e2e.sh`, en orden.
 
+## 63. Los bucles: el `goto` de vuelta medido, y el `.class` del `while` idéntico al de javac
+
+Lo que el plan tenía como el ítem grande de control de flujo (5.10). Medido primero, como siempre:
+fuente `while (i < n) { total = total + i; i = i + 1; }` con `static int total`, compilado por javac 21
+y dexado por `d8 --release` (fichero de 1380 bytes, `dexdump -d` en el aparato):
+
+```
+registers 3, ins 1, outs 0, 12 palabras
+0000: const/4 v0, #int 0            ← el local `i`, que `d8` deja en v0
+0001: if-ge v0, v2, +000a           ← la condición invertida; v2 es el argumento `n`
+0003: sget v1, total ; 0005: add-int/2addr v1, v0 ; 0006: sput v1, total
+0008: add-int/lit8 v0, v0, #int 1   ← el paso, plegado a literal
+000a: goto 0001                     ← **`28f7`: opcode 0x28 y desplazamiento -9 en el byte alto**
+000b: return-void
+```
+
+De ahí salen tres cosas. **La rama hacia atrás usa el `goto` 10t con el desplazamiento en el byte alto y
+con signo** (el `28f7` de arriba), y la salida un 22t con el desplazamiento en la unidad siguiente; el
+traductor ya tenía las dos formas, solo que rechazaba `rel < 0` «porque el reparto de registros en el
+destino no está medido». **No hace falta ningún análisis de viveza**: los locales van clavados a su
+registro (`guardaLocal`) y en la cabecera del bucle la pila JVM está vacía —lo exige el verificador para
+los dos caminos—, así que la vuelta encuentra los mismos registros que dejó la primera pasada. Y **el
+cuerpo nuestro es el mismo que el de `d8`** salvo un plegado: nosotros escribimos `const/4 v1, #1` +
+`add-int/2addr v0, v1` donde él escribe `add-int/lit8 v0, v0, #1` (la diferencia de forma del §21 y el
+§53, que no se toca aquí). El `goto` sale **`28f7` idéntico**.
+
+**El emisor ya escribe el bucle.** `while (cond) cuerpo` se analiza a un nodo propio y se emite con la
+forma de javac: `cabecera: <condición invertida> if_… fin ; cuerpo ; goto cabecera ; fin:`. `for
+(init; cond; paso)` **se desdobla en el analizador** como `init; while (cond) { cuerpo; paso }`, que es
+exactamente lo que escribe javac: el `.class` de nuestro `for` tiene **el mismo `Code` byte a byte** que
+el suyo (23 bytes, `iconst_0 1:istore_1 2:iload_1 3:iload_0 4:if_icmpge 22 … 19:goto 2 22:return`), y el
+`while` también. El `goto` de la vuelta se resuelve con una función nueva, `resuelveAtras`, porque
+`cierra` solo parchea al cerrar y la cabecera se cerró antes del cuerpo; el desplazamiento se comprueba
+en 16 bits con signo y lo que no cabe se rechaza por nombre (`goto_w` no está medido).
+
+**Oráculos.** El doble, con la dosis de siempre: `TestElBucleSeDexaIgualQueElDeJavac` compila los dos
+fuentes con este fork y exige que el dex sea **byte a byte** el de las clases de javac para el mismo
+fuente (dos fixtures nuevos en base64), y además comprueba la forma: `if-ge` (0x35) con +10, el `goto`
+`0x28` con **-9**, y `return-void` al final. `TestLaRamaHaciaAtrasSeEscribeComoD8` fija la vuelta en el
+traductor (cuerpo sintético, `goto` -3 palabras a la cabecera). `TestDoSwitchYTtrySiguenRechazados` deja
+escrita la frontera: `do`, `switch` y `try` siguen saliendo por su nombre, y `i++` también (se nombró en
+el portero en vez de dejar el mensaje genérico).
+
+**Ejecutado.** El dex de javac's `Bucle` traducido por nosotros imprime `10` y sale con `rc 10` en
+`app_process`; el `.class` del `while` escrito por nosotros, dexado por nosotros, también (`10`, `rc 10`),
+y el del `for` igual. Y el banco (`banco/banco.sh`) lleva ahora un bucle: `Ver.suma(3)` con su `while`,
+de modo que los cuatro caminos imprimen `total 7`, `total 9` y `total 42` y salen con `rc 42` — la JVM,
+nuestro dex de punta a punta, `d8` sobre javac y `d8` sobre nuestra `Ver`, los tres dex con `dexdump
+verificando rc 0`.
+
+**Frontera, con motivo**: no hay `do-while`, ni `break`/`continue`, ni `i++`, ni bucles con valores vivos
+distintos de un local, ni `goto/16`; y el `+` de cadenas en un fuente compilado por **javac 21** sale
+como `invokedynamic` y el dexer lo rechaza (plan 5.22), que es la razón de que el `Arranque` del banco
+imprima enteros y no cadenas.
+
+Suite: **221 PASS + 2 SKIP** nativa y **194 PASS + 29 SKIP** en el hospedador; gate de `studio/e2e.sh`
+en orden.
+
 
 
 

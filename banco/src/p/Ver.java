@@ -15,4 +15,12 @@ public class Ver {
         }
         System.out.println("total " + total);
     }
+
+    public static void suma(int n) {
+        int i = 0;
+        while (i < n) {
+            total = total + i;
+            i = i + 1;
+        }
+    }
 }

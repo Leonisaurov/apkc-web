@@ -391,6 +391,9 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 		if v.siNo != nil {
 			ctx.registrarSentencia(v.siNo)
 		}
+	case jmientras:
+		ctx.registrarExpresion(v.cond)
+		ctx.registrarSentencia(v.cuerpo)
 	}
 }
 
@@ -2187,6 +2190,56 @@ func (e *emisor) branca(v jif) error {
 	return e.stm(v.siNo)
 }
 
+// mientras: `while (cond) cuerpo`, con la forma que se midió en el parrafo 63 (javac y `d8` escriben
+// lo mismo): la cabeza con la condición **invertida** saltando al final, el cuerpo, y un `goto` a la
+// cabeza. En la cabeza la pila JVM está vacía, que es lo que el verificador exige a los dos caminos, y
+// los locales van clavados a su registro, así que el reparto no cambia entre vueltas.
+func (e *emisor) mientras(v jmientras) error {
+	e.marcaLinea(v.donde.linea)
+	cabeza := e.nuevaEtiqueta()
+	fin := e.nuevaEtiqueta()
+	e.cierra(cabeza)
+	op, consume, err := e.condicionBranca(v.cond)
+	if err != nil {
+		return err
+	}
+	e.saltoEmite(op, fin, consume)
+	if err := e.stm(v.cuerpo); err != nil {
+		return err
+	}
+	e.saltoEmite(opGOTO, cabeza, 0)
+	if err := e.resuelveAtras(cabeza); err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	e.cierra(fin)
+	return nil
+}
+
+// resuelveAtras completa los saltos que apuntan a una etiqueta **ya cerrada**, que es el `goto` del
+// final de un bucle: `cierra` solo parchea cuando se cierra, y la cabeza se cerró antes del cuerpo. El
+// operando es un desplazamiento de 16 bits con signo contado desde el principio de la branquia.
+func (e *emisor) resuelveAtras(id int) error {
+	destino, ok := e.etiquetas[id]
+	if !ok {
+		return fmt.Errorf("un salto hacia atras a una etiqueta que no se cerro")
+	}
+	quedan := e.parches[:0]
+	for _, p := range e.parches {
+		if p.etiqueta != id {
+			quedan = append(quedan, p)
+			continue
+		}
+		rel := destino - p.en
+		if rel < -32768 || rel > 32767 {
+			return fmt.Errorf("un salto hacia atras de %d bytes: goto_w no esta medido", rel)
+		}
+		e.codigo[p.en+1] = byte(rel >> 8)
+		e.codigo[p.en+2] = byte(rel)
+	}
+	e.parches = quedan
+	return nil
+}
+
 func (e *emisor) stm(s jstmt) error {
 	switch v := s.(type) {
 	case jstmtExpr:
@@ -2306,6 +2359,8 @@ func (e *emisor) stm(s jstmt) error {
 		return nil
 	case jif:
 		return e.branca(v)
+	case jmientras:
+		return e.mientras(v)
 	}
 	return fmt.Errorf("una sentencia de %T no esta medida", s)
 }
