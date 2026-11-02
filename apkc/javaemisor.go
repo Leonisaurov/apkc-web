@@ -470,7 +470,12 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 		ctx.registrarExpresion(v.cond)
 	case jtry:
 		ctx.registrarSentencia(v.cuerpo)
-		ctx.registrarSentencia(v.atrapa)
+		for _, c := range v.atrapas {
+			ctx.registrarSentencia(c.atrapa)
+		}
+		if v.finalmente != nil {
+			ctx.registrarSentencia(v.finalmente)
+		}
 	case jlanza:
 		ctx.registrarExpresion(v.e)
 	case jswitch:
@@ -3203,44 +3208,242 @@ func (e *emisor) incremento(v jincr) error {
 }
 
 // entradaTry: una fila de la exception_table del Code (JVMS 4.7.3). `fin` es exclusivo y `tipo` es el
-// descriptor de la clase atrapada (vacio sería un catch-all, que el subconjunto del fuente no escribe).
+// descriptor de la clase atrapada; vacio es el `any` que escribe javac para el `finally` (parrafo 75).
 type entradaTry struct {
 	inicio, fin, handler int
 	tipo                 string
 }
 
-// intenta: `try { … } catch (T e) { … }`. La forma de javac, medida en el parrafo 71 sobre `T`:
-// cuerpo protegido, un `goto` al final (solo si el cuerpo puede caer), el handler que empieza con el
-// `astore` de la excepción —que es el único valor que el verificador deja en la pila ahí—, el cuerpo
-// del catch, y la fila (inicio, fin, handler, tipo) en la tabla del `Code`.
-func (e *emisor) intenta(v jtry) error {
-	desc, err := e.ctx.descriptorDe(v.tipo)
-	if err != nil {
-		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+// escapaDelTry: un `return` del cuerpo, o un `break`/`continue` que no se ata a un bucle ni a un
+// `switch` escritos dentro del cuerpo, sale del `try` y necesita el valor pendiente que javac guarda
+// en un local antes de la copia del `finally` (medido en el parrafo 75 sobre `Fin2.retorno` y
+// `Fin2.ruptura`). Ese guardado aun no esta escrito, asi que estos casos se rechazan por nombre.
+func escapaDelTry(s jstmt, enBucle bool) bool {
+	switch v := s.(type) {
+	case jretorno:
+		return true
+	case jrompe, jcontinua:
+		return !enBucle
+	case jbloque:
+		for _, x := range v.sentencias {
+			if escapaDelTry(x, enBucle) {
+				return true
+			}
+		}
+	case jif:
+		if escapaDelTry(v.entonces, enBucle) || (v.siNo != nil && escapaDelTry(v.siNo, enBucle)) {
+			return true
+		}
+	case jmientras:
+		return escapaDelTry(v.cuerpo, true)
+	case jhacer:
+		return escapaDelTry(v.cuerpo, true)
+	case jpara:
+		return escapaDelTry(v.cuerpo, true)
+	case jswitch:
+		for _, c := range v.casos {
+			if escapaDelTry(jbloque{sentencias: c.cuerpo}, true) {
+				return true
+			}
+		}
+		if v.defecto != nil && escapaDelTry(jbloque{sentencias: v.defecto}, true) {
+			return true
+		}
+	case jtry:
+		if escapaDelTry(v.cuerpo, enBucle) {
+			return true
+		}
+		for _, c := range v.atrapas {
+			if escapaDelTry(c.atrapa, enBucle) {
+				return true
+			}
+		}
+		if v.finalmente != nil && escapaDelTry(v.finalmente, enBucle) {
+			return true
+		}
 	}
+	return false
+}
+
+// bloqueVacio: un `finally { }` sin sentencias. javac lo suelta entero —ni copia, ni goto, ni fila en
+// la tabla—, medido en `Fin3.vacioFinalmente`: el `Code` sale con el cuerpo del try y nada mas.
+func bloqueVacio(s jstmt) bool {
+	b, ok := s.(jbloque)
+	return ok && len(b.sentencias) == 0
+}
+
+// intenta: `try { … } catch (T e) { … } [catch …] [finally { … }]`. La forma de javac, medida en el
+// parrafo 71 sobre `T` y en el 75 sobre `Fin`, `Fin2` y `Fin3`: el cuerpo protegido y despues un bloque
+// por camino —cada `catch` con su `astore` de la excepción y su cuerpo—; con `finally` la copia del
+// bloque va al pie de cada camino que pueda caer (el normal también) y el ultimo manejador es el `any`,
+// que guarda la excepción en un local que nadie mas usa, copia el bloque, y la re-lanza. Las filas de
+// la tabla salen en ese orden: los tipos del try, el `any` del try, y el `any` de cada cuerpo del catch.
+func (e *emisor) intenta(v jtry) error {
+	descs := make([]string, len(v.atrapas))
+	for i, c := range v.atrapas {
+		desc, err := e.ctx.descriptorDe(c.tipo)
+		if err != nil {
+			return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+		}
+		descs[i] = desc
+	}
+	finalmente := v.finalmente
+	if bloqueVacio(finalmente) {
+		finalmente = nil
+	}
+	if finalmente != nil {
+		if escapaDelTry(v.cuerpo, false) {
+			return fmt.Errorf("linea %d: un `return`, `break` o `continue` que sale de un `try` con `finally` guarda el valor pendiente en un local y eso no esta escrito", v.donde.linea)
+		}
+		for _, c := range v.atrapas {
+			if escapaDelTry(c.atrapa, false) {
+				return fmt.Errorf("linea %d: un `return`, `break` o `continue` que sale de un `catch` con `finally` guarda el valor pendiente en un local y eso no esta escrito", v.donde.linea)
+			}
+		}
+	}
+	base := e.siguiente
+	alto := base
+	salida := e.nuevaEtiqueta()
+
 	inicio := len(e.codigo)
 	if err := e.stm(v.cuerpo); err != nil {
 		return err
 	}
-	// javac saca del rango protegido el `return`/`goto` final (no pueden lanzar) pero deja dentro
-	// el `athrow`: medido en el parrafo 71 (`lee`: 0..3, con el `ireturn` en 3; `T.f`: 0..10, con el
-	// `athrow` en 9)
-	fin := e.finProtegido(inicio, len(e.codigo))
-	salida := e.nuevaEtiqueta()
-	if !terminaEnSalida(v.cuerpo) {
+	// un `try` anidado ya usó huecos por su cuenta: el temporal del `finally` de arriba va en el
+	// mas alto que haya visto el metodo (medido en `Fini.anidado`, donde el interior usa el 2 y el
+	// `any` exterior escribe `astore_3`)
+	if e.siguiente > alto {
+		alto = e.siguiente
+	}
+	fin := len(e.codigo)
+	if finalmente == nil {
+		// javac saca del rango protegido el `return`/`goto` final (no pueden lanzar) pero deja dentro
+		// el `athrow`: medido en el parrafo 71 (`lee`: 0..3, con el `ireturn` en 3; `T.f`: 0..10, con el
+		// `athrow` en 9)
+		fin = e.finProtegido(inicio, fin)
+	} else if e.ultimaEsLanza(inicio, fin) {
+		// con `finally`, un `throw` como ultima sentencia del cuerpo deja en javac un rango que se
+		// pasa a la primera instruccion de su propio manejador (medido: `Fin.lanza` es 0..9 con el
+		// `astore` en 8, y `Fin3.soloLanzaConCatch` mezcla el cuerpo con el `catch` en 0..11). Esa
+		// forma no la reproduce este emisor, asi que se rechaza por nombre
+		return fmt.Errorf("linea %d: un `throw` como ultima sentencia de un `try` con `finally` no esta medido", v.donde.linea)
+	}
+	// las filas de la tabla salen en el orden de javac: los tipos del cuerpo, el `any` del cuerpo y
+	// despues el `any` de cada cuerpo del catch (medido en `Fin.multi` y `Fin3.lanzaTyped`)
+	type rango struct{ inicio, fin int }
+	var cuerpos []rango
+	saltaALaSalida := func() {
+		e.marcaLinea(v.lineaCierre)
 		e.saltoEmite(opGOTO, salida, 0)
 	}
-	handler := len(e.codigo)
-	e.marcaLinea(v.lineaAtrapa)
-	indice := e.reserva(v.excep, desc)
-	e.sube() // la excepción que el verificador deja en la pila al entrar al handler
-	e.guardaDe(indice, desc)
-	if err := e.stm(v.atrapa); err != nil {
-		return err
+	cierraCamino := func(cuerpo jstmt) error {
+		if terminaEnSalida(cuerpo) {
+			return nil
+		}
+		if finalmente != nil {
+			if err := e.stm(finalmente); err != nil {
+				return err
+			}
+			if terminaEnSalida(finalmente) {
+				return nil
+			}
+		}
+		saltaALaSalida()
+		return nil
+	}
+
+	// camino normal: la copia del `finally` y el `goto` a la salida, solo si el cuerpo puede caer y
+	// si queda algo despues (un `try` sin `catch` ni `finally` despues de recortar el bloque vacio
+	// no deja nada que saltar, y javac no escribe el `goto`: `Fin3.vacioFinalmente`)
+	if len(v.atrapas) > 0 || finalmente != nil {
+		if err := cierraCamino(v.cuerpo); err != nil {
+			return err
+		}
+	}
+	// los `catch`, cada uno desde el hueco de local que deja el `try`: javac reutiliza el mismo
+	// numero para la excepcion de cada brazo (medido en `Fin.multi`: los dos `astore_1`)
+	manejadores := make([]int, len(v.atrapas))
+	for i, c := range v.atrapas {
+		e.siguiente = base
+		h := len(e.codigo)
+		manejadores[i] = h
+		e.marcaLinea(c.lineaAtrapa)
+		indice := e.reserva(c.excep, descs[i])
+		e.sube() // la excepción que el verificador deja en la pila al entrar al handler
+		e.guardaDe(indice, descs[i])
+		if err := e.stm(c.atrapa); err != nil {
+			return err
+		}
+		if e.siguiente > alto {
+			alto = e.siguiente
+		}
+		if finalmente == nil {
+			// el ultimo `catch` cae a la salida del constructo: no lleva `goto`, medido en
+			// `Fini.dosCatch` (javac para en `iload_1; ireturn` despues del segundo brazo)
+			if i == len(v.atrapas)-1 {
+				break
+			}
+			if err := cierraCamino(c.atrapa); err != nil {
+				return err
+			}
+			continue
+		}
+		if e.ultimaEsLanza(h, len(e.codigo)) {
+			return fmt.Errorf("linea %d: un `throw` como ultima sentencia de un `catch` con `finally` no esta medido", v.donde.linea)
+		}
+		if !terminaEnSalida(c.atrapa) {
+			cuerpos = append(cuerpos, rango{inicio: h, fin: len(e.codigo)})
+		}
+		if err := cierraCamino(c.atrapa); err != nil {
+			return err
+		}
+	}
+	filas := make([]entradaTry, 0, len(v.atrapas)+1+len(cuerpos))
+	for i := range v.atrapas {
+		filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: manejadores[i], tipo: descs[i]})
+	}
+	if finalmente != nil {
+		// el manejador `any`: guarda la excepcion en el hueco mas alto que vio el metodo, copia el
+		// bloque con su renglon, y la re-lanza con el del cierre (medido en `Fin.multi`: `astore_2`
+		// en 42 con la linea del `a = 7;` y `aload_2` en 48 con la de la llave)
+		e.siguiente = alto
+		hAny := len(e.codigo)
+		e.marcaLinea(v.lineaAviso)
+		indice := e.reserva("", "Ljava/lang/Throwable;")
+		e.sube()
+		e.guardaDe(indice, "Ljava/lang/Throwable;")
+		if err := e.stm(finalmente); err != nil {
+			return err
+		}
+		if !terminaEnSalida(finalmente) {
+			e.marcaLinea(v.lineaCierre)
+			e.cargaDe(indice, "Ljava/lang/Throwable;")
+			e.emite(0xbf)
+			e.baja(1)
+		}
+		filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: hAny, tipo: ""})
+		for _, r := range cuerpos {
+			filas = append(filas, entradaTry{inicio: r.inicio, fin: r.fin, handler: hAny, tipo: ""})
+		}
 	}
 	e.cierra(salida)
-	e.excepciones = append(e.excepciones, entradaTry{inicio: inicio, fin: fin, handler: handler, tipo: desc})
+	e.excepciones = append(e.excepciones, filas...)
 	return nil
+}
+
+// ultimaEsLanza: si la ultima instruccion escrita del tramo [inicio,fin) es un `athrow`. Con `finally`
+// javac deja ese caso en una forma que este emisor no reproduce (parrafo 75).
+func (e *emisor) ultimaEsLanza(inicio, fin int) bool {
+	lista, err := walkJvmCode(e.codigo[:fin])
+	if err != nil {
+		return false
+	}
+	for _, in := range lista {
+		if in.pc >= inicio && in.name == "athrow" && in.pc+1 >= fin {
+			return true
+		}
+	}
+	return false
 }
 
 // finProtegido: el fin del rango de un try, recortando un `return`/`goto` final. Es lo que hace
@@ -3951,9 +4154,13 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		}
 	}
 	if e.vuelta == "V" {
-		// el return implicito, con la linea de la llave que cierra (parrafo 40: line 16: 11)
-		e.marcaLinea(m.lineaFin)
-		e.emite(retorno('V'))
+		// el return implicito, con la linea de la llave que cierra (parrafo 40: line 16: 11). javac lo
+		// suelta cuando el ultimo camino ya sale por su cuenta: medido en `Fin4.vacioConThrowFinal`,
+		// cuyo `Code` termina en el `athrow` del `finally` y no lleva return (parrafo 75)
+		if !terminaEnRetorno(m.cuerpo) {
+			e.marcaLinea(m.lineaFin)
+			e.emite(retorno('V'))
+		}
 	} else if !terminaEnRetorno(m.cuerpo) {
 		return nil, fmt.Errorf("linea %d: un metodo que devuelve %s y no termina en `return` no esta medido", m.linea, e.vuelta)
 	}
@@ -4147,8 +4354,22 @@ func terminaEnSalida(s jstmt) bool {
 	case jlanza:
 		return true
 	case jtry:
-		// un `try/catch` no cae si el cuerpo y el catch salen los dos
-		return terminaEnSalida(v.cuerpo) && terminaEnSalida(v.atrapa)
+		// con `finally`, el ultimo camino que se ejecuta es la copia del bloque: si ella sale (un
+		// `throw`), el constructo sale y javac no escribe el `return` implicito —medido en
+		// `Fin4.vacioConThrowFinal`—. Si no, el constructo cae solo si caen el cuerpo y todos los
+		// `catch`
+		if v.finalmente != nil && terminaEnSalida(v.finalmente) {
+			return true
+		}
+		if !terminaEnSalida(v.cuerpo) {
+			return false
+		}
+		for _, c := range v.atrapas {
+			if !terminaEnSalida(c.atrapa) {
+				return false
+			}
+		}
+		return v.finalmente == nil
 	}
 	return false
 }

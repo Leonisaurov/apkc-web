@@ -467,6 +467,23 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `parameters_count` del `debug_info_item` va por **parámetros declarados** y no por palabras, y una clase
   llamada `L` chocaba con el `L` de un descriptor. `double` no lo arma ni el léxico (`1.0`); siguen sin medir
   `lcmp`, `dup2`/`pop2`, los arreglos de largos y el `ConstantValue` de un `static final long`.
+- **El `finally` y los dos `catch`, con la copia en cada camino** (§75): javac no escribe subrutina —copia el
+  bloque al pie de cada camino que puede caer (el normal y el de cada `catch`) y añade un último manejador
+  `any` que guarda la excepción en un local, copia el bloque y hace `aload`+`athrow`—. Las filas de la tabla
+  salen en ese orden (tipos del cuerpo, `any` del cuerpo, `any` de cada cuerpo del `catch`), y dos rangos que
+  van al mismo manejador con el mismo tipo **se mezclan** (`Fin3.soloLanzaConCatch` protege `0..11`). Cada
+  `catch` declara su excepción **en el mismo hueco** y el temporal del `any` va en el **más alto que vio el
+  método** (`astore_1` los dos brazos de `multi`, `astore_3` el `any` de un `try` anidado). Las filas de
+  línea: la copia lleva la línea de la primera sentencia del `finally` y el `goto`/re-lanza que la sigue, la de
+  su llave; la entrada del `any` se anota con la línea de la sentencia, no con la del `catch`. Sin `finally`,
+  el `goto` del `try/catch` lleva la línea de la llave que cierra el último `catch` (regla que faltaba del
+  §71). Un `finally` que lanza no deja `goto`, y en un `void` javac tampoco escribe el `return` implícito; un
+  `finally` vacío se suelta entero. En el dex no hizo falta escribir nada: `armaTries` ya agrupaba por rango
+  y ya ponía el `catch_all` con el tamaño negativo. El dex de la sonda (siete métodos) sale **byte a byte** el
+  de javac (1452) y el banco lleva `finalmente(5)` y `finalmente(0)`: los cinco caminos y la JVM con nuestra
+  clase dan `…|306|22|7` con `rc 102`. Frontera por nombre: el valor pendiente de un `return`/`break`/`continue`
+  que sale de un `try` con `finally` (medido en `Fin2`), el `throw` como última sentencia del cuerpo con
+  `finally` (el rango de javac se pasa a su propio manejador) y `catch (A | B e)`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -492,7 +509,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **246 PASS + 2 SKIP** nativa y **196 PASS + 52 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **248 PASS + 2 SKIP** nativa y **196 PASS + 54 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

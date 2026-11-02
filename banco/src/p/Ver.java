@@ -133,4 +133,21 @@ public class Ver {
         saldo = saldo + x;
         return saldo;
     }
+
+    // El `finally` con dos `catch` en el mismo `try` (§75): javac copia el bloque al pie de cada
+    // camino y el ultimo manejador es el `any`, que guarda la excepcion y la re-lanza. Devuelve 22
+    // por el camino normal y 7 por el que atrapa la division por cero.
+    public static int finalmente(int n) {
+        int r = 0;
+        try {
+            r = 100 / n;
+        } catch (ArithmeticException e) {
+            r = 5;
+        } catch (RuntimeException e) {
+            r = 6;
+        } finally {
+            r = r + 2;
+        }
+        return r;
+    }
 }

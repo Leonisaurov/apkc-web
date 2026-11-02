@@ -24,6 +24,8 @@ public class Arranque {
         System.out.println(Ver.inicial());
         System.out.println(Ver.cuentaLarga(2L, 3L));
         System.out.println(Ver.acumula());
+        System.out.println(Ver.finalmente(5));
+        System.out.println(Ver.finalmente(0));
         int t = Ver.total;
         System.exit(t);
     }

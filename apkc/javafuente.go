@@ -213,17 +213,27 @@ type jpara struct {
 
 func (jpara) jstmtPuede() {}
 
-// jtry: `try { … } catch (T e) { … }`, con un solo catch y sin `finally` (los dos se rechazan por
-// nombre). La forma de javac, medida en el parrafo 71: el cuerpo protegido, un `goto` al final, el
-// handler que empieza con el `astore` de la excepción y el cuerpo del catch.
-type jtry struct {
-	cuerpo jstmt
+// capturaTry: un `catch (T e) { … }` de un `try`.
+type capturaTry struct {
 	tipo   string
 	excep  string
 	atrapa jstmt
 	// lineaAtrapa es el renglon del `catch`: javac lo anota en el pc del handler (medido en el
 	// parrafo 71) y no anota el del `try`
 	lineaAtrapa int
+}
+
+// jtry: `try { … }` con cero o mas `catch` y un `finally` opcional. La forma de javac, medida en los
+// parrafos 71 y 75: el cuerpo protegido y despues un bloque por camino —cada `catch` con su `astore`
+// y su cuerpo—; con `finally` la copia del bloque va al pie de cada camino, el normal tambien, y el
+// ultimo manejador es el `any`, que guarda la excepcion, copia el bloque y la re-lanza.
+type jtry struct {
+	cuerpo  jstmt
+	atrapas []capturaTry
+	// finalmente es el bloque que se copia en cada camino, o nil si el fuente no lo escribe
+	finalmente  jstmt
+	lineaAviso  int
+	lineaCierre int
 	donde       pos
 }
 
@@ -1255,36 +1265,58 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		if !a.es('k', "catch") {
-			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch` (o con `finally`) no esta medido", linea)
+		var atrapas []capturaTry
+		for a.es('k', "catch") {
+			lineaAtrapa := a.actual().donde.linea
+			a.avanzar()
+			if err := a.comerSimbolo("("); err != nil {
+				return nil, false, err
+			}
+			tipo, err := a.tipo()
+			if err != nil {
+				return nil, false, err
+			}
+			if a.es('p', "|") {
+				return nil, false, fmt.Errorf("linea %d: un `catch` con dos tipos separados por `|` no esta medido", linea)
+			}
+			if a.actual().kind != 'i' {
+				return nil, false, fmt.Errorf("linea %d: el catch no nombra su excepcion", linea)
+			}
+			excep := a.avanzar().valor
+			if err := a.comerSimbolo(")"); err != nil {
+				return nil, false, err
+			}
+			atrapa, _, err := a.sentencia()
+			if err != nil {
+				return nil, false, err
+			}
+			atrapas = append(atrapas, capturaTry{tipo: tipo, excep: excep, atrapa: atrapa, lineaAtrapa: lineaAtrapa})
 		}
-		lineaAtrapa := a.actual().donde.linea
-		a.avanzar()
-		if err := a.comerSimbolo("("); err != nil {
-			return nil, false, err
-		}
-		tipo, err := a.tipo()
-		if err != nil {
-			return nil, false, err
-		}
-		if a.actual().kind != 'i' {
-			return nil, false, fmt.Errorf("linea %d: el catch no nombra su excepcion", linea)
-		}
-		excep := a.avanzar().valor
-		if err := a.comerSimbolo(")"); err != nil {
-			return nil, false, err
-		}
-		atrapa, _, err := a.sentencia()
-		if err != nil {
-			return nil, false, err
-		}
-		if a.es('k', "catch") {
-			return nil, false, fmt.Errorf("linea %d: mas de un `catch` en el mismo `try` no esta medido", linea)
-		}
+		var finalmente jstmt
+		lineaAviso, lineaCierre := 0, 0
 		if a.es('k', "finally") {
-			return nil, false, fmt.Errorf("linea %d: `finally` no esta medido", linea)
+			a.avanzar()
+			if !a.es('p', "{") {
+				return nil, false, fmt.Errorf("linea %d: el `finally` no abre bloque", linea)
+			}
+			// el renglon del primer renglon del bloque es el que javac anota en la entrada del
+			// manejador excepcional, y el de la llave que lo cierra el que anota en la re-lanza:
+			// medido en el parrafo 75 sobre `Fin.simple` (9 y 10) y `Fin.lanza` (43 y 44)
+			lineaAviso = a.toks[a.i+1].donde.linea
+			b, err := a.bloque()
+			if err != nil {
+				return nil, false, err
+			}
+			finalmente = jbloque{sentencias: b, donde: pos{linea}}
 		}
-		return jtry{cuerpo: cuerpo, tipo: tipo, excep: excep, atrapa: atrapa, lineaAtrapa: lineaAtrapa, donde: pos{linea}}, true, nil
+		// la llave que cerro el ultimo bloque del constructo es la linea con la que javac anota el
+		// `goto` de salida: medido en `Fini.dosCatch` (la del `catch`) y en `Fini.multi` (la del
+		// `finally`)
+		lineaCierre = a.toks[a.i-1].donde.linea
+		if len(atrapas) == 0 && finalmente == nil {
+			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch` ni `finally` no es Java valido", linea)
+		}
+		return jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente, lineaAviso: lineaAviso, lineaCierre: lineaCierre, donde: pos{linea}}, true, nil
 	case a.es('k', "throw"):
 		a.avanzar()
 		e, err := a.expresion()

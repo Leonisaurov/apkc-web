@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/base64"
 	"testing"
 )
@@ -101,24 +100,6 @@ func TestElTrySeDexaComoJavac(t *testing.T) {
 				t.Errorf("%s: la palabra %d es %#04x y la de javac %#04x", metodo, i, a.insns[i], b.insns[i])
 				break
 			}
-		}
-	}
-}
-
-// TestElTryDelFuenteRechazaLoNoMedido: `finally` y dos `catch` salen por su nombre.
-func TestElTryDelFuenteRechazaLoNoMedido(t *testing.T) {
-	casos := []struct{ nombre, fuente, pista string }{
-		{"finally", "package p;\npublic class A { public static void f() { try { f(); } catch (RuntimeException e) { f(); } finally { f(); } } }\n", "finally"},
-		{"dos catch", "package p;\npublic class A { public static void f() { try { f(); } catch (RuntimeException e) { f(); } catch (Error e) { f(); } } }\n", "catch"},
-	}
-	for _, c := range casos {
-		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/A.java", contenido: c.fuente}}, jarDelSDK(t))
-		if err == nil {
-			t.Errorf("%s: se acepto lo que no esta medido", c.nombre)
-			continue
-		}
-		if !bytes.Contains([]byte(err.Error()), []byte(c.pista)) {
-			t.Errorf("%s: el mensaje no nombra %q: %v", c.nombre, c.pista, err)
 		}
 	}
 }

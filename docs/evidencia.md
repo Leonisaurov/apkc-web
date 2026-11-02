@@ -4142,3 +4142,77 @@ Suite: **246 PASS + 2 SKIP** nativa y **196 PASS + 52 SKIP** en el hospedador. E
 `lastore` sin medir), `lcmp` y las ramas sobre largos, `dup2`/`pop2` y el `access$` de un campo ancho
 (pide `dup2_x1` y `pop2`). Un `static final long` con `ConstantValue` tampoco: `classField` guarda el
 `Long` pero `buscarCampo` sigue doblando solo enteros.
+
+## 75. El `finally` y los dos `catch` en el mismo `try`: la copia en cada camino y el `any` que re-lanza
+
+**Cuatro sondas** (`Fin`: `finally` solo, `return` en el `try` y varios `catch` con `finally`; `Fin2`: el valor
+pendiente, un `finally` que lanza y un `break` dentro del `try`; `Fin3`: un `finally` vacío, un `try` vacío y
+el `throw` como última sentencia; `Fin4`: un `void` que termina en el `athrow` del `finally` y un `try`
+anidado dentro de un `try` con `finally`), leídas con `javac --release 8 -g:lines,source` y `javap -c -p -l` y
+`javap -v`.
+
+**No hay subrutina**: el bloque se **copia** al pie de cada camino que puede caer —el normal y el de cada
+`catch`— y el último manejador es el `any`, que guarda la excepción en un local, copia el bloque y hace
+`aload` + `athrow`. En `Fin.simple` (`try { a = 1; } finally { a = 2; }`): `0 iconst_1; 1 putstatic; 4 iconst_2;
+5 putstatic; 8 goto 18; 11 astore_0; 12 iconst_2; 13 putstatic; 16 aload_0; 17 athrow; 18 getstatic` con
+`0..4 → 11 any`. En `Fin.multi` la fila del `any` del cuerpo va **después** de los tipos y **antes** de las de
+los cuerpos de los `catch`: `0..7 → 15 AE`, `0..7 → 28 RE`, `0..7 → 42 any`, `15..20 → 42 any`,
+`28..34 → 42 any`.
+
+**Los huecos de local**: cada `catch` declara su excepción **en el mismo hueco** (los dos brazos de `multi`
+escriben `astore_1`), y el temporal del `any` va en el **más alto que haya visto el método** (`astore_2` en
+`multi`; `astore_3` en `Fini.anidado`, donde el `try` interior ya usó el 2). Con `return` pendiente el valor se
+guarda antes y la excepción sube un hueco más: `Fin2.retornoConCatch` es valor `1`, excepción del `catch` `1`,
+valor del `catch` `2`, `any` `3`.
+
+**Las filas de la `LineNumberTable`**: la copia del camino normal lleva la línea de la **primera sentencia del
+`finally`** y el `goto` (o la re-lanza) que la sigue, la de la **llave que lo cierra** —`multi`: `33 en 7` y
+`34 en 12`; `simple`: `9 en 4` y `10 en 8`—; la entrada del manejador `any` se anota con la **misma línea de la
+sentencia** del `finally`, no con la del `catch` ni la del `try` (`multi`: `33 en 42`, `aload` en `34 en 48`;
+`Fin.lanza`: `43 en 8` y `44 en 14`). Sin `finally`, el `goto` del `try/catch` lleva la línea de la **llave que
+cierra el último `catch`** —`Fini.dosCatch`: `44 en 7` y `44 en 13`—, regla que el párrafo 71 no había escrito.
+
+**Las salidas que cambian el remate**: un `finally` que lanza (`Fin2.lanzaEnFinally`) no deja `goto` después de
+la copia, y en un método `void` javac tampoco escribe el `return` implícito —`Fin4.vacioConThrowFinal` termina
+en el `athrow` del manejador, en el pc 20—. Un `finally` **vacío** se suelta entero (`Fin3.vacioFinalmente`:
+cuerpo del `try` y nada más, sin copia, sin `goto` y sin fila en la tabla) y un `try` **vacío** con `catch`
+tampoco escribe la tabla (`Fin3.sinCuerpo` es `iload_0; ireturn`).
+
+**Dos rangos que van al mismo manejador con el mismo tipo se mezclan**: `Fin3.soloLanzaConCatch` protege
+`0..11 → 19 any` (cuerpo y `catch` de una) y `Fini.anidado` escribe `2..13 → 20 any` aunque en el medio haya un
+`goto` (pc 7) y el manejador interior (10..13).
+
+**La trampa que queda fuera**: cuando la **última sentencia del cuerpo es un `throw`**, javac escribe un rango
+que se pasa a la primera instrucción de su propio manejador —`Fin.lanza`: `0..9 → 8 any` con el `astore` en 8—
+y mezcla cuerpo con `catch`. Este emisor lo rechaza por nombre, y también rechaza el `return`/`break`/`continue`
+que **sale** de un `try` con `finally` (el valor pendiente: `Fin2.retorno` es `istore_0` antes de la copia e
+`iload_0` después; `Fin2.ruptura` guarda el destino del `break` en otro local) y un `catch` con dos tipos
+separados por `|`.
+
+**Los marcos del verificador**: cada entrada de manejador lleva **el tipo declarado en el `catch`** sobre la
+pila y el `any` lleva `Throwable` —`javap -v` de `Fin.multi`: `same_locals_1_stack_item` con
+`ArithmeticException`, `RuntimeException` y `Throwable`, y `same` en la salida (pc 50)—. `apkc/jvmframes.go` ya
+unía esos estados desde el párrafo 71; no hizo falta cambiarlo.
+
+**En el dex** no hizo falta escribir nada nuevo: `armaTries` (párrafo 71) ya agrupa por rango las entradas del
+mismo `try`, ya escribe el `catch_all` con el tamaño en negativo y ya acepta varios `try_item` por método. Lo
+que aporta el fuente son los cuerpos de los `catch` protegidos y los huecos de local del temporal, que suben
+`registers`. Nuestro dex de `Fini` (siete métodos, dos con tres manejadores) es **byte a byte** el de javac:
+**1452 = 1452 bytes, `cmp` mudo**.
+
+**Ejecutado**: el banco lleva `Ver.finalmente(5)` (camino normal, 22) y `Ver.finalmente(0)` (atrapa la división
+por cero, 7); los cinco caminos y la JVM con **nuestra clase emitida** bajo `-Xverify:all` dan
+`total 7|total 9|total 102|10|3|2|4|7|-1|10|6|8|306|22|7` con `rc 102`, y `dexdump` del aparato verifica los
+cuatro dex con `rc 0`.
+
+**Pruebas**: `apkc/javaemisor_finally_test.go` — compara método a método contra `javac --release 8
+-g:lines,source` las instrucciones, la `exception_table`, la `LineNumberTable`, `max_stack` y los huecos de
+local; exige el dex idéntico byte a byte; y fija los cuatro rechazos (valor pendiente del `return`, valor
+pendiente del `break`, `throw` último con `finally`, `catch` con `|`). Se fue
+`TestElTryDelFuenteRechazaLoNoMedido`, que reclamaba como no medidos los dos casos que este párrafo midió.
+
+Suite: **248 PASS + 2 SKIP** nativa y **196 PASS + 54 SKIP** en el hospedador.
+
+**Frontera**: el valor pendiente que javac guarda cuando un `return`, un `break` o un `continue` **sale** de un
+`try` con `finally` (medido en `Fin2`, no escrito); el `throw` como última sentencia del cuerpo de un `try` con
+`finally` (el rango se pasa al propio manejador); `catch (A | B e)`; y `try`-with-resources.
