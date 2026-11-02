@@ -534,11 +534,18 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[2]string]uint32) (
 				// tipo — el `4` de siempre con los cuatro bytes de siempre, que es la cabecera que
 				// `d8` usa para las `R$id` — y el `<clinit>` lo sobrescribe al correr, que es lo que
 				// habria hecho de todas formas.
-				if p.f.Desc == "I" {
+				switch p.f.Desc[0] {
+				case 'I', 'B', 'C', 'S', 'Z':
 					valores = append(valores, byte(valueInt|3<<5), 0, 0, 0, 0)
-					continue
+				case 'J':
+					// un `static long total = 5L` sin `ConstantValue` es el mismo caso del parrafo 55
+					// con un entero: el elemento tiene que ser del tipo del campo, o ART corta con
+					// `unexpected static field initial value type: 'L' vs 'J'` (medido con la sonda `L`,
+					// parrafo 74). Ocho bytes de cero con el ancho de siete.
+					valores = append(valores, byte(valueLong|7<<5), 0, 0, 0, 0, 0, 0, 0, 0)
+				default:
+					valores = append(valores, valueNull)
 				}
-				valores = append(valores, valueNull)
 				continue
 			}
 			valores = append(valores, vf)

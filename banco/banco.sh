@@ -97,10 +97,18 @@ veredicto() { # alias de dex, descripcion
 		printf '%s\n' "$sal" | sed 's/^/      /'
 		exit 1
 	fi
-	# el rc se lee en la MISMA llamada que corre dexdump: dos llamadas seguidas dejaban al cliente
-	# leyendo el fichero antes de que el aparato lo hubiera escrito, y el banco decia `rc=` vacio
-	"$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$?" > "$TRABAJO/dv.txt" 2>/dev/null
-	dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
+	# el rc se lee en la MISMA llamada que corre dexdump, y se reintenta: con dos llamadas seguidas el
+	# cliente leía el fichero antes de que el aparato lo escribiera, y a veces rish devuelve la salida
+	# vacía aunque el comando haya corrido (el veredicto salia con el `rc` en blanco)
+	dv=""
+	i=0
+	while [ $i -lt 4 ]; do
+		"$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$?" > "$TRABAJO/dv.txt" 2>/dev/null
+		dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
+		case $dv in *[0-9]*) break ;; esac
+		i=$((i + 1))
+		sleep 1
+	done
 	[ "$dv" = "0" ] && echo "    dexdump verificando: rc 0" || { echo "    dexdump rc=$dv"; exit 1; }
 }
 sube bnuestro "$TRABAJO/nuestro.dex"

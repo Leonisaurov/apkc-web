@@ -28,6 +28,21 @@ const (
 	// `move-object v0, v3` sale `0730` (12x, destino en el nibble bajo y fuente en el alto)
 	opMueve       = 0x01 // 12x move vA, vB
 	opMueveObjeto = 0x07 // 12x move-object vA, vB
+
+	// el `long` en el dex, medido con `dexdump -d` sobre `d8 --release` en las sondas `L`, `V` y `M`
+	// (parrafo 74): dos registros por valor, el de en medio de cada trío de acceso a campo
+	opMueveWide      = 0x04 // 12x move-wide vA, vB
+	opMueveResultWide = 0x0b // 11x move-result-wide vAA, `0b00`
+	opRetornaWide    = 0x10 // 11x return-wide vAA, `1000`
+	opConstWide16    = 0x16 // 21c const-wide/16 vAA, #+BBBB (`1600 0100`)
+	opConstWide32    = 0x17 // const-wide/32 vAA, #+BBBBBBBB (`1700 7011 0100`)
+	opConstWide      = 0x18 // const-wide vAA, #+BBBBBBBBBBBBBBBB, cuatro unidades (`1800 cb04 fb71 1f01`)
+	opIGetWide       = 0x53 // 22c iget-wide vAA, vBB, field@CCCC (`5320 0000`)
+	opIPutWide       = 0x5a // 22c iput-wide vAA, vBB, field@CCCC (`5a01 0000`)
+	opSGetWide       = 0x61 // 21c sget-wide vAA, field@BBBB (`6102 0000`)
+	opSPutWide       = 0x68 // 21c sput-wide vAA, field@BBBB (`6802 0000`)
+	opIntALargo      = 0x81 // 12x int-to-long vA, vB (`8120`)
+	opLargoAInt    = 0x84 // 12x long-to-int v1, v0 (`8401`)
 	opConst4         = 0x12 // 11n const/4 vAA, #+B
 	opConst16        = 0x13 // 21c const/16 vAA, #+BBBB
 	opConstAlto16    = 0x15 // 21c const/high16 vAA, #+BBBB0000
@@ -176,6 +191,155 @@ func (p *traduce) toma(in jvmInstr) int {
 	return r
 }
 
+// tomaPar: dos registros **consecutivos** para un valor ancho. Las formas `*-wide` del dex nombran la
+// mitad baja y la alta se sobreentiende, así que un par suelto no vale: medido en `d8` sobre `L` y `V`
+// (parrafo 74), donde `const-wide/16 v0` va seguido de `add-long/2addr v0, v4` y del `return-wide v0`.
+func (p *traduce) tomaPar(in jvmInstr) int {
+	if n := len(p.libres); n >= 2 && p.libres[n-2] == p.libres[n-1]+1 {
+		r := p.libres[n-1]
+		p.libres = p.libres[:n-2]
+		return r
+	}
+	r := p.siguiente
+	p.siguiente += 2
+	if p.siguiente > p.pico {
+		p.pico = p.siguiente
+	}
+	if r+1 >= p.base {
+		p.falla(in, "it needs more wide temporaries than the max stack javap measured")
+	}
+	return r
+}
+
+// sueltaPar: devuelve las dos mitades, en el orden que `tomaPar` vuelve a reconocer.
+func (p *traduce) sueltaPar(r int) {
+	p.suelta(r + 1)
+	p.suelta(r)
+}
+
+// cargaLargo: `lconst_0`, `lconst_1` y `ldc2_w` bajan a las tres formas de constante ancha que escribe
+// d8, según el tamaño del valor: `const-wide/16` (`1600 0200`), `const-wide/32` (`1700 7011 0100`) o
+// `const-wide` con los ocho bytes en little-endian (`1800 cb04 fb71 1f01` para 1234567890123L).
+func (p *traduce) cargaLargo(in jvmInstr, v int64) {
+	r := p.tomaPar(in)
+	if p.err != nil {
+		return
+	}
+	if !p.octeto(r, in) {
+		return
+	}
+	switch {
+	case v == int64(int16(v)):
+		p.palabra(uint16(opConstWide16) | uint16(r&0xff)<<8)
+		p.palabra(uint16(int16(v)))
+	case v == int64(int32(v)):
+		p.palabra(uint16(opConstWide32) | uint16(r&0xff)<<8)
+		p.palabra(uint16(uint32(v)))
+		p.palabra(uint16(uint32(v) >> 16))
+	default:
+		p.palabra(uint16(opConstWide) | uint16(r&0xff)<<8)
+		for i := 0; i < 4; i++ {
+			p.palabra(uint16(uint64(v) >> uint(16*i)))
+		}
+	}
+	p.push(r)
+}
+
+// cuentaAncha: las cinco cuentas de `long`, con el mismo reparto que `cuentaEntera` (parrafo 66):
+// `/2addr` sobre el operando muerto, conmutando si hace falta, y la forma de tres registros si los dos
+// siguen vivos. Medido en `d8`: `add-long/2addr v0, v4` (`bb40`), `mul-long v4, v4, v0` (`9d04 0400`)
+// y `div-long/2addr v0, v2` (`be20`) (parrafo 74).
+func (p *traduce) cuentaAncha(in jvmInstr) {
+	dos := map[string]byte{"ladd": 0xbb, "lsub": 0xbc, "lmul": 0xbd, "ldiv": 0xbe, "lrem": 0xbf}
+	tres := map[string]byte{"ladd": 0x9b, "lsub": 0x9c, "lmul": 0x9d, "ldiv": 0x9e, "lrem": 0x9f}
+	op, ok := dos[in.name]
+	if !ok {
+		p.falla(in, "a wide arithmetic opcode this translator does not know")
+		return
+	}
+	conmuta := in.name == "ladd" || in.name == "lmul"
+	b := p.pop(in)
+	a := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	vivo := func(r int) bool {
+		for _, v := range p.enPila {
+			if v == r || v+1 == r {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case !vivo(a):
+		if !p.nibble(a, in) || !p.nibble(b, in) {
+			return
+		}
+		p.palabra(unidad12x(op, a, b))
+		p.push(a)
+		p.sueltaPar(b)
+	case conmuta && !vivo(b):
+		if !p.nibble(b, in) || !p.nibble(a, in) {
+			return
+		}
+		p.palabra(unidad12x(op, b, a))
+		p.push(b)
+		p.sueltaPar(a)
+	default:
+		r := p.tomaPar(in)
+		if p.err != nil {
+			return
+		}
+		if !p.octeto(r, in) || !p.octeto(a, in) || !p.octeto(b, in) {
+			return
+		}
+		u1, u2 := unidad23x(tres[in.name], r, a, b)
+		p.palabra(u1)
+		p.palabra(u2)
+		p.push(r)
+		p.sueltaPar(a)
+		p.sueltaPar(b)
+	}
+}
+
+// convierteEnAncho: `i2l` sale `int-to-long vA, vB` (`8120` para v0, v2), un registro suelto dentro de
+// un par (parrafo 74).
+func (p *traduce) convierteEnAncho(in jvmInstr, op byte) {
+	r := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	d := p.tomaPar(in)
+	if p.err != nil {
+		return
+	}
+	if !p.nibble(r, in) || !p.nibble(d, in) {
+		return
+	}
+	p.palabra(unidad12x(op, d, r))
+	p.suelta(r)
+	p.push(d)
+}
+
+// convierteDeAncho: `l2i` sale `long-to-int v1, v0` (`8401`).
+func (p *traduce) convierteDeAncho(in jvmInstr, op byte) {
+	r := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	p.sueltaPar(r)
+	d := p.toma(in)
+	if p.err != nil {
+		return
+	}
+	if !p.nibble(r, in) || !p.nibble(d, in) {
+		return
+	}
+	p.palabra(unidad12x(op, d, r))
+	p.push(d)
+}
+
 // suelta: devuelve un temporal solo si ninguna otra entrada de la pila lo está usando. Comprobarlo
 // cada vez cuesta un recorrido corto y es lo que impide que un dup pierda un valor por escribir dos
 // vivos en el mismo registro. Y un local nunca se suelta: por debajo de base solo hay temporales, y
@@ -213,6 +377,12 @@ func (p *traduce) push(r int) { p.enPila = append(p.enPila, r) }
 // instrucción. Al atar un temporal a un local hay que sacarlo de la bolsa de reutilización, porque
 // si no el siguiente `toma` escribiría encima de una variable viva.
 func (p *traduce) guardaLocal(in jvmInstr, n int) {
+	p.guardaLocalEn(in, n, false)
+}
+
+// guardaLocalEn: `istore`/`astore`, y con `ancho` los `lstore` (parrafo 74). Un valor ancho vive en un
+// PAR de registros consecutivos, así que la fusion y el `move-wide` atizan los dos.
+func (p *traduce) guardaLocalEn(in jvmInstr, n int, ancho bool) {
 	r := p.pop(in)
 	destino := p.local(n)
 	if r == destino {
@@ -233,23 +403,36 @@ func (p *traduce) guardaLocal(in jvmInstr, n int) {
 		if p.fijos == nil {
 			p.fijos = map[int]bool{}
 		}
-		p.fijos[r] = true
-		for i, vivo := range p.libres {
-			if vivo == r {
-				p.libres = append(p.libres[:i], p.libres[i+1:]...)
-				break
+		quitar := []int{r}
+		if ancho {
+			quitar = append(quitar, r+1)
+		}
+		for _, q := range quitar {
+			p.fijos[q] = true
+			for i, vivo := range p.libres {
+				if vivo == q {
+					p.libres = append(p.libres[:i], p.libres[i+1:]...)
+					break
+				}
 			}
 		}
 		return
 	}
 	op := byte(opMueve)
-	if in.name == "astore" || (len(in.name) == 8 && in.name[:6] == "astore") {
+	switch {
+	case ancho:
+		op = opMueveWide
+	case in.name == "astore" || (len(in.name) == 8 && in.name[:6] == "astore"):
 		op = opMueveObjeto
 	}
 	if !p.nibble(r, in) || !p.nibble(destino, in) {
 		return
 	}
 	p.palabra(unidad12x(op, destino, r))
+	if ancho {
+		p.sueltaPar(r)
+		return
+	}
 	p.suelta(r)
 }
 
@@ -369,8 +552,8 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if len(desc) > 0 {
 		tipo = desc[0]
 	}
-	if desc != "I" && !esObjeto(desc) {
-		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero y la referencia; lo demas no")
+	if desc != "I" && !esObjeto(desc) && !esAncho(desc) {
+		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, la referencia y el largo; lo demas no")
 		return
 	}
 	campo, ok := p.t.fieldIdx[fieldKey{owner: owner, typeOf: desc, name: nombre}]
@@ -389,21 +572,40 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 			op = opSgetObject
 		}
 	}
+	if esAncho(desc) {
+		// `sget-wide v2, field@0` es `6102 0000` y `sput-wide v2, field@0` `6802 0000`: la misma forma
+		// 21c con el par de registros en vAA (parrafo 74)
+		if escribe {
+			op = opSPutWide
+		} else {
+			op = opSGetWide
+		}
+	}
 	// al escribir el registro sale de la pila, y **no** se pide uno nuevo: pedirlo antes de sacarlo
 	// dejaba un temporal asignado y perdido por cada `putstatic`, y con dos en un método el marco se
 	// quedaba sin temporales —lo destapó el banco al añadir un `println` con concatenación (§62)—
 	var r int
-	if escribe {
+	switch {
+	case escribe:
 		r = p.pop(in)
-	} else {
+	case esAncho(desc):
+		r = p.tomaPar(in)
+	default:
 		r = p.toma(in)
+	}
+	if p.err != nil {
+		return
 	}
 	p.palabra(uint16(op) | uint16(r&0xff)<<8)
 	if !p.indice(campo, in, "the field_id of the static access") {
 		return
 	}
 	if escribe {
-		p.suelta(r)
+		if esAncho(desc) {
+			p.sueltaPar(r)
+		} else {
+			p.suelta(r)
+		}
 		return
 	}
 	p.push(r)
@@ -809,6 +1011,55 @@ func (p *traduce) recorre() error {
 			p.accesoEstatico(in, in.name == "putstatic")
 		case "iadd", "isub", "imul", "idiv", "irem":
 			p.cuentaEntera(in)
+		case "ladd", "lsub", "lmul", "ldiv", "lrem":
+			p.cuentaAncha(in)
+		case "lconst_0", "lconst_1":
+			v := int64(0)
+			if in.name == "lconst_1" {
+				v = 1
+			}
+			p.cargaLargo(in, v)
+		case "ldc2_w":
+			idx := int(dexU16(in.ops))
+			if p.x.tagOf(idx) != cpLong {
+				p.falla(in, "a ldc2_w whose pool entry is not a Long: doubles and floats are not measured here")
+				return p.err
+			}
+			p.cargaLargo(in, p.x.longOf(idx))
+		case "lload", "lload_0", "lload_1", "lload_2", "lload_3":
+			n := 0
+			if in.name == "lload" {
+				n = int(in.ops[0])
+			} else {
+				n = int(in.name[len(in.name)-1]) - '0'
+			}
+			r := p.local(n)
+			if !p.nibble(r, in) {
+				return p.err
+			}
+			p.push(r)
+		case "lstore", "lstore_0", "lstore_1", "lstore_2", "lstore_3":
+			n := 0
+			if in.name == "lstore" {
+				n = int(in.ops[0])
+			} else {
+				n = int(in.name[len(in.name)-1]) - '0'
+			}
+			p.guardaLocalEn(in, n, true)
+		case "i2l":
+			p.convierteEnAncho(in, opIntALargo)
+		case "l2i":
+			p.convierteDeAncho(in, opLargoAInt)
+		case "lreturn":
+			r := p.pop(in)
+			if p.err != nil {
+				return p.err
+			}
+			if !p.nibble(r, in) {
+				return p.err
+			}
+			p.palabra(unidad11x(opRetornaWide, r))
+			p.sueltaPar(r)
 		case "arraylength":
 			p.longitudArreglo(in)
 		case "athrow":
@@ -1056,6 +1307,10 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 	}
 	var op byte
 	switch {
+	case escribe && esAncho(desc):
+		op = opIPutWide
+	case !escribe && esAncho(desc):
+		op = opIGetWide
 	case escribe && esObjeto(desc):
 		op = opIputObject
 	case !escribe && esObjeto(desc):
@@ -1067,7 +1322,7 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		// `iput v0, v1, field@1`, con el valor en el primer registro y el objeto en el segundo
 		op = opIput
 	default:
-		p.falla(in, "a field access of type "+string(desc[0])+": only object fields and iget were measured")
+		p.falla(in, "a field access of type "+string(desc[0])+": only int, object and wide fields were measured")
 		return
 	}
 	if escribe {
@@ -1081,11 +1336,23 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		p.palabra(unidad12x(op, valor, objeto))
 		// los dos murieron con el almacenamiento: sin soltarlos, un <init> con seis putfields
 		// pide seis temporales y revienta contra la pila máxima que midió javap
-		p.suelta(valor)
+		if esAncho(desc) {
+			p.sueltaPar(valor)
+		} else {
+			p.suelta(valor)
+		}
 		p.suelta(objeto)
 	} else {
 		objeto := p.pop(in)
-		r := p.toma(in)
+		var r int
+		if esAncho(desc) {
+			r = p.tomaPar(in)
+		} else {
+			r = p.toma(in)
+		}
+		if p.err != nil {
+			return
+		}
 		if !p.nibble(objeto, in) || !p.nibble(r, in) {
 			return
 		}
@@ -1146,17 +1413,39 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 			return
 		}
 	}
-	regs := make([]int, total)
-	// se descargan en orden inverso: el último argumento es el primero que sale de la pila JVM, y
-	// en el 35c el receptor va en el primer registro
-	for i := total - 1; i >= 0; i-- {
-		regs[i] = p.pop(in)
+	_, ret, params := splitDescriptor(desc)
+	// La pila JVM tiene UNA entrada por valor, pero la lista del 35c cuenta PALABRAS: un argumento
+	// ancho aporta los dos registros del par (medido: `println:(J)V` sale `6e20 ... 0300` con
+	// {v3, v0, v1} y `imprime:(J)V` con {v0, v1}, parrafo 74).
+	valores := make([]int, len(params))
+	if !estatico {
+		valores = append([]int{0}, valores...)
+	}
+	for i := len(valores) - 1; i >= 0; i-- {
+		valores[i] = p.pop(in)
 	}
 	if p.err != nil {
 		return
 	}
-	for _, r := range regs {
-		p.suelta(r)
+	ancho := func(i int) bool {
+		if estatico {
+			return esAncho(params[i])
+		}
+		return i > 0 && esAncho(params[i-1])
+	}
+	regs := make([]int, 0, total)
+	for i, v := range valores {
+		regs = append(regs, v)
+		if ancho(i) {
+			regs = append(regs, v+1)
+		}
+	}
+	for i, v := range valores {
+		if ancho(i) {
+			p.sueltaPar(v)
+			continue
+		}
+		p.suelta(v)
 	}
 	if total > p.outs {
 		p.outs = total
@@ -1165,12 +1454,22 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 	if p.err != nil {
 		return
 	}
-	_, ret, _ := splitDescriptor(desc)
 	switch {
 	case ret == "V" || ret == "":
 	case seTira:
 		// el resultado se tira justo despues: ni move-result ni descarga, que es lo que hizo d8
 		// con el MenuItem del listener (§21). Tampoco hace falta saber el tipo devuelto
+	case esAncho(ret):
+		// `move-result-wide v0` es `0b00` (parrafo 74)
+		r := p.tomaPar(in)
+		if p.err != nil {
+			return
+		}
+		if !p.nibble(r, in) {
+			return
+		}
+		p.palabra(unidad11x(opMueveResultWide, r))
+		p.push(r)
 	case esObjeto(ret):
 		r := p.toma(in)
 		p.palabra(unidad11x(opMueveResultObj, r))

@@ -22,6 +22,8 @@ public class Arranque {
         System.out.println(Ver.leeSeguro(corto, 5));
         System.out.println(new Ver().privados());
         System.out.println(Ver.inicial());
+        System.out.println(Ver.cuentaLarga(2L, 3L));
+        System.out.println(Ver.acumula());
         int t = Ver.total;
         System.exit(t);
     }

@@ -120,4 +120,17 @@ public class Ver {
         }
         return s;
     }
+
+    // Un `long` de punta a punta (§74): campo estático ancho, una cuenta con dos argumentos largos y
+    // un local ancho que se reasigna. Son 8 y 306.
+    static long saldo = 5L;
+
+    public static long cuentaLarga(long a, long b) { return a + b * 2L; }
+
+    public static long acumula() {
+        long x = 1L;
+        x = x + 300L;
+        saldo = saldo + x;
+        return saldo;
+    }
 }

@@ -456,10 +456,16 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   y el ensanchado va **en el sitio del operando** (`n + m` largo es `iload_0; i2l; lload_1; ladd`), lo
   que obligó a saber el tipo de los dos lados antes de escribirlos (`tipoPrevisto`). Los marcos ponen
   `ITEM_Long` una sola vez por variable y la segunda mitad no se escribe. Nuestro `L` sale con el mismo
-  `Code`, `max_stack` y `max_locals` que el de javac y la JVM lo ejecuta (`306`/`8`); el dex todavía lo
-  rechaza por nombre, con las formas de `d8` ya medidas (`const-wide/16` 0x16, `mul-long` 0x9d,
-  `add-long/2addr` 0xbb, `sget-wide` 0x61, `sput-wide` 0x68, `return-wide` 0x10, `move-result-wide`
-  0x0b y argumentos que valen dos registros). `double` no lo arma ni el léxico (`1.0`); siguen sin medir
+  `Code`, `max_stack` y `max_locals` que el de javac y la JVM lo ejecuta (`306`/`8`). **Y el dex también**:
+  `const-wide/16` 0x16, `const-wide/32` 0x17 y `const-wide` 0x18, `lload`/`lstore` como `move-wide` 0x04 con
+  **par de registros**, la familia 23x `0x9b..0x9f` y `/2addr` `0xbb..0xbf` con la misma regla de viveza del
+  entero, `int-to-long` 0x81 / `long-to-int` 0x84, `iget-wide` 0x53 / `iput-wide` 0x5a / `sget-wide` 0x61 /
+  `sput-wide` 0x68, `return-wide` 0x10 con `move-result-wide` 0x0b, y los argumentos largos que valen dos
+  registros (`(JJ)J` sale `registers=6, ins=4`). Nuestro dex sobre nuestras clases es **byte a byte** el
+  mismo que sobre las de javac (1104 bytes, `cmp` mudo) y ART lo ejecuta: `306` y `8`. Tres defectos salieron
+  al ejecutar: el `encoded_value` de un `static long` debe anunciar `valueLong` con 8 bytes, el
+  `parameters_count` del `debug_info_item` va por **parámetros declarados** y no por palabras, y una clase
+  llamada `L` chocaba con el `L` de un descriptor. `double` no lo arma ni el léxico (`1.0`); siguen sin medir
   `lcmp`, `dup2`/`pop2`, los arreglos de largos y el `ConstantValue` de un `static final long`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
@@ -486,11 +492,12 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **245 PASS + 2 SKIP** nativa y **196 PASS + 51 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **246 PASS + 2 SKIP** nativa y **196 PASS + 52 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
-  tipos de punto flotante y el `long` en el dex (el `.class` ya se emite, párrafo 74), anotaciones que no sean `@Override`.
+  tipos de punto flotante, los arreglos de largos y las ramas sobre `long` (el `long` entero —`.class` y
+  dex— ya está, párrafo 74), anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

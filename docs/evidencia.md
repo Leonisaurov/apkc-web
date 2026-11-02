@@ -4054,7 +4054,7 @@ los cuatro dex. El `dexdump` del banco se lee ahora en la **misma** llamada a `r
 con dos llamadas seguidas el cliente leía el fichero de estado antes de que el aparato lo terminara
 de escribir, y el veredicto salía con el `rc` vacío.
 
-## 74. El `long` en el `.class`: dos huecos, dos palabras y la constante `Long` del pool
+## 74. El `long`: dos huecos, dos palabras, la constante `Long` del pool y el `const-wide` del dex
 
 **El pool, con `javap -v` sobre `L`**: una entrada `Long` (tag 5) **ocupa dos posiciones** —`#7 = Long 2l`
 y la siguiente es `#9`; el #8 no existe—, así que el escritor reserva un hueco (`agregarDos`) y
@@ -4081,13 +4081,13 @@ por `ldc2_w`, incluso `2L`.
 —el entero se ensancha en su propio sitio, antes de cargar el otro lado—, así que el emisor necesita el
 tipo de los dos operandos *antes* de escribirlos: por eso aparece `tipoPrevisto`.
 
-**Lo que ya estaba medido del lado del dex** (de `dexdump -d` sobre `d8 --release` con la misma sonda), y
-que nuestro traductor todavía **no** escribe: `const-wide/16` 0x16 (`1600 0200`, dos unidades),
-`mul-long` 0x9d en forma 23x, `add-long/2addr` 0xbb, `sget-wide` 0x61, `sput-wide` 0x68, `return-wide`
-0x10, `move-result-wide` 0x0b, y en la frame los argumentos largos valen **dos registros**: `cuenta:(JJ)J`
-sale con `registers=6, ins=4` y `imprime:(J)V` con `registers=3, ins=2`, con `invoke-static {v0, v1}`
-para un solo argumento largo. También midió `d8` que reasigna el par muerto (`mul-long v4, v4, v0`
-escribe encima del segundo argumento).
+**Lado del dex**, medido con `dexdump -d` sobre `d8 --release` con la misma sonda `L`: `const-wide/16`
+(`1600 0200`, dos unidades), `mul-long` 0x9d en forma 23x, `add-long/2addr` 0xbb, `sget-wide` 0x61,
+`sput-wide` 0x68, `return-wide` 0x10, `move-result-wide` 0x0b, y en la frame los argumentos largos valen
+**dos registros**: `cuenta:(JJ)J` sale con `registers=6, ins=4` y `imprime:(J)V` con
+`registers=3, ins=2, outs=3`, con `invoke-static {v0, v1}` para un solo argumento largo. También midió
+`d8` que reasigna el par muerto (`mul-long v4, v4, v0` escribe encima del segundo argumento) y que
+pliega `1L + 300L` en una sola constante.
 
 **Añadido con dos sondas más** (`V`: conversiones, campo de instancia ancho, constantes de 17 y 5
 dígitos; `M`: las cuatro cuentas y una copia): `int-to-long v0, v2` es **0x81** y `long-to-int v1, v0`
@@ -4103,17 +4103,42 @@ llamada con un largo es `invoke-static {v0, v1}` (dos registros para un argument
 reutiliza el par del operando muerto (`add-long/2addr v0, v4` encima de una constante) y no emite nada
 para `long b = a; return b;` (`return-wide v0` a secas).
 
-**Ejecutado**: la sonda `L` compilada por este fork corre en la JVM con `-Xverify:all` y da `306` y `8`
-(`rc 0`). Nuestro traductor de bytecode todavía la rechaza por nombre (`at pc 1, ladd: outside the
-measured subset`), que es la frontera siguiente.
+**Escrito y ejecutado**. El traductor ya emite esas formas (`tomaPar` da dos registros consecutivos, y
+la cuenta ancha usa el mismo reparto de vida que la entera del §66). Con la sonda `L`:
 
-**Pruebas**: `apkc/javaemisor_largo_test.go` compara método a método contra `javac --release 8 -g`, con
+- Nuestro `.class` en la JVM con `-Xverify:all`: `306` y `8`, `rc 0`.
+- **Nuestro dex sobre nuestras clases es byte a byte el mismo que nuestro dex sobre las clases de
+  `javac`** (1104 bytes, `cmp` mudo) —con el fixture compilado `--release 8 -g:lines,source`; con
+  `-g:none` faltaba el `SourceFile` y con `-g` sobraba el `LocalVariableTable`, y las dos cosas cambian
+  el fichero—.
+- `d8 --release` sobre nuestras clases: `rc 0`, y su dex también da `306` y `8` en ART.
+- `dexdump` del nuestro: `rc 0`, y `imprime:(J)V` sale con las mismas seis palabras que `d8`
+  (`6200 0100`, `6e30 0600 1002`, `0e00`, `registers 3 / ins 2 / outs 3`). Donde elegimos otra forma
+  válida está dicho en la prueba: para `a + b * 2L` nosotros hacemos `mul-long/2addr v4, v0` (`bd04`)
+  encima del par muerto y `d8` escribe el `mul-long` de tres registros; y no plegamos `1L + 300L`.
+
+Tres defectos salieron al ejecutar, ninguno visible en los `cmp` anteriores: (1) un `static long` sin
+`ConstantValue` se anunciaba en el `encoded_array_item` con `value_null` y ART cortaba con
+`unexpected static field initial value type: 'L' vs 'J'` —es la regla 4 del §55 con un campo ancho, y
+ahora va con `valueLong` y ocho bytes—; (2) el `parameters_count` del `debug_info_item` se sacaba de
+`ArgCount`, que cuenta **palabras**, y con dos `long` declaraba cuatro parámetros: ART avisaba
+`invalid stream - problem with parameter iterator … for method long L.cuenta(long, long)`; el conteo es
+el de parámetros del descriptor (y `this` ya no estaba dentro, así que se quita la resta que hacía el
+§56); (3) una clase llamada `L` —que empieza por la `L` de un descriptor— salía al dex como
+`type_id "L"` (`Invalid type descriptor: 'L'`), la misma familia de `B` del §73, y se cierra exigiendo
+el `;` de cierre en `descriptorDeClase`.
+
+**Pruebas**: `apkc/javaemisor_largo_test.go` compara método a método contra `javac --release 8`, con
 `max_stack` y `max_locals` incluidos, y fija los rechazos de `double`, del arreglo de largos y de la
-comparación de largos. La prueba de la frontera del dexer cambió de byte (`0x61` ya está medido; queda
-`0xd2`).
+comparación de largos; `apkc/dexlargo_test.go` exige el dex idéntico entre nuestras clases y las de
+javac y las palabras de `d8` en `imprime`; `apkc/classreader_nombre_test.go` cubre ahora `B` y `L`. La
+prueba de la frontera del caminante cambió de byte (`0x61` ya está medido; queda `0xd2`).
 
-Suite: **245 PASS + 2 SKIP** nativa y **196 PASS + 51 SKIP** en el hospedador.
+Suite: **246 PASS + 2 SKIP** nativa y **196 PASS + 52 SKIP** en el hospedador. El banco lleva
+`saldo`, `cuentaLarga(2L, 3L)` y `acumula()`, y los cinco caminos dan
+`total 7|total 9|total 102|10|3|2|4|7|-1|10|6|8|306` con `rc 102`.
 
 **Frontera**: `float` y `double` (el léxico ni siquiera arma `1.0`), arreglos de largos (`laload` /
-`lastore` sin medir), `lcmp` y las ramas sobre largos, `dup2`/`pop2`, el `ConstantValue` de un
-`static final long`, el `access$` de un campo ancho (pide `dup2_x1` y `pop2`) y todo el `long` en el dex.
+`lastore` sin medir), `lcmp` y las ramas sobre largos, `dup2`/`pop2` y el `access$` de un campo ancho
+(pide `dup2_x1` y `pop2`). Un `static final long` con `ConstantValue` tampoco: `classField` guarda el
+`Long` pero `buscarCampo` sigue doblando solo enteros.

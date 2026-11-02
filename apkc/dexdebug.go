@@ -108,10 +108,13 @@ func (td *dexTables) itemDebug(m classMethod, pcs map[int]int, insns []uint16) [
 		puestas = puestas[:len(puestas)-1]
 	}
 
-	cuantos := m.ArgCount
-	if m.Access&accStatic == 0 {
-		cuantos-- // `this` no es un argumento a los efectos del item
-	}
+	// `parameters_count` son los **parametros declarados**, no los huecos: `ArgCount` cuenta palabras
+	// porque el dex las necesita para la frame, y con un `long` esa cuenta es mayor que el numero de
+	// parameters. ART lo detecta al iterar los tipos: `invalid stream - problem with parameter
+	// iterator … for method long L.cuenta(long, long)` (medido con la sonda `L`, parrafo 74). El
+	// descriptor ya no incluye `this`, asi que aqui no se le resta nada (§56).
+	_, _, param := splitDescriptor(m.Desc)
+	cuantos := len(param)
 	out := putUleb(nil, uint32(puestas[0].linea))
 	out = putUleb(out, uint32(cuantos))
 	for i := 0; i < cuantos; i++ {

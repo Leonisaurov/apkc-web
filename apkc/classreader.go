@@ -299,7 +299,8 @@ func (m *classMethod) readCode(x poolIndex, body []byte) error {
 		}
 		m.Tries = append(m.Tries, t)
 	}
-	// the receiver is a local slot too, and the dex wants args_size, not locals
+	// the receiver is a local slot too, and the dex wants args_size, not locals. `countArgs` ya cuenta
+	// HUECOS: un `long` vale dos, medido en el `ins=4` de `V.cuenta(JJ)J` del parrafo 74.
 	m.ArgCount = countArgs(m.Desc)
 	if m.Access&accStatic == 0 {
 		m.ArgCount++
@@ -468,19 +469,24 @@ func countArgs(desc string) int {
 	return n
 }
 
-// descriptorOf turns the internal name javac writes (com/x/Y) into what a dex holds (Lcom/x/Y;).
-// A primitive or an array is already a descriptor and stays as it is.
 // descriptorDeClase: el Utf8 de una entrada `Class` es un nombre **interno**, no un descriptor; una
 // clase llamada `B` o `I` en el paquete por defecto es legal y no es el primitivo del mismo nombre
 // (lo destapó una sonda llamada `B`: el dex quedaba con el type_id "B" y `dexdump` lo rechazaba con
-// `Invalid descriptor for class_idx`). Los arreglos sí llegan ya como `[…`.
+// `Invalid descriptor for class_idx`), y una llamada `L` empieza por la `L` de un descriptor sin
+// serlo (la sonda `L` dio `Invalid type descriptor: 'L'`). Se reconoce un descriptor ya escrito solo
+// por `L…;` cerrado o por el corchete de un arreglo.
 func descriptorDeClase(name string) string {
-	if name == "" || name[0] == 'L' || name[0] == '[' {
+	if name == "" || name[0] == '[' {
+		return name
+	}
+	if name[0] == 'L' && name[len(name)-1] == ';' {
 		return name
 	}
 	return "L" + name + ";"
 }
 
+// descriptorOf turns the internal name javac writes (com/x/Y) into what a dex holds (Lcom/x/Y;).
+// A primitive or an array is already a descriptor and stays as it is.
 func descriptorOf(name string) string {
 	if name == "" {
 		return ""
