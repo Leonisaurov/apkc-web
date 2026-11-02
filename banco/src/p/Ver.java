@@ -109,4 +109,15 @@ public class Ver {
         r.run();
         return pulsos + oculto;
     }
+
+    // Un inicializador de arreglo (§73): `new int[] {…}` es el largo, el `newarray` y por cada
+    // elemento `dup`, indice, valor y `iastore` —la forma de javac—. Devuelve 6.
+    public static int inicial() {
+        int[] v = new int[] {1, 2, 3};
+        int s = 0;
+        for (int i = 0; i < v.length; i++) {
+            s = s + v[i];
+        }
+        return s;
+    }
 }

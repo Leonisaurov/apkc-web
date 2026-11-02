@@ -97,8 +97,9 @@ veredicto() { # alias de dex, descripcion
 		printf '%s\n' "$sal" | sed 's/^/      /'
 		exit 1
 	fi
-	"$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$? > /data/local/tmp/$s.dv" >/dev/null 2>&1
-	"$RISH" -c "toybox cat /data/local/tmp/$s.dv" > "$TRABAJO/dv.txt" 2>/dev/null
+	# el rc se lee en la MISMA llamada que corre dexdump: dos llamadas seguidas dejaban al cliente
+	# leyendo el fichero antes de que el aparato lo hubiera escrito, y el banco decia `rc=` vacio
+	"$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$?" > "$TRABAJO/dv.txt" 2>/dev/null
 	dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
 	[ "$dv" = "0" ] && echo "    dexdump verificando: rc 0" || { echo "    dexdump rc=$dv"; exit 1; }
 }

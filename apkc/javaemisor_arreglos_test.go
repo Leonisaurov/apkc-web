@@ -106,12 +106,12 @@ func TestLosMarcosDeUnArregloSonLosDeJavac(t *testing.T) {
 	}
 }
 
-// TestElArregloDelFuenteRechazaLoNoMedido: el inicializador, mas de una dimension y el indice que no
-// es entero salen por su nombre, no por un mensaje generico.
+// TestElArregloDelFuenteRechazaLoNoMedido: mas de una dimension y el indice que no es entero salen por
+// su nombre, no por un mensaje generico. (El inicializador `new T[] {…}` ya esta medido: parrafo 73, y
+// sus rechazos se prueban en `javaemisor_inicializador_test.go`.)
 func TestElArregloDelFuenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"inicializador", "class A { static void f() { int[] v = new int[] {1, 2}; } }", "inicializador"},
-		{"dos dimensiones con inicializador", "class A { static void f() { int[][] v = new int[2][3]; } }", "dimension"},
+		{"dos dimensiones", "class A { static void f() { int[][] v = new int[2][3]; } }", "dimension"},
 	}
 	for _, c := range casos {
 		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/A.java", contenido: c.fuente}}, jarDelSDK(t))

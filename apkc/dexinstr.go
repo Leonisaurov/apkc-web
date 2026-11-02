@@ -369,7 +369,7 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if len(desc) > 0 {
 		tipo = desc[0]
 	}
-	if desc != "I" && tipo != 'L' {
+	if desc != "I" && !esObjeto(desc) {
 		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero y la referencia; lo demas no")
 		return
 	}
@@ -382,7 +382,7 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if escribe {
 		op = opSput
 	}
-	if tipo == 'L' {
+	if esObjeto(desc) {
 		if escribe {
 			op = opSputObject
 		} else {

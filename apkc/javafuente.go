@@ -85,12 +85,14 @@ type jnuevo struct {
 
 func (jnuevo) jexprPuede() {}
 
-// jnuevoArreglo: `new Tipo[n]`. El inicializador `new Tipo[] {…}` no esta medido (pide
-// `filled-new-array`, que todavia no se ha medido) y se rechaza por nombre al leerlo.
+// jnuevoArreglo: `new Tipo[n]` o `new Tipo[] {…}`. Con inicializador, javac escribe el largo, el
+// `newarray`/`anewarray` y una cadena de `dup` + indice + valor + `iastore`/`aastore` por elemento
+// (medido en el parrafo 73), asi que no hace falta `filled-new-array`.
 type jnuevoArreglo struct {
-	tipo  string
-	largo jexpr
-	donde pos
+	tipo      string
+	largo     jexpr
+	elementos []jexpr
+	donde     pos
 }
 
 func (jnuevoArreglo) jexprPuede() {}
@@ -1650,7 +1652,30 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		if a.es('p', "[") {
 			a.avanzar()
 			if a.es('p', "]") {
-				return nil, fmt.Errorf("linea %d: el inicializador `new %s[] {…}` no esta medido; escriba `new %s[n]`", t.donde.linea, tipo, tipo)
+				a.avanzar()
+				if !a.es('p', "{") {
+					return nil, fmt.Errorf("linea %d: `new %s[]` sin inicializador no es Java; escriba `new %s[n]` o `new %s[] {…}`", t.donde.linea, tipo, tipo, tipo)
+				}
+				a.avanzar() // el {
+				elementos := []jexpr{}
+				for !a.es('p', "}") {
+					elem, err := a.expresion()
+					if err != nil {
+						return nil, err
+					}
+					elementos = append(elementos, elem)
+					if !a.es('p', ",") {
+						break
+					}
+					a.avanzar()
+				}
+				if err := a.comerSimbolo("}"); err != nil {
+					return nil, err
+				}
+				if a.es('p', "[") || a.es('p', "{") {
+					return nil, fmt.Errorf("linea %d: un arreglo de mas de una dimension no esta medido", t.donde.linea)
+				}
+				return jnuevoArreglo{tipo: tipo, elementos: elementos, donde: t.donde}, nil
 			}
 			largo, err := a.expresion()
 			if err != nil {

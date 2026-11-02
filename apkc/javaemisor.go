@@ -457,7 +457,12 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 			ctx.registrar(v.cuerpo)
 		}
 	case jnuevoArreglo:
-		ctx.registrarExpresion(v.largo)
+		if v.largo != nil {
+			ctx.registrarExpresion(v.largo)
+		}
+		for _, el := range v.elementos {
+			ctx.registrarExpresion(el)
+		}
 	case jindice:
 		ctx.registrarExpresion(v.base)
 		ctx.registrarExpresion(v.indice)
@@ -561,7 +566,12 @@ func anonimasDe(c *jclas) []*jclas {
 		case jcast:
 			expr(v.dentro)
 		case jnuevoArreglo:
-			expr(v.largo)
+			if v.largo != nil {
+				expr(v.largo)
+			}
+			for _, el := range v.elementos {
+				expr(el)
+			}
 		case jindice:
 			expr(v.base)
 			expr(v.indice)
@@ -2342,12 +2352,17 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
 	}
-	d, err := e.exp(v.largo)
-	if err != nil {
-		return "", err
-	}
-	if d != "I" {
-		return "", fmt.Errorf("linea %d: el largo de un arreglo es %s y no un entero", v.donde.linea, d)
+	if v.largo == nil {
+		// `new T[] {…}`: el largo es el numero de elementos y javac lo escribe con `cargaEntero`
+		e.cargaEntero(int32(len(v.elementos)))
+	} else {
+		d, err := e.exp(v.largo)
+		if err != nil {
+			return "", err
+		}
+		if d != "I" {
+			return "", fmt.Errorf("linea %d: el largo de un arreglo es %s y no un entero", v.donde.linea, d)
+		}
 	}
 	if elem[0] == 'L' || elem[0] == '[' {
 		interno := elem
@@ -2366,6 +2381,33 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 	}
 	e.baja(1) // el largo
 	e.sube()  // el arreglo
+	if v.largo != nil {
+		return "[" + elem, nil
+	}
+	// la cadena de javac: por cada elemento, `dup`, indice, valor y `iastore`/`aastore` (parrafo 73)
+	var guarda byte
+	switch elem[0] {
+	case 'I':
+		guarda = 0x4f
+	case 'L', '[':
+		guarda = 0x53
+	default:
+		return "", fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, v.tipo)
+	}
+	for i, x := range v.elementos {
+		e.emite(opDup)
+		e.sube()
+		e.cargaEntero(int32(i))
+		d, err := e.exp(x)
+		if err != nil {
+			return "", err
+		}
+		if d != elem {
+			return "", fmt.Errorf("linea %d: el arreglo es %s y el elemento %d es %s", v.donde.linea, elem, i, d)
+		}
+		e.emite(guarda)
+		e.baja(3)
+	}
 	return "[" + elem, nil
 }
 
@@ -2478,6 +2520,12 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			}
 		}
 		return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+	case jnuevoArreglo:
+		d, err := e.ctx.descriptorDe(v.tipo)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+		}
+		return "[" + d, nil
 	}
 	return "", fmt.Errorf("linea %d: el tipo de un argumento de %T no esta medido", lineaDeExpr(x), x)
 }

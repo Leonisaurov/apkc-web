@@ -375,14 +375,14 @@ func (x poolIndex) refOf(i int) (owner, name, desc string, iface bool) {
 	}
 	name, desc = x.nameAndType(int(b[2])<<8 | int(b[3]))
 	if c, ok := x.p.class[int(b[0])<<8|int(b[1])]; ok {
-		owner = descriptorOf(x.p.utf[c])
+		owner = descriptorDeClase(x.p.utf[c])
 	}
 	return owner, name, desc, x.p.tag[i] == cpInterfaceMethodref
 }
 
 func (x poolIndex) classDescriptor(i int) string {
 	if c, ok := x.p.class[i]; ok {
-		return descriptorOf(x.p.utf[c])
+		return descriptorDeClase(x.p.utf[c])
 	}
 	return ""
 }
@@ -470,6 +470,17 @@ func countArgs(desc string) int {
 
 // descriptorOf turns the internal name javac writes (com/x/Y) into what a dex holds (Lcom/x/Y;).
 // A primitive or an array is already a descriptor and stays as it is.
+// descriptorDeClase: el Utf8 de una entrada `Class` es un nombre **interno**, no un descriptor; una
+// clase llamada `B` o `I` en el paquete por defecto es legal y no es el primitivo del mismo nombre
+// (lo destapó una sonda llamada `B`: el dex quedaba con el type_id "B" y `dexdump` lo rechazaba con
+// `Invalid descriptor for class_idx`). Los arreglos sí llegan ya como `[…`.
+func descriptorDeClase(name string) string {
+	if name == "" || name[0] == 'L' || name[0] == '[' {
+		return name
+	}
+	return "L" + name + ";"
+}
+
 func descriptorOf(name string) string {
 	if name == "" {
 		return ""

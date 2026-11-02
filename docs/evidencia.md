@@ -3998,3 +3998,58 @@ los índices del pool se ordenan distinto—; incluye las dos formas de la front
 **Frontera**: una clase anidada `private` (javac le añade un constructor sintético `(Exterior$1)` y
 una clase marcador `Exterior$1`) y una `protected` con nombre y sin `static` (pide la captura
 `this$0`) se rechazan por nombre; `protected` en campos y métodos sí entra.
+
+## 73. El inicializador `new T[] {…}`, y una clase llamada `B` que se leía como el primitivo
+
+**La forma de javac**, de `javap -c -p` sobre `A` (`return new int[] {1, 2, 3};`, un `String[]`, un
+local y un argumento de llamada): no hay `filled-new-array`; es el largo, el `newarray`/`anewarray` y
+por cada elemento `dup`, indice, valor y `iastore`/`aastore`, con el arreglo vivo en la pila:
+
+```
+0: iconst_3
+1: newarray       int
+3: dup
+4: iconst_0
+5: iconst_1
+6: iastore
+7: dup
+8: iconst_1
+9: iconst_2
+10: iastore
+...
+15: areturn
+```
+
+El analizador admite `new T[] {a, b, …}` (y `{}` y la coma final); el emisor escribe esa cadena y
+rechaza por nombre `new T[]` sin inicializador, más de una dimensión y un elemento de otro tipo.
+`d8 --release` sí lo compacta a `filled-new-array {v0, v1}, [I` + `move-result-object` (medido sobre
+la sonda `B`), pero el `.class` que emitimos es el de javac y `d8` lo acepta.
+
+**Un estático de tipo arreglo es `sget-object`/`sput-object`**, no `sget`/`sput`: medido en el dex de
+`d8` sobre `static int[] v` (`6200 0000` para leer y `6900 0000` para escribir). El traductor solo
+aceptaba `I` y `L…`; ahora acepta cualquier descriptor de referencia (`[` incluido).
+
+**El defecto que destapó la sonda llamada `B`**: `descriptorOf` tenía un caso para los primitivos de
+una letra y devolvía `B` tal cual; una clase del paquete por defecto llamada `B` (o `I`, `S`…) quedaba
+en el dex con el `type_id` `"B"` y `dexdump` cortaba con `Invalid descriptor for class_idx: 'B'`. La
+entrada `Class` del pool es siempre un **nombre interno**, nunca un descriptor: `descriptorDeClase`
+envuelve en `L…;` salvo que ya empiece por `L` o `[`, y lo usan `refOf` y `classDescriptor`.
+`TestUnaClaseLlamadaBNoEsElPrimitivo` lo fija.
+
+**Ejecutado** con la sonda `B` (`static int[] v = new int[] {4, 5}`, `suma(new int[] {1, 2, 3})`,
+`nombres().length`):
+- JVM con `-Xverify:all`: `6`, `9`, `2`, `rc 0`.
+- Nuestro dex (compilador + dexer en Go): `dexdump rc 0`, `app_process` `6`/`9`/`2`, `rc 0`.
+- `d8 --release` sobre nuestras clases: `rc 0`, su dex `dexdump rc 0` y `6`/`9`/`2` en ART.
+
+**Pruebas**: `apkc/javaemisor_inicializador_test.go` compara método a método (nombres, flags y la
+sucesión de instrucciones con el miembro resuelto por nombre) contra `javac --release 8 -g`, y fija
+los tres rechazos; `apkc/classreader_nombre_test.go` fija el nombre de clase de una letra.
+
+**Suite y gates con esto**: **243 PASS + 2 SKIP** nativa (eran 240; dos pruebas del inicializador y
+una del nombre de clase), **196 PASS + 49 SKIP** en el hospedador (las tres nuevas se saltan sin
+`android.jar` montado), `studio/e2e.sh` en orden y el banco con los cinco caminos y el sexto de
+interoperabilidad: salida `total 7|total 9|total 102|10|3|2|4|7|-1|10|6`, `rc 102`, `dexdump rc 0` en
+los cuatro dex. El `dexdump` del banco se lee ahora en la **misma** llamada a `rish` que lo ejecuta:
+con dos llamadas seguidas el cliente leía el fichero de estado antes de que el aparato lo terminara
+de escribir, y el veredicto salía con el `rc` vacío.

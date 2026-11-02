@@ -378,8 +378,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `newarray`/`anewarray`/`arraylength`/`iaload`/`iastore`/`aaload`/`aastore` y el dex `new-array`
   (0x23, 22c), `array-length` (0x21, 12x), `aget`/`aget-object` (0x44/0x46) y `aput`/`aput-object`
   (0x4b/0x4d), todos 23x con `op|AA` y `BB|CC<<8`. El analizador lee `T[]` en declaraciones y
-  parámetros, `new T[n]`, `v[i]` (lectura y destino) y `v.length`; el inicializador `new T[] {…}` y más
-  de una dimensión se rechazan por nombre. El dex de la sonda `Arreglos` (diez métodos) es **byte a
+  parámetros, `new T[n]`, `v[i]` (lectura y destino) y `v.length`; más de una dimensión se rechaza por
+  nombre y el inicializador `new T[] {…}` entró después, midido en el §73. El dex de la sonda
+  `Arreglos` (diez métodos) es **byte a
   byte** el de javac. Ejecutar destapó dos defectos: **una tabla vacía escribía su desplazamiento en la
   cabecera** (`field_ids_off` tiene que ser 0; ART: `Offset(228) should be zero when size is zero`) y
   **la cuenta pisaba un operando vivo** (`v[i] = i + 1` daba 3 en ART y 5 en la JVM): `d8` usa `/2addr`
@@ -436,6 +437,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   JVM `-Xverify:all`, nuestro dex en ART y `d8` sobre nuestras clases dan `3`/`6`; el banco lleva
   `Ver.privados` (devuelve `10`) y los cinco caminos coinciden. Frontera por nombre: una clase anidada
   `private` (constructor sintético y clase marcador) o `protected` con nombre y sin `static` (`this$0`).
+- **El inicializador `new T[] {…}`, y una clase llamada `B` que se leía como el primitivo** (§73):
+  javac **no** usa `filled-new-array` en el `.class` —es `iconst_N`, `newarray`/`anewarray` y por cada
+  elemento `dup`, índice, valor y `iastore`/`aastore`, con el arreglo vivo en la pila—; el emisor
+  escribe esa cadena y `d8 --release` la compacta a `filled-new-array` + `move-result-object` al dexar
+  (medido sobre la misma sonda). Dos cosas salieron del camino: un **estático de tipo arreglo** se lee
+  y escribe con `sget-object`/`sput-object` (`6200`/`6900`), no con `sget`/`sput`, y el nombre interno
+  de una clase del paquete por defecto **puede ser una letra de primitivo** —`descriptorOf` devolvía
+  `B` tal cual y el dex quedaba con `type_id "B"`, que `dexdump` corta con `Invalid descriptor for
+  class_idx`—; por eso `descriptorDeClase` (entradas `Class` del pool) envuelve siempre salvo `L`/`[`.
+  Sonda `B` (campo estático con inicializador, suma sobre `new int[] {1,2,3}` y `.length` de un
+  `String[]`): JVM `-Xverify:all`, nuestro dex en ART (`dexdump rc 0`) y el dex de `d8` sobre nuestras
+  clases dan `6`/`9`/`2`; el banco lleva `Ver.inicial` y los cinco caminos coinciden.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -461,7 +474,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **240 PASS + 2 SKIP** nativa y **196 PASS + 46 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **243 PASS + 2 SKIP** nativa y **196 PASS + 49 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
