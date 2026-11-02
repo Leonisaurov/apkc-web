@@ -36,9 +36,14 @@ const (
 	opInvocaInterfaz = 0x72 // 35c invoke-interface
 
 	// leidos de `d8` sobre la sonda del parrafo 50: `sget v0, field@0` sale 0x60 y su indice,
-	// `sput` 0x67, `check-cast v1, type@1` 0x1f y su indice, `return-object v1` 0x11.
+	// `sput` 0x67, `check-cast v1, type@1` 0x1f y su indice, `return-object v1` 0x11. Las dos de
+	// referencia se midieron el 2026-11-01 sobre `System.out.println` (parrafo 62):
+	// `sget-object v0, field@0` es `6200 0000` y `sput-object v1, field@1` es `6901 0100`, o sea la
+	// misma forma 21c y el mismo hueco de dos opcodes entre el entero y el de objeto (wide en medio).
 	opSget          = 0x60 // 21c sget vAA, field@BBBB
 	opSput          = 0x67 // 21c sput vAA, field@BBBB
+	opSgetObject    = 0x62 // 21c sget-object vAA, field@BBBB
+	opSputObject    = 0x69 // 21c sput-object vAA, field@BBBB
 	opCheckcastDex  = 0x1f // 21c check-cast vAA, type@BBBB
 	opRetornaObjeto = 0x11 // 11x return-object vAA
 	opIput          = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
@@ -261,11 +266,16 @@ func (p *traduce) indice(n int, in jvmInstr, qué string) bool {
 
 // accesoEstatico: `getstatic` y `putstatic`. Son 21c —opcode, registro e índice— y no llevan
 // receptor: la sonda del parrafo 50 midió `sget v0, field@0` (0x0060 + 0x0000) al leer el campo y
-// `const/16 v0, 9` seguido de `sput v0, field@0` (0x0067) al escribirlo. Solo se probó con enteros.
+// `const/16 v0, 9` seguido de `sput v0, field@0` (0x0067) al escribirlo. Para una referencia es la
+// misma forma con el opcode de objeto, medido sobre `System.out.println` en el parrafo 62.
 func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	owner, nombre, desc, _ := p.x.refOf(dexU16(in.ops))
-	if desc != "I" {
-		p.falla(in, "a static access of type "+string(desc[0])+": solo se midió el entero")
+	tipo := byte(0)
+	if len(desc) > 0 {
+		tipo = desc[0]
+	}
+	if desc != "I" && tipo != 'L' {
+		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero y la referencia; lo demas no")
 		return
 	}
 	campo, ok := p.t.fieldIdx[fieldKey{owner: owner, typeOf: desc, name: nombre}]
@@ -277,9 +287,21 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if escribe {
 		op = opSput
 	}
-	r := p.toma(in)
+	if tipo == 'L' {
+		if escribe {
+			op = opSputObject
+		} else {
+			op = opSgetObject
+		}
+	}
+	// al escribir el registro sale de la pila, y **no** se pide uno nuevo: pedirlo antes de sacarlo
+	// dejaba un temporal asignado y perdido por cada `putstatic`, y con dos en un método el marco se
+	// quedaba sin temporales —lo destapó el banco al añadir un `println` con concatenación (§62)—
+	var r int
 	if escribe {
 		r = p.pop(in)
+	} else {
+		r = p.toma(in)
 	}
 	p.palabra(uint16(op) | uint16(r&0xff)<<8)
 	if !p.indice(campo, in, "the field_id of the static access") {

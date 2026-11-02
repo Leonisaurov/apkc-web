@@ -49,21 +49,25 @@ cp "$TRABAJO/jc/p/Arranque.class" "$TRABAJO/nuestro/p/"
 "$BT/d8" --release --min-api 21 --output "$TRABAJO/d8desde" \
 	"$TRABAJO/nuestro/p/Ver.class" "$TRABAJO/jc/p/Arranque.class" >/dev/null 2>&1
 
-# 3. la JVM, que es el oráculo que no necesita teléfono
+# 3. la JVM, que es el oráculo que no necesita teléfono: código de salida **y texto**
 set +e
 java_out=$("$JDK/bin/java" -cp "$TRABAJO/scr:$TRABAJO/jc" p.Arranque 2>&1); jvm=$?
 set -e
-echo "  jvm (javac): rc=$jvm $java_out"
+echo "  jvm (javac): rc=$jvm, salida: $(printf '%s' "$java_out" | tr '\n' '|')"
 
 # 4. el aparato ejecuta los tres dex, sin instalar nada
 sube() { # nombre -> /data/local/tmp/ nombre .dex
 	base64 -w0 "$2" | "$RISH" -c "toybox base64 -d > /data/local/tmp/$1.dex"
 }
-corre() { # alias -> rc y stderr del app_process (un golpe de rish puede venir vacio: se reintenta)
+corre() { # alias -> salida y rc del app_process. La salida se deja en un fichero del aparato y se baja
+	# en base64: con una tuberia directa el cliente de rish deja el texto del programa en el terminal y
+	# devuelve solo la ultima linea, y el banco compararia contra nada (visto en la primera corrida).
 	i=0
 	while [ $i -lt 3 ]; do
-		sal=$(	"$RISH" -c "export CLASSPATH=/data/local/tmp/$1.dex; /system/bin/app_process64 /data/local/tmp p.Arranque 2>&1; echo rc=\$?" \
-				| tr -d '\r')
+		"$RISH" -c "export CLASSPATH=/data/local/tmp/$1.dex; /system/bin/app_process64 /data/local/tmp p.Arranque > /data/local/tmp/$1.out 2>&1; echo rc=\$? >> /data/local/tmp/$1.out" >/dev/null 2>&1
+		# la bajada se redirige a un fichero local: cuando rish ve un terminal duplica ahi lo que imprime
+		"$RISH" -c "toybox base64 /data/local/tmp/$1.out" > "$TRABAJO/corre.b64" 2>/dev/null
+		sal=$(base64 -d < "$TRABAJO/corre.b64" | tr -d '\r')
 		case $sal in *"rc="*) break ;; esac
 		i=$((i + 1))
 		sleep 2
@@ -75,13 +79,18 @@ veredicto() { # alias de dex, descripcion
 	set +e
 	sal=$(corre "$s"); rcs=$(echo "$sal" | sed -n 's/^rc=//p' | tail -1)
 	set -e
+	txt=$(printf '%s\n' "$sal" | sed '/^rc=/d')
 	v=$(echo "$sal" | grep -c "VerifyError\|NoClassDefFound" || true)
-	if [ "$rcs" = "$jvm" ] && [ "$v" = "0" ]; then
-		echo "  $t: rc=$rcs igual que la JVM  ok"
+	if [ "$rcs" = "$jvm" ] && [ "$txt" = "$java_out" ] && [ "$v" = "0" ]; then
+		echo "  $t: rc=$rcs y salida igual a la JVM  ok"
 	else
-		echo "  $t: rc=$rcs (la JVM dice $jvm)  FALLO"; echo "$sal" | sed 's/^/      /'; exit 1
+		echo "  $t: rc=$rcs y salida «$(printf '%s' "$txt" | tr '\n' '|')» contra rc=$jvm «$(printf '%s' "$java_out" | tr '\n' '|')»  FALLO"
+		printf '%s\n' "$sal" | sed 's/^/      /'
+		exit 1
 	fi
-	dv=$("$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$?")
+	"$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$? > /data/local/tmp/$s.dv" >/dev/null 2>&1
+	"$RISH" -c "toybox cat /data/local/tmp/$s.dv" > "$TRABAJO/dv.txt" 2>/dev/null
+	dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
 	[ "$dv" = "0" ] && echo "    dexdump verificando: rc 0" || { echo "    dexdump rc=$dv"; exit 1; }
 }
 sube bnuestro "$TRABAJO/nuestro.dex"
@@ -91,12 +100,15 @@ veredicto bnuestro "nuestro dex (Go de punta a punta)"
 veredicto bd8 "dex de d8 sobre javac"
 veredicto bd8desde "dex de d8 sobre nuestra Ver"
 
-# 5. el doble oráculo, en este caso nuevo: si `d8` dexa lo mismo sobre nuestra `Ver` que sobre la de
-#    javac, el emisor está escribiendo el mismo bytecode que javac
+# 5. el doble oráculo: se informa, no se exige. `d8` sobre nuestra `Ver` y sobre la de javac no salen
+#    iguales porque el código de las dos clases no es el mismo (javac pliega `new StringBuilder();
+#    append("...")` en el constructor `StringBuilder(String)` y nosotros escribimos las dos filas, §53),
+#    y eso es una diferencia de forma ya aceptada. Lo que sí se exige es que las dos *ejecuten* igual,
+#    que es lo que comprueban los veredictos de arriba.
 if cmp -s "$TRABAJO/d8/classes.dex" "$TRABAJO/d8desde/classes.dex"; then
-	echo "  d8 sobre javac y d8 sobre nuestra Ver: $(wc -c < "$TRABAJO/d8/classes.dex" | tr -d ' ') bytes idénticos  ok"
+	echo "  d8 sobre javac y d8 sobre nuestra Ver: $(wc -c < "$TRABAJO/d8/classes.dex" | tr -d ' ') bytes idénticos"
 else
-	echo "  d8 sobre javac y d8 sobre nuestra Ver DIFIEREN (nuestro emisor escribio otra cosa)"; exit 1
+	echo "  d8 sobre javac y d8 sobre nuestra Ver: $(wc -c < "$TRABAJO/d8/classes.dex" | tr -d ' ') y $(wc -c < "$TRABAJO/d8desde/classes.dex" | tr -d ' ') bytes (forma distinta: javac pliega el primer append en el constructor, §53)"
 fi
 
 # 6. y la comprobación de interoperabilidad que ningun oráculo de bytes daba: nuestro .class NO

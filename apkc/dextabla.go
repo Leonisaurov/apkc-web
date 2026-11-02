@@ -210,7 +210,10 @@ func (t *dexTables) collectCode(m classMethod, p *pool) error {
 				return fmt.Errorf("ldc without its operand")
 			}
 			t.followConstant(x, int(in.ops[0]))
-		case "getfield", "putfield":
+		case "getfield", "putfield", "getstatic", "putstatic":
+			// los estaticos tambien: medido el 2026-11-01 con `System.out.println`, donde el campo
+			// vive en otra clase (Ljava/lang/System;) y la pasada de colecta no lo veia, asi que el
+			// traductor se quedaba sin su field_id ("a field that was never interned")
 			owner, name, desc, _ := x.refOf(dexU16(in.ops))
 			t.internField(owner, desc, name)
 		case "invokevirtual", "invokespecial", "invokestatic", "invokeinterface":

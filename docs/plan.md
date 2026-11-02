@@ -45,7 +45,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
-| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01 con su inventario**: hoy la página compila apps sencillas; faltan bucles, arreglos, `switch`, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. Cada ítem tiene su medición, su oráculo y su coste escrito abajo | la sección «Fase 5» de este plan |
+| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan bucles, arreglos, `switch`, `try/catch`, `long`/`float`/`double`, `char`, miembros privados, `throws`, interfaces e iconos/calificadores en recursos. **Hechos 5.24 a 5.27** (estáticos de referencia, temporales, sobrecargas y llamadas sin receptor) y el `invokestatic` sin argumentos, todo al empezar a **ejecutar** los dex (§61 y §62); lo que sigue es 5.23 (`StackMapTable`) y 5.10 (bucles) | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
@@ -553,8 +553,10 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.20 | versión de platform no medida y `--codename`/`--sdk-version` | `linker.go:230` | la tabla nombre↔API que usa `buildVersionCodename`/`versionName` en la cabecera AXML | XS por versión |
 | 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | la pestaña pasa `--keystore` con el de depuración | lectura de PKCS#12/JKS ya hecha (`apkc sign`); falta el camino de v3 (rechazado por nombre en `apkc verify`) y medir qué acepta `apksigner` | S/M |
 | 5.23 | `StackMapTable` en el `.class` que emitimos | el emisor no escribe el atributo: `java -Xverify:all` rechaza cualquier método con ramas (`Expecting a stackmap frame at branch target`), medido en el §61 | los once marcos del JVMS 4.10.1 (`same_frame`, `append_frame`, `chop_frame`, `same_locals_1_stack_item…`) contra `javap -v` de javac en las mismas sondas, y el ejecutor del banco con `java -Xverify:all` como oráculo | M |
-| 5.24 | `getstatic`/`putstatic` de una **referencia** (`System.out`) | `dexinstr.go:265`: «a static access of type L: solo se midió el entero» | `sget-object`/`sput-object` (21c) sobre las palabras de `d8`, y el `Ljava/io/PrintStream;` en `type_ids`/`field_ids` | S |
-| 5.25 | temporales en el punto de unión de un `if` con `else` | `dexinstr.go:134` (`toma`): «it needs more temporaries than the max stack javap measured», medido en el §61 | descargar la pila en la unión y revisar el presupuesto `max_stack + locales + 1` (párrafo 50) contra la diana ya escrita arriba en el §61: `registers 3, ins 0, outs 0`, 20 palabras | M |
+| 5.24 | `getstatic`/`putstatic` de una **referencia** (`System.out`) | **HECHO** (§62): medido `sget-object` `6200` y `sput-object` `6901` en el fichero de `d8`; `accesoEstatico` acepta `I` y `L` y el resto se rechaza por nombre. De paso, el internado no recorría los estáticos de otra clase y un campo ajeno nunca entraba en `field_ids` (corregido en `dextabla.go`) | — | hecho |
+| 5.25 | temporales en el punto de unión de un `if` con `else` | **HECHO, y la causa no era la unión** (§62): cada `putstatic` pedía un temporal con `toma` y luego lo tiraba al sacar el registro de la pila, así que el marco se quedaba sin temporales; corregido. La unión de brazos no necesitó nada. Queda por medir el presupuesto cuando un bucle tenga valores vivos en la cabecera (5.10) | — | hecho |
+| 5.26 | Resolución de sobrecargas (`println(String)` salía `println(Z)`) | **HECHO** (§62): candidatas por nombre y aridad de la jerarquía, exacta por descriptores, si no la aplicable más específica por cadena de padres e interfaces del jar (JVMS 15.12.2.5), y si no rechazo por nombre. `boxing`, varargs, arrays y ensanchamiento siguen fuera, por nombre | — | hecho |
+| 5.27 | Llamar a un método **sin receptor** desde un `static` | **HECHO** (§62): javac escribe `invokestatic` contra la clase actual, que es la forma 35c ya medida; se rechaza si el método no es estático | — | hecho |
 | 5.22 | `invokedynamic` (lambdas y references de método) | el lector de `.class` lo rechaza en `refuseOutsideSubset` | la desugración completa: cómo `d8` sintetiza `lambda$…`, quién recibe las variables capturadas y qué `method_type`/`method_handle` llegan al dex | XL |
 
 ### Dependencias y orden
@@ -573,6 +575,11 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 - **Séptimo (opcional, el más caro):** 5.21, 5.22.
 - **5.23 y 5.24 tocan antes**: son de la familia «el fuente real lo necesita» (`System.out` y el
   `.class` verificable), no de control de flujo; 5.25 es el preludio obligado de 5.10.
+- **Lo primero de todo fue el ejecutor** (§61): antes de tocar un ítem, `banco/banco.sh` corre el fuente
+  por los cuatro caminos. En una tarde destapó cinco cosas que ningún oráculo de bytes veía (5.23 a
+  5.27 y el `invokestatic` sin argumentos).
+- **Lo que sigue**: 5.23 (`StackMapTable`) para que el `.class` sea interoperable, y después **5.10
+  (bucles)**, que es el ítem grande de control de flujo y el que abre 5.11 (arreglos) y 5.12 (`switch`).
 
 ### Hitos con prueba en el teléfono
 

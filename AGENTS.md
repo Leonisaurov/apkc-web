@@ -307,6 +307,22 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   **referencia** (`System.out`, plan 5.24) y el **presupuesto de temporales en la unión de un `if` con
   `else`** (plan 5.25, con la diana de `d8` copiada en el §61: `registers 3, ins 0, outs 0`, 20 palabras y el
   pliegue `total - 4` sobre el registro previo, que sale `add-int/lit8 …, #-2`).
+- **Ejecutando de verdad salieron tres fallos más, y el banco ya compara el texto** (§62): el fuente de
+  prueba imprime con `System.out.println`, así que los cuatro caminos se comparan por **texto y código de
+  salida** (`total 7` / `total 9`, `rc 9` en los tres dex, `dexdump` verificando `rc 0`). Lo que apareció:
+  **`sget-object`/`sput-object` medidos** (`6200 0000` y `6901 0100`, misma 21c con el hueco del `wide` en
+  medio, plan 5.24) y, al usarlos, que **el internado no recorría los estáticos de otra clase**
+  (`System.out` nunca entraba en `field_ids`: `collectCode` sólo seguía `getfield`/`putfield`); **cada
+  `putstatic` se llevaba un temporal** porque `accesoEstatico` pedía uno con `toma` y luego usaba el que
+  sacaba de la pila —con dos en un método el marco se quedaba vacío, y era la causa real que el plan
+  llamaba 5.25, no la unión de brazos—; y **la sobrecarga se elegía por nombre y aridad**, así que
+  `println(que)` con un String salía `println:(Z)V`: ahora es exacta por descriptores y, si no, la
+  aplicable **más específica** por padres e interfaces del jar (JVMS 15.12.2.5, lo que pide
+  `Menu.add("…")`), y sin candidata se rechaza por nombre (plan 5.26). De paso, llamar **sin receptor
+  desde un `static`** ya se emite como `invokestatic` (5.27). El dex de `d8` sobre nuestra `Ver` y el de
+  javac difieren de forma (javac pliega el primer `append` en el constructor `StringBuilder(String)`):
+  el banco lo informa y exige sólo que ejecuten igual. Pruebas: `apkc/javaemisor_sobrecarga_test.go`
+  (tres, saltan sin jar).
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -332,7 +348,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **216 PASS + 2 SKIP** nativa y **194 PASS + 24 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **219 PASS + 2 SKIP** nativa y **194 PASS + 27 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

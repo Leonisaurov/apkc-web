@@ -650,67 +650,260 @@ func (e *emisor) usarDescriptor(desc string) {
 	}
 }
 
-// buscarMetodo recorre la clase y sus padres por nombre y aridad. Devuelve la descripcion, los accesos del
-// duenio (para el estatico y el interface) y el duenio, que es lo unico que se lee del jar.
-func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int) (desc string, acceso int, err error) {
+// candidato: una de las sobrecargas que sirven para una llamada, con los accesos de quien la declara.
+type candidato struct {
+	desc   string
+	acceso int
+}
+
+// buscarMetodo recorre la clase y sus padres por nombre y aridad, y elige la sobrecarga. Con **una**
+// candidata devuelve esa, que es lo que este codigo habia hecho siempre; con varias se queda con la que
+// coincide **exactamente** con los descriptores de los argumentos. Medido el 2026-11-01 (parrafo 62):
+// `System.out.println(que)` con `que` de tipo String bajaba `println:(Z)V` —la primera declarada en
+// PrintStream— porque el recorrido paraba en el primer nombre con la aridad debida; javac escribe
+// `println:(Ljava/lang/String;)V`, y el dex lo refleja palabra a palabra. La eleccion por **subtipo**
+// (`setText(CharSequence)` con un String, que no tiene candidata exacta y hoy se resuelve por haber una
+// sola), el `boxing` y los varargs **no estan medidos**: con varias candidatas y ninguna exacta se
+// rechaza por nombre, con las candidatas a la vista.
+func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []string) (candidato, error) {
+	cands, err := ctx.candidatos(interno, nombre, argc)
+	if err != nil {
+		return candidato{}, err
+	}
+	if len(cands) == 0 {
+		return candidato{}, fmt.Errorf("el metodo %s.%s con %d argumentos no esta en %s ni en sus padres",
+			interno, nombre, argc, interno)
+	}
+	if len(cands) == 1 {
+		return cands[0], nil
+	}
+	exactas := []candidato{}
+	for _, c := range cands {
+		_, _, ps := splitDescriptor(c.desc)
+		if len(ps) != len(tipos) {
+			continue
+		}
+		todas := true
+		for i := range ps {
+			if ps[i] != tipos[i] {
+				todas = false
+				break
+			}
+		}
+		if todas {
+			exactas = append(exactas, c)
+		}
+	}
+	if len(exactas) == 1 {
+		return exactas[0], nil
+	}
+	// sin candidata exacta, la regla de javac es la aplicable mas especifica (JVMS 15.12.2.5), y lo que
+	// se puede medir aquí es la parte de tipos de referencia: identidad o subida por la cadena de padres
+	// y las interfaces que el `.class` del jar declara. El caso real que lo pidió es `Menu.add("...")`
+	// del fixture: `add(CharSequence)` y `add(int)`, y el String solo cabe en la primera.
+	aplicables := []candidato{}
+	for _, c := range cands {
+		_, _, ps := splitDescriptor(c.desc)
+		if len(ps) != len(tipos) {
+			continue
+		}
+		cabe := true
+		for i := range ps {
+			if !ctx.asignable(tipos[i], ps[i]) {
+				cabe = false
+				break
+			}
+		}
+		if cabe {
+			aplicables = append(aplicables, c)
+		}
+	}
+	if len(aplicables) == 1 {
+		return aplicables[0], nil
+	}
+	if len(aplicables) > 1 {
+		mas := []candidato{}
+		for _, a := range aplicables {
+			especifica := true
+			for _, b := range aplicables {
+				if a.desc == b.desc || ctx.masEspecifico(a.desc, b.desc) {
+					continue
+				}
+				especifica = false
+				break
+			}
+			if especifica {
+				mas = append(mas, a)
+			}
+		}
+		if len(mas) == 1 {
+			return mas[0], nil
+		}
+	}
+	posibles := make([]string, 0, len(cands))
+	for _, c := range cands {
+		posibles = append(posibles, c.desc)
+	}
+	return candidato{}, fmt.Errorf("%s.%s tiene %d sobrecargas de %d argumentos (%s) y los tipos llamados son (%s): ninguna es la mas especifica para este subconjunto",
+		interno, nombre, len(cands), argc, strings.Join(posibles, " "), strings.Join(tipos, " "))
+}
+
+// masEspecifico: si cada parametro de `a` cabe en el de `b` (y alguno no al revés, o son iguales).
+func (ctx *contextoJava) masEspecifico(a, b string) bool {
+	_, _, pa := splitDescriptor(a)
+	_, _, pb := splitDescriptor(b)
+	if len(pa) != len(pb) {
+		return false
+	}
+	for i := range pa {
+		if !ctx.asignable(pa[i], pb[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// asignable: si un valor del tipo `desde` cabe en un parámetro del tipo `hasta`. Identidad, y entre
+// referencias la subida por la cadena de padres y por las interfaces. Los arrays y el ensanchamiento de
+// primitivos no están medidos: salen `false`, y eso deja la llamada en el rechazo por nombre.
+func (ctx *contextoJava) asignable(desde, hasta string) bool {
+	if desde == hasta {
+		return true
+	}
+	if !esTipoDeReferencia(desde) || !esTipoDeReferencia(hasta) {
+		return false
+	}
+	if desde[0] != 'L' || hasta[0] != 'L' {
+		return false
+	}
+	objetivo := hasta[1 : len(hasta)-1]
+	vistos := map[string]bool{}
+	pila := []string{desde[1 : len(desde)-1]}
+	for len(pila) > 0 {
+		actual := pila[len(pila)-1]
+		pila = pila[:len(pila)-1]
+		if actual == objetivo {
+			return true
+		}
+		if vistos[actual] || actual == "java/lang/Object" {
+			continue
+		}
+		vistos[actual] = true
+		padre, interfaces, err := ctx.superEInterfaces(actual)
+		if err != nil {
+			continue
+		}
+		if padre != "" {
+			pila = append(pila, padre)
+		}
+		pila = append(pila, interfaces...)
+	}
+	return false
+}
+
+// superEInterfaces: el padre y las interfaces de un tipo, venga del fuente o del `android.jar`.
+func (ctx *contextoJava) superEInterfaces(interno string) (padre string, interfaces []string, err error) {
+	if propia, ok := ctx.clasePropia(interno); ok {
+		p, err := ctx.padreDe(propia)
+		return p, nil, err
+	}
+	c, err := ctx.busc.claseDelJar(interno)
+	if err != nil {
+		return "", nil, err
+	}
+	if c.Super != "" {
+		padre = internoDeDescriptor(c.Super)
+	}
+	for _, i := range c.Interfaces {
+		interfaces = append(interfaces, internoDeDescriptor(i))
+	}
+	return padre, interfaces, nil
+}
+
+func esTipoDeReferencia(desc string) bool {
+	return len(desc) > 0 && (desc[0] == 'L' || desc[0] == '[')
+}
+
+// candidatos: las sobrecargas de nombre y aridad dados, en el orden de la jerarquia (la clase propia
+// primero, luego el `android.jar`) y deduplicadas por descriptor, que es como javac ve un mismo metodo
+// declarado y heredado.
+func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candidato, error) {
+	sal := []candidato{}
+	vistas := map[string]bool{}
+	poner := func(c candidato) {
+		if vistas[c.desc] {
+			return
+		}
+		vistas[c.desc] = true
+		sal = append(sal, c)
+	}
 	actual := interno
 	for visits := 0; actual != "" && visits < 32; visits++ {
 		propia, esPropia := ctx.clasePropia(actual)
 		if !esPropia {
-			d, a, err := ctx.busc.enLaCadena(actual, nombre, argc)
+			cs, err := ctx.busc.candidatosDelJar(actual, nombre, argc)
 			if err != nil {
-				return "", 0, fmt.Errorf("%s: %w", interno, err)
+				return nil, err
 			}
-			return d, a, nil
+			for _, c := range cs {
+				poner(c)
+			}
+			return sal, nil
 		}
 		for _, m := range propia.metodos {
-			if m.nombre == nombre && len(m.params) == argc {
-				d, err := ctx.descDeMetodo(m)
-				if err != nil {
-					return "", 0, err
-				}
-				acc := 0
-				if m.esPublico {
-					acc |= accPublic
-				}
-				if m.esEstatico {
-					acc |= accStatic
-				}
-				if m.esFinal {
-					acc |= accFinal
-				}
-				return d, acc, nil
+			if m.nombre != nombre || len(m.params) != argc {
+				continue
 			}
+			d, err := ctx.descDeMetodo(m)
+			if err != nil {
+				return nil, err
+			}
+			acceso := 0
+			if m.esPublico {
+				acceso |= accPublic
+			}
+			if m.esEstatico {
+				acceso |= accStatic
+			}
+			if m.esFinal {
+				acceso |= accFinal
+			}
+			poner(candidato{desc: d, acceso: acceso})
 		}
 		if actual == "java/lang/Object" {
 			break
 		}
+		var err error
 		if actual, err = ctx.padreDe(propia); err != nil {
-			return "", 0, err
+			return nil, err
 		}
 	}
-	return "", 0, fmt.Errorf("el metodo %s.%s con %d argumentos no esta en %s ni en sus padres", interno, nombre, argc, interno)
+	return sal, nil
 }
 
-// enLaCadena busca un metodo en una clase del jar y sus padres.
-func (b *buscadorDeClases) enLaCadena(interno, nombre string, argc int) (desc string, accesoDuenio int, err error) {
+// candidatosDelJar: lo mismo sobre las clases del `android.jar`, subiendo por la cadena de padres.
+func (b *buscadorDeClases) candidatosDelJar(interno, nombre string, argc int) ([]candidato, error) {
+	sal := []candidato{}
+	vistas := map[string]bool{}
 	actual := interno
 	for visits := 0; actual != "" && visits < 32; visits++ {
 		c, err := b.claseDelJar(actual)
 		if err != nil {
-			return "", 0, err
+			return nil, err
 		}
 		for _, m := range c.Methods {
-			if m.Name == nombre && cuentaArgumentosJava(m.Desc) == argc {
-				return m.Desc, m.Access, nil
+			if m.Name != nombre || cuentaArgumentosJava(m.Desc) != argc || vistas[m.Desc] {
+				continue
 			}
+			vistas[m.Desc] = true
+			sal = append(sal, candidato{desc: m.Desc, acceso: m.Access})
 		}
 		if c.Super == "" {
 			break
 		}
 		actual = internoDeDescriptor(c.Super)
 	}
-	return "", 0, fmt.Errorf("%s no declara %s con %d argumentos ni lo hereda", interno, nombre, argc)
+	return sal, nil
 }
 
 type campoResuelto struct {
@@ -1656,47 +1849,74 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 		}
-		desc, _, err := e.ctx.buscarMetodo(dueño, l.nombre, argc)
+		e.cargaDe(0, "L")
+		tipos, err := e.argumentos(l.args)
+		if err != nil {
+			return "", err
+		}
+		cand, err := e.ctx.buscarMetodo(dueño, l.nombre, argc, tipos)
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 		}
-		e.cargaDe(0, "L")
-		if err := e.argumentos(l.args); err != nil {
-			return "", err
-		}
-		e.invoca(opInvokespec, dueño, l.nombre, desc, argc+1)
-		return vueltaDe(desc), nil
+		e.invoca(opInvokespec, dueño, l.nombre, cand.desc, argc+1)
+		return vueltaDe(cand.desc), nil
 	}
 	if l.base == nil {
 		if e.estatico {
-			return "", fmt.Errorf("linea %d: llamar %s sin receptor desde un metodo estatico no esta medido", l.donde.linea, l.nombre)
-		}
-		// receptor implicito: el Methodref va contra la clase actual, medido en el parrafo 40
-		desc, _, err := e.ctx.buscarMetodo(e.interno, l.nombre, argc)
-		if err != nil {
-			return "", fmt.Errorf("linea %d: no existe %s con %d argumentos en %s ni en sus padres", l.donde.linea, l.nombre, argc, e.interno)
-		}
-		e.cargaDe(0, "L")
-		if err := e.argumentos(l.args); err != nil {
-			return "", err
-		}
-		e.invoca(opInvokevirt, e.interno, l.nombre, desc, argc+1)
-		return vueltaDe(desc), nil
-	}
-	if acc, esAcceso := l.base.(jacceso); esAcceso && acc.base == nil && e.locales[acc.nombre].desc == "" {
-		if interno, err := e.ctx.resolverSimple(acc.nombre); err == nil {
-			desc, accesoDuenio, err := e.ctx.buscarMetodo(interno, l.nombre, argc)
+			// sin receptor dentro de un metodo static: Java solo lo admite si el metodo es estatico, y
+			// javac escribe `invokestatic` contra la clase actual, que es la misma forma ya medida (35c).
+			// Los tipos se estiman **antes** de bajar los argumentos porque la resolucion tiene que elegir
+			// la sobrecarga y aqui no hay receptor que cargar primero (parrafo 62).
+			tipos := make([]string, 0, argc)
+			for _, arg := range l.args {
+				d, err := e.tipoEstimado(arg)
+				if err != nil {
+					return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+				}
+				tipos = append(tipos, d)
+			}
+			cand, err := e.ctx.buscarMetodo(e.interno, l.nombre, argc, tipos)
 			if err != nil {
 				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 			}
-			if accesoDuenio&accStatic == 0 {
-				return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
+			if cand.acceso&accStatic == 0 {
+				return "", fmt.Errorf("linea %d: %s no es estatico y desde un metodo estatico hace falta receptor", l.donde.linea, l.nombre)
 			}
-			if err := e.argumentos(l.args); err != nil {
+			if _, err := e.argumentos(l.args); err != nil {
 				return "", err
 			}
-			e.invoca(opInvokestat, interno, l.nombre, desc, argc)
-			return vueltaDe(desc), nil
+			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
+			return vueltaDe(cand.desc), nil
+		}
+		// receptor implicito: el Methodref va contra la clase actual, medido en el parrafo 40
+		e.cargaDe(0, "L")
+		tipos, err := e.argumentos(l.args)
+		if err != nil {
+			return "", err
+		}
+		cand, err := e.ctx.buscarMetodo(e.interno, l.nombre, argc, tipos)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: no existe %s con %d argumentos en %s ni en sus padres: %w",
+				l.donde.linea, l.nombre, argc, e.interno, err)
+		}
+		e.invoca(opInvokevirt, e.interno, l.nombre, cand.desc, argc+1)
+		return vueltaDe(cand.desc), nil
+	}
+	if acc, esAcceso := l.base.(jacceso); esAcceso && acc.base == nil && e.locales[acc.nombre].desc == "" {
+		if interno, err := e.ctx.resolverSimple(acc.nombre); err == nil {
+			tipos, err := e.argumentos(l.args)
+			if err != nil {
+				return "", err
+			}
+			cand, err := e.ctx.buscarMetodo(interno, l.nombre, argc, tipos)
+			if err != nil {
+				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+			}
+			if cand.acceso&accStatic == 0 {
+				return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
+			}
+			e.invoca(opInvokestat, interno, l.nombre, cand.desc, argc)
+			return vueltaDe(cand.desc), nil
 		}
 	}
 	d, err := e.exp(l.base)
@@ -1707,12 +1927,13 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		return "", fmt.Errorf("linea %d: no se puede llamar %s sobre un %s", l.donde.linea, l.nombre, d)
 	}
 	receptor := d[1 : len(d)-1]
-	desc, _, err := e.ctx.buscarMetodo(receptor, l.nombre, argc)
+	tipos, err := e.argumentos(l.args)
+	if err != nil {
+		return "", err
+	}
+	cand, err := e.ctx.buscarMetodo(receptor, l.nombre, argc, tipos)
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
-	}
-	if err := e.argumentos(l.args); err != nil {
-		return "", err
 	}
 	accesosReceptor, err := e.ctx.accesosDe(receptor)
 	if err != nil {
@@ -1722,17 +1943,22 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 	if accesosReceptor&accInterface != 0 {
 		opcode = opInvointf
 	}
-	e.invoca(opcode, receptor, l.nombre, desc, argc+1)
-	return vueltaDe(desc), nil
+	e.invoca(opcode, receptor, l.nombre, cand.desc, argc+1)
+	return vueltaDe(cand.desc), nil
 }
 
-func (e *emisor) argumentos(args []jexpr) error {
+// argumentos: baja los argumentos al pico y devuelve sus descriptores, que es lo que necesita
+// buscarMetodo para elegir entre sobrecargas (parrafo 62).
+func (e *emisor) argumentos(args []jexpr) ([]string, error) {
+	tipos := make([]string, 0, len(args))
 	for _, arg := range args {
-		if _, err := e.exp(arg); err != nil {
-			return err
+		d, err := e.exp(arg)
+		if err != nil {
+			return nil, err
 		}
+		tipos = append(tipos, d)
 	}
-	return nil
+	return tipos, nil
 }
 
 func (e *emisor) superDe() (string, error) { return e.ctx.padreDe(e.c) }
@@ -1755,7 +1981,7 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		e.emite(opDup)
 		e.sube()
 		e.cargaDe(0, "L")
-		if err := e.argumentos(n.args); err != nil {
+		if _, err := e.argumentos(n.args); err != nil {
 			return "", err
 		}
 		sb := strings.Builder{}
@@ -1784,7 +2010,7 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	e.sube()
 	e.emite(opDup)
 	e.sube()
-	if err := e.argumentos(n.args); err != nil {
+	if _, err := e.argumentos(n.args); err != nil {
 		return "", err
 	}
 	sb := strings.Builder{}

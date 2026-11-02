@@ -3372,6 +3372,77 @@ SKIP** en el hospedador con forma de navegador, con las cuentas de tamaño del d
 ninguna sucesión del fixture lleva una llamada sin argumentos) y el gate de `studio/e2e.sh` otra vez en
 orden con los mismos apks de la pestaña (10014, 9725 y 10285 bytes).
 
+## 62. Con el banco ejecutando de verdad: estáticos de referencia, sobrecargas y un temporal que se perdía
+
+Seguir el camino del §61 —ejecutar en vez de instalar— destapó cuatro cosas más, y tres eran fallos
+reales del emisor y del traductor. El banco (`banco/banco.sh`) ya no compara solo el código de salida:
+el fuente de prueba imprime con `System.out.println`, así que compara **el texto y el código de salida**
+del mismo programa por los cuatro caminos.
+
+**1. `sget-object` y `sput-object`, medidos.** Sonda `Lanza` con `System.out.println(que)` y
+`mensaje = que` (un String estático). En el fichero de `d8`: `sget-object v0, field@0000` → **`6200
+0000`** y `sput-object v1, field@0001` → **`6901 0100`**, o sea la misma forma 21c con el hueco de dos
+opcodes entre el entero y el de objeto (`sget` 0x60, `wide` 0x61, `object` 0x62; `sput` 0x67, 0x68, 0x69).
+`accesoEstatico` acepta ahora los dos prefijos medidos (`I` y `L`) y sigue rechazando el resto por nombre.
+Con eso, nuestro dex de `Lanza.di` sale **palabra a palabra igual** al de `d8` (`6200 0000 | 6e20 0000
+1000 | 6901 0100 | 0e00`), y en el aparato imprime `uno`/`dos`.
+
+**2. El internado no recorría `getstatic`/`putstatic`.** Con el objeto mío, `apkc dex` cortó con
+`a field that was never interned (Ljava/lang/System;.out Ljava/io/PrintStream;)`: `collectCode` seguía
+`getfield`/`putfield` e ignoraba los estáticos, así que un campo de **otra** clase nunca entraba en
+`field_ids`. Los propios funcionaban por la pasada de `collectClasses`, que interna todos los campos de
+la clase. Corregido en `dextabla.go` (mismo `internField`, cuatro nombres en el `case`).
+
+**3. Cada `putstatic` se llevaba un temporal.** Con el `println` del banco, el traductor cortó con
+`at pc 34, ldc: it needs more temporaries than the max stack javap measured`. Traza de `toma`/`suelta`
+con el `println` de Go a la vista: `accesoEstatico` pedía un registro con `toma` **también al
+escribir** y luego lo tiraba (`r = p.pop(in)`), así que cada `putstatic` dejaba un temporal asignado y
+perdido; con dos en un método el marco se quedaba sin registros. Corregido: al escribir el registro sale
+de la pila y no se pide ninguno. Es el hueco que el plan llamaba 5.25 («temporales en la unión de un
+`if`»): la unión no tenía nada que ver.
+
+**4. La sobrecarga se elegía por nombre y aridad.** Ejecutando la sonda: nuestro dex no imprimía nada y
+`dexdump` enseñó que la llamada iba a `PrintStream.println:(Z)V` —la primera sobrecarga declarada—.
+`javap -v` sobre nuestro `.class` lo confirmó: `Methodref java/io/PrintStream.println:(Z)V` donde javac
+escribe `(Ljava/lang/String;)V`. `buscarMetodo` recorría por nombre y número de argumentos; ahora:
+1) candidatas por nombre y aridad, deducidas de la jerarquía; 2) con una sola, esa (lo de siempre);
+3) con varias, la que coincide **exactamente** con los descriptores de los argumentos; 4) si ninguna es
+exacta, la **aplicable más específica** por la cadena de padres y las interfaces del jar (JVMS
+15.12.2.5), que es lo que pide `Menu.add("…")` del fixture —`add(CharSequence)` y `add(int)`, y el
+String solo cabe en la primera—; 5) si no hay una sola, **rechazo por nombre** con las candidatas y los
+tipos a la vista. El `boxing`, los varargs, los arrays y el ensanchamiento de primitivos no están
+medidos y caen en el rechazo. Los tipos de los argumentos salen del propio emisor (`e.exp` devuelve el
+descriptor al bajar el valor; para las llamadas sin receptor dentro de un `static`, donde hay que
+resolver antes de bajar nada, se estiman con `tipoEstimado`).
+
+**Y una cosa que estaba rechazada y no hacía falta: llamar sin receptor desde un `static`.** Los tests
+de arriba tropezaron con `llamar di sin receptor desde un metodo estatico no esta medido`; javac escribe
+`invokestatic` contra la clase actual, que es la forma 35c ya medida, y ahora se emite así (y se sigue
+rechazando si el método no es estático).
+
+**Pruebas permanentes**: `apkc/javaemisor_sobrecarga_test.go` comprueba contra el `android.jar` que
+`println(String)` e `println(int)` son las que se internan y que `(Z)V` no aparece, que entre
+`h(CharSequence)` y `h(Object)` gana la primera con un String, y que sin candidata aplicable el mensaje
+nombra las sobrecargas y los tipos. El banco, de punta a punta: nuestro dex imprime `total 7`/`total 9`
+y sale con `rc 9`, **igual que la JVM y que los dos dex de `d8`**, y los tres pasan `dexdump
+verificando` con `rc 0`. El dex de `d8` sobre nuestra `Ver` y sobre la de javac miden lo mismo (1404
+bytes) pero **no son idénticos**: javac pliega `new StringBuilder(); append("…")` en el constructor
+`StringBuilder(String)` —36 palabras y 4 registros— y nosotros escribimos las dos filas del §53 —37
+palabras y 3 registros—; el banco lo informa en vez de fallar, porque la forma del código es una
+diferencia aceptada y lo que se exige es que ejecute igual.
+
+**Lo que costó del banco mismo**, para no repetirlo: `rish` duplica al terminal lo que imprime la orden
+remota cuando la salida es un terminal, así que las capturas van por fichero en el aparato y se bajan en
+`base64` (una tubería directa devolvía solo la última línea y el banco comparaba contra nada). Y una
+trampa de proceso: el primer gate de este párrafo salió con **un problema** —«el proyecto generado no
+compila en nativo»— porque se lanzó con un `apkc-gate` **viejo**, de antes de la resolución nueva;
+reconstruidos los dos binarios, el mismo gate queda en orden. Los apks de la pestaña cambian de tamaño
+con el código emitido: de 9725 y 10285 bytes a **9720** y **10280**.
+
+Suite: **219 PASS + 2 SKIP** nativa (tres nuevas: dos de sobrecarga y la del rechazo sin candidata) y
+**194 PASS + 27 SKIP** en el hospedador, donde las tres nuevas se saltan si no hay `android.jar`
+montado; el gate de `studio/e2e.sh`, en orden.
+
 
 
 
