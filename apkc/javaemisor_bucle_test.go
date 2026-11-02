@@ -139,12 +139,11 @@ func codeItemDeMetodo(d *dexFile, nombre string) (codeItem, error) {
 	return codeItem{}, errors.New("el método no aparece en el class_data")
 }
 
-// TestDoSwitchYTtrySiguenRechazados: la frontera escrita. Al añadir `while` y `for` no se abrió nada
-// más: lo que no está medido sigue saliendo por su nombre.
-func TestDoSwitchYTtrySiguenRechazados(t *testing.T) {
+// TestDoYTtrySiguenRechazados: la frontera escrita. Al añadir `while`, `for` y `switch` no se abrió
+// nada más: lo que no está medido sigue saliendo por su nombre.
+func TestDoYTtrySiguenRechazados(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
 		{"do-while", "package p;\npublic class A { public static void f(int n) { do { n = n + 1; } while (n < 3); } }\n", "do"},
-		{"switch", "package p;\npublic class A { public static void f(int n) { switch (n) { case 1: n = 2; } } }\n", "switch"},
 		{"try", "package p;\npublic class A { public static void f() { try { f(); } catch (RuntimeException e) { f(); } } }\n", "try"},
 	}
 	for _, c := range casos {

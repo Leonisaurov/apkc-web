@@ -10,6 +10,7 @@ public class Arranque {
         Ver.cuenta();
         Ver.cuenta();
         Ver.suma(3);
+        Ver.elige(1);
         Ver.cuenta();
         int t = Ver.total;
         System.exit(t);

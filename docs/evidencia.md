@@ -3482,9 +3482,9 @@ en 16 bits con signo y lo que no cabe se rechaza por nombre (`goto_w` no está m
 fuentes con este fork y exige que el dex sea **byte a byte** el de las clases de javac para el mismo
 fuente (dos fixtures nuevos en base64), y además comprueba la forma: `if-ge` (0x35) con +10, el `goto`
 `0x28` con **-9**, y `return-void` al final. `TestLaRamaHaciaAtrasSeEscribeComoD8` fija la vuelta en el
-traductor (cuerpo sintético, `goto` -3 palabras a la cabecera). `TestDoSwitchYTtrySiguenRechazados` deja
-escrita la frontera: `do`, `switch` y `try` siguen saliendo por su nombre, y `i++` también (se nombró en
-el portero en vez de dejar el mensaje genérico).
+traductor (cuerpo sintético, `goto` -3 palabras a la cabecera). `TestDoYTtrySiguenRechazados` deja
+escrita la frontera: `do` y `try` siguen saliendo por su nombre, y `i++` también (se nombró en
+el portero en vez de dejar el mensaje genérico). *(`switch` entró después, en el §64.)*
 
 **Ejecutado.** El dex de javac's `Bucle` traducido por nosotros imprime `10` y sale con `rc 10` en
 `app_process`; el `.class` del `while` escrito por nosotros, dexado por nosotros, también (`10`, `rc 10`),
@@ -3538,15 +3538,31 @@ tres pasan `dexdump` verificando con `rc 0`. Pruebas permanentes: `TestElSwitchS
 (las dos formas, los dos idents, las tres claves ascendentes y los destinos detrás de ellas, más el
 layout del fichero) y la del `<clinit>`.
 
-**Frontera**: el **analizador** todavía no lee `switch` del fuente (siguiente mitad de 5.12); lo que está
-medido y hecho es el traductor, que es lo que hace falta para dexar clases de javac, y por eso el banco
-sigue sin un `switch` en `p.Ver`.
+**La otra mitad: el `switch` del fuente.** El analizador lee `switch (selector) { case k: … break;
+default: … }` con claves literales enteras y sin claves repetidas, y **cada brazo tiene que terminar en
+`break` o en `return`** (la caída al siguiente se rechaza por nombre; el último brazo puede acabar sin
+`break`). El emisor escribe `tableswitch` o `lookupswitch` con la forma medida: el relleno hasta el
+múltiplo de cuatro **contado desde el principio del `Code`** y cada destino un entero de 32 bits con
+signo desde el opcode. La elección de forma es de este emisor —`tableswitch` cuando el rango no pasa del
+doble de los casos—: el criterio de javac 21 se sondeó y **no es una desigualdad sencilla** (con dos
+casos y rango 4 elige `lookupswitch`, con cuatro casos y rango 10 elige `tableswitch`, con seis y rango
+15 también `tableswitch`), así que se copia el formato, no la heurística. El resultado, con la switch
+densa de ocho casos y la dispersa de tres: el `.class` emitido tiene **el mismo `Code` que el de javac**
+(mismos `tableswitch` en el pc 1, mismos destinos 48…112, mismo `default`) y el dex de nuestras clases es
+**byte a byte** el de las clases de javac (1432 bytes, `cmp` mudo): `TestElSwitchSeEscribeComoJavac`.
+Ejecutado, los tres caminos coinciden: `100`, `105`, `999`, `2`, `9`, `rc 250` en ART con nuestro dex,
+en la JVM y en el dex de `d8` sobre nuestras clases, con `dexdump rc 0`. Y el banco lleva ahora un
+`switch` además del bucle: los cuatro caminos imprimen `total 7|total 9|total 102` y salen con `rc 102`.
+
+**Frontera**: `do-while`, `break`/`continue` fuera de un `switch`, claves negativas o que no sean
+literales, la caída de un caso al siguiente y un `default` que no esté al final (el emisor lo coloca el
+último) se rechazan por nombre.
 
 Efecto colateral medido en el gate: el bit nuevo del `<clinit>` cambia los apks de la pestaña de **9720 a
 9727** y de **10280 a 10287** bytes (el atributo de acceso del método pasa de un byte a tres en el
 `class_data`), y siguen saliendo **igual entrada por entrada** al nativo.
 
-Suite: **223 PASS + 2 SKIP** nativa y **196 PASS + 29 SKIP** en el hospedador; gate de `studio/e2e.sh`
+Suite: **225 PASS + 2 SKIP** nativa y **196 PASS + 31 SKIP** en el hospedador; gate de `studio/e2e.sh`
 en orden.
 
 

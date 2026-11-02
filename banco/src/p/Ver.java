@@ -23,4 +23,12 @@ public class Ver {
             i = i + 1;
         }
     }
+
+    public static void elige(int n) {
+        switch (n) {
+            case 0: total = total + 10; break;
+            case 1: total = total + 20; break;
+            default: total = total + 1;
+        }
+    }
 }

@@ -394,6 +394,16 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 	case jmientras:
 		ctx.registrarExpresion(v.cond)
 		ctx.registrarSentencia(v.cuerpo)
+	case jswitch:
+		ctx.registrarExpresion(v.selector)
+		for _, c := range v.casos {
+			for _, s := range c.cuerpo {
+				ctx.registrarSentencia(s)
+			}
+		}
+		for _, s := range v.defecto {
+			ctx.registrarSentencia(s)
+		}
 	}
 }
 
@@ -1118,6 +1128,7 @@ type emisor struct {
 	// del JVMS se cuenta en bytes desde el principio de la instruccion, así que no se conoce hasta que
 	// esta escrito el cuerpo del `if` (parrafo 52)
 	parches           []parcheSalto
+	parches4          []parcheSalto4
 	etiquetas         map[int]int
 	siguienteEtiqueta int
 }
@@ -1126,6 +1137,15 @@ type parcheSalto struct {
 	en       int
 	etiqueta int
 	op       byte
+}
+
+// parcheSalto4: un desplazamiento de 32 bits con signo, como el `default` y cada destino de un
+// `tableswitch`/`lookupswitch`. Se cuenta desde `base`, que es el principio de la instrucción de
+// switch, igual que en las branquias de dos bytes.
+type parcheSalto4 struct {
+	en       int
+	base     int
+	etiqueta int
 }
 
 type localVar struct {
@@ -1183,6 +1203,31 @@ func (e *emisor) cierra(id int) {
 		e.codigo[p.en+1] = byte(rel >> 8)
 		e.codigo[p.en+2] = byte(rel)
 	}
+	quedan := e.parches4[:0]
+	for _, p := range e.parches4 {
+		if p.etiqueta != id {
+			quedan = append(quedan, p)
+			continue
+		}
+		rel := uint32(int32(len(e.codigo) - p.base))
+		e.codigo[p.en] = byte(rel >> 24)
+		e.codigo[p.en+1] = byte(rel >> 16)
+		e.codigo[p.en+2] = byte(rel >> 8)
+		e.codigo[p.en+3] = byte(rel)
+	}
+	e.parches4 = quedan
+}
+
+// cuatro: reserva un desplazamiento de 32 bits que se completa al cerrarse la etiqueta.
+func (e *emisor) cuatro(etiqueta, base int) {
+	e.parches4 = append(e.parches4, parcheSalto4{en: len(e.codigo), base: base, etiqueta: etiqueta})
+	e.emite(0, 0, 0, 0)
+}
+
+// cuatroConstante: un entero de 32 bits con signo, como las claves y los extremos del switch.
+func (e *emisor) cuatroConstante(v int32) {
+	u := uint32(v)
+	e.emite(byte(u>>24), byte(u>>16), byte(u>>8), byte(u))
 }
 
 // encadenaGotos: un `goto` cuyo destino es una posicion que empieza por otro `goto` se resuelve
@@ -2215,6 +2260,80 @@ func (e *emisor) mientras(v jmientras) error {
 	return nil
 }
 
+// cambio: `switch` del fuente a `tableswitch` o `lookupswitch`, con la forma medida en el §64: el
+// relleno va del opcode al siguiente múltiplo de cuatro **contado desde el principio del `Code`**, y
+// cada destino es un entero de 32 bits con signo desde el principio de la instrucción. La elección de
+// forma es de este emisor —`tableswitch` cuando el rango no pasa del doble de los casos—: el criterio
+// exacto de javac 21 se sondeó y no es una desigualdad sencilla (con dos casos y rango 4 elige
+// `lookupswitch`, con cuatro casos y rango 10 elige `tableswitch`), y las dos formas son correctas.
+func (e *emisor) cambio(v jswitch) error {
+	e.marcaLinea(v.donde.linea)
+	if _, err := e.exp(v.selector); err != nil {
+		return err
+	}
+	casos := append([]jcaso(nil), v.casos...)
+	sort.Slice(casos, func(i, j int) bool { return casos[i].valor < casos[j].valor })
+	bajo, alto := casos[0].valor, casos[len(casos)-1].valor
+	rango := int(alto-bajo) + 1
+	etiqueta := map[int32]int{}
+	for _, c := range casos {
+		etiqueta[c.valor] = e.nuevaEtiqueta()
+	}
+	fin := e.nuevaEtiqueta()
+	defecto := fin
+	if v.defecto != nil {
+		defecto = e.nuevaEtiqueta()
+	}
+	inicio := len(e.codigo)
+	tabla := rango <= 2*len(casos)
+	if tabla {
+		e.emite(0xaa)
+	} else {
+		e.emite(0xab)
+	}
+	for len(e.codigo)%4 != 0 {
+		e.emite(0)
+	}
+	e.cuatro(defecto, inicio)
+	if tabla {
+		e.cuatroConstante(bajo)
+		e.cuatroConstante(alto)
+		for k := bajo; k <= alto; k++ {
+			if et, ok := etiqueta[k]; ok {
+				e.cuatro(et, inicio)
+				continue
+			}
+			e.cuatro(defecto, inicio)
+		}
+	} else {
+		e.cuatroConstante(int32(len(casos)))
+		for _, c := range casos {
+			e.cuatroConstante(c.valor)
+			e.cuatro(etiqueta[c.valor], inicio)
+		}
+	}
+	e.baja(1) // el switch consume el valor del selector
+	for _, c := range casos {
+		e.cierra(etiqueta[c.valor])
+		if err := e.stm(jbloque{sentencias: c.cuerpo, donde: c.donde}); err != nil {
+			return err
+		}
+		// el `goto` al final solo lo escribe javac detrás del brazo que acaba en `break`; el que
+		// termina en `return` no lo necesita y el último cae ya en el final
+		if c.rompe {
+			e.saltoEmite(opGOTO, fin, 0)
+		}
+	}
+	if v.defecto != nil {
+		e.cierra(defecto)
+		if err := e.stm(jbloque{sentencias: v.defecto, donde: v.donde}); err != nil {
+			return err
+		}
+	}
+	e.cierra(fin)
+	return nil
+}
+
 // resuelveAtras completa los saltos que apuntan a una etiqueta **ya cerrada**, que es el `goto` del
 // final de un bucle: `cierra` solo parchea cuando se cierra, y la cabeza se cerró antes del cuerpo. El
 // operando es un desplazamiento de 16 bits con signo contado desde el principio de la branquia.
@@ -2361,6 +2480,8 @@ func (e *emisor) stm(s jstmt) error {
 		return e.branca(v)
 	case jmientras:
 		return e.mientras(v)
+	case jswitch:
+		return e.cambio(v)
 	}
 	return fmt.Errorf("una sentencia de %T no esta medida", s)
 }
@@ -2890,6 +3011,17 @@ func terminaEnSalida(s jstmt) bool {
 			return false
 		}
 		return terminaEnSalida(v.entonces) && terminaEnSalida(v.siNo)
+	case jswitch:
+		// solo si TODOS los brazos y el defecto salen; con un `break` se sigue después del switch
+		if v.defecto == nil || !terminaEnRetorno(v.defecto) {
+			return false
+		}
+		for _, c := range v.casos {
+			if !terminaEnRetorno(c.cuerpo) {
+				return false
+			}
+		}
+		return true
 	}
 	return false
 }

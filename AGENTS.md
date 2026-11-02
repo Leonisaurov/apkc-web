@@ -331,13 +331,13 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `i + 1` a `add-int/lit8`. En el emisor, `while` es un nodo propio y `for` **se desdobla** como
   `init; while (cond) { cuerpo; paso }`: el `.class` de los dos es **idéntico al de javac** y el dex
   **byte a byte** el de javac (`TestElBucleSeDexaIgualQueElDeJavac`, dos fixtures nuevos),
-  `TestLaRamaHaciaAtrasSeEscribeComoD8` fija la vuelta en el traductor y `TestDoSwitchYTtrySiguenRechazados`
-  la frontera (`do`, `switch`, `try`, `i++` —este último ahora nombrado en el portero—). Ejecutado: el dex
+  `TestLaRamaHaciaAtrasSeEscribeComoD8` fija la vuelta en el traductor y `TestDoYTtrySiguenRechazados`
+  la frontera (`do`, `try`, `i++` —este último ahora nombrado en el portero—). Ejecutado: el dex
   de javac's `Bucle` traducido por nosotros imprime `10`/`rc 10` en `app_process`, el `.class` nuestro
   también, y el banco lleva un `while` (los cuatro caminos: `total 7|total 9|total 42`, `rc 42`, `dexdump
   rc 0`). Ojo al preparar fuentes para el dexer: **javac 21 compila el `+` de cadenas con
   `invokedynamic`**, que este fork rechaza (5.22); por eso el `Arranque` del banco imprime enteros.
-- **El `switch` del `.class` ya se dexa; el del fuente, todavía no** (§64): `tableswitch` (`0xaa`) y
+- **El `switch`, del `.class` y del fuente, ya está** (§64): `tableswitch` (`0xaa`) y
   `lookupswitch` (`0xab`) se caminan con el relleno hasta el múltiplo de cuatro **contado desde el
   principio del `Code`**, y salen como `packed-switch` (`0x2b`) / `sparse-switch` (`0x2c`) con el
   payload al final del cuerpo, alineado a cuatro bytes: `0x0100`+tamaño+`first_key`+destinos, y
@@ -348,7 +348,14 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   cadenas de `if-eq` en `--release`, y solo en `--debug` deja ver el `sparse-switch`—. Y ART exige
   `ACC_CONSTRUCTOR` en `<clinit>` con el mismo bit que en `<init>` (`TestElClinitLlevaConstructor`).
   Probado con `Ramas` (densa de ocho y dispersa de tres) en los tres caminos: nuestro dex, la JVM y el
-  dex de `d8` sobre nuestras clases dan `100/105/999/3/9`, `rc 240`, `dexdump rc 0`.
+  dex de `d8` sobre nuestras clases dan `100/105/999/3/9`, `rc 240`, `dexdump rc 0`. Y **también se lee
+  del fuente**: el analizador acepta `switch` con claves literales enteras y brazos que terminan en
+  `break` o `return` (la caída al siguiente se rechaza por nombre) y el emisor escribe
+  `tableswitch`/`lookupswitch` con el relleno desde el principio del `Code` y destinos de 32 bits desde
+  el opcode; el `.class` sale **idéntico al de javac** y el dex **byte a byte** el suyo (1432 bytes,
+  `TestElSwitchSeEscribeComoJavac`). La elección entre las dos formas es de este emisor (`tableswitch`
+  cuando el rango no pasa del doble de los casos): el criterio de javac 21 se sondeó y no es una
+  desigualdad sencilla. El banco lleva bucle y `switch`: `total 7|total 9|total 102`, `rc 102`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
@@ -374,7 +381,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **223 PASS + 2 SKIP** nativa y **196 PASS + 29 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **225 PASS + 2 SKIP** nativa y **196 PASS + 31 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

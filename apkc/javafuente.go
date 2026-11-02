@@ -145,6 +145,26 @@ type jmientras struct {
 
 func (jmientras) jstmtPuede() {}
 
+// jswitch: `switch (selector) { case k: cuerpo break; … default: cuerpo }`. El selector tiene que ser
+// un entero y las claves literales enteros; cada caso **tiene que terminar en `break` o en `return`**
+// (la caída de un caso al siguiente no está medida y se rechaza por nombre). Se midió en el §64 qué
+// forma elige javac; el emisor usa la suya, escrita en `cambio`.
+type jswitch struct {
+	selector jexpr
+	casos    []jcaso
+	defecto  []jstmt
+	donde    pos
+}
+
+func (jswitch) jstmtPuede() {}
+
+type jcaso struct {
+	valor  int32
+	cuerpo []jstmt
+	rompe  bool // terminó en `break;`, así que el emisor escribe el salto al final del switch
+	donde  pos
+}
+
 // jparam, jcampo y jmetodo son las partes declarativas.
 type jparam struct {
 	tipo   string
@@ -229,7 +249,7 @@ var palabrasJava = map[string]bool{
 	"void": true, "return": true, "if": true, "else": true, "new": true, "this": true, "super": true,
 	"true": true, "false": true, "null": true, "for": true, "while": true, "try": true, "catch": true,
 	"boolean": true, "int": true, "long": true, "float": true, "double": true, "byte": true, "short": true,
-	"char": true, "switch": true, "case": true, "break": true, "continue": true, "throw": true, "native": true,
+	"char": true, "switch": true, "case": true, "default": true, "break": true, "continue": true, "throw": true, "native": true,
 	"synchronized": true, "volatile": true, "transient": true, "instanceof": true, "do": true,
 }
 
@@ -863,6 +883,100 @@ func (a *analizadorJava) bloque() ([]jstmt, error) {
 
 // sentencia lee una sentencia. El segundo valor dice si produjo una: `if` sin cuerpo devuelve false
 // despues de haber consumido, y el bloque no anade nada.
+// cambio lee `switch (selector) { case k: … break; default: … }`. Las claves tienen que ser literales
+// enteros y cada caso termina en `break` o en `return`: la caída al caso siguiente no está medida y se
+// rechaza con su nombre (parrafo 64).
+func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
+	a.avanzar() // switch
+	if err := a.comerSimbolo("("); err != nil {
+		return nil, false, err
+	}
+	sel, err := a.expresion()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := a.comerSimbolo(")"); err != nil {
+		return nil, false, err
+	}
+	if err := a.comerSimbolo("{"); err != nil {
+		return nil, false, err
+	}
+	cam := jswitch{selector: sel, donde: pos{linea}}
+	vistas := map[int32]bool{}
+	for !a.es('p', "}") {
+		esDefecto := false
+		var valor int32
+		switch {
+		case a.es('k', "case"):
+			a.avanzar()
+			e, err := a.expresion()
+			if err != nil {
+				return nil, false, err
+			}
+			lit, esLit := e.(jlit)
+			if !esLit || lit.tipoJ != 'i' {
+				return nil, false, fmt.Errorf("linea %d: una clave de `case` que no es un literal entero no esta medida", a.actual().donde.linea)
+			}
+			valor = lit.entero
+		case a.es('k', "default"):
+			a.avanzar()
+			esDefecto = true
+		default:
+			return nil, false, fmt.Errorf("linea %d: se esperaba `case` o `default` dentro del switch", a.actual().donde.linea)
+		}
+		if err := a.comerSimbolo(":"); err != nil {
+			return nil, false, err
+		}
+		cuerpo := []jstmt{}
+		terminado := false
+		rompe := false
+		for !a.es('p', "}") && !a.es('k', "case") && !a.es('k', "default") {
+			if a.es('k', "break") {
+				a.avanzar()
+				if err := a.comerSimbolo(";"); err != nil {
+					return nil, false, err
+				}
+				terminado = true
+				rompe = true
+				break
+			}
+			s, _, err := a.sentencia()
+			if err != nil {
+				return nil, false, err
+			}
+			cuerpo = append(cuerpo, s)
+		}
+		if !terminado && a.es('p', "}") {
+			// el último brazo puede acabar sin `break`: cae en el final del switch, que es lo mismo
+			terminado = true
+		}
+		if !terminado && len(cuerpo) > 0 {
+			if _, esRetorno := cuerpo[len(cuerpo)-1].(jretorno); esRetorno {
+				terminado = true
+			}
+		}
+		if !terminado {
+			return nil, false, fmt.Errorf("linea %d: un `case` que no termina en `break` ni en `return` no esta medido (la caida al siguiente tampoco)", linea)
+		}
+		if esDefecto {
+			cam.defecto = cuerpo
+			continue
+		}
+		if vistas[valor] {
+			return nil, false, fmt.Errorf("linea %d: la clave %d aparece dos veces en el switch", linea, valor)
+		}
+		vistas[valor] = true
+		cam.casos = append(cam.casos, jcaso{valor: valor, cuerpo: cuerpo, rompe: rompe, donde: pos{linea}})
+	}
+	if err := a.comerSimbolo("}"); err != nil {
+		return nil, false, err
+	}
+	if len(cam.casos) == 0 {
+		return nil, false, fmt.Errorf("linea %d: un `switch` sin ningun `case` no esta medido", linea)
+	}
+	return cam, true, nil
+}
+
 func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	linea := a.actual().donde.linea
 	switch {
@@ -984,7 +1098,9 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			return m, true, nil
 		}
 		return jbloque{sentencias: []jstmt{inicio, m}, donde: pos{linea}}, true, nil
-	case a.es('k', "do"), a.es('k', "switch"), a.es('k', "try"):
+	case a.es('k', "switch"):
+		return a.cambio(linea)
+	case a.es('k', "do"), a.es('k', "try"):
 		return nil, false, fmt.Errorf("linea %d: la sentencia %q no esta medida en este compilador", linea, a.actual().valor)
 	}
 	// declaracion local o expresion
