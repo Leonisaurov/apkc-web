@@ -222,6 +222,12 @@ func (t *dexTables) collectCode(m classMethod, p *pool) error {
 			t.internMethod(owner, desc, name)
 		case "new":
 			t.internType(x.classDescriptor(dexU16(in.ops)))
+		case "checkcast", "instanceof":
+			// la clase del moldeo y la del `instanceof` son type_ids por si solas: medido con `W2.dos`
+			// en el aparato, donde `instanceof CharSequence` no volvía a nombrarse en ninguna otra
+			// parte de la clase y el traductor, al no encontrar el índice, escribía un cero que salía
+			// como `instance-of v5, v4, I` (ART: «instance-of on unexpected class Integer»)
+			t.internType(x.classDescriptor(dexU16(in.ops)))
 		case "newarray":
 			// el atype del JVMS 4.9 a su descriptor de arreglo: lo que el traductor va a pedir
 			if len(in.ops) < 1 {

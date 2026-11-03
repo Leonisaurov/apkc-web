@@ -159,6 +159,7 @@ type traduce struct {
 	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
 	siguiente int           // próximo temporal nuevo
 	pico      int           // el mayor número de temporal usado
+	techo     bool          // la base es un límite duro: solo en la pasada que escribe las palabras
 	w         []uint16
 	outs      int // la llamada más ancha, que es el outs_size del §20
 	err       error
@@ -193,7 +194,7 @@ func (p *traduce) toma(in jvmInstr) int {
 	if p.siguiente > p.pico {
 		p.pico = p.siguiente
 	}
-	if r >= p.base {
+	if p.techo && r >= p.base {
 		p.falla(in, "it needs more temporaries than the max stack javap measured")
 	}
 	return r
@@ -202,18 +203,38 @@ func (p *traduce) toma(in jvmInstr) int {
 // tomaPar: dos registros **consecutivos** para un valor ancho. Las formas `*-wide` del dex nombran la
 // mitad baja y la alta se sobreentiende, así que un par suelto no vale: medido en `d8` sobre `L` y `V`
 // (parrafo 74), donde `const-wide/16 v0` va seguido de `add-long/2addr v0, v4` y del `return-wide v0`.
+// La bolsa se recorre entera buscando el par consecutivo **más bajo**, no solo las dos últimas
+// entradas: medido con `Lp/Ver;flotantes` después del §80, donde la bolsa `[0 2 3 4 5 6 7]` sí tenía
+// par (2,3) y la regla de las dos últimas pedía dos registros nuevos, llevando el marco a v17.
 func (p *traduce) tomaPar(in jvmInstr) int {
-	if n := len(p.libres); n >= 2 && p.libres[n-2] == p.libres[n-1]+1 {
-		r := p.libres[n-1]
-		p.libres = p.libres[:n-2]
-		return r
+	bajo := -1
+	for _, a := range p.libres {
+		if bajo >= 0 && a >= bajo {
+			continue
+		}
+		for _, b := range p.libres {
+			if b == a+1 {
+				bajo = a
+				break
+			}
+		}
+	}
+	if bajo >= 0 {
+		vivas := []int{}
+		for _, r := range p.libres {
+			if r != bajo && r != bajo+1 {
+				vivas = append(vivas, r)
+			}
+		}
+		p.libres = vivas
+		return bajo
 	}
 	r := p.siguiente
 	p.siguiente += 2
 	if p.siguiente > p.pico {
 		p.pico = p.siguiente
 	}
-	if r+1 >= p.base {
+	if p.techo && r+1 >= p.base {
 		p.falla(in, "it needs more wide temporaries than the max stack javap measured")
 	}
 	return r
@@ -446,6 +467,20 @@ func (p *traduce) convierteDeAncho(in jvmInstr, op byte) {
 	p.push(d)
 }
 
+// typeIdxDe: el `type_id` de un descriptor, con rechazo con nombre si la pasada de colecta no lo
+// internó. Leer el mapa a secas devuelve cero para una clave ausente, y un cero mal escrito es un dex
+// que `dexdump` traga y ART corta en ejecución: medido con `p.W2.dos` después del §79, donde la clase
+// del `instanceof CharSequence` no se volvía a nombrar en todo el fichero y la instrucción salía
+// `instance-of v5, v4, I` («instance-of on unexpected class Integer»).
+func (p *traduce) typeIdxDe(desc string, in jvmInstr) int {
+	i, ok := p.t.typeIdx[desc]
+	if !ok {
+		p.falla(in, "the type_id "+desc+" was never interned (the collector does not follow this operand)")
+		return 0
+	}
+	return i
+}
+
 // suelta: devuelve un temporal solo si ninguna otra entrada de la pila lo está usando. Comprobarlo
 // cada vez cuesta un recorrido corto y es lo que impide que un dup pierda un valor por escribir dos
 // vivos en el mismo registro. Y un local nunca se suelta: por debajo de base solo hay temporales, y
@@ -591,6 +626,12 @@ func (p *traduce) palabra(u uint16) { p.w = append(p.w, u) }
 // entero y sí llegan a 255.
 func (p *traduce) nibble(r int, in jvmInstr) bool {
 	if r < 0 || r > 15 {
+		// la pasada de medida trabaja con una conjetura de base: los números de registro que ve son
+		// provisionales y el marco definitivo sale más abajo, así que el techo lo pone solo la pasada
+		// que escribe las palabras
+		if !p.techo {
+			return true
+		}
 		p.falla(in, "register v"+itoa(r)+" does not fit a four-bit format (the /range or /from16 form is not measured here)")
 		return false
 	}
@@ -600,6 +641,9 @@ func (p *traduce) nibble(r int, in jvmInstr) bool {
 // octeto: los registros de una 23x van en ocho bits cada uno.
 func (p *traduce) octeto(r int, in jvmInstr) bool {
 	if r < 0 || r > 0xff {
+		if !p.techo {
+			return true
+		}
 		p.falla(in, "register v"+itoa(r)+" does not fit the eight-bit registers of the three-register form")
 		return false
 	}
@@ -919,7 +963,7 @@ func (p *traduce) nuevoArreglo(in jvmInstr) {
 		return
 	}
 	p.palabra(uint16(opNuevoArreglo) | uint16((largo&0xf)<<4|r&0xf)<<8)
-	if !p.indice(p.t.typeIdx[desc], in, "the type_id of new-array") {
+	if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of new-array") {
 		return
 	}
 	p.push(r)
@@ -1102,7 +1146,7 @@ func (p *traduce) recorre() error {
 			desc := p.x.classDescriptor(dexU16(in.ops))
 			r := p.toma(in)
 			p.palabra(uint16(opNuevaInstancia) | uint16(r&0xff)<<8)
-			if !p.indice(p.t.typeIdx[desc], in, "the type_id of new") {
+			if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of new") {
 				return p.err
 			}
 			p.push(r)
@@ -1228,7 +1272,7 @@ func (p *traduce) recorre() error {
 			desc := p.x.classDescriptor(dexU16(in.ops))
 			r := p.pop(in)
 			p.palabra(uint16(opCheckcastDex) | uint16(r&0xff)<<8)
-			if !p.indice(p.t.typeIdx[desc], in, "the type_id of check-cast") {
+			if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of check-cast") {
 				return p.err
 			}
 			p.push(r)
@@ -1248,7 +1292,7 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.palabra(unidad12x(opInstanceDex, r, objeto))
-			if !p.indice(p.t.typeIdx[desc], in, "the type_id of instance-of") {
+			if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of instance-of") {
 				return p.err
 			}
 			p.suelta(objeto)
@@ -1677,16 +1721,26 @@ func (t *dexTables) codeItemConPc(clase classFull, m classMethod) (codeItem, map
 		return codeItem{}, nil, nil
 	}
 	x := poolIndex{p: clase.p}
-	// la primera pasada necesita una base que no pise los locales: la pila máxima que midió javap
-	// es un techo de entradas vivas, y por tanto de temporales. Se le suma el número de huecos
-	// porque desde el parrafo 50 un temporal puede quedar *atado* a un local (`int v = ...`), y
-	// esos registros ya no son reutilizables: con la base estrecha el cuarto temporal chocaba
-	// contra el borde y el método entero se rechazaba.
+	// La conjetura de la pasada de medida es la pila máxima que midió javap más el número de huecos,
+	// porque desde el párrafo 50 un temporal puede quedar *atado* a un local (`int v = ...`) y esos
+	// registros ya no son reutilizables. Con los valores anchos la conjetura se queda corta a veces:
+	// un `double` vivo ocupa DOS registros y la pila JVM los cuenta como dos palabras, pero dos
+	// temporales muertos sueltos no forman un par (`tomaPar` pide consecutivos), así que el pico
+	// medido puede pasar de la base. La medida no es un rechazo —solo la pasada que escribe las
+	// palabras tiene techo— y como el plan depende de la base, se repite subiendo la conjetura hasta
+	// que el pico cabe debajo: ese punto fijo es lo que hace que las dos pasadas coincidan. Medido
+	// con el `main` del banco después del §80: pedía 11 temporales con una conjetura de 9.
 	prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: m.MaxStack + m.LocalCount + 1}
-	if err := prueba.recorre(); err != nil {
-		return codeItem{}, nil, err
+	for {
+		if err := prueba.recorre(); err != nil {
+			return codeItem{}, nil, err
+		}
+		if prueba.pico <= prueba.base {
+			break
+		}
+		prueba = &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: prueba.pico}
 	}
-	final := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: prueba.pico}
+	final := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: prueba.pico, techo: true}
 	if err := final.recorre(); err != nil {
 		return codeItem{}, nil, err
 	}

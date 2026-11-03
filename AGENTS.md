@@ -519,7 +519,23 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   (trece métodos) sale **byte a byte** igual escrito sobre nuestras clases que sobre las de javac. Quedan
   rechazadas con nombre: la forma de **tres registros** de una cuenta ancha de flotante (ninguna sonda la
   escribió), `faload`/`fastore`, `aget-wide`/`aput-wide`, `l2f`/`l2d`/`f2l`/`d2l` (inferidas del mismo paso,
-  sin sonda) y la comprobación en ART, que espera `rish`.
+  sin sonda). La comprobación en ART llegó en el §82 (con `sudo` en vez de `rish`): el banco ejecuta `flotantes`
+  y `dobleCon` por los cinco caminos.
+- **El banco en ART después del reset, y los tres defectos que solo ve el aparato** (§82): el aparato se alcanza
+  con `sudo` (`banco.sh` elige `rish` o `sudo` con `enAparato`) y la sonda del banco ya lleva `float`, `double`,
+  dos `instanceof` y un `return-wide` leído por `println(D)V`; los cinco caminos dan `…|101|8|3.0` con `rc 102`.
+  Los tres defectos, invisibles para `d8` y para la identidad byte a byte: (1) el `encoded_value` de un estático
+  `double`/`float` sin `ConstantValue` salía `valueNull` y ART cortaba con `unexpected static field initial value
+  type: 'L' vs 'D'` — ahora lleva el cero del tipo (`valueDouble|7<<5`, `valueFloat|3<<5`) y la constante real
+  cuando el `.class` trae `ConstantValue`; (2) `collectCode` no seguía `instanceof` ni `checkcast`, así que la
+  clase de un `instanceof CharSequence` que no se nombraba en otro sitio faltaba de `type_ids` y la instrucción
+  salía `instance-of v5, v4, I` (`ART: instance-of on unexpected class Integer`) — ahora se internan y `typeIdxDe`
+  rechaza con nombre cualquier tipo ausente en las cuatro instrucciones que lo llevan; (3) el reparto de pares
+  anchos agotaba el marco (`it needs more wide temporaries…` y luego `register v16 does not fit a four-bit
+  format`) — `tomaPar` busca el par consecutivo **más bajo** de la bolsa, la pasada de medida no tiene techo y la
+  base se busca por **punto fijo**. De paso entraron `lload` 0x16 y `lstore` 0x37 (forma indexada, la que javac
+  escribe con el local > 3). Tests: `javaemisor_ancho_test.go` (cuatro) y `TestRechazaLoQueNoEstaMedido` con
+  `techo: true`.
 - **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
   —el indice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
   del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
@@ -530,8 +546,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   nibbles y obliga a pedir un **temporal** para el destino (la referencia probada puede seguir viva). Los cinco
   métodos de `Ins` salen iguales que javac (instrucciones, `max_stack`, huecos, filas de línea), el dex que
   escribimos sobre nuestras clases es **byte a byte** el de sobre las de javac, y la JVM con `-Xverify:all`
-  ejecuta nuestra clase con el mismo texto: `1|0|2|3|2|cadena|5`. Queda por ver en ART (falta `rish`),
-  `x instanceof T[]` y la forma negada.
+  ejecuta nuestra clase con el mismo texto: `1|0|2|3|2|cadena|5`. La comprobación en ART llegó en el §82 (con
+  el banco por `sudo`): `instance-of` corre y da el resultado esperado, y de paso destapó que la clase del
+  `instanceof` no se internaba; `x instanceof T[]` y la forma negada siguen sin medirse.
 - **El valor pendiente: un `return` o un `break` que cruza el `finally`** (§76): el cuerpo deja de ser un rango
   único —cada salida abrupta **cierra un trozo** cuyo fin es el pc justo detrás del `istore` que guarda el valor, y
   el trozo siguiente empieza **después** de la copia, del `iload` y del `return` (o del `goto` del `break`): medido
@@ -571,7 +588,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **254 PASS + 2 SKIP** nativa y **196 PASS + 60 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **252 PASS + 2 SKIP** nativa y **200 PASS + 60 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

@@ -165,4 +165,29 @@ public class Ver {
         }
         return r;
     }
+
+    // El punto flotante y el `instanceof` en ART (párrafos 77 a 80): cuenta con promoción de entero a
+    // doble, campo `float` leido con la forma de una palabra, conversion a largo y dos pruebas de
+    // tipo. Con n = 2 son 6 + 1 + 1 = 8.
+    static double doble = 2.5;
+    static float flotante = 1.5f;
+
+    public static int flotantes(int n) {
+        double d = n * doble + flotante;
+        long l = (long) d;
+        Object o = "cadena";
+        if (o instanceof String) {
+            l = l + 1;
+        }
+        if (o instanceof CharSequence) {
+            l = l + 1;
+        }
+        return (int) l;
+    }
+
+    // Un `double` que sale por `println`: la constante 1.5 va al pool como `Double` (dos posiciones) y
+    // el entero se ensancha en su propio sitio, antes de la cuenta.
+    public static double dobleCon(int n) {
+        return n * 1.5;
+    }
 }

@@ -326,10 +326,12 @@ func TestRechazaLoQueNoEstaMedido(t *testing.T) {
 	}
 
 	// un local que cae en v16 con el registro de cuatro bits de un 11n/12x/35c: se rechaza, no se
-	// recorta (aload_0 + ireturn, las dos medidas)
+	// recorta (aload_0 + ireturn, las dos medidas). El techo lo pone la pasada que escribe las
+	// palabras (`techo`), que es la que tiene que caber de verdad: la de medida usa una conjetura de
+	// base y sus números de registro son provisionales.
 	conBaseAncha := classMethod{HasCode: true, Name: "devuelve", Desc: "()I", LocalCount: 1, ArgCount: 1, MaxStack: 1,
 		Code: []byte{0x2a, 0xac}}
-	p := &traduce{t: td, x: poolIndex{p: cf.p}, clase: cf, m: conBaseAncha, locales: 1, base: 16}
+	p := &traduce{t: td, x: poolIndex{p: cf.p}, clase: cf, m: conBaseAncha, locales: 1, base: 16, techo: true}
 	if err := p.recorre(); err == nil {
 		t.Error("a register above v15 in a four-bit format was accepted")
 	} else if !strings.Contains(err.Error(), "four-bit") {

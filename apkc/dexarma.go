@@ -543,6 +543,16 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[2]string]uint32) (
 					// `unexpected static field initial value type: 'L' vs 'J'` (medido con la sonda `L`,
 					// parrafo 74). Ocho bytes de cero con el ancho de siete.
 					valores = append(valores, byte(valueLong|7<<5), 0, 0, 0, 0, 0, 0, 0, 0)
+				case 'D', 'F':
+					// el mismo caso con los dos tipos flotantes, medido con el banco después del §80:
+					// un `static double doble = 2.5` sin `ConstantValue` cortaba la verificación con
+					// `unexpected static field initial value type: 'L' vs 'D'`. El `<clinit>` lo
+					// sobrescribe al correr, como con el entero del §55.
+					if p.f.Desc[0] == 'D' {
+						valores = append(valores, byte(valueDouble|7<<5), 0, 0, 0, 0, 0, 0, 0, 0)
+					} else {
+						valores = append(valores, byte(valueFloat|3<<5), 0, 0, 0, 0)
+					}
 				default:
 					valores = append(valores, valueNull)
 				}
@@ -593,10 +603,16 @@ func (td *dexTables) valorEstatico(f classField) (byte, []byte) {
 			return 0, nil
 		}
 		return byte(valueString), putUleb([]byte{}, uint32(td.stringIdx[f.ConstStr]))
-	case cpFloat, cpDouble:
-		// el .class lo trae, pero classField no conserva el bits de un float: sin campo que
-		// leer, no se emite, y eso es un "todavia no" dicho por su nombre
-		return 0, nil
+	case cpFloat:
+		n := uint32(f.ConstInt)
+		return byte(valueFloat | 3<<5), []byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)}
+	case cpDouble:
+		n := uint64(f.ConstLong)
+		b := make([]byte, 0, 8)
+		for k := 0; k < 8; k++ {
+			b = append(b, byte(n>>(8*k)))
+		}
+		return byte(valueDouble | 7<<5), b
 	}
 	return 0, nil
 }

@@ -23,10 +23,30 @@ BT=${BT:-$(ls -d "$HOME/Android/build-tools"/* 2>/dev/null | sort -V | tail -1)}
 JDK=$P/lib/jvm/java-21-openjdk
 TRABAJO=${TRABAJO:-$P/tmp/banco}
 DEXDUMP=/apex/com.android.art/bin/dexdump
-RISH=${RISH:-rish}
+# El aparato se alcanza con `rish` (el shell de Shizuku) o, si hay root, con `sudo`: los dos valen
+# igual, `<comando> -c "…"`, porque quien lee y escribe /data/local/tmp es la shell del otro lado.
+# `sudo sh -c` equivale a `rish -c`, y así el resto del guion no cambia.
+RISH=${RISH:-}
+if [ -z "$RISH" ]; then
+	if command -v rish >/dev/null 2>&1; then
+		RISH=rish
+	elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+		RISH=sudo
+	fi
+fi
+
+# enAparato: un comando en la shell del aparato. `rish -c` y `sudo sh -c` son lo mismo para lo que
+# hace falta aquí (escribir en /data/local/tmp, correr `app_process64` y `dexdump`), y el resto del
+# guion llama a esta función en vez de a `$RISH` porque el modo root son dos palabras.
+enAparato() {
+	case $RISH in
+	sudo) sudo sh -c "$1" ;;
+	*) "$RISH" -c "$1" ;;
+	esac
+}
 
 [ -x "$APKC" ] || { echo "banco: falta el binario en $APKC (go build -o $APKC . en apkc/)"; exit 1; }
-command -v "$RISH" >/dev/null || { echo "banco: sin rish, el banco no puede ejecutar dex"; exit 1; }
+[ -n "$RISH" ] || { echo "banco: ni rish (Shizuku) ni sudo en el PATH; sin uno de los dos el banco no puede ejecutar dex"; exit 1; }
 # el trabajo tiene que quedar bajo el tmp de Termux: el guion lo borra al empezar
 case $TRABAJO in
 	$P/tmp/*) ;;
@@ -69,16 +89,16 @@ echo "  jvm (javac): rc=$jvm, salida: $(printf '%s' "$java_out" | tr '\n' '|')"
 
 # 4. el aparato ejecuta los tres dex, sin instalar nada
 sube() { # nombre -> /data/local/tmp/ nombre .dex
-	base64 -w0 "$2" | "$RISH" -c "toybox base64 -d > /data/local/tmp/$1.dex"
+	base64 -w0 "$2" | enAparato "toybox base64 -d > /data/local/tmp/$1.dex"
 }
 corre() { # alias -> salida y rc del app_process. La salida se deja en un fichero del aparato y se baja
 	# en base64: con una tuberia directa el cliente de rish deja el texto del programa en el terminal y
 	# devuelve solo la ultima linea, y el banco compararia contra nada (visto en la primera corrida).
 	i=0
 	while [ $i -lt 3 ]; do
-		"$RISH" -c "export CLASSPATH=/data/local/tmp/$1.dex; /system/bin/app_process64 /data/local/tmp p.Arranque > /data/local/tmp/$1.out 2>&1; echo rc=\$? >> /data/local/tmp/$1.out" >/dev/null 2>&1
+		enAparato "export CLASSPATH=/data/local/tmp/$1.dex; /system/bin/app_process64 /data/local/tmp p.Arranque > /data/local/tmp/$1.out 2>&1; echo rc=\$? >> /data/local/tmp/$1.out" >/dev/null 2>&1
 		# la bajada se redirige a un fichero local: cuando rish ve un terminal duplica ahi lo que imprime
-		"$RISH" -c "toybox base64 /data/local/tmp/$1.out" > "$TRABAJO/corre.b64" 2>/dev/null
+		enAparato "toybox base64 /data/local/tmp/$1.out" > "$TRABAJO/corre.b64" 2>/dev/null
 		sal=$(base64 -d < "$TRABAJO/corre.b64" | tr -d '\r')
 		case $sal in *"rc="*) break ;; esac
 		i=$((i + 1))
@@ -106,7 +126,7 @@ veredicto() { # alias de dex, descripcion
 	dv=""
 	i=0
 	while [ $i -lt 4 ]; do
-		"$RISH" -c "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$?" > "$TRABAJO/dv.txt" 2>/dev/null
+		enAparato "$DEXDUMP /data/local/tmp/$s.dex >/dev/null 2>&1; echo \$?" > "$TRABAJO/dv.txt" 2>/dev/null
 		dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
 		case $dv in *[0-9]*) break ;; esac
 		i=$((i + 1))

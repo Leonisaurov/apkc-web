@@ -4530,4 +4530,87 @@ como `d8`) y a los de `double` por la ancha ya medida. **El dex de `FyD` (trece 
 mismo escrito sobre nuestras clases que sobre las de javac**, y la frontera que queda es concreta: la forma de
 **tres registros** de una cuenta ancha de `float`/`double` (ninguna sonda la escribió; se rechaza con el nombre
 del opcode), `faload`/`fastore` y `aget-wide`/`aput-wide` (arreglos de flotantes), `l2f`/`l2d`/`f2l`/`d2l`
-(inferidas del mismo paso, sin sonda) y la comprobación en ART, que necesita `rish`.
+(inferidas del mismo paso, sin sonda). La comprobación en ART llegó en el párrafo 82, cuando el aparato se
+alcanzó con `sudo`.
+
+## 82. El banco en ART sin `rish`: `float`, `double` e `instanceof` ejecutados, y los tres defectos que salieron
+
+Al volver el root al aparato, el banco se alcanza con `sudo` en vez de `rish` (Shizuku desapareció con el
+reset; `banco/banco.sh` elige uno u otro con `enAparato`). Con eso, la sonda del banco —que ya llevaba
+`finalmente`, `salidaPendiente` y el `long`— ganó lo que faltaba del §79 y del §80 y se pudo **ejecutar**:
+
+```java
+static double doble = 2.5;
+static float flotante = 1.5f;
+public static int flotantes(int n) {
+    double d = n * doble + flotante;
+    long l = (long) d;
+    Object o = "cadena";
+    if (o instanceof String) { l = l + 1; }
+    if (o instanceof CharSequence) { l = l + 1; }
+    return (int) l;
+}
+public static double dobleCon(int n) { return n * 1.5; }
+```
+
+```sh
+sh -c 'APKC="$PREFIX/tmp/apkc-banco" sh banco/banco.sh'
+# jvm (javac): rc=102, salida: total 7|…|306|22|7|10|101|8|3.0
+#   nuestro dex (Go de punta a punta): rc=102 y salida igual a la JVM  ok
+#   dex de d8 sobre javac: rc=102 y salida igual a la JVM  ok
+#   dex de d8 sobre nuestra Ver: rc=102 y salida igual a la JVM  ok
+#   nuestro dex con nuestro main (sin javac ni d8): rc=102 y salida igual a la JVM  ok
+# jvm con nuestra clase emitida (Xverify:all): rc=102 y salida igual a la JVM  ok
+# banco: en orden
+```
+
+Los cuatro dex dan `dexdump` verificando `rc 0`, y el camino «todo nuestro» —las dos fuentes compiladas y
+dexadas por este fork— imprime `…|101|8|3.0`: el `8` es `flotantes(2)` (el `double`, el `float`, el `long`,
+las dos `instanceof` y las dos sumas) y el `3.0` es `dobleCon(2)`, o sea un `return-wide` leído por
+`println(D)V`. Los cinco caminos coinciden.
+
+**Tres defectos, y los tres solo los vio el aparato** (ni `d8`, ni la identidad byte a byte, ni la JVM con
+nuestro `.class`):
+
+1. **`unexpected static field initial value type: 'L' vs 'D'`.** El `encoded_value` de un estático tiene que
+   ser del tipo del campo. El emisor ya lo hacía para `I` (párrafo 55) y `J` (74), pero un `double`/`float`
+   sin `ConstantValue` caía en `valueNull`, y ART cortaba la clase entera antes de ejecutar nada. Se emite el
+   cero de la anchura del tipo —`valueDouble | 7<<5` (0x11, ocho bytes) y `valueFloat | 3<<5` (0x10, cuatro)—,
+   que el `<clinit>` sobrescribe al correr. De paso, `valorEstatico` ya emite la constante de un
+   `static final double`/`float` (el `.class` la trae y el lector guardaba los bits en `ConstLong`/`ConstInt`):
+   `dexdump` de nuestra sonda `Fd` lee `FD = 2.5` y `FF = 1.5`. `TestLosEstaticosAnchosLlevanSuTipo` lo fija
+   leyendo el `encoded_array_item` con el lector propio.
+
+2. **`instance-of on unexpected class Integer`.** `collectCode` no seguía `instanceof` (ni `checkcast`): la
+   clase del `instanceof` solo entraba en `type_ids` si el fichero la volvía a nombrar en otra parte (un
+   campo, una llamada, un descriptor). Con `o instanceof CharSequence` en una clase que no la nombra, el
+   mapa devolvía el cero de la clave ausente y la instrucción salía `instance-of v5, v4, I` —ART la leía
+   como «probar contra `int`» y rechazaba el método—. El test destapó que el fallo era *silencioso*: ahora
+   `typeIdxDe` rechaza con nombre («the type_id … was never interned») en las cuatro instrucciones que
+   llevan tipo (`new`, `new-array`, `check-cast`, `instance-of`), y el colector interna los dos operandos.
+   `TestElTipoDelInstanceOfSeInterna` comprueba que los dos `instance-of` de la sonda apuntan a
+   `Ljava/lang/String;` y `Ljava/lang/CharSequence;`; sin el arreglo el test falla con el rechazo nuevo.
+
+3. **`it needs more wide temporaries than the max stack javap measured`, y después `register v16 does not fit
+   a four-bit format`.** El marco de `main` se quedaba sin pares: un `double` vivo ocupa DOS registros, la
+   pila de javac lo cuenta como dos palabras, pero dos temporales muertos sueltos no forman un par, y el
+   reparto pedía siempre dos registros nuevos. Tres cambios, todos medidos por el efecto en el aparato:
+   - `tomaPar` busca el **par consecutivo más bajo** de la bolsa libre, no solo las dos últimas entradas
+     (con la bolsa `[0 2 3 4 5 6 7]` el par `(2,3)` existía y no se veía);
+   - la pasada de medida **no es un rechazo**: `techo` solo lo pone la pasada que escribe las palabras, y sus
+     números de registro son provisionales (una base conjetural empujaba `iload_0` a v16 y el propio
+     instrumento de medida se caía);
+   - la base se busca por **punto fijo**: se repite la medida subiendo la conjetura hasta que el pico cabe
+     debajo, porque el plan de la pasada final depende de la base. `main` del banco pedía 11 temporales con
+     una conjetura de 9; `Ver.flotantes` acabó con `registers=14` (base 8 y seis huecos) frente a los 6 de
+     `d8` —el marco puede ser más grande, lo que no puede es pasar de v15 en un formato de cuatro bits—.
+     `TestLaFrameAnchaCabe` exige `registers ≤ 16` en los dos métodos de la sonda.
+
+**Y dos huecos del caminante** que solo aparecen con locales por encima del 3, como el `long` de esta sonda:
+`lload` (0x16) y `lstore` (0x37) con el índice de un byte. `javap -c` sobre la sonda los enseña
+(`lstore 4`, `lload 4`); sin ellos el caminante paraba en el primer `lstore 4`.
+`TestElCaminanteConoceLosAnchosIndexados` fija las dos formas.
+
+Comprobado además: `go test ./...` de punta a punta en el hospedador wasm (PASS) y `studio/e2e.sh` en orden
+(41 comprobaciones en la pestaña; el proyecto generado y la app del contador siguen saliendo verificados por
+`apksigner`, `zipalign`, `zipcheck`, `aapt2` y releídos por `d8`).

@@ -28,6 +28,8 @@ public class Arranque {
         System.out.println(Ver.finalmente(0));
         System.out.println(Ver.salidaPendiente(5));
         System.out.println(Ver.salidaPendiente(0));
+        System.out.println(Ver.flotantes(2));
+        System.out.println(Ver.dobleCon(2));
         int t = Ver.total;
         System.exit(t);
     }
