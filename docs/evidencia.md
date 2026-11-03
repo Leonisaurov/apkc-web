@@ -4425,3 +4425,54 @@ por `d8`).
 **Frontera**: el `instanceof` en ART hasta que vuelva `rish`; `x instanceof T[]`; la forma negada; y lo que
 seguía: el punto flotante en el dex (`dload_0` sigue sin forma medida), las ramas sobre `long`
 (`lcmp`, `dup2`/`pop2`) y los arreglos de largos o flotantes.
+
+## 80. Las formas dalvik del `float` y el `double`, medidas sobre el fichero de `d8` (solo medición)
+
+Sin `rish` no hay `dexdump` en el aparato, pero el oráculo sigue siendo ajeno: **`d8 --debug` escribe el
+dex y las palabras las corta `readDex`**, que no comparte nada con el traductor (no interpreta opcode).
+Sonda: `FyD` del párrafo 77, `d8 --debug --min-api 28 --lib platforms/android-34/android.jar` sobre la
+clase de `javac` (1728 bytes), y las listas de palabras por método:
+
+| método | palabras (`d8`) | lectura |
+| --- | --- | --- |
+| `suma(double a, double b)` | `0x20CB 0x0010` | `add-double/2addr v0, v2` + `return-wide v0` |
+| `resta(float a, float b)` | `0x10C7 0x000F` | `sub-float/2addr v0, v1` + `return v0` |
+| `por(float a, double b)` | `0x2089 0x30CD 0x0010` | `float-to-double v0, v2`, `mul-double/2addr v0, v3`, `return-wide v0` |
+| `divide(double a, int b)` | `0x4083 0x02CE 0x0210` | `int-to-double v0, v4`, `div-double/2addr v2, v0`, `return-wide v2` |
+| `constante()` (3.14159) | `0x0018 0x866E 0xEFFB 0x21F9 0x4009 0x0010` | `const-wide v0, #+0x400921F9EFFB8669` (los ocho bytes en little-endian, cinco unidades) + `return-wide` |
+| `constanteCorta()` (0.0f) | `0x0012 0x000F` | `const/4 v0, #0` + `return v0` —un `0.0f` es un entero de una palabra— |
+| `deEntero(int n)` | `0x4083 0x0219 0x3FF0 0x20CB 0x0010` | `int-to-double`, **`const-wide/high16 v2, #+0x3FF0`** (= 1.0, dos unidades), `add-double/2addr v0, v2`, `return-wide v0` |
+| `aEntero(double d)` | `0x008A 0x000F` | `double-to-int v0, v0` + `return v0` |
+| `aFlotante(double d)` | `0x008C 0x000F` | `double-to-float v0, v0` + `return v0` |
+| `aDoble(float f)` | `0x2089 0x0010` | `float-to-double v0, v2` + `return-wide v0` |
+| `campoEstatico()` (`dd + ff`) | `0x0061 0x0000 0x0260 0x0001 0x2289 0x20CB 0x0010` | `sget-wide v0, field@0` (el `double`), **`sget v2, field@1`** (el `float` va por la forma entera), `float-to-double v2, v2`, `add-double/2addr v0, v2`, `return-wide v0` |
+| `negativo()` (-2.5) | `0x0019 0xC004 0x0010` | `const-wide/high16 v0, #+0xC004` + `return-wide v0` |
+
+**Lo que fija la tabla**, anclado en lo ya medido (`const-wide` 0x18, `const-wide/16` 0x16, `sget-wide` 0x61,
+`return-wide` 0x10, `move`/`move-wide` 0x01/0x04, `add-long/2addr` 0xbb y su bloque 0xbb..0xbf, `add-int`
+0x90..0x94, `move-result` 0x0a):
+
+- **Conversiones**: el bloque es la rejilla del `.class` menos cuatro —`int-to-long` 0x81 y `long-to-int` 0x84
+  (párrafo 74) encajan con `int-to-double` 0x83 (`divide`, `deEntero`), `float-to-double` 0x89 (`por`,
+  `aDoble`, `campoEstatico`), `double-to-int` 0x8A (`aEntero`) y `double-to-float` 0x8C (`aFlotante`)—. Los
+  seis restantes de ese bloque (`int-to-float` 0x82, `long-to-float` 0x85, `long-to-double` 0x86,
+  `float-to-int` 0x87, `float-to-long` 0x88, `double-to-long` 0x8B) salen del mismo paso y quedan por ver.
+- **Cuentas `/2addr`**: el bloque de `float` es 0xC6..0xCA (`sub-float/2addr` 0xC7 por `resta`) y el de
+  `double` 0xCB..0xCF (`add` 0xCB, `mul` 0xCD, `div` 0xCE por `suma`, `por`, `divide`) —después del de
+  `long` 0xBB..0xBF, cinco posiciones cada uno porque no hay bit a bit sobre flotantes. Las formas 23x
+  (`add-float` 0xA6.. y `add-double` 0xAB..) se infieren del mismo salto y **no** están vistas aún.
+- **Constantes**: `0.0f` se escribe como `const/4 v0, #0` (una palabra), `1.0` y `-2.5` caben en
+  `const-wide/high16` (**0x19**, dos unidades: `op|AA` + los dieciseis bits altos) y `3.14159` va por
+  `const-wide` 0x18 en cinco unidades. Nuestro traductor no tiene por qué imitar la elección: basta con que
+  emita una forma válida; la igualdad que exigimos es entre **nuestro** dex sobre nuestras clases y **nuestro**
+  dex sobre las de javac (párrafo 74).
+- **Locales y campos**: el `float` usa las formas de una palabra (`sget`/`sput`, `move`, `return`,
+  `aget`/`aput`) y el `double` las anchas ya medidas (`sget-wide` 0x61, `move-wide` 0x04, `return-wide` 0x10,
+  `iget-wide` 0x53 / `iput-wide` 0x5a). Un local `float` o `double` cargado desde el sitio que le da la
+  frame no emite nada, como con el `long` ✓ (en `suma` y `resta` no hay ninguna instrucción de carga).
+
+**Sin cambio de código todavía**: el traductor sigue parándose en `dload_0` (lo fija
+`TestElFlotanteTodaviaNoSeDexa`, párrafo 77). Esta medición es la que hay que convertir en las cuatro
+ramas que faltan —`ldc`/`ldc2_w` de `Float`/`Double`, `dload`/`dstore` y `fload`/`fstore` sobre el
+reparto de registros, las cinco cuentas y las seis conversiones—, y después cerrar en ART con `dexdump` y
+el banco cuando vuelva `rish`.
