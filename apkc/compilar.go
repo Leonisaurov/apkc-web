@@ -37,10 +37,11 @@ static included, with the access$NNN synthetics javac gives an anonymous class),
 integer arithmetic, ++/-- and +=/-=, an if or if-else over one of the comparisons javac inverts
 (docs/evidencia.md §49 and §52), while, for and do-while with break and continue (§63, §69, §70), a
 switch of integer literals (§64), try/catch with several catches and finally (§71 and §75), arrays
-(new T[n], v[i], .length, §66), the long with its two slots and its two stack words (§74), string
+(new T[n], v[i], .length, §66), the long with its two slots and its two stack words (§74), the float
+and the double (§77) with the widened comparisons javac lowers through a cmp and a branch (§81), string
 concatenation through the StringBuilder chain and the constant folding that javac does with it
 (§53), and anonymous classes with the this$0 field javac gives them. Anything else -
-a char, a condition that is a bare boolean, a comparison over float or double,
+a char, a condition that is a bare boolean,
 a return, break or continue leaving a try with finally,
 a nested private class, an annotation other than @Override, a class the classpath does not name -
 stops the command with its line, before writing a single file.

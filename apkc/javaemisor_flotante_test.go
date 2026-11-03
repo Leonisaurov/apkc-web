@@ -129,11 +129,10 @@ func TestElFlotanteSeDexaComoJavac(t *testing.T) {
 	}
 }
 
-// TestElFlotanteRechazaLoNoMedido: comparar flotantes (el `fcmpl`/`dcmpl` de javac y su rama) y leer un
-// elemento de un arreglo de flotantes salen por su nombre.
+// TestElFlotanteRechazaLoNoMedido: leer un elemento de un arreglo de flotantes sale por su nombre.
+// (La comparación de dobles entró en el párrafo 81 con su propio test.)
 func TestElFlotanteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"comparacion de dobles", "package p;\npublic class A { public static int f(double a, double b) { if (a > b) { return 1; } return 2; } }\n", "solo se midieron enteros"},
 		{"lectura de un arreglo de flotantes", "package p;\npublic class A { public static float f(float[] v) { return v[0]; } }\n", "arreglo de F"},
 		{"escritura en un arreglo de dobles", "package p;\npublic class A { public static void f(double[] v) { v[0] = 1.5; } }\n", "arreglo de D"},
 	}

@@ -536,6 +536,20 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   base se busca por **punto fijo**. De paso entraron `lload` 0x16 y `lstore` 0x37 (forma indexada, la que javac
   escribe con el local > 3). Tests: `javaemisor_ancho_test.go` (cuatro) y `TestRechazaLoQueNoEstaMedido` con
   `techo: true`.
+- **Las comparaciones anchas, del fuente y del dex** (§81): javac mantiene la inversión del §52 y emite el
+  `cmp` con el sufijo que pide la relación —`…l` para `>`, `>=`, `==`, `!=` y `…g` para `<`, `<=`, la regla
+  de NaN del JVMS 2.9— dejando un entero que consume la branquia de siempre; el literal cero **no** se
+  ahorra en las anchas (`if (x > 0L)` es `lload_0; lconst_0; lcmp; ifle`). En el dex son el bloque 0x2d..0x31
+  en 23x (`fcmpl` 0x2d, `fcmpg` 0x2e, `dcmpl` 0x2f, `dcmpg` 0x30, `lcmp` 0x31) con la `if-*z` encima. El
+  emisor promociona los dos lados con `expA` y el traductor pide un temporal para el resultado (las dos
+  parejas pueden seguir vivas por un `dup`). La sonda `Ram` (ocho métodos) sale con el mismo `Code` que
+  javac y su dex byte a byte el suyo (1192 bytes); ejecutado en ART por el camino «todo nuestro» da
+  `1 2 1 2 …` como la JVM, y el banco lleva `Ver.compara(2)` (6). `javaemisor_compara_test.go` (dos) fija el
+  par `cmp`+branquia de cada método.
+- **El reparto de temporales se reintenta** (§81): la base se mide con una conjetura holgada y se escribe con
+  la base = pico; si esa pasada pide más (visto con `Ver.compara`), la conjetura sube por encima del pico
+  pedido y se repite el par entero. `esPresupuesto` distingue el fallo de marco (se reintenta) de un opcode o
+  un tipo sin medir (se devuelve), y la conjetura crece en cada vuelta, así que el bucle termina.
 - **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
   —el indice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
   del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
@@ -588,13 +602,13 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **252 PASS + 2 SKIP** nativa y **200 PASS + 60 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **255 PASS + 2 SKIP** nativa y **196 PASS + 61 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
-  los arreglos de largos o de flotantes y las ramas sobre `long` o sobre punto flotante (el `long` entero
-  —`.class` y dex— ya está, párrafo 74; el `float` y el `double` entraron en el `.class` (párrafo 77) y en
-  el dex (párrafo 80), pero faltan sus arreglos y sus comparaciones), y anotaciones que no sean `@Override`.
+  los arreglos de largos o de flotantes (el `long` entero —`.class` y dex— ya está, párrafo 74; el `float`
+  y el `double` entraron en el `.class` (párrafo 77), en el dex (párrafo 80) y en las comparaciones
+  (párrafo 81), pero faltan sus arreglos), y anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

@@ -131,6 +131,45 @@ func TestElCaminanteConoceLosAnchosIndexados(t *testing.T) {
 // así que su valor viaja en el `<clinit>`.
 const estaticosJavac = "yv66vgAAADQAHwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWBwAIAQAEcC9GZAZAEAAAAAAAAAkABwAMDAANAA4BAAFkAQABRAZADAAAAAAAAAEAAkZEAQANQ29uc3RhbnRWYWx1ZQZABAAAAAAAAAEAAkZGAQABRgQ/wAAAAQAEQ29kZQEAD0xpbmVOdW1iZXJUYWJsZQEAA3VzbwEAAygpRAEACDxjbGluaXQ+AQAKU291cmNlRmlsZQEAB0ZkLmphdmEAIQAHAAIAAAADABgAEQAOAAEAEgAAAAIAEwAYABUAFgABABIAAAACABcACAANAA4AAAADAAEABQAGAAEAGAAAAB0AAQABAAAABSq3AAGxAAAAAQAZAAAABgABAAAAAgAJABoAGwABABgAAAAgAAQAAAAAAAgUAAmyAAtjrwAAAAEAGQAAAAYAAQAAAAYACAAcAAYAAQAYAAAAHwACAAAAAAAHFAAPswALsQAAAAEAGQAAAAYAAQAAAAUAAQAdAAAAAgAe"
 
+// cmpJavac: `javac --release 8 -g:lines,source Cmp.java` y `base64 -w0`, con un `long`, un `double` y
+// un `float` vivos y cuatro comparaciones encadenadas. Es el método que pedía más temporales en la
+// pasada que escribe las palabras que en la de medida (`Ver.compara` del banco, después del §81).
+const cmpJavac = "yv66vgAAADQAFwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWBj/4AAAAAAAABkAAAAAAAAAABECAAAAGQFkAAAAAAAAHAA8BAANDbXABAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQAHY29tcGFyYQEABChJKUkBAA1TdGFja01hcFRhYmxlAQAKU291cmNlRmlsZQEACENtcC5qYXZhACEADgACAAAAAAACAAEABQAGAAEAEAAAAB0AAQABAAAABSq3AAGxAAAAAQARAAAABgABAAAAAQAJABIAEwABABAAAACHAAQABgAAAD4ahUAfCZSeAAcaBGA7GocUAAdrSikUAAmXngAHGgRgOxqGOAUXBRILlZsABxoEYDspFAAMmJwABxoEYDsarAAAAAIAEQAAACIACAAAAAMAAwAEAA0ABQAUAAYAIAAHACQACAAwAAkAPAAKABQAAAAPAAT8AA0E/AASA/wADwILAAEAFQAAAAIAFg=="
+
+// TestElMarcoSeReintentaCuandoLaPasadaFinalPideMas: con el long, el double y el float vivos a la vez,
+// la pasada que escribe las palabras pide un registro más que el pico medido. Antes el traductor lo
+// rechazaba (`it needs more temporaries than the max stack javap measured`) y el banco no dexaba;
+// ahora la base sube al pico de esa pasada y se repite sola, acotada por los registros de ocho bits.
+func TestElMarcoSeReintentaCuandoLaPasadaFinalPideMas(t *testing.T) {
+	datos, err := base64.StdEncoding.DecodeString(cmpJavac)
+	if err != nil {
+		t.Fatalf("el fixture no es base64: %v", err)
+	}
+	cf, err := readClassFull(datos)
+	if err != nil {
+		t.Fatalf("el fixture no se lee: %v", err)
+	}
+	td := newDexTables()
+	if err := td.collectClasses([]classFull{cf}); err != nil {
+		t.Fatalf("internando: %v", err)
+	}
+	td.orderTables()
+	m, ok := buscaMetodo(cf, "compara")
+	if !ok {
+		t.Fatal("`compara` no está en la sonda")
+	}
+	ci, err := td.codeItemDe(cf, m)
+	if err != nil {
+		t.Fatalf("dexando `compara`: %v", err)
+	}
+	if len(ci.insns) == 0 {
+		t.Fatal("`compara` salió sin cuerpos")
+	}
+	if ci.registersSize > 16 {
+		t.Errorf("`compara` pide %d registros y los formatos de cuatro bits llegan a v15", ci.registersSize)
+	}
+}
+
 // TestLosEstaticosAnchosLlevanSuTipo: el `encoded_value` de un estático tiene que ser del TIPO del
 // campo, y cuando el `.class` trae `ConstantValue` lleva sus bits. Medido en el aparato (Android 15,
 // `dexdump -d`, 2026-11-03): con `valueNull` en un `static double` sin `ConstantValue`, ART cortaba

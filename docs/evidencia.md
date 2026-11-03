@@ -4471,10 +4471,19 @@ remata en `if-eq` 0x32, que estaba medido en el párrafo 52. El operando del `cm
 método `double(double,double)` con `registers=4, ins=4` escribe el resultado encima de un operando muerto,
 como ya hacía con las cuentas `/2addr` (párrafo 66).
 
-**Aún no escrito**: el emisor rechaza la comparación sobre `J`/`F`/`D` con el mensaje de siempre («solo se
-midieron enteros y la referencia contra null», párrafo 52), y el traductor no conoce los cinco opcodes. Los
-dos pasos entran con la tabla de arriba. Lo que sigue fuera, con la forma vista: `dup2`/`pop2` (el
-`access$` de un campo ancho, párrafo 72) y los arreglos de largos y flotantes.
+**Ya escrito** (2026-11-03): el emisor acepta la comparación sobre `J`/`F`/`D` —promociona los dos lados
+como en las cuentas, emite `lcmp`/`fcmpl`/`fcmpg`/`dcmpl`/`dcmpg` y encima la branquia contra cero de la
+tabla de arriba, sin ahorrarse el literal cero— y el traductor conoce los cinco opcodes. La sonda `Ram` (ocho
+métodos) sale con el mismo `Code` que la de javac y su dex **byte a byte** el suyo (1192 bytes); `dexdump -d`
+lee `cmpl-double` 0x2f con `if-lez`/`if-eqz`, `cmpg-double` 0x30 con `if-gez`, `cmpl-float` 0x2d con
+`if-ltz`, `cmpg-float` 0x2e con `if-gtz` y `cmp-long` 0x31 con `if-nez`/`if-lez`/`if-gez`. Ejecutado en el
+aparato por el camino «todo nuestro» (`apkc compile` + `apkc dex`, sin javac ni d8), un driver con las ocho
+relaciones imprime `1 2 1 2 …` igual que la JVM, con `dexdump` verificando `rc 0`; el banco lleva
+`Ver.compara(2)` (devuelve 6) y los cinco caminos coinciden. `javaemisor_compara_test.go` fija el par
+`cmp`+branquia de cada método y la identidad del `.class` y del dex contra javac.
+
+Lo que sigue fuera, con la forma vista: `dup2`/`pop2` (el `access$` de un campo ancho, párrafo 72) y los
+arreglos de largos y flotantes.
 
 ## 80. Las formas dalvik del `float` y el `double`, medidas sobre el fichero de `d8` —y ya implementadas
 

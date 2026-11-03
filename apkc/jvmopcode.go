@@ -138,6 +138,13 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x8e: {"d2i", 0},
 	0x8f: {"d2l", 0},
 	0x90: {"d2f", 0},
+	// comparaciones anchas (parrafo 81): `lcmp` y las cuatro de NaN, un byte y sin operandos. El
+	// resultado en la pila es un entero, y la branquia que lo consume ya estaba medida (parrafo 52)
+	0x94: {"lcmp", 0},
+	0x95: {"fcmpl", 0},
+	0x96: {"fcmpg", 0},
+	0x97: {"dcmpl", 0},
+	0x98: {"dcmpg", 0},
 	0xae: {"freturn", 0},
 	0xaf: {"dreturn", 0},
 	// arreglos (parrafo 66): el ancho sale de `javap -c` de la sonda `Arreglos`, donde

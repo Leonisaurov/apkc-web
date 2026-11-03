@@ -190,4 +190,25 @@ public class Ver {
     public static double dobleCon(int n) {
         return n * 1.5;
     }
+
+    // Las comparaciones anchas (párrafo 81): un `lcmp` con su literal cero, un `dcmpl` y un `dcmpg`
+    // con su branquia y un `fcmpl`. Con n = 2 suma cuatro veces y devuelve 6.
+    public static int compara(int n) {
+        long x = n;
+        if (x > 0L) {
+            n = n + 1;
+        }
+        double d = n * 1.5;
+        if (d > 2.0) {
+            n = n + 1;
+        }
+        float f = n;
+        if (f >= 4.0f) {
+            n = n + 1;
+        }
+        if (d < 100.0) {
+            n = n + 1;
+        }
+        return n;
+    }
 }

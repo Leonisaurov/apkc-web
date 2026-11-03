@@ -88,6 +88,16 @@ const (
 	opRetornaObjeto     = 0x11 // 11x return-object vAA
 	opIput              = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
 
+	// las comparaciones anchas, medidas en el párrafo 81 sobre dos sondas de `d8 --debug` leídas con
+	// `readDex`: bloque contiguo 0x2d..0x31, formato 23x (`op|AA` y después `BB|CC<<8`), con el
+	// destino en un registro suelto y las dos parejas de operandos detrás. El 0x32 (`if-eq`) estaba
+	// medido desde el párrafo 52 y es con el que se consume el entero que dejan.
+	opFcmplDex = 0x2d // 23x fcmpl vAA, vBB, vCC
+	opFcmpgDex = 0x2e // 23x fcmpg
+	opDcmplDex = 0x2f // 23x dcmpl
+	opDcmpgDex = 0x30 // 23x dcmpg
+	opLcmpDex  = 0x31 // 23x lcmp
+
 	// los arreglos, medidos en el parrafo 66 sobre `Arreglos` dexado por `d8` y desarmado con
 	// `dexdump -d` del aparato: `array-length v0, v0` sale `2100` (12x, destino en el nibble bajo y
 	// fuente en el alto), `new-array v0, v0, [I` sale `2300 0500` (22c: registros en el byte alto y el
@@ -179,6 +189,18 @@ type traduceError struct {
 
 func (e *traduceError) Error() string {
 	return "at pc " + itoa(e.pc) + ", " + e.nombre + ": " + e.motivo
+}
+
+// esPresupuesto: el fallo es del reparto de registros —la base se quedó corta—, y eso se arregla
+// repitiendo la medida con más temporales. Cualquier otro motivo (un opcode sin medir, un tipo sin
+// internar) no mejora subiendo la base y se devuelve tal cual, sin dar vueltas.
+func esPresupuesto(err error) bool {
+	te, ok := err.(*traduceError)
+	if !ok {
+		return false
+	}
+	return strings.HasPrefix(te.motivo, "it needs more temporaries") ||
+		strings.HasPrefix(te.motivo, "it needs more wide temporaries")
 }
 
 // toma: un registro temporal nuevo, o el último que murió. Reutilizar es lo que hace el marco más
@@ -343,6 +365,39 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		p.sueltaPar(a)
 		p.sueltaPar(b)
 	}
+}
+
+// comparaAncha: `lcmp`, `fcmpl`, `fcmpg`, `dcmpl` y `dcmpg` (párrafo 81). Consume las dos parejas
+// —el largo o el flotante de cada lado— y deja el entero -1/0/1 en un temporal suelto, porque los
+// dos operandos pueden seguir vivos por un `dup`. La rama que lo consume es la `if-*z` de siempre.
+func (p *traduce) comparaAncha(in jvmInstr) {
+	op, ok := map[string]byte{
+		"fcmpl": opFcmplDex, "fcmpg": opFcmpgDex,
+		"dcmpl": opDcmplDex, "dcmpg": opDcmpgDex,
+		"lcmp":  opLcmpDex,
+	}[in.name]
+	if !ok {
+		p.falla(in, "a wide comparison this translator does not know")
+		return
+	}
+	b := p.pop(in)
+	a := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	r := p.toma(in)
+	if p.err != nil {
+		return
+	}
+	if !p.octeto(r, in) || !p.octeto(a, in) || !p.octeto(b, in) {
+		return
+	}
+	u1, u2 := unidad23x(op, r, a, b)
+	p.palabra(u1)
+	p.palabra(u2)
+	p.sueltaPar(b)
+	p.sueltaPar(a)
+	p.push(r)
 }
 
 // conviertePalabra: una conversion que no cambia el numero de palabras (`int-to-float` 0x82 y
@@ -1165,6 +1220,8 @@ func (p *traduce) recorre() error {
 			"fadd", "fsub", "fmul", "fdiv", "frem",
 			"dadd", "dsub", "dmul", "ddiv", "drem":
 			p.cuentaAncha(in)
+		case "lcmp", "fcmpl", "fcmpg", "dcmpl", "dcmpg":
+			p.comparaAncha(in)
 		case "lconst_0", "lconst_1":
 			v := int64(0)
 			if in.name == "lconst_1" {
@@ -1727,26 +1784,30 @@ func (t *dexTables) codeItemConPc(clase classFull, m classMethod) (codeItem, map
 	// un `double` vivo ocupa DOS registros y la pila JVM los cuenta como dos palabras, pero dos
 	// temporales muertos sueltos no forman un par (`tomaPar` pide consecutivos), así que el pico
 	// medido puede pasar de la base. La medida no es un rechazo —solo la pasada que escribe las
-	// palabras tiene techo— y como el plan depende de la base, se repite subiendo la conjetura hasta
-	// que el pico cabe debajo: ese punto fijo es lo que hace que las dos pasadas coincidan. Medido
-	// con el `main` del banco después del §80: pedía 11 temporales con una conjetura de 9.
+	// palabras tiene techo—; si esa pasada pide más que el pico (visto con `Ver.compara` después del
+	// §81), se sube la base a lo que pidió y se repite **sola ella**: volver a medir rebotaba entre
+	// dos picos. Cada vuelta sube al menos un registro y los formatos llegan a 255, así que el bucle
+	// termina.
 	prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: m.MaxStack + m.LocalCount + 1}
-	for {
-		if err := prueba.recorre(); err != nil {
-			return codeItem{}, nil, err
-		}
-		if prueba.pico <= prueba.base {
-			break
-		}
-		prueba = &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: prueba.pico}
-	}
-	final := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: prueba.pico, techo: true}
-	if err := final.recorre(); err != nil {
+	if err := prueba.recorre(); err != nil {
 		return codeItem{}, nil, err
 	}
-	if final.pico > prueba.pico {
-		return codeItem{}, nil, &traduceError{nombre: m.Name,
-			motivo: "the second pass asked for more temporaries than the first: translator bug"}
+	base := prueba.pico
+	var final *traduce
+	for {
+		final = &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: base, techo: true}
+		err := final.recorre()
+		if err == nil {
+			break
+		}
+		if !esPresupuesto(err) {
+			return codeItem{}, nil, err
+		}
+		if final.pico > 0xff {
+			return codeItem{}, nil, &traduceError{nombre: m.Name,
+				motivo: "the register plan does not fit the eight-bit registers of the three-register form"}
+		}
+		base = final.pico
 	}
 	tries, handlers, err := armaTries(final, m)
 	if err != nil {

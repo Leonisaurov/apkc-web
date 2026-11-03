@@ -74,6 +74,13 @@ const (
 	opGOTO      = 0xa7
 	opIFNULL    = 0xc6
 	opIFNONNULL = 0xc7
+	// las comparaciones anchas (párrafo 81): `lcmp` y las cuatro que se distinguen por el signo que
+	// dejan con un NaN. javac usa `…l` con `>`, `>=`, `==` y `!=`, y `…g` con `<` y `<=` (JVMS 2.9)
+	opLcmp  = 0x94
+	opFcmpl = 0x95
+	opFcmpg = 0x96
+	opDcmpl = 0x97
+	opDcmpg = 0x98
 	// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49)
 	opIadd = 0x60
 	opIsub = 0x64
@@ -82,9 +89,8 @@ const (
 	opIrem = 0x70
 )
 
-// descPrimitivo: el descriptor de cada tipo escrito en el fuente. `long`, `float` y `double` se rechazan
-// con nombre en descriptorDe: el primero ocupa dos huecos de variable y los otros dos piden arithmetic
-// widening que nadie midio aqui.
+// descPrimitivo: el descriptor de cada tipo escrito en el fuente. `long` y `double` ocupan dos huecos
+// de variable y dos palabras de pila; `float`, uno y uno (párrafos 74 y 77).
 var descPrimitivo = map[string]string{
 	"int": "I", "boolean": "Z", "short": "S", "byte": "B", "char": "C",
 	"long": "J", "float": "F", "double": "D", "void": "V",
@@ -3062,6 +3068,58 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 	pares, ok := invertidas[op.op]
 	if !ok {
 		return 0, 0, fmt.Errorf("linea %d: el operador %q en una condicion no esta medido", linea, op.op)
+	}
+	// Comparaciones anchas (párrafo 81): los dos lados se promocionan (doble > flotante > largo >
+	// entero), javac emite el `cmp` y después la branquia contra cero que ya estaba medida. El
+	// literal cero NO se ahorra aquí: `if (x > 0L)` es `lload_0; lconst_0; lcmp; ifle`.
+	tIzq, okIzq := e.tipoPrevisto(op.izq)
+	tDer, okDer := e.tipoPrevisto(op.der)
+	nivel := map[string]int{"": 0, "I": 0, "J": 1, "F": 2, "D": 3}
+	ancho := ""
+	if okIzq && nivel[tIzq] > nivel[ancho] {
+		ancho = tIzq
+	}
+	if okDer && nivel[tDer] > nivel[ancho] {
+		ancho = tDer
+	}
+	if ancho == "J" || ancho == "F" || ancho == "D" {
+		if !okIzq || !okDer {
+			return 0, 0, fmt.Errorf("linea %d: `%s` entre un %s y un operando cuyo tipo no se puede saber antes de escribirlo: la conversion va en el sitio de javac y adivinarlo aqui no esta medido",
+				linea, op.op, ancho)
+		}
+		di, err := e.expA(op.izq, ancho)
+		if err != nil {
+			return 0, 0, err
+		}
+		dd, err := e.expA(op.der, ancho)
+		if err != nil {
+			return 0, 0, err
+		}
+		if di != ancho || dd != ancho {
+			return 0, 0, fmt.Errorf("linea %d: `%s` entre %s y %s: la comparacion ancha solo se midio entre numeros", linea, op.op, di, dd)
+		}
+		invertida := op.op[0] == '<'
+		cmp := byte(opLcmp)
+		switch ancho {
+		case "F":
+			cmp = opFcmpl
+			if invertida {
+				cmp = opFcmpg
+			}
+		case "D":
+			cmp = opDcmpl
+			if invertida {
+				cmp = opDcmpg
+			}
+		}
+		e.emite(cmp)
+		// cuatro palabras a una con `J`/`D`, dos a una con `F`
+		if ancho == "F" {
+			e.baja(1)
+		} else {
+			e.baja(3)
+		}
+		return pares.uno, 1, nil
 	}
 	if esLiteralNulo(op.der) {
 		d, err := e.exp(op.izq)

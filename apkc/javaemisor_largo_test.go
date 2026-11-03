@@ -73,12 +73,11 @@ func TestElLargoSeEscribeComoJavac(t *testing.T) {
 	}
 }
 
-// TestElLargoRechazaLoNoMedido: punto flotante, arreglo de largos y el campo privado ancho de la
-// anonima salen por su nombre.
+// TestElLargoRechazaLoNoMedido: el arreglo de largos sale por su nombre. (La comparación de largos
+// entró en el párrafo 81 con `javaemisor_compara_test.go`.)
 func TestElLargoRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
 		{"arreglo de largos", "class A { static void f() { long[] v = new long[2]; v[0] = 1L; } }\n", "no esta medido"},
-		{"comparacion de largos", "class A { static long f(long n) { if (n > 0L) { return 1L; } return 2L; } }\n", "entre J y J"},
 	}
 	for _, c := range casos {
 		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/A.java", contenido: c.fuente}}, jarDelSDK(t))

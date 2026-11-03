@@ -606,6 +606,30 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifLargo)
+	case op == 0x94: // lcmp: dos largos y el entero de la comparación (párrafo 81)
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
+	case op == 0x95 || op == 0x96: // fcmpl, fcmpg
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
+	case op == 0x97 || op == 0x98: // dcmpl, dcmpg
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
 	case op == 0x85: // i2l
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
