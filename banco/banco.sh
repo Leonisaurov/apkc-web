@@ -77,9 +77,9 @@ mkdir -p "$TRABAJO/todo"
 "$APKC" dex -o "$TRABAJO/nuestro.dex" "$TRABAJO/nuestro" >"$TRABAJO/dex.log" 2>&1 || {
 	echo "banco: apkc dex fallo"; tail -3 "$TRABAJO/dex.log"; exit 1; }
 "$BT/d8" --release --min-api 21 --lib "$JAR" --output "$TRABAJO/d8" \
-	"$TRABAJO/scr/p/Ver.class" "$TRABAJO/scr/p/Ver\$1.class" "$TRABAJO/jc/p/Arranque.class" >/dev/null 2>&1
+	"$TRABAJO/scr/p/Ver"*.class "$TRABAJO/jc/p/Arranque.class" >/dev/null 2>&1
 "$BT/d8" --release --min-api 21 --output "$TRABAJO/d8desde" \
-	"$TRABAJO/nuestro/p/Ver.class" "$TRABAJO/nuestro/p/Ver\$1.class" "$TRABAJO/jc/p/Arranque.class" >/dev/null 2>&1
+	"$TRABAJO/nuestro/p/Ver"*.class "$TRABAJO/jc/p/Arranque.class" >/dev/null 2>&1
 
 # 3. la JVM, que es el oráculo que no necesita teléfono: código de salida **y texto**
 set +e
@@ -159,8 +159,7 @@ fi
 #    StackMapTable estaba en el plan 5.23 y se cerro en el §65: si vuelve a faltar, la JVM lo dice.
 mkdir -p "$TRABAJO/mix/p"
 cp "$TRABAJO/jc/p/Arranque.class" "$TRABAJO/mix/p/"
-cp "$TRABAJO/nuestro/p/Ver.class" "$TRABAJO/mix/p/"
-cp "$TRABAJO/nuestro/p/Ver\$1.class" "$TRABAJO/mix/p/"
+cp "$TRABAJO/nuestro/p/Ver"*.class "$TRABAJO/mix/p/"
 set +e
 mixto=$("$JDK/bin/java" -Xverify:all -cp "$TRABAJO/mix" p.Arranque 2>&1); mezcla=$?
 set -e

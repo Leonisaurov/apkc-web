@@ -4623,3 +4623,64 @@ nuestro `.class`):
 Comprobado además: `go test ./...` de punta a punta en el hospedador wasm (PASS) y `studio/e2e.sh` en orden
 (41 comprobaciones en la pestaña; el proyecto generado y la app del contador siguen saliendo verificados por
 `apksigner`, `zipalign`, `zipcheck`, `aapt2` y releídos por `d8`).
+
+## 83. Los campos anchos privados: `dup2_x1`, `dup2`, `pop2`, y el orden de los `proto_ids` que ART exige
+
+Una clase con `private long largo` y `private double doble` tocados desde una anónima
+(`largo = largo + 1; doble = doble + 1.5;`) hace que javac escriba los accesores sintéticos del §72 con
+las formas anchas. Medido con `javac --release 8 -g:lines,source` y `javap -c -p`:
+
+```java
+static long access$002(D, long);      // escribir
+    Code:  0: aload_0  1: lload_1  2: dup2_x1  3: putfield #6  6: lreturn
+static long access$000(D);            // leer
+    Code:  0: aload_0  1: getfield #6  4: lreturn
+static long access$002(long);         // el estático, en `E`
+    Code:  0: lload_0  1: dup2  2: putstatic #1  5: lreturn
+```
+
+y el llamador anónimo tira el valor que devuelve la escritura con **`pop2`** (0x58):
+`invokestatic D.access$002:(LD;J)J; pop2`. En el `.class` las tres formas nuevas son `dup2_x1` (0x5d),
+`dup2` (0x5c) y `pop2` (0x58); `getfield`/`putfield` no cambian de opcode, el ancho lo dice el descriptor.
+
+En el dex, `d8 --debug` sobre las mismas clases (`dexdump -d` del aparato) **no escribe nada** para el
+`dup2_x1` ni para el `dup2` —las entradas comparten registros, como el `dup_x1` del §72— y el `pop2`
+desaparece con la llamada, igual que el `pop` absorbido del §21. El accesor queda en `iput-wide` (0x5a) y
+`return-wide` (0x10), y en `run` hay **dos** `move-result-wide` para cuatro `invoke-static`: las dos
+lecturas guardan su resultado y las dos escrituras lo tiran.
+
+**Cuatro defectos salieron ejecutándolo**, y ninguno lo veía `javap`:
+
+1. `max_locals` del accesor contaba **argumentos** y no **huecos**: `(LD;J)J` pide tres y el accesor salía
+   con `locals=2`, con lo que el traductor ponía `aload_0` en v-1 y el dex se rechazaba con
+   `register v does not fit a four-bit format`. `javap -v` del nuestro y del de javac lo enseñan.
+2. El número del `access$` se contaba sobre todo el proyecto: con `D` y `E` juntas, la segunda recibía
+   `access$200`/`access$202` donde javac pone `access$000`/`access$002`. La posición es **por clase
+   exterior**.
+3. La contabilidad de pila del accesor no descontaba las dos palabras del `return` ancho (`el access$002
+   deja 1 valores en la pila al cerrar`, que el emisor mismo detecta).
+4. **El orden de los `proto_ids`**: ART cortaba el fichero con `Out-of-order proto_id arguments`. La regla
+   medida es la de `d8` —por tipo de retorno y después por la **lista de parámetros** comparada por sus
+   `type_idx`—, no por el shorty: `(LD;J)J` va antes que `(LF;)J` aunque sus shortys sean «JLJ» y «JL», que
+   ordenarían al revés. Nuestro fichero ponía `(LF;)J` en medio (`5 (LD;)J`, `6 (LF;)J`, `7 (LD;J)J`) y el
+   de `d8` dice `5 (LD;)J`, `6 (LD;J)J`, `7 (LF;)J`.
+
+Con las cuatro correcciones, las cinco clases de la sonda salen con el mismo `javap -c` que las de javac
+(solo cambian los números de pool) y su dex, escrito por este fork, verifica (`dexdump`, `rc 0`) y se
+ejecuta en el aparato por el camino «todo nuestro» (`apkc compile` + `apkc dex`, sin javac ni d8):
+
+```sh
+$PREFIX/tmp/apkc-dup compile --android-jar $HOME/Android/platforms/android-34/android.jar -o $M/nuestro \
+    $M/D.java $M/DM.java $M/E.java $M/F.java $M/G.java
+$PREFIX/tmp/apkc-dup dex -o $M/todo.dex $M/nuestro/*.class
+# /data/local/tmp: dexdump rc 0;  app_process64 p.DM  →  6 4.0   (la JVM dice lo mismo)
+```
+
+El banco lleva el caso en `Ver.anchoPrivado` (campo `private long ancho = 5L`, anónima que suma 2, devuelve
+7) y los cinco caminos dan `…|6|7` con `rc 102`, incluida la JVM con nuestra clase emitida bajo
+`-Xverify:all`. Tests: `javaemisor_privada_ancha_test.go` (el accesor con `iput-wide` y los dos
+`move-result-wide` de cuatro llamadas; y el `.class` del emisor contra javac) y `dexprotos_test.go` (el
+orden de los protos con el contraejemplo del shorty).
+
+Lo que sigue fuera de este bloque: los arreglos de largos y de flotantes (`laload`/`lastore`,
+`faload`/`fastore`, `aget-wide`/`aput-wide`) y el `ConstantValue` de un `static final long`.

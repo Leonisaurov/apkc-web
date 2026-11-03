@@ -758,6 +758,34 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		valor := a.est.pila[len(a.est.pila)-1]
 		objeto := a.est.pila[len(a.est.pila)-2]
 		a.est.pila = append(a.est.pila[:len(a.est.pila)-2], valor, objeto, valor)
+	case op == 0x5c: // dup2: el mismo par, para el access$ de un estatico ancho (parrafo 83)
+		if len(a.est.pila) == 0 {
+			return nil, false, fmt.Errorf("el `dup2` con la pila vacia")
+		}
+		par := a.est.pila[len(a.est.pila)-1]
+		if par.etiqueta != 'j' && par.etiqueta != 'd' {
+			return nil, false, fmt.Errorf("un `dup2` sobre %s: solo se midio el valor ancho", par)
+		}
+		a.est.pila = append(a.est.pila, par)
+	case op == 0x5d: // dup2_x1: [objeto, par] -> [par, objeto, par] (access$ de un campo ancho, parrafo 83)
+		if len(a.est.pila) < 2 {
+			return nil, false, fmt.Errorf("el `dup2_x1` con menos de dos valores")
+		}
+		par := a.est.pila[len(a.est.pila)-1]
+		objeto := a.est.pila[len(a.est.pila)-2]
+		if par.etiqueta != 'j' && par.etiqueta != 'd' {
+			return nil, false, fmt.Errorf("un `dup2_x1` sobre %s: solo se midio la forma [objeto, valor ancho]", par)
+		}
+		a.est.pila = append(a.est.pila[:len(a.est.pila)-2], par, objeto, par)
+	case op == 0x58: // pop2: un valor de dos palabras
+		if len(a.est.pila) == 0 {
+			return nil, false, fmt.Errorf("el `pop2` con la pila vacia")
+		}
+		t := a.est.pila[len(a.est.pila)-1]
+		if t.etiqueta != 'j' && t.etiqueta != 'd' {
+			return nil, false, fmt.Errorf("un `pop2` sobre %s: solo se midio el valor ancho", t)
+		}
+		a.est.pila = a.est.pila[:len(a.est.pila)-1]
 	case op == 0x60 || op == 0x64 || op == 0x68 || op == 0x6c || op == 0x70:
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err

@@ -297,10 +297,18 @@ func (t *dexTables) orderTables() {
 		if t.typeIdx[a.ret] != t.typeIdx[b.ret] {
 			return t.typeIdx[a.ret] < t.typeIdx[b.ret]
 		}
-		if t.stringIdx[a.shorty] != t.stringIdx[b.shorty] {
-			return t.stringIdx[a.shorty] < t.stringIdx[b.shorty]
+		// dentro del mismo retorno manda la LISTA DE PARÁMETROS por su índice de tipo, no el shorty:
+		// medido en el aparato (Android 15, `dexdump`, 2026-11-03) con `D.access$002`, donde `d8` pone
+		// `(LD;J)J` antes que `(LF;)J` —el shorty de las dos es «JL» y «JLJ», que ordenaría al revés— y
+		// ART corta con `Out-of-order proto_id arguments`. Un prefijo va antes que su extensión.
+		_, _, pa := splitDescriptor("(" + a.params + ")V")
+		_, _, pb := splitDescriptor("(" + b.params + ")V")
+		for k := 0; k < len(pa) && k < len(pb); k++ {
+			if t.typeIdx[pa[k]] != t.typeIdx[pb[k]] {
+				return t.typeIdx[pa[k]] < t.typeIdx[pb[k]]
+			}
 		}
-		return a.params < b.params
+		return len(pa) < len(pb)
 	})
 	for i, k := range t.protos {
 		t.protoIdx[k] = i

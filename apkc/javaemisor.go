@@ -45,8 +45,13 @@ const (
 	opAconstNull = 0x01
 	opLdc        = 0x12
 	opPop        = 0x57
+	opPop2       = 0x58
 	opDup        = 0x59
 	opDupX1      = 0x5a
+	// las formas que duplican un valor de dos palabras: el `dup2` del access$ de un estático ancho y el
+	// `dup2_x1` del de instancia (medidos en el párrafo 83 sobre `E` y `D`)
+	opDup2   = 0x5c
+	opDup2X1 = 0x5d
 	opGetstatic  = 0xb2
 	opPutstatic  = 0xb3
 	opGetfield   = 0xb4
@@ -1219,7 +1224,15 @@ func (ctx *contextoJava) accesorPara(duenio, miembro, miembroDesc string, campo,
 	memoria := fmt.Sprintf("%s|%s|%s|%v|%v", duenio, miembro, miembroDesc, campo, estatico)
 	numero, ok := ctx.accesorNumero[memoria]
 	if !ok {
-		numero = len(ctx.accesorNumero)
+		// la posición cuenta los miembros del MISMO exterior, no el total del proyecto: medido con
+		// `D` y `E` juntas en el párrafo 83, donde javac da `access$000`/`access$002` en cada una y el
+		// contador global daba `access$200`/`access$202` en la segunda
+		numero = 0
+		for k := range ctx.accesorNumero {
+			if strings.HasPrefix(k, duenio+"|") {
+				numero++
+			}
+		}
 		ctx.accesorNumero[memoria] = numero
 	}
 	// el ultimo digito es el sentido: 0 para leer un campo o llamar a un metodo, 2 para escribir un
@@ -2381,11 +2394,8 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 	}
 	estatico := cr.acceso&accStatic != 0
 	if dueño != e.interno && cr.acceso&accPrivate != 0 {
-		if esAncho(cr.desc) {
-			// el access$ de un campo ancho usa `dup2_x1`/`dup2` y el `pop2` del llamador: no esta medido
-			return "", false
-		}
-		// el campo privado del exterior: la anonima pasa por `access$NN0` (parrafo 72)
+		// el campo privado del exterior: la anonima pasa por `access$NN0` (parrafo 72), y el accesor de
+		// un campo ancho es `getfield` + `lreturn`/`dreturn`, sin nada mas (párrafo 83)
 		nombreAcc, descAcc := e.ctx.accesorPara(dueño, nombre, cr.desc, true, false, estatico)
 		enPila := 0
 		if !estatico {
@@ -3849,8 +3859,14 @@ func (e *emisor) stm(s jstmt) error {
 			return err
 		}
 		if d != "V" && d != "" {
-			e.emite(opPop)
-			e.baja(1)
+			// un valor de dos palabras se tira con `pop2` (`D$1.run` tras el access$002, párrafo 83)
+			if esAncho(d) {
+				e.emite(opPop2)
+				e.baja(2)
+			} else {
+				e.emite(opPop)
+				e.baja(1)
+			}
 		}
 		return nil
 	case jretorno:
@@ -3960,11 +3976,9 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		esEstatico := cr.acceso&accStatic != 0
 		if dueño != e.interno && cr.acceso&accPrivate != 0 {
-			if esAncho(cr.desc) {
-				return fmt.Errorf("linea %d: escribir el campo %s, que es ancho y privado del exterior: el access$ con `dup2_x1` y el `pop2` del llamador no estan medidos", v.donde.linea, segs[0])
-			}
 			// campo privado del exterior: la escritura pasa por `access$NN2`, que devuelve el valor y deja
-			// un `pop` en el llamador (parrafo 72). El accesor se apunta **antes** de bajar el valor porque
+			// un `pop` en el llamador (parrafo 72) —`pop2` cuando el campo es ancho (párrafo 83)—. El
+			// accesor se apunta **antes** de bajar el valor porque
 			// asi lo crea javac: en `secreto = secreto + 2` el de escritura es el 002 y el de lectura el 000.
 			nombreAcc, descAcc := e.ctx.accesorPara(dueño, segs[0], cr.desc, true, true, esEstatico)
 			enPila := 1
@@ -3985,8 +3999,13 @@ func (e *emisor) stm(s jstmt) error {
 				return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, segs[0], cr.desc, dv)
 			}
 			e.invoca(opInvokestat, dueño, nombreAcc, descAcc, enPila)
-			e.emite(opPop)
-			e.baja(1)
+			if esAncho(cr.desc) {
+				e.emite(opPop2)
+				e.baja(2)
+			} else {
+				e.emite(opPop)
+				e.baja(1)
+			}
 			return nil
 		}
 		if !esEstatico {
@@ -4654,38 +4673,67 @@ func (e *emisor) accesorDeClassFile(a accesorSintetico) ([]byte, error) {
 	// `java -Xverify:all` sobre esta sonda antes de corregirlo). El accessor es siempre estatico, asi que
 	// el descriptor dice todos los huecos; `a.estatico` habla del miembro, no del metodo sintetico.
 	_, _, args := splitDescriptor(a.desc)
-	e.maxLoc = len(args)
+	// los HUECOS que piden los argumentos, no el número de argumentos: un `long` o un `double` ocupa
+	// dos, y el traductor reparte los locales con `max_locals` (destapado en el aparato con
+	// `D.access$002`, párrafo 83: `max_locals=2` para `(LD;J)J` dejaba a `aload_0` en v-1)
+	e.maxLoc = 0
+	for _, p := range args {
+		if esAncho(p) {
+			e.maxLoc += 2
+		} else {
+			e.maxLoc++
+		}
+	}
 	e.marcaLinea(e.c.linea)
+	// el `return` se lleva lo que haya en la pila: dos palabras si el miembro es ancho (J/D), una si no
+	pierde := 1
+	if esAncho(a.miembroDesc) {
+		pierde = 2
+	}
 	switch {
 	case a.campo && a.estatico && !a.escritura:
 		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
-		e.emite(opGetstatic, byte(idx>>8), byte(idx))
-		e.sube()
+		e.getstaticDe(idx, a.miembroDesc)
 		e.emite(retorno(a.miembroDesc[0]))
-		e.baja(1)
+		e.baja(pierde)
 	case a.campo && a.estatico:
+		// `static long` privado: `lload_0; dup2; putstatic; lreturn` (medido en `E.access$002`,
+		// párrafo 83); el `dup` de una palabra era el del parrafo 72
 		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
 		e.cargaDe(0, a.miembroDesc)
-		e.emite(opDup)
-		e.sube()
-		e.putstatic(idx)
+		if esAncho(a.miembroDesc) {
+			e.emite(opDup2)
+			e.subeDos()
+			e.putstaticDe(idx, a.miembroDesc)
+		} else {
+			e.emite(opDup)
+			e.sube()
+			e.putstatic(idx)
+		}
 		e.emite(retorno(a.miembroDesc[0]))
-		e.baja(1)
+		e.baja(pierde)
 	case a.campo && !a.escritura:
 		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
 		e.cargaDe(0, "L")
-		e.getfield(idx)
+		e.getfieldDe(idx, a.miembroDesc)
 		e.emite(retorno(a.miembroDesc[0]))
-		e.baja(1)
+		e.baja(pierde)
 	case a.campo:
+		// y el de instancia: `aload_0; lload_1; dup2_x1; putfield; lreturn` (`D.access$002`)
 		idx := e.pool.campo(a.duenio, a.miembro, a.miembroDesc)
 		e.cargaDe(0, "L")
 		e.cargaDe(1, a.miembroDesc)
-		e.emite(opDupX1)
-		e.sube()
-		e.putfield(idx)
+		if esAncho(a.miembroDesc) {
+			e.emite(opDup2X1)
+			e.subeDos()
+			e.putfieldDe(idx, a.miembroDesc)
+		} else {
+			e.emite(opDupX1)
+			e.sube()
+			e.putfield(idx)
+		}
 		e.emite(retorno(a.miembroDesc[0]))
-		e.baja(1)
+		e.baja(pierde)
 	default:
 		_, vuelta, params := splitDescriptor(a.miembroDesc)
 		base := 0

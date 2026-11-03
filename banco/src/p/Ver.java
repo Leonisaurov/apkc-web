@@ -211,4 +211,18 @@ public class Ver {
         }
         return n;
     }
+
+    // Un campo ancho privado tocado desde una anónima (párrafo 83): el `access$002` de escritura usa
+    // `dup2_x1` y el llamador tira el valor con `pop2`. Con 5 + 2 devuelve 7.
+    private long ancho = 5L;
+
+    public int anchoPrivado() {
+        Runnable r = new Runnable() {
+            public void run() {
+                ancho = ancho + 2;
+            }
+        };
+        r.run();
+        return (int) ancho;
+    }
 }

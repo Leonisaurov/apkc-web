@@ -1137,7 +1137,7 @@ func (p *traduce) recorre() error {
 		// mira: la siguiente instruccion JVM. Se usa para saber si el resultado de una llamada se
 		// va a tirar: d8 no emite move-result-object cuando el pop lo consume, y las palabras del
 		// listener del studio lo dejan ver (§21)
-		seTira := k+1 < len(lista) && lista[k+1].name == "pop"
+		seTira := k+1 < len(lista) && (lista[k+1].name == "pop" || lista[k+1].name == "pop2")
 		switch in.name {
 		case "iconst_0", "iconst_1":
 			v := 0
@@ -1166,6 +1166,35 @@ func (p *traduce) recorre() error {
 			p.push(r)
 		case "pop":
 			p.suelta(p.pop(in))
+		case "pop2":
+			// un valor de dos palabras: el `pop2` que javac pone tras el `access$` de un campo ancho
+			// (`D$1.run` es `invokestatic access$002:(LD;J)J; pop2`, párrafo 83). d8 no escribe nada.
+			r := p.pop(in)
+			if p.err != nil {
+				return p.err
+			}
+			p.sueltaPar(r)
+		case "dup2":
+			// el par duplicado comparte registros y no emite nada: el `dup2` del access$ de un
+			// estático ancho (`E.access$002`: `lload_0; dup2; putstatic; lreturn`, párrafo 83)
+			if len(p.enPila) == 0 {
+				p.falla(in, "dup2 with an empty JVM stack")
+				return p.err
+			}
+			p.push(p.enPila[len(p.enPila)-1])
+		case "dup2_x1":
+			// pila [objeto, par] -> [par, objeto, par]: las tres entradas comparten registros y no se
+			// emite nada, igual que el `dup_x1` del parrafo 72. Medido en `D.access$002`, que d8 dexa
+			// como `iput-wide v1, v0` y `return-wide v1`.
+			if len(p.enPila) < 2 {
+				p.falla(in, "dup2_x1 with fewer than two values on the JVM stack")
+				return p.err
+			}
+			par := p.pop(in)
+			obj := p.pop(in)
+			p.push(par)
+			p.push(obj)
+			p.push(par)
 		case "dup":
 			if len(p.enPila) == 0 {
 				p.falla(in, "dup with an empty JVM stack")

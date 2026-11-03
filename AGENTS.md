@@ -471,8 +471,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismo que sobre las de javac (1104 bytes, `cmp` mudo) y ART lo ejecuta: `306` y `8`. Tres defectos salieron
   al ejecutar: el `encoded_value` de un `static long` debe anunciar `valueLong` con 8 bytes, el
   `parameters_count` del `debug_info_item` va por **parámetros declarados** y no por palabras, y una clase
-  llamada `L` chocaba con el `L` de un descriptor. `double` no lo arma ni el léxico (`1.0`); siguen sin medir
-  `lcmp`, `dup2`/`pop2`, los arreglos de largos y el `ConstantValue` de un `static final long`.
+  llamada `L` chocaba con el `L` de un descriptor. `double` no lo arma ni el léxico (`1.0`); el `lcmp` y las
+  comparaciones de NaN entraron en el §81 y `dup2`/`dup2_x1`/`pop2` en el §83; siguen sin medir los arreglos de
+  largos y el `ConstantValue` de un `static final long`.
 - **El `finally` y los dos `catch`, con la copia en cada camino** (§75): javac no escribe subrutina —copia el
   bloque al pie de cada camino que puede caer (el normal y el de cada `catch`) y añade un último manejador
   `any` que guarda la excepción en un local, copia el bloque y hace `aload`+`athrow`—. Las filas de la tabla
@@ -550,6 +551,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   la base = pico; si esa pasada pide más (visto con `Ver.compara`), la conjetura sube por encima del pico
   pedido y se repite el par entero. `esPresupuesto` distingue el fallo de marco (se reintenta) de un opcode o
   un tipo sin medir (se devuelve), y la conjetura crece en cada vuelta, así que el bucle termina.
+- **Los campos anchos privados y su `access$`** (§83): javac baja `largo = largo + 1` en una anónima a
+  `access$000` (leer: `getfield` + `lreturn`) y `access$002` (escribir: `aload_0; lload_1; dup2_x1; putfield;
+  lreturn`), y el llamador tira el valor con `pop2`; el estático ancho usa `dup2`. En el dex, `dup2_x1` y el
+  `dup2` **no emiten nada** (las entradas comparten registros) y el `pop2` se absorbe con la llamada, igual que
+  el `pop` del §21; el `iput-wide` 0x5a ya estaba. Cuatro defectos salieron al ejecutarlo: `max_locals` del
+  accesor contaba argumentos y no **huecos** (`(LD;J)J` pide 3 y quedaba 2, con `aload_0` en v-1), el número
+  del `access$` se contaba en todo el proyecto y no por exterior (`D`+`E` daban `access$200` en la segunda), el
+  `prof` del accesor no descontaba las dos palabras del `return` ancho, y la ordenación de `proto_ids` usaba el
+  shorty: ART pide la **lista de parámetros por `type_idx`** y cortaba con `Out-of-order proto_id arguments`
+  (`(LD;J)J` va antes que `(LF;)J` aunque sus shortys sean «JLJ» y «JL»). Ejecutado por los cinco caminos del
+  banco (`anchoPrivado` = 7) y por la JVM con nuestra clase (`-Xverify:all`). Tests:
+  `javaemisor_privada_ancha_test.go` (dos) y `dexprotos_test.go`.
 - **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
   —el indice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
   del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
@@ -602,7 +615,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **255 PASS + 2 SKIP** nativa y **196 PASS + 61 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **258 PASS + 2 SKIP** nativa y **198 PASS + 62 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
