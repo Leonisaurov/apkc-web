@@ -48,8 +48,14 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
   asignaciones de entorno en `sh -c '...'`.
 - Comando pesado por `tcr` (`tcr -j 1 -q -- <cmd>`), jamás `-j$(nproc)`. Antes de algo caro:
   `free -m` y `df -h "$PREFIX"`.
-^- El SDK está en `~/Android` (build-tools 34.0.0, `platforms/android-34/android.jar`) y el JDK en
-  `$PREFIX/lib/jvm/java-21-openjdk`.
+^- El SDK está en `~/Android` (`platforms/android-34/android.jar`) y el JDK en
+  `$PREFIX/lib/jvm/java-21-openjdk`. Las build-tools accesibles son `~/Android/build-tools/34.9.0/`, unos
+  enlaces **nuevos** a los binarios del paquete (`$PREFIX/bin/{aapt,aapt2,apksigner,d8,zipalign}`): los
+  enlaces viejos de `34.0.0` quedaron con el contexto SELinux del usuario anterior tras un reset de fábrica
+  y son inaccesibles (ni `readlink` ni `unlink`). **El número de la carpeta no puede superar al de la
+  platform**, porque apkc deriva de ahí la platform (`35.0.0` pedía `android-35`, que no existe).
+  `studio/e2e.sh` y `banco/banco.sh` eligen la carpeta más alta con `sort -V`. Tras ese reset `rish`
+  desapareció del PATH, así que los caminos de aparato del banco no corren hasta reponer Shizuku.
 - **Dos trampas de wasm ya conocidas**: (a) `go test -exec=$GOROOT/lib/wasm/go_js_wasm_exec` falla
   con `total length of command line and environment variables exceeds limit` si no se le da
   `env -i`; (b) sin `GOOS=js GOARCH=wasm` el lanzador recibe un ELF y se queja de

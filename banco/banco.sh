@@ -16,7 +16,10 @@ P=/data/data/com.termux/files/usr
 AQUI=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 APKC=${APKC:-$P/tmp/apkc-gate}
 JAR=${ANDROID_JAR:-$HOME/Android/platforms/android-34/android.jar}
-BT=${BT:-$HOME/Android/build-tools/34.0.0}
+# La version de build-tools se elige como en studio/e2e.sh —la mas alta del SDK—, no por una ruta
+# fija: tras un reset de fabrica los enlaces de la carpeta vieja quedan con el contexto SELinux del
+# usuario anterior y son inaccesibles (aapt2 y d8: permission denied).
+BT=${BT:-$(ls -d "$HOME/Android/build-tools"/* 2>/dev/null | sort -V | tail -1)}
 JDK=$P/lib/jvm/java-21-openjdk
 TRABAJO=${TRABAJO:-$P/tmp/banco}
 DEXDUMP=/apex/com.android.art/bin/dexdump

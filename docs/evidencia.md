@@ -4337,9 +4337,26 @@ ciertos —`double d = 1.0` en la prueba del largo y el del léxico sobre `1.0`�
 cambió de byte (0x6a ya es `fmul`; ahora es 0x94, `lcmp`).
 
 Suite: **251 PASS + 2 SKIP** nativa y **196 PASS + 57 SKIP** en el hospedador (las tres pruebas nuevas se
-saltan si el hospedador no lleva `android.jar` montado). **El `studio/e2e.sh` y el banco no se pudieron correr
-en esta sesión**: el proceso del CLI cambió de usuario de Android y los enlaces de
-`~/Android/build-tools/34.0.0/` apuntan al directorio privado de la otra app —`aapt2: permission denied` y
-`d8: Permission denied`, medido con `ls -lL aapt2`, que no puede leer el enlace—. Vuelve a pasar como antes de
-este párrafo en cuanto se arranque la CLI desde la instancia que es dueña del SDK; nada de lo de arriba
-(léxico, emisor, marcos y la ejecución en la JVM) depende de esas dos herramientas.
+saltan si el hospedador no lleva `android.jar` montado).
+
+**El entorno se rompió con el reset de fábrica del aparato, no el repo.** La sesión pasó a otro usuario de
+Android (`u0_a237`, antes `u0_a379`) y los enlaces de `~/Android/build-tools/34.0.0/`
+(`aapt`, `aapt2`, `apksigner`, `d8`, `zipalign`) quedaron con el contexto SELinux del usuario anterior:
+`ls -Z` del objetivo sano muestra `u:object_r:app_data_file:s0:c237,…`, y sobre el enlace viejo ni
+`readlink`, ni `stat`, ni `unlink` —todo `Permission denied`—. Con eso el gate daba `aapt2: permission denied`
+y el primer `e2e` de este párrafo salió con dos problemas.
+
+**Reparación medida**: los binarios existen como paquetes de Termux en `$PREFIX/bin/` (`pacman -Q`:
+`aapt2 16.0.0.4-4`, `d8 37.0.0-0`) y corren desde ahí —`aapt2 version` → `2.20-android-16.0.0_r4`,
+`d8 --version` → `D8 9.2.4-dev`—. Se creó `~/Android/build-tools/34.9.0/` con enlaces **nuevos** a esos
+binarios (los enlaces nuevos nacen con el contexto actual y sí funcionan) y `banco/banco.sh` ahora elige la
+carpeta de build-tools más alta igual que `studio/e2e.sh`, en vez de una ruta fija. Primer intento con
+`35.0.0` y el build falló pidiendo `platforms/android-35/android.jar`: **apkc deriva la platform del número
+de build-tools**, y en este SDK solo hay `android-34`; renombrada a `34.9.0`, `apkc doctor` vuelve a resolver
+`platforms/android-34/android.jar` ✓. Con eso el gate vuelve a estar **en orden** (el apk del contador,
+10287 bytes, verificado por `apksigner`, `zipalign`, `zipcheck.py`, `aapt2 dump` y releído por `d8`).
+
+**Lo que falta en esta sesión**: `rish` desapareció con el reset (`command -v rish` vacío), así que
+`banco/banco.sh` no puede correr sus caminos de aparato (`dexdump` y `app_process64` del teléfono). La
+evidencia de ejecución del punto flotante, mientras, es la de la JVM real: `-Xverify:all` sobre nuestra clase,
+que ya está arriba.
