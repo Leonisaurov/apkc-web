@@ -75,6 +75,18 @@ type jcast struct {
 	donde  pos
 }
 
+// jinstanceof: `x instanceof T`. Medido en el parrafo 79 sobre la sonda `Ins`: javac escribe
+// `aload_0; instanceof #7 // class java/lang/String; 4: ifeq 9` —deja un 0/1 en la pila y la condicion
+// del `if` es el `ifeq` **sin invertir** (al revés que las comparaciones, que salen invertidas:
+// parrafo 52)—.
+type jinstanceof struct {
+	tipo   string
+	dentro jexpr
+	donde  pos
+}
+
+func (jinstanceof) jexprPuede() {}
+
 func (jcast) jexprPuede() {}
 
 // jnuevo: `new Tipo(args)` y, si cuerpo no es nil, la clase anonima `new Tipo(args) { ... }`.
@@ -1474,6 +1486,20 @@ func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
 	}
 	for {
 		t := a.actual()
+		// `instanceof` liga como las relacionales (nivel 4) y no es asociativo: se consume aqui y el
+		// tipo que sigue va tal cual
+		if t.kind == 'k' && t.valor == "instanceof" {
+			if precedenciasJava["<"] < min {
+				return izq, nil
+			}
+			a.avanzar()
+			tipo, err := a.tipo()
+			if err != nil {
+				return nil, err
+			}
+			izq = jinstanceof{dentro: izq, tipo: tipo, donde: t.donde}
+			continue
+		}
 		op := ""
 		if t.kind == 'p' {
 			op = t.valor

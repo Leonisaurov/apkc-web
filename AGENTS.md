@@ -507,6 +507,18 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `1.5|2.5`, `rc 0`). Frontera por nombre: el traductor se para en `dload_0` (las formas de dalvik están por
   medir), `faload`/`fastore`, las comparaciones sobre flotantes o dobles, `i2b`/`i2c`/`i2s` y el exponente con
   signo. La prueba del caminante cambió de byte (0x6a ya es `fmul`; es 0x94, `lcmp`).
+- **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
+  —el indice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
+  del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
+  En el dex, **`instance-of` es 0x20 en formato 22c**: medido sobre el fichero que escribe `d8 --debug` y
+  decodificando sus palabras con el lector `readDex` (el oráculo no comparte código con el traductor: solo
+  corta el `code_item`), porque sin `rish` no hay `dexdump`. `Ins2.f(Object a, Object b)` con
+  `if (b instanceof CharSequence)` sale `4128 2` = `instance-of v0, v1, type@2` ✓, lo que fija el orden de los
+  nibbles y obliga a pedir un **temporal** para el destino (la referencia probada puede seguir viva). Los cinco
+  métodos de `Ins` salen iguales que javac (instrucciones, `max_stack`, huecos, filas de línea), el dex que
+  escribimos sobre nuestras clases es **byte a byte** el de sobre las de javac, y la JVM con `-Xverify:all`
+  ejecuta nuestra clase con el mismo texto: `1|0|2|3|2|cadena|5`. Queda por ver en ART (falta `rish`),
+  `x instanceof T[]` y la forma negada.
 - **El valor pendiente: un `return` o un `break` que cruza el `finally`** (§76): el cuerpo deja de ser un rango
   único —cada salida abrupta **cierra un trozo** cuyo fin es el pc justo detrás del `istore` que guarda el valor, y
   el trozo siguiente empieza **después** de la copia, del `iload` y del `return` (o del `goto` del `break`): medido
@@ -546,7 +558,7 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **251 PASS + 2 SKIP** nativa y **196 PASS + 57 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **254 PASS + 2 SKIP** nativa y **196 PASS + 60 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

@@ -77,6 +77,7 @@ const (
 	identEmpaquetado    = 0x0100
 	identDisperso       = 0x0200
 	opCheckcastDex      = 0x1f // 21c check-cast vAA, type@BBBB
+	opInstanceDex       = 0x20 // 22c instance-of vAA, vBB, type@CCCC (`2010 0002` en `Ins2.f`, parrafo 79)
 	opRetornaObjeto     = 0x11 // 11x return-object vAA
 	opIput              = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
 
@@ -1084,6 +1085,27 @@ func (p *traduce) recorre() error {
 			if !p.indice(p.t.typeIdx[desc], in, "the type_id of check-cast") {
 				return p.err
 			}
+			p.push(r)
+		case "instanceof":
+			// medido en el parrafo 79 con `Ins2.f` dexada por `d8`: `4128 2` es
+			// `instance-of v0, v1, type@2` —opcode 0x20, el hueco entre `check-cast` 0x1f (parrafo 50)
+			// y `array-length` 0x21 (parrafo 66), en la forma 22c de siempre: `op|BA` con el destino en
+			// el nibble bajo del byte alto—. El destino es un temporal: la referencia que se prueba
+			// puede seguir viva despues de la condicion.
+			desc := p.x.classDescriptor(dexU16(in.ops))
+			objeto := p.pop(in)
+			if !p.nibble(objeto, in) {
+				return p.err
+			}
+			r := p.toma(in)
+			if !p.nibble(r, in) {
+				return p.err
+			}
+			p.palabra(unidad12x(opInstanceDex, r, objeto))
+			if !p.indice(p.t.typeIdx[desc], in, "the type_id of instance-of") {
+				return p.err
+			}
+			p.suelta(objeto)
 			p.push(r)
 		case "areturn":
 			r := p.pop(in)

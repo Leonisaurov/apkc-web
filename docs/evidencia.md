@@ -4360,3 +4360,68 @@ de build-tools**, y en este SDK solo hay `android-34`; renombrada a `34.9.0`, `a
 `banco/banco.sh` no puede correr sus caminos de aparato (`dexdump` y `app_process64` del teléfono). La
 evidencia de ejecución del punto flotante, mientras, es la de la JVM real: `-Xverify:all` sobre nuestra clase,
 que ya está arriba.
+
+## 79. El `instanceof`, y el oráculo de `d8` sin aparato: `instance-of` es 0x20 en forma 22c
+
+**El `.class`, con `javap -c -p -l` sobre `Ins`**: `static int esCadena(Object x) { if (x instanceof String) { return 1; } return 0; }` es
+`0 aload_0; 1 instanceof #7 // class java/lang/String; 4: ifeq 9; 7 iconst_1; 8 ireturn; 9 iconst_0; 10 ireturn`.
+Tres cosas: el `instanceof` consume la referencia y **deja un entero** (el alto de pila no cambia), la
+condición del `if` es el `ifeq` **sin invertir** —al revés que las seis comparaciones del párrafo 52, que
+salen invertidas—, y el indice es de **dos bytes** (`instanceof` = 0xc1, junto al `checkcast` 0xc0 y el
+`multianewarray` 0xc2, este ultimo fuera del subconjunto). La filas de línea del `if` son las de la
+sentencia (`line 5: 0`, `line 6: 7`, `line 8: 9`) —no hay fila para el `ifeq`—, y el marco del destino es
+un `same_locals_1_stack_item`… aqui `same`, porque en el `else` la pila ya está vacía: `javap -v` muestra
+`stack=1, locals=2` y un unico marco `same` en el pc 9.
+
+**El dex, medido sobre el fichero de `d8` y no sobre un manual** (sin `rish` hace falta un oráculo local, y
+`d8` lo da: escribe el dex, y las **palabras** las leo con nuestro lector `readDex`, que no comparte código
+con el traductor porque no lo interpreta —solo corta `code_item`—). `d8 --debug` sobre `Ins.class` deja en
+`esCadena` las palabras `32 4 | 56 4 | 4114 15 | 18 15`, y en `esSecuencia` `32 2 | 56 4 | 8210 15 |
+12306 15`. Decodificadas con la tabla ya medida en el repo (`check-cast` 0x1f, `array-length` 0x21,
+`new-array` 0x23, `if-eqz` 0x38, `const/4` 0x12, `return` 0x0f):
+
+- `32` = **0x20**, el hueco que queda entre `check-cast` y `array-length`, con la forma 22c: el primer
+  registro en el nibble bajo del byte alto y el segundo en el alto (`0x0020` → `v0, v0`), y el `type@CCCC`
+  en la unidad siguiente (`4` = `Ljava/lang/String;`, `2` = `Ljava/lang/CharSequence;` ✓ los indices
+  coinciden con los del `instanceof` del `.class`).
+- `4114` = `0x1012` = `const/4 v0, #1` ✓ (el literal en el nibble alto: `0x2012` → `#2` en `esSecuencia` y
+  `0x3012` → `#3` ✓ las dos constantes del fuente), y `15` = `0x000f` = `return v0` ✓.
+
+Para fijar el orden de los nibbles hace falta un caso con **destino y origen distintos**, y lo di
+`Ins2.f(Object a, Object b)` con `if (b instanceof CharSequence)`: `d8` escribe `4128 2` =
+`0x1020` = `instance-of v0, v1, type@2` ✓ —destino v0 (nibble bajo del byte alto), origen v1 (nibble
+alto)—. Por eso el traductor pide un **temporal** para el destino en vez de escribir sobre el de la
+referencia: la referencia probada puede seguir viva despues de la condicion (`if (b instanceof X) { usa(b); }`).
+
+**Añadido al emisor y al traductor**: el analizador lee `instanceof` con la precedencia de las relacionales
+(nivel 4, no asociativo); el emisor escribe `0xc1` con el indice de la clase en el pool (la misma `usar` +
+`pool.clase` del `checkcast`, así que la clase probada entra en `InnerClasses`-like como tipo usado);
+`condicionBranca` devuelve `opIFEQ` con una palabra consumida; la tabla del caminante lleva
+`0xc1: {"instanceof", 2}`; el interprete de marcos saca la referencia y empuja un entero; y el traductor emite
+`unidad12x(0x20, temporal, origen)` + el indice de tipo.
+
+**Comparados con javac, los cinco métodos**: `esCadena`, `esSecuencia`, `conArreglo` (el `instanceof` dentro
+del bucle sobre `vs[i]`, que es donde el temporal importa), `baja` (el `checkcast` de siempre) y `anidado`.
+Las instrucciones, `max_stack`, los huecos de local y las filas de línea salen **iguales**, y el dex que
+escribe este fork sobre nuestras clases es **byte a byte** el que escribe sobre las de javac.
+
+**Ejecutado en la JVM real**: un conductor compilado con javac (`InsDriver`, con `new Object[] { "hola", 3, "adios" }`)
+corre contra nuestra clase con `-Xverify:all` y da el mismo texto que contra la de javac:
+`1|0|2|3|2|cadena|5`, `rc 0` en los dos. **Lo que no se pudo comprobar en esta sesión es el `instance-of` en
+ART**, porque `rish` no está: falta el `dexdump` del aparato y el `app_process` del banco.
+
+**Rechazado por nombre, con la forma medida**: la condición negada (`if (!(x instanceof T))`, que en javac
+usa el `ifne` y no la leímos), `x instanceof String[]` (el tipo de arreglo en el pool) y `instanceof` sobre
+un primitivo (que en Java ni compila, pero el mensaje sale de nuestro portero).
+
+**Pruebas**: `apkc/javaemisor_instof_test.go` — tres pruebas (comparación con javac método a método, dex
+idéntico, y los tres rechazos). La prueba del caminante que fijaba `0x6a` como byte no medido ya no podia
+usarlo (`fmul`, párrafo 77) y pasó a `0x94`, `lcmp`.
+
+Suite: **254 PASS + 2 SKIP** nativa, **196 PASS + 60 SKIP** en el hospedador y `studio/e2e.sh` **en orden**
+(el apk del proyecto generado, verificado por `apksigner`, `zipalign`, `zipcheck.py`, `aapt2 dump` y releído
+por `d8`).
+
+**Frontera**: el `instanceof` en ART hasta que vuelva `rish`; `x instanceof T[]`; la forma negada; y lo que
+seguía: el punto flotante en el dex (`dload_0` sigue sin forma medida), las ramas sobre `long`
+(`lcmp`, `dup2`/`pop2`) y los arreglos de largos o flotantes.

@@ -894,6 +894,14 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifRef(clase))
+	case op == 0xc1: // instanceof: consume la referencia y deja un entero (`Ins.esCadena`, parrafo 79)
+		if _, err := a.lector.claseDe(u2De(in.ops, 0)); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
 	case op == 0xc0:
 		clase, err := a.lector.claseDe(u2De(in.ops, 0))
 		if err != nil {

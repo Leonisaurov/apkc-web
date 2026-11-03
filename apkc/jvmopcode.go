@@ -163,6 +163,7 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xb9: {"invokeinterface", 4}, // index u16, then count u8 and a reserved u8
 	0xbb: {"new", 2},
 	0xc0: {"checkcast", 2},
+	0xc1: {"instanceof", 2}, // medido en `Ins.esCadena` (parrafo 79): indice de dos bytes con la clase
 	// las branquias, con el ancho de dos bytes que mide `javap -c` en el parrafo 52: el numero que
 	// imprime detras del mnemonic es el desplazamiento, y el siguiente desplazamiento de la lista
 	// esta tres bytes mas adelante que el de la branquia

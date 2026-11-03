@@ -563,6 +563,8 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 		}
 	case jcast:
 		ctx.registrarExpresion(v.dentro)
+	case jinstanceof:
+		ctx.registrarExpresion(v.dentro)
 	case joperador:
 		ctx.registrarExpresion(v.izq)
 		ctx.registrarExpresion(v.der)
@@ -646,6 +648,8 @@ func anonimasDe(c *jclas) []*jclas {
 				expr(v.base)
 			}
 		case jcast:
+			expr(v.dentro)
+		case jinstanceof:
 			expr(v.dentro)
 		case jnuevoArreglo:
 			if v.largo != nil {
@@ -1783,6 +1787,8 @@ func lineaDeExpr(x jexpr) int {
 		return v.donde.linea
 	case jcast:
 		return v.donde.linea
+	case jinstanceof:
+		return v.donde.linea
 	case jnuevo:
 		return v.donde.linea
 	case jnuevoArreglo:
@@ -1886,6 +1892,29 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		}
 		e.cargaDe(0, "L")
 		return "L" + e.interno + ";", nil
+	case jinstanceof:
+		// medido en `Ins.esCadena` (parrafo 79): `aload_0; instanceof #7 // class java/lang/String;`
+		// y despues el `ifeq` de la condicion —el `instanceof` consume la referencia y deja un entero,
+		// así que el alto de pila no cambia—. La clase va al pool como la de `checkcast`, con el
+		// indice en dos bytes.
+		d, err := e.exp(v.dentro)
+		if err != nil {
+			return "", err
+		}
+		if len(d) == 0 || d[0] != 'L' {
+			return "", fmt.Errorf("linea %d: `instanceof` sobre %s: solo se midio sobre una referencia", v.donde.linea, d)
+		}
+		if strings.Contains(v.tipo, "[") {
+			return "", fmt.Errorf("linea %d: `instanceof %s` con un arreglo no esta medido", v.donde.linea, v.tipo)
+		}
+		interno, err := e.ctx.tipoAInterno(v.tipo)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+		}
+		e.usar(interno)
+		idx := e.pool.clase(interno)
+		e.emite(0xc1, byte(idx>>8), byte(idx))
+		return "Z", nil
 	case jcast:
 		if destino, ok := descPrimitivo[v.tipo]; ok && strings.IndexByte("IJFD", destino[0]) >= 0 {
 			// un cast numerico es la conversion de la rejilla, no un `checkcast`: medido en `FyD`,
@@ -3007,6 +3036,15 @@ func esEnteroDesc(desc string) bool {
 // Lo que no está en esa tabla se rechaza con nombre: el booleano suelto (`if b`), el literal a la
 // izquierda y las referencias comparadas entre sí.
 func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
+	// `x instanceof T` deja un 0/1 y javac branquea con el `ifeq` **sin invertir** (parrafo 79,
+	// `Ins.esCadena`: `aload_0; instanceof #7; 4: ifeq 9`). La forma negada (`if (!(x instanceof T))`)
+	// no esta medida y cae en el rechazo de abajo.
+	if v, esInstance := cond.(jinstanceof); esInstance {
+		if _, err := e.exp(v); err != nil {
+			return 0, 0, err
+		}
+		return opIFEQ, 1, nil
+	}
 	op, esComp := cond.(joperador)
 	if !esComp {
 		return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida (sobre un booleano javac usa `ifeq`, y eso no lo leimos)",
