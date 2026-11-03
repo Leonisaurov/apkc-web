@@ -18,9 +18,9 @@ package main
 // con dos registros en nibbles; un 35c cuenta los argumentos y reparte registros entre dos
 // unidades. La lista es corta a propósito: lo que falta está dicho en los rechazos.
 const (
-	opRetorna        = 0x0f // 11x return vAA
-	opRetornaV       = 0x0e // 10x return-void
-	opMueveResult    = 0x0a // 11x move-result vAA, medido en el parrafo 66 (`0a00` tras un
+	opRetorna     = 0x0f // 11x return vAA
+	opRetornaV    = 0x0e // 10x return-void
+	opMueveResult = 0x0a // 11x move-result vAA, medido en el parrafo 66 (`0a00` tras un
 	// invoke-static que devuelve I)
 	opMueveResultObj = 0x0c // 11x move-result-object vAA
 
@@ -31,31 +31,31 @@ const (
 
 	// el `long` en el dex, medido con `dexdump -d` sobre `d8 --release` en las sondas `L`, `V` y `M`
 	// (parrafo 74): dos registros por valor, el de en medio de cada trío de acceso a campo
-	opMueveWide      = 0x04 // 12x move-wide vA, vB
+	opMueveWide       = 0x04 // 12x move-wide vA, vB
 	opMueveResultWide = 0x0b // 11x move-result-wide vAA, `0b00`
-	opRetornaWide    = 0x10 // 11x return-wide vAA, `1000`
-	opConstWide16    = 0x16 // 21c const-wide/16 vAA, #+BBBB (`1600 0100`)
-	opConstWide32    = 0x17 // const-wide/32 vAA, #+BBBBBBBB (`1700 7011 0100`)
-	opConstWide      = 0x18 // const-wide vAA, #+BBBBBBBBBBBBBBBB, cuatro unidades (`1800 cb04 fb71 1f01`)
-	opIGetWide       = 0x53 // 22c iget-wide vAA, vBB, field@CCCC (`5320 0000`)
-	opIPutWide       = 0x5a // 22c iput-wide vAA, vBB, field@CCCC (`5a01 0000`)
-	opSGetWide       = 0x61 // 21c sget-wide vAA, field@BBBB (`6102 0000`)
-	opSPutWide       = 0x68 // 21c sput-wide vAA, field@BBBB (`6802 0000`)
-	opIntALargo      = 0x81 // 12x int-to-long vA, vB (`8120`)
-	opLargoAInt    = 0x84 // 12x long-to-int v1, v0 (`8401`)
-	opConst4         = 0x12 // 11n const/4 vAA, #+B
-	opConst16        = 0x13 // 21c const/16 vAA, #+BBBB
-	opConstAlto16    = 0x15 // 21c const/high16 vAA, #+BBBB0000
-	opConstString    = 0x1a // 21c const-string vAA, string@BBBB
-	opNuevaInstancia = 0x22 // 21c new-instance vAA, type@BBBB
-	opIget           = 0x52 // 22c iget vAA, vBB, field@CCCC
-	opIgetObject     = 0x54 // 22c iget-object vAA, vBB, field@CCCC
-	opIputObject     = 0x5b // 22c iput-object vAA, vBB, field@CCCC
-	opInvocaVirtual  = 0x6e // 35c invoke-virtual
-	opInvocaSuper    = 0x6f // 35c invoke-super
-	opInvocaDirecto  = 0x70 // 35c invoke-direct
-	opInvocaEstatico = 0x71 // 35c invoke-static
-	opInvocaInterfaz = 0x72 // 35c invoke-interface
+	opRetornaWide     = 0x10 // 11x return-wide vAA, `1000`
+	opConstWide16     = 0x16 // 21c const-wide/16 vAA, #+BBBB (`1600 0100`)
+	opConstWide32     = 0x17 // const-wide/32 vAA, #+BBBBBBBB (`1700 7011 0100`)
+	opConstWide       = 0x18 // const-wide vAA, #+BBBBBBBBBBBBBBBB, cuatro unidades (`1800 cb04 fb71 1f01`)
+	opIGetWide        = 0x53 // 22c iget-wide vAA, vBB, field@CCCC (`5320 0000`)
+	opIPutWide        = 0x5a // 22c iput-wide vAA, vBB, field@CCCC (`5a01 0000`)
+	opSGetWide        = 0x61 // 21c sget-wide vAA, field@BBBB (`6102 0000`)
+	opSPutWide        = 0x68 // 21c sput-wide vAA, field@BBBB (`6802 0000`)
+	opIntALargo       = 0x81 // 12x int-to-long vA, vB (`8120`)
+	opLargoAInt       = 0x84 // 12x long-to-int v1, v0 (`8401`)
+	opConst4          = 0x12 // 11n const/4 vAA, #+B
+	opConst16         = 0x13 // 21c const/16 vAA, #+BBBB
+	opConstAlto16     = 0x15 // 21c const/high16 vAA, #+BBBB0000
+	opConstString     = 0x1a // 21c const-string vAA, string@BBBB
+	opNuevaInstancia  = 0x22 // 21c new-instance vAA, type@BBBB
+	opIget            = 0x52 // 22c iget vAA, vBB, field@CCCC
+	opIgetObject      = 0x54 // 22c iget-object vAA, vBB, field@CCCC
+	opIputObject      = 0x5b // 22c iput-object vAA, vBB, field@CCCC
+	opInvocaVirtual   = 0x6e // 35c invoke-virtual
+	opInvocaSuper     = 0x6f // 35c invoke-super
+	opInvocaDirecto   = 0x70 // 35c invoke-direct
+	opInvocaEstatico  = 0x71 // 35c invoke-static
+	opInvocaInterfaz  = 0x72 // 35c invoke-interface
 
 	// leidos de `d8` sobre la sonda del parrafo 50: `sget v0, field@0` sale 0x60 y su indice,
 	// `sput` 0x67, `check-cast v1, type@1` 0x1f y su indice, `return-object v1` 0x11. Las dos de
