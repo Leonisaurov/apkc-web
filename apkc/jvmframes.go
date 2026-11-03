@@ -807,6 +807,26 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifInt)
+	case op == 0x30: // faload (parrafo 84)
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifFlotante)
+	case op == 0x2f || op == 0x31: // laload, daload: dos palabras del arreglo
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+		if op == 0x2f {
+			a.empuja(verifLargo)
+		} else {
+			a.empuja(verifDoble)
+		}
 	case op == 0x32: // aaload
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
@@ -823,6 +843,32 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 	case op == 0x4f: // iastore
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
+		}
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+	case op == 0x51: // fastore (parrafo 84)
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		if _, err := a.sacaRef(); err != nil {
+			return nil, false, err
+		}
+	case op == 0x50 || op == 0x52: // lastore, dastore
+		if op == 0x50 {
+			if err := a.sacaLargo(); err != nil {
+				return nil, false, err
+			}
+		} else {
+			if err := a.sacaDe('d'); err != nil {
+				return nil, false, err
+			}
 		}
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err

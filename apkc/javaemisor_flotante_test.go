@@ -129,21 +129,23 @@ func TestElFlotanteSeDexaComoJavac(t *testing.T) {
 	}
 }
 
-// TestElFlotanteRechazaLoNoMedido: leer un elemento de un arreglo de flotantes sale por su nombre.
-// (La comparación de dobles entró en el párrafo 81 con su propio test.)
-func TestElFlotanteRechazaLoNoMedido(t *testing.T) {
-	casos := []struct{ nombre, fuente, pista string }{
-		{"lectura de un arreglo de flotantes", "package p;\npublic class A { public static float f(float[] v) { return v[0]; } }\n", "arreglo de F"},
-		{"escritura en un arreglo de dobles", "package p;\npublic class A { public static void f(double[] v) { v[0] = 1.5; } }\n", "arreglo de D"},
+// TestElFlotanteEnArreglos: leer y escribir elementos de un `float[]` y de un `double[]` ya se compila
+// (el `faload`/`fastore`/`daload`/`dastore` y el `aget`/`aget-wide`/`aput`/`aput-wide` entraron en el
+// párrafo 84). Aquí solo se comprueba que el emisor no los rechaza; la forma exacta la fija el test
+// de esa sonda.
+func TestElFlotanteEnArreglos(t *testing.T) {
+	fuentes := []string{
+		"package p;\npublic class A { public static float f(float[] v) { return v[0]; } }\n",
+		"package p;\npublic class A { public static void f(double[] v) { v[0] = 1.5; } }\n",
 	}
-	for _, c := range casos {
-		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/A.java", contenido: c.fuente}}, jarDelSDK(t))
-		if err == nil {
-			t.Errorf("%s: se acepto lo que no esta medido", c.nombre)
+	for _, fuente := range fuentes {
+		salida, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/A.java", contenido: fuente}}, jarDelSDK(t))
+		if err != nil {
+			t.Errorf("el emisor rechazó un arreglo de flotantes: %v", err)
 			continue
 		}
-		if !bytes.Contains([]byte(err.Error()), []byte(c.pista)) {
-			t.Errorf("%s: el mensaje no nombra %q: %v", c.nombre, c.pista, err)
+		if len(salida) == 0 || len(salida[0].datos) == 0 {
+			t.Error("el emisor no escribió la clase")
 		}
 	}
 }

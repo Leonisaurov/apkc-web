@@ -151,10 +151,17 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xae: {"freturn", 0},
 	0xaf: {"dreturn", 0},
 	// arreglos (parrafo 66): el ancho sale de `javap -c` de la sonda `Arreglos`, donde
-	// `newarray int` va de 1 a 3, `anewarray #7` de 1 a 4 y `arraylength` de 1 a 2
+	// `newarray int` va de 1 a 3, `anewarray #7` de 1 a 4 y `arraylength` de 1 a 2. Las formas de
+	// `long`, `float` y `double` son las del JVMS y se midieron en el parrafo 84 sobre `Arr`
 	0x2e: {"iaload", 0},
+	0x2f: {"laload", 0},
+	0x30: {"faload", 0},
+	0x31: {"daload", 0},
 	0x32: {"aaload", 0},
 	0x4f: {"iastore", 0},
+	0x50: {"lastore", 0},
+	0x51: {"fastore", 0},
+	0x52: {"dastore", 0},
 	0x53: {"aastore", 0},
 	0xbc: {"newarray", 1},
 	0xbd: {"anewarray", 2},

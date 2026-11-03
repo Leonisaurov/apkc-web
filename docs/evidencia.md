@@ -4684,3 +4684,50 @@ orden de los protos con el contraejemplo del shorty).
 
 Lo que sigue fuera de este bloque: los arreglos de largos y de flotantes (`laload`/`lastore`,
 `faload`/`fastore`, `aget-wide`/`aput-wide`) y el `ConstantValue` de un `static final long`.
+
+## 84. Los arreglos de `long`, `float` y `double`, y el defecto de pares que solo ve ART
+
+Una sonda con seis métodos (`long leeLargo(long[], int)`, `void escribeLargo(long[], int, long)`, y lo
+mismo con `float` y `double`) medida con `javac --release 8 -g:lines,source`, `javap -c` y `d8 --debug`
+desarmado con `dexdump -d` del aparato:
+
+| fuente | `.class` | dex |
+| --- | --- | --- |
+| `v[i]` de un `long[]` | `laload` (0x2f) | `aget-wide v0, v2, v3` (**0x45**, 23x) |
+| `v[i]` de un `float[]` | `faload` (0x30) | `aget v0, v0, v1` (**0x44**) |
+| `v[i]` de un `double[]` | `daload` (0x31) | `aget-wide` 0x45 |
+| `v[i] = x` de un `long[]` | `lastore` (0x50) | `aput-wide v2, v0, v1` (**0x4c**) |
+| `v[i] = x` de un `float[]` | `fastore` (0x51) | `aput` (**0x4b**) |
+| `v[i] = x` de un `double[]` | `dastore` (0x52) | `aput-wide` 0x4c |
+
+El `float` va por las formas de una palabra y el `long`/`double` por las anchas, como en los campos y los
+locales. En el `.class` las tres parejas de `*aload`/`*astore` son opcodes propios y el ancho lo dice el
+descriptor del arreglo.
+
+**Implementado y ejecutado**: el caminante conoce las seis formas, los marcos consumen y empujan lo que
+toca (dos palabras en `laload`/`daload`, una en `faload`), el traductor baja a `aget-wide`/`aput-wide` con
+la pareja como destino/valor (y suelta el par), y el emisor ya no rechaza `new long[n]`, `v[i]`, `v[i] = x`
+ni `new T[] {…}` de esos tipos: escribe `newarray` con el atype de la tabla, `laload`/`lastore`, etc., y
+contabiliza la pila con dos palabras. El camino «todo nuestro» (`apkc compile` + `apkc dex`, sin javac ni
+d8) ejecuta en ART un driver con las seis operaciones y da `7 9 3 7 5 9`, lo mismo que la JVM, con
+`dexdump` verificando `rc 0`.
+
+**El defecto que destapó ART, y que ningún comparador de bytes veía**:
+
+```
+java.lang.VerifyError: ... [0x5F] wide register v7 has type Double (Low Half)/Double (Low Half)
+```
+
+El cuerpo era `move-result-wide v7` (el par es `v7,v8`), `int-to-double v8, v0` (el par es `v8,v9`) y
+`mul-double/2addr v7, v8`: los dos pares se **solapaban en v8**. La causa estaba en el reparto: la pila
+guarda solo el registro BAJO de un par, así que `suelta` liberaba la mitad alta de un par que seguía vivo
+(`suelta(r+1)` no la veía en la pila), y `tomaPar` podía crear un par nuevo sobre esa mitad. Se corrigió
+con tres piezas: `altos` (la mitad alta de un par vivo no se libera), `sueltaPar` que no devuelve nada
+mientras el par siga en la pila, y `ocupado`, que hace que `toma`/`tomaPar` **salten** los registros
+vivos al repartir un par nuevo (de dos en dos, para no partir pares).
+
+**Pendiente, para cuando se retome**: el `Code` de la sonda del driver **no** es idéntico al de javac
+porque javac pliega `fa * 2` a la constante `fconst_2` (2.0f) y este emisor escribe `int-to-float`; el
+resultado es el mismo y el dex ejecuta igual, pero la igualdad de forma que piden los otros tests queda
+para cuando se mida ese plegado. Faltan además el test permanente de la sonda y el caso en el banco
+(hoy la evidencia de ejecución es la corrida de arriba).

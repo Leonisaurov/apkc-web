@@ -106,8 +106,10 @@ const (
 	opLongitudArreglo = 0x21 // 12x array-length vA, vB
 	opNuevoArreglo    = 0x23 // 22c new-array vA, vB, type@CCCC
 	opAget            = 0x44 // 23x aget vAA, vBB, vCC
+	opAgetAncho       = 0x45 // 23x aget-wide, medido en `Arr.leeLargo` (parrafo 84)
 	opAgetObjeto      = 0x46 // 23x aget-object vAA, vBB, vCC
 	opAput            = 0x4b // 23x aput vAA, vBB, vCC
+	opAputAncho       = 0x4c // 23x aput-wide, medido en `Arr.escribeLargo` (parrafo 84)
 	opAputObjeto      = 0x4d // 23x aput-object vAA, vBB, vCC
 
 	// las excepciones, medidas en el parrafo 71 sobre `T` dexado por `d8`: `throw v1` sale `2701`
@@ -164,6 +166,7 @@ type traduce struct {
 	libres    []int         // temporales ya muertos
 	renom     map[int]int   // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
 	fijos     map[int]bool  // temporal que quedó atado a un local: ya no es reusable
+	altos     map[int]bool  // registro ALTO de un par vivo: no se libera hasta que muera el par
 	pcs       map[int]int   // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
 	saltos    []parcheDEX   // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
 	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
@@ -203,6 +206,22 @@ func esPresupuesto(err error) bool {
 		strings.HasPrefix(te.motivo, "it needs more wide temporaries")
 }
 
+// ocupado: el registro no se puede repartir. Está ocupado si es un local (`fijos`), si es la mitad
+// alta de un par vivo (`altos`) o si lo usa un valor de la pila. Sin esta comprobación el par nuevo
+// caía sobre la mitad alta de un par vivo: medido en ART con `ArrMain`, donde `move-result-wide v7`
+// (par v7,v8) y `int-to-double` pedían (8,9) y los dos pares se solapaban en v8.
+func (p *traduce) ocupado(r int) bool {
+	if p.fijos[r] || p.altos[r] {
+		return true
+	}
+	for _, v := range p.enPila {
+		if v == r {
+			return true
+		}
+	}
+	return false
+}
+
 // toma: un registro temporal nuevo, o el último que murió. Reutilizar es lo que hace el marco más
 // pequeño; la muerte la decide suelta, que mira la pila antes de devolver el registro.
 func (p *traduce) toma(in jvmInstr) int {
@@ -213,6 +232,10 @@ func (p *traduce) toma(in jvmInstr) int {
 	}
 	r := p.siguiente
 	p.siguiente++
+	for p.ocupado(r) {
+		r = p.siguiente
+		p.siguiente++
+	}
 	if p.siguiente > p.pico {
 		p.pico = p.siguiente
 	}
@@ -249,21 +272,41 @@ func (p *traduce) tomaPar(in jvmInstr) int {
 			}
 		}
 		p.libres = vivas
+		p.marcaPar(bajo)
 		return bajo
 	}
 	r := p.siguiente
-	p.siguiente += 2
+	for p.ocupado(r) || p.ocupado(r+1) {
+		r += 2
+	}
+	p.siguiente = r + 2
 	if p.siguiente > p.pico {
 		p.pico = p.siguiente
 	}
+	p.marcaPar(r)
 	if p.techo && r+1 >= p.base {
 		p.falla(in, "it needs more wide temporaries than the max stack javap measured")
 	}
 	return r
 }
 
-// sueltaPar: devuelve las dos mitades, en el orden que `tomaPar` vuelve a reconocer.
+// marcaPar: la mitad alta del par queda protegida mientras el par viva en la pila (ver `altos`).
+func (p *traduce) marcaPar(r int) {
+	if p.altos == nil {
+		p.altos = map[int]bool{}
+	}
+	p.altos[r+1] = true
+}
+
+// sueltaPar: devuelve las dos mitades, en el orden que `tomaPar` vuelve a reconocer, solo cuando el
+// par ya no está en la pila; la marca de la mitad alta se retira con él.
 func (p *traduce) sueltaPar(r int) {
+	for _, vivo := range p.enPila {
+		if vivo == r {
+			return
+		}
+	}
+	delete(p.altos, r+1)
 	p.suelta(r + 1)
 	p.suelta(r)
 }
@@ -552,6 +595,13 @@ func (p *traduce) suelta(r int) {
 		if vivo == r {
 			return
 		}
+	}
+	// `altos`: r es la mitad ALTA de un par que sigue vivo. La pila guarda solo el registro bajo, así
+	// que sin esta marca la mitad alta se liberaba con el par vivo y el plan la reutilizaba (medido en
+	// ART con `ArrMain`: `mul-double/2addr v7, v8` con los pares v7,v8 y v8,v9 solapados,
+	// `wide register v7 has type Double (Low Half)`).
+	if p.altos[r] {
+		return
 	}
 	p.libres = append(p.libres, r)
 }
@@ -1028,12 +1078,26 @@ func (p *traduce) nuevoArreglo(in jvmInstr) {
 // leeArreglo: `iaload`/`aaload` (23x). La pila JVM trae el arreglo y detrás el índice.
 func (p *traduce) leeArreglo(in jvmInstr) {
 	op := byte(opAget)
-	if in.name == "aaload" {
+	ancho := false
+	switch in.name {
+	case "aaload":
 		op = opAgetObjeto
+	case "laload", "daload":
+		// `aget-wide` 0x45: el destino es un PAR y las dos palabras se leen del arreglo (parrafo 84)
+		op = opAgetAncho
+		ancho = true
 	}
 	indice := p.pop(in)
 	arreglo := p.pop(in)
-	r := p.toma(in)
+	r := 0
+	if ancho {
+		r = p.tomaPar(in)
+	} else {
+		r = p.toma(in)
+	}
+	if p.err != nil {
+		return
+	}
 	a, b := unidad23x(op, r, arreglo, indice)
 	p.palabra(a)
 	p.palabra(b)
@@ -1043,11 +1107,17 @@ func (p *traduce) leeArreglo(in jvmInstr) {
 }
 
 // escribeArreglo: `iastore`/`aastore` (23x). La pila JVM trae el arreglo, el índice y el valor; el
-// primer registro de la instrucción es el valor (medido: `aput v2, v0, v1` para `v[i] = x`).
+// primer registro de la instrucción es el valor (medido: `aput v2, v0, v1` para `v[i] = x`). Un valor
+// ancho se escribe con `aput-wide` 0x4c y se suelta como par.
 func (p *traduce) escribeArreglo(in jvmInstr) {
 	op := byte(opAput)
-	if in.name == "aastore" {
+	ancho := false
+	switch in.name {
+	case "aastore":
 		op = opAputObjeto
+	case "lastore", "dastore":
+		op = opAputAncho
+		ancho = true
 	}
 	valor := p.pop(in)
 	indice := p.pop(in)
@@ -1057,7 +1127,11 @@ func (p *traduce) escribeArreglo(in jvmInstr) {
 	p.palabra(b)
 	p.suelta(arreglo)
 	p.suelta(indice)
-	p.suelta(valor)
+	if ancho {
+		p.sueltaPar(valor)
+	} else {
+		p.suelta(valor)
+	}
 }
 
 // invoca escribe un 35c: primera unidad con el opcode, el recuento de argumentos en los bits 4..7 y
@@ -1350,9 +1424,9 @@ func (p *traduce) recorre() error {
 			p.incrementa(in)
 		case "newarray", "anewarray":
 			p.nuevoArreglo(in)
-		case "iaload", "aaload":
+		case "iaload", "aaload", "laload", "faload", "daload":
 			p.leeArreglo(in)
-		case "iastore", "aastore":
+		case "iastore", "aastore", "lastore", "fastore", "dastore":
 			p.escribeArreglo(in)
 		case "checkcast":
 			desc := p.x.classDescriptor(dexU16(in.ops))
@@ -1779,7 +1853,7 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 		r := p.toma(in)
 		p.palabra(unidad11x(opMueveResultObj, r))
 		p.push(r)
-	case ret[0] == 'I' || ret[0] == 'B' || ret[0] == 'C' || ret[0] == 'S' || ret[0] == 'Z':
+	case ret[0] == 'I' || ret[0] == 'B' || ret[0] == 'C' || ret[0] == 'S' || ret[0] == 'Z' || ret[0] == 'F':
 		r := p.toma(in)
 		if !p.nibble(r, in) {
 			return

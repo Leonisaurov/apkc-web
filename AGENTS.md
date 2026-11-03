@@ -563,6 +563,16 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   (`(LD;J)J` va antes que `(LF;)J` aunque sus shortys sean «JLJ» y «JL»). Ejecutado por los cinco caminos del
   banco (`anchoPrivado` = 7) y por la JVM con nuestra clase (`-Xverify:all`). Tests:
   `javaemisor_privada_ancha_test.go` (dos) y `dexprotos_test.go`.
+- **Los arreglos de `long`, `float` y `double`** (§84): en el `.class` son `laload` 0x2f / `faload` 0x30 /
+  `daload` 0x31 y `lastore` 0x50 / `fastore` 0x51 / `dastore` 0x52; en el dex, `aget-wide` **0x45** y
+  `aput-wide` **0x4c** para los anchos y `aget`/`aput` para el `float`, con el par como destino/valor.
+  Implementados caminante, marcos, traductor y emisor (`new T[n]`, `v[i]`, `v[i] = x`, `new T[] {…}`), y el
+  camino «todo nuestro» ejecuta en ART `7 9 3 7 5 9`, como la JVM. **Defecto que solo vio ART**: la pila
+  guarda solo el registro bajo de un par, así que la mitad alta se liberaba con el par vivo y `tomaPar`
+  creaba pares solapados (`wide register v7 has type Double (Low Half)`); se cerró con `altos` (mitad alta
+  protegida), `sueltaPar` que espera a que el par muera y `ocupado` en `toma`/`tomaPar`. Queda pendiente el
+  plegado de `fa * 2` a la constante `float` —hoy `int-to-float`, mismo resultado—, el test de la sonda y el
+  caso del banco.
 - **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
   —el indice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
   del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
@@ -619,9 +629,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
-  los arreglos de largos o de flotantes (el `long` entero —`.class` y dex— ya está, párrafo 74; el `float`
-  y el `double` entraron en el `.class` (párrafo 77), en el dex (párrafo 80) y en las comparaciones
-  (párrafo 81), pero faltan sus arreglos), y anotaciones que no sean `@Override`.
+  un `char`, una condición que sea un booleano suelto y anotaciones que no sean `@Override` (el `long`
+  entero —`.class` y dex— está desde el párrafo 74; el `float` y el `double` en el `.class` (77), en el dex
+  (80), en las comparaciones (81) y en los arreglos (84)).
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

@@ -2722,6 +2722,12 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 	switch elem[0] {
 	case 'I':
 		guarda = 0x4f
+	case 'J':
+		guarda = 0x50
+	case 'F':
+		guarda = 0x51
+	case 'D':
+		guarda = 0x52
 	case 'L', '[':
 		guarda = 0x53
 	default:
@@ -2761,16 +2767,27 @@ func (e *emisor) leeIndice(v jindice) (string, error) {
 		return "", fmt.Errorf("linea %d: el indice es %s y no un entero", v.donde.linea, d)
 	}
 	elem := base[1:]
+	ancho := elem[0] == 'J' || elem[0] == 'D'
 	switch elem[0] {
 	case 'I':
 		e.emite(0x2e)
+	case 'J':
+		e.emite(0x2f)
+	case 'F':
+		e.emite(0x30)
+	case 'D':
+		e.emite(0x31)
 	case 'L', '[':
 		e.emite(0x32)
 	default:
 		return "", fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, elem)
 	}
 	e.baja(2)
-	e.sube()
+	if ancho {
+		e.subeDos()
+	} else {
+		e.sube()
+	}
 	return elem, nil
 }
 
@@ -2799,15 +2816,27 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 	if dv != elem {
 		return fmt.Errorf("linea %d: el arreglo es %s y se le asigna un %s", v.donde.linea, elem, dv)
 	}
+	ancho := elem[0] == 'J' || elem[0] == 'D'
 	switch elem[0] {
 	case 'I':
 		e.emite(0x4f)
+	case 'J':
+		e.emite(0x50)
+	case 'F':
+		e.emite(0x51)
+	case 'D':
+		e.emite(0x52)
 	case 'L', '[':
 		e.emite(0x53)
 	default:
 		return fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, elem)
 	}
-	e.baja(3)
+	// el valor de dos palabras ocupa una mas en la pila simulada
+	if ancho {
+		e.baja(4)
+	} else {
+		e.baja(3)
+	}
 	return nil
 }
 

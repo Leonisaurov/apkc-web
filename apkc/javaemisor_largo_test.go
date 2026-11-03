@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/base64"
-	"strings"
 	"testing"
 )
 
@@ -73,20 +72,15 @@ func TestElLargoSeEscribeComoJavac(t *testing.T) {
 	}
 }
 
-// TestElLargoRechazaLoNoMedido: el arreglo de largos sale por su nombre. (La comparación de largos
-// entró en el párrafo 81 con `javaemisor_compara_test.go`.)
-func TestElLargoRechazaLoNoMedido(t *testing.T) {
-	casos := []struct{ nombre, fuente, pista string }{
-		{"arreglo de largos", "class A { static void f() { long[] v = new long[2]; v[0] = 1L; } }\n", "no esta medido"},
+// TestElLargoEnArreglos: `new long[n]`, `v[i]` y `v[i] = x` ya se compilan (el `laload`/`lastore` y el
+// `aget-wide`/`aput-wide` entraron en el párrafo 84). La comparación de largos entró en el 81.
+func TestElLargoEnArreglos(t *testing.T) {
+	fuente := "class A { static void f() { long[] v = new long[2]; v[0] = 1L; } }\n"
+	salida, err := compilarProyectoJava([]fuenteJava{{nombre: "src/A.java", contenido: fuente}}, jarDelSDK(t))
+	if err != nil {
+		t.Fatalf("el emisor rechazó un arreglo de largos: %v", err)
 	}
-	for _, c := range casos {
-		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/A.java", contenido: c.fuente}}, jarDelSDK(t))
-		if err == nil {
-			t.Errorf("%s: se acepto lo que no esta medido", c.nombre)
-			continue
-		}
-		if !strings.Contains(err.Error(), c.pista) {
-			t.Errorf("%s: el mensaje no nombra %q: %v", c.nombre, c.pista, err)
-		}
+	if len(salida) == 0 || len(salida[0].datos) == 0 {
+		t.Error("el emisor no escribió la clase")
 	}
 }
