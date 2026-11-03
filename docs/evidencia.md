@@ -4427,6 +4427,55 @@ por `d8`).
 seguía: las ramas sobre `long` (`lcmp`, `dup2`/`pop2`) y los arreglos de largos o flotantes. El punto flotante
 en el dex entró después, en el párrafo 80.
 
+## 81. Las comparaciones anchas: `lcmp`, `fcmpl`/`fcmpg`, `dcmpl`/`dcmpg`, medidas las cinco
+
+Dos sondas (`Ram`: `x > 0L`, `x == y` de largos, `x > y` y `x != 0.0` de dobles, `x <= y` de flotantes;
+`Ram2`: `x < y` de dobles, `x == y` de dobles, `x >= y` y `x < y` de flotantes, `x < y` de largos), leídas con
+`javac --release 8 -g:lines,source`, `javap -c` y —para el dex— `d8 --debug` sobre la clase de javac con las
+palabras cortadas por `readDex`, igual que en el párrafo 80.
+
+**En el `.class` la inversión del párrafo 52 se mantiene tal cual**, con el resultado de la comparación en la
+pila como un entero:
+
+| fuente | bytecode |
+| --- | --- |
+| `if (x > 0L)` | `lload_0; lconst_0; lcmp; ifle` |
+| `if (x == y)` (largos) | `lload_0; lload_2; lcmp; ifne` |
+| `if (x < y)` (largos) | `lload_0; lload_2; lcmp; ifge` |
+| `if (x > y)` (dobles) | `dload_0; dload_2; dcmpl; ifle` |
+| `if (x != 0.0)` | `dload_0; dconst_0; dcmpl; ifeq` |
+| `if (x <= y)` (flotantes) | `fload_0; fload_1; fcmpg; ifgt` |
+| `if (x >= y)` (flotantes) | `fload_0; fload_1; fcmpl; iflt` |
+| `if (x < y)` (dobles) | `dload_0; dload_2; dcmpg; ifge` |
+
+O sea: **`…l` con las relaciones que javac escribe al derecho (`>`, `>=`, `!=`, `==`) y `…g` con las que
+escribe invertidas (`<`, `<=`)** —es la regla de NaN del JVMS 2.9, no una elección de javac: `dcmpl` deja -1
+con un NaN y `dcmpg` deja 1, y cada una se combina con la branquia que ya estaba medida—. El `lcmp` no tiene
+hermano porque un largo no puede ser NaN.
+
+**En el dex**, las cinco formas y el formato 23x (`op|AA`, `BB|CC<<8`), con la branquia `if-*z` encima del
+resultado —d8 no emite `if-eq` contra cero, sino `if-ltz`/`if-gez`/`if-gtz`/`if-lez`, que ya estaban medidos
+(0x38..0x3d)—:
+
+| método | palabras | lectura |
+| --- | --- | --- |
+| `fMayorIgual` (`fcmpl`) | `45 256 \| 58 4` | `0x2D cmp…` → **`fcmpl` = 0x2d**, `if-gez v0, +4` (0x3a) |
+| `fMenor` (`fcmpg`) | `46 256 \| 59 4` | **`fcmpg` = 0x2e**, `if-ltz v0, +4` (0x3b) |
+| `dIgual` / `doubleMayor` (`dcmpl`) | `47 512 \| 57 4` y `47 512 \| 61 4` | **`dcmpl` = 0x2f**, `if-nez` (0x39) y `if-lez` (0x3d) |
+| `dMenor` (`dcmpg`) | `48 512 \| 59 4` | **`dcmpg` = 0x30**, `if-ltz` |
+| `iguales` / `mayorQue` / `lMenor` (`lcmp`) | `49 512 \| 57 4`, `… 561 2 \| 573 4 …`, `49 512 \| 59 5` | **`lcmp` = 0x31**, con `if-nez`, `if-lez` y `if-ltz` |
+
+Cada número sale de dos o tres casos independientes y coincide ✓; el bloque es contiguo 0x2d..0x31 y
+remata en `if-eq` 0x32, que estaba medido en el párrafo 52. El operando del `cmp-long`/`cmpg-double` es la
+**pareja** de cada lado (`512` = `0x0200` → `v0` y `v2`) y el destino es un registro suelto, con lo que un
+método `double(double,double)` con `registers=4, ins=4` escribe el resultado encima de un operando muerto,
+como ya hacía con las cuentas `/2addr` (párrafo 66).
+
+**Aún no escrito**: el emisor rechaza la comparación sobre `J`/`F`/`D` con el mensaje de siempre («solo se
+midieron enteros y la referencia contra null», párrafo 52), y el traductor no conoce los cinco opcodes. Los
+dos pasos entran con la tabla de arriba. Lo que sigue fuera, con la forma vista: `dup2`/`pop2` (el
+`access$` de un campo ancho, párrafo 72) y los arreglos de largos y flotantes.
+
 ## 80. Las formas dalvik del `float` y el `double`, medidas sobre el fichero de `d8` —y ya implementadas
 
 Sin `rish` no hay `dexdump` en el aparato, pero el oráculo sigue siendo ajeno: **`d8 --debug` escribe el
