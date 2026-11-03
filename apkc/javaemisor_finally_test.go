@@ -85,11 +85,68 @@ const fuenteFinalmente = `public class Fini {
         }
         return r;
     }
+
+    static int retorno() {
+        try {
+            return 1;
+        } finally {
+            a = 2;
+        }
+    }
+
+    static int retornoConCatch(int n) {
+        try {
+            return 100 / n;
+        } catch (ArithmeticException e) {
+            return 2;
+        } finally {
+            a = 3;
+        }
+    }
+
+    static int rama(int n) {
+        try {
+            if (n > 0) {
+                return 1;
+            }
+            n = n + 1;
+        } finally {
+            a = 2;
+        }
+        return n;
+    }
+
+    static void ramaVoid(int n) {
+        try {
+            if (n > 0) {
+                return;
+            }
+            a = 1;
+        } finally {
+            a = 6;
+        }
+    }
+
+    static int breakConFinally(int n) {
+        int r = 0;
+        while (n > 0) {
+            try {
+                if (n > 2) {
+                    break;
+                }
+                r = r + 1;
+            } finally {
+                a = 3;
+            }
+            n = n - 1;
+        }
+        return r;
+    }
 }
 `
 
 // finalmenteJavac: `javac --release 8 -g:lines,source Fini.java` y `base64 -w0 Fini.class`.
-const finalmenteJavac = "yv66vgAAADQAIwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCQAIAAkHAAoMAAsADAEABEZpbmkBAAFhAQABSQcADgEAHWphdmEvbGFuZy9Bcml0aG1ldGljRXhjZXB0aW9uBwAQAQAaamF2YS9sYW5nL1J1bnRpbWVFeGNlcHRpb24KAA0AAwEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAZzaW1wbGUBAAMoKUkBAA1TdGFja01hcFRhYmxlBwAYAQATamF2YS9sYW5nL1Rocm93YWJsZQEABWxvY2FsAQAEKEkpSQEABW11bHRpAQAIZG9zQ2F0Y2gBAA5sYW56YUVuRmluYWxseQEAD3ZhY2lvRmluYWxtZW50ZQEAB2FuaWRhZG8BAAg8Y2xpbml0PgEAClNvdXJjZUZpbGUBAAlGaW5pLmphdmEAIQAIAAIAAAABAAgACwAMAAAACQABAAUABgABABIAAAAdAAEAAQAAAAUqtwABsQAAAAEAEwAAAAYAAQAAAAEACAAUABUAAQASAAAAVwABAAEAAAAWBLMABwWzAAenAApLBbMAByq/sgAHrAABAAAABAALAAAAAgATAAAAGgAGAAAABgAEAAgACAAJAAsACAAQAAkAEgAKABYAAAAHAAJLBwAXBgAIABkAGgABABIAAABlAAIAAwAAABgDPBoEYDwbEApgPKcAC00bEApgPCy/G6wAAQACAAYADgAAAAIAEwAAAB4ABwAAAA4AAgAQAAYAEgALABMADgASABQAEwAWABQAFgAAAA8AAv8ADgACAQEAAQcAFwcACAAbABoAAQASAAAAvwACAAMAAAA2EGQabLMABxAHswAHpwAmTAizAAcQB7MAB6cAGUwQBrMABxAHswAHpwALTRAHswAHLL+yAAesAAUAAAAHAA8ADQAAAAcAHAAPAAAABwAqAAAADwAUACoAAAAcACIAKgAAAAIAEwAAADoADgAAABkABwAfAAwAIAAPABoAEAAbABQAHwAZACAAHAAcAB0AHQAiAB8AJwAgACoAHwAwACAAMgAhABYAAAAPAARPBwANTAcAD00HABcHAAgAHAAaAAEAEgAAAHcAAgADAAAAFgM8EGQabDynAA1NCDynAAdNEAY8G6wAAgACAAcACgANAAIABwAQAA8AAgATAAAAJgAJAAAAJQACACcABwAsAAoAKAALACkADQAsABAAKgARACsAFAAtABYAAAATAAP/AAoAAgEBAAEHAA1FBwAPAwAIAB0ABgABABIAAABFAAIAAQAAABUEswAHuwANWbcAEb9LuwANWbcAEb8AAQAAAAQADAAAAAIAEwAAAAoAAgAAADIABAA0ABYAAAAGAAFMBwAXAAgAHgAaAAEAEgAAACIAAgABAAAABhoEYDsarAAAAAEAEwAAAAoAAgAAADoABAA9AAgAHwAaAAEAEgAAAIMAAgAEAAAAHQM8EGQabDynAAZNBTwbBGA8pwAKThsEYDwtvxusAAIAAgAHAAoADQACAA0AFAAAAAIAEwAAACoACgAAAEEAAgBEAAcARwAKAEUACwBGAA0ASQARAEoAFABJABkASgAbAEsAFgAAABQABP8ACgACAQEAAQcADQJGBwAXBgAIACAABgABABIAAAAdAAEAAAAAAAUDswAHsQAAAAEAEwAAAAYAAQAAAAIAAQAhAAAAAgAi"
+const finalmenteJavac = "yv66vgAAADQAKQoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCQAIAAkHAAoMAAsADAEABEZpbmkBAAFhAQABSQcADgEAHWphdmEvbGFuZy9Bcml0aG1ldGljRXhjZXB0aW9uBwAQAQAaamF2YS9sYW5nL1J1bnRpbWVFeGNlcHRpb24KAA0AAwEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAZzaW1wbGUBAAMoKUkBAA1TdGFja01hcFRhYmxlBwAYAQATamF2YS9sYW5nL1Rocm93YWJsZQEABWxvY2FsAQAEKEkpSQEABW11bHRpAQAIZG9zQ2F0Y2gBAA5sYW56YUVuRmluYWxseQEAD3ZhY2lvRmluYWxtZW50ZQEAB2FuaWRhZG8BAAdyZXRvcm5vAQAPcmV0b3Jub0NvbkNhdGNoAQAEcmFtYQEACHJhbWFWb2lkAQAEKEkpVgEAD2JyZWFrQ29uRmluYWxseQEACDxjbGluaXQ+AQAKU291cmNlRmlsZQEACUZpbmkuamF2YQAhAAgAAgAAAAEACAALAAwAAAAOAAEABQAGAAEAEgAAAB0AAQABAAAABSq3AAGxAAAAAQATAAAABgABAAAAAQAIABQAFQABABIAAABXAAEAAQAAABYEswAHBbMAB6cACksFswAHKr+yAAesAAEAAAAEAAsAAAACABMAAAAaAAYAAAAGAAQACAAIAAkACwAIABAACQASAAoAFgAAAAcAAksHABcGAAgAGQAaAAEAEgAAAGUAAgADAAAAGAM8GgRgPBsQCmA8pwALTRsQCmA8LL8brAABAAIABgAOAAAAAgATAAAAHgAHAAAADgACABAABgASAAsAEwAOABIAFAATABYAFAAWAAAADwAC/wAOAAIBAQABBwAXBwAIABsAGgABABIAAAC/AAIAAwAAADYQZBpsswAHEAezAAenACZMCLMABxAHswAHpwAZTBAGswAHEAezAAenAAtNEAezAAcsv7IAB6wABQAAAAcADwANAAAABwAcAA8AAAAHACoAAAAPABQAKgAAABwAIgAqAAAAAgATAAAAOgAOAAAAGQAHAB8ADAAgAA8AGgAQABsAFAAfABkAIAAcABwAHQAdACIAHwAnACAAKgAfADAAIAAyACEAFgAAAA8ABE8HAA1MBwAPTQcAFwcACAAcABoAAQASAAAAdwACAAMAAAAWAzwQZBpsPKcADU0IPKcAB00QBjwbrAACAAIABwAKAA0AAgAHABAADwACABMAAAAmAAkAAAAlAAIAJwAHACwACgAoAAsAKQANACwAEAAqABEAKwAUAC0AFgAAABMAA/8ACgACAQEAAQcADUUHAA8DAAgAHQAGAAEAEgAAAEUAAgABAAAAFQSzAAe7AA1ZtwARv0u7AA1ZtwARvwABAAAABAAMAAAAAgATAAAACgACAAAAMgAEADQAFgAAAAYAAUwHABcACAAeABoAAQASAAAAIgACAAEAAAAGGgRgOxqsAAAAAQATAAAACgACAAAAOgAEAD0ACAAfABoAAQASAAAAgwACAAQAAAAdAzwQZBpsPKcABk0FPBsEYDynAApOGwRgPC2/G6wAAgACAAcACgANAAIADQAUAAAAAgATAAAAKgAKAAAAQQACAEQABwBHAAoARQALAEYADQBJABEASgAUAEkAGQBKABsASwAWAAAAFAAE/wAKAAIBAQABBwANAkYHABcGAAgAIAAVAAEAEgAAAEsAAQACAAAADwQ7BbMABxqsTAWzAAcrvwABAAAAAgAIAAAAAgATAAAAFgAFAAAAUAACAFIABgBQAAgAUgANAFMAFgAAAAYAAUgHABcACAAhABoAAQASAAAAewACAAQAAAAbEGQabDwGswAHG6xMBT0GswAHHKxOBrMABy2/AAMAAAAFAAsADQAAAAUAFAAAAAsADgAUAAAAAgATAAAAJgAJAAAAWAAFAFwACQBYAAsAWQAMAFoADgBcABIAWgAUAFwAGQBdABYAAAAKAAJLBwANSAcAFwAIACIAGgABABIAAAB6AAIAAwAAACAangALBDwFswAHG6waBGA7BbMAB6cACk0FswAHLL8arAACAAAABgAXAAAADAAQABcAAAACABMAAAAqAAoAAABiAAQAYwAGAGcACgBjAAwAZQAQAGcAFABoABcAZwAcAGgAHgBpABYAAAAIAAMMSgcAFwYACAAjACQAAQASAAAAdQABAAIAAAAfGp4ACRAGswAHsQSzAAcQBrMAB6cAC0wQBrMAByu/sQACAAAABAAWAAAACgAOABYAAAACABMAAAAmAAkAAABuAAQAcwAJAG8ACgBxAA4AcwATAHQAFgBzABwAdAAeAHUAFgAAAAgAAwpLBwAXBwAIACUAGgABABIAAACUAAIAAwAAAC0DPBqeACgaBaQACgazAAenABwbBGA8BrMAB6cACk0GswAHLL8aBGQ7p//aG6wAAgAGAAsAHQAAABIAFgAdAAAAAgATAAAAMgAMAAAAeAACAHkABgB7AAsAgAAPAHwAEgB+ABYAgAAaAIEAHQCAACIAgQAkAIIAKwCEABYAAAANAAX8AAIBD0oHABcGBgAIACYABgABABIAAAAdAAEAAAAAAAUDswAHsQAAAAEAEwAAAAYAAQAAAAIAAQAnAAAAAgAo"
 
 // tablaDeExcepciones: las filas de la exception_table como texto, con el `any` nombrado.
 func tablaDeExcepciones(m classMethod) string {
@@ -113,6 +170,10 @@ func buscaMetodo(cf classFull, nombre string) (classMethod, bool) {
 	}
 	return classMethod{}, false
 }
+
+// metodosFinalmente: los métodos de la sonda, en el orden del fuente.
+var metodosFinalmente = []string{"simple", "local", "multi", "dosCatch", "lanzaEnFinally", "vacioFinalmente", "anidado",
+	"retorno", "retornoConCatch", "rama", "ramaVoid", "breakConFinally"}
 
 // filasDeLinea: la LineNumberTable como texto, en el orden en que se escribe.
 func filasDeLinea(m classMethod) string {
@@ -144,7 +205,7 @@ func TestElFinalmenteSeEscribeComoJavac(t *testing.T) {
 	if err != nil {
 		t.Fatalf("el fixture no se lee: %v", err)
 	}
-	for _, nombre := range []string{"simple", "local", "multi", "dosCatch", "lanzaEnFinally", "vacioFinalmente", "anidado"} {
+	for _, nombre := range metodosFinalmente {
 		a, ok := buscaMetodo(nuestra, nombre)
 		if !ok {
 			t.Fatalf("%s: no esta en nuestra clase", nombre)
@@ -214,7 +275,7 @@ func TestElFinalmenteSeDexaComoJavac(t *testing.T) {
 		if err != nil {
 			t.Fatalf("el dex de javac no se relee: %v", err)
 		}
-		for _, nombre := range []string{"simple", "local", "multi", "dosCatch", "lanzaEnFinally", "vacioFinalmente", "anidado"} {
+		for _, nombre := range metodosFinalmente {
 			a, err := codeItemDeMetodo(uno, nombre)
 			if err != nil {
 				t.Errorf("%s: %v", nombre, err)
@@ -242,13 +303,17 @@ func TestElFinalmenteSeDexaComoJavac(t *testing.T) {
 	}
 }
 
-// TestElFinalmenteRechazaLoNoMedido: el valor pendiente de un `return` que sale de un `try` con
-// `finally`, el `break` que sale del mismo sitio, y un `throw` como ultima sentencia del cuerpo.
+// TestElFinalmenteRechazaLoNoMedido: las formas de javac que este emisor todavia no escribe salen por
+// su nombre, no por un mensaje generico.
 func TestElFinalmenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"return pendiente", "package p;\npublic class A { public static int f() { try { return 1; } finally { f(); } } }\n", "valor pendiente"},
-		{"break pendiente", "package p;\npublic class A { public static int f(int n) { int r = 0; while (n > 0) { try { r = 1; break; } finally { r = 2; } } return r; } }\n", "valor pendiente"},
-		{"throw final", "package p;\npublic class A { public static void f() { try { throw new RuntimeException(); } finally { f(); } } }\n", "ultima sentencia"},
+		{"continue que sale", "package p;\npublic class A { public static int f(int n) { int r = 0; while (n > 0) { try { if (n > 2) { continue; } r = r + 1; } finally { r = 2; } n = n - 1; } return r; } }\n", "un `continue` que sale de un `try` con `finally` no esta medido"},
+		{"return en un try anidado", "package p;\npublic class A { public static int f(int n) { try { try { if (n > 0) { return 1; } } finally { f(n); } } finally { f(n); } return 2; } }\n", "cruza otro `try` anidado"},
+		{"return dentro del finally", "package p;\npublic class A { public static int f(int n) { try { f(n); } finally { if (n > 0) { return 1; } } return 2; } }\n", "dentro del propio `finally`"},
+		{"throw ultimo del cuerpo", "package p;\npublic class A { public static void f() { try { throw new RuntimeException(); } finally { f(); } } }\n", "ultima sentencia"},
+		{"throw ultimo del catch", "package p;\npublic class A { public static void f(int n) { try { f(n); } catch (RuntimeException e) { throw new RuntimeException(); } finally { f(n); } } }\n", "ultima sentencia de un `catch`"},
+		{"cuerpo que sale por dos trozos con catch", "package p;\npublic class A { public static int f(int n) { try { if (n > 0) { return 1; } f(n); } catch (RuntimeException e) { f(n); } finally { f(n); } return 2; } }\n", "dos trozos"},
+		{"cuerpo sin nada protegido", "package p;\npublic class A { public static void f(int n) { try { return; } finally { f(n); } } }\n", "nada protegido"},
 		{"catch con dos tipos", "package p;\npublic class A { public static void f() { try { f(); } catch (RuntimeException | Error e) { f(); } } }\n", "separados por `|`"},
 	}
 	for _, c := range casos {

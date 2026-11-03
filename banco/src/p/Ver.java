@@ -150,4 +150,19 @@ public class Ver {
         }
         return r;
     }
+
+    // El `finally` con el valor pendiente (§76): el `return` de adentro guarda el 10 en un hueco,
+    // copia el bloque —que escribe otro local— y recarga. Son 10 por el `return` y 101 por la caida.
+    public static int salidaPendiente(int n) {
+        int r = 0;
+        try {
+            if (n > 0) {
+                return n * 2;
+            }
+            r = n + 1;
+        } finally {
+            r = r + 100;
+        }
+        return r;
+    }
 }

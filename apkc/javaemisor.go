@@ -1347,6 +1347,9 @@ type emisor struct {
 	continuar []int
 	// excepciones es la exception_table del Code (parrafo 71)
 	excepciones []entradaTry
+	// finalmente es la pila de `finally` vivos: un `return` o un `break` que los cruza copia el bloque
+	// antes de salir (parrafo 76)
+	finalmente []*pendienteTry
 }
 
 type parcheSalto struct {
@@ -3214,55 +3217,113 @@ type entradaTry struct {
 	tipo                 string
 }
 
-// escapaDelTry: un `return` del cuerpo, o un `break`/`continue` que no se ata a un bucle ni a un
-// `switch` escritos dentro del cuerpo, sale del `try` y necesita el valor pendiente que javac guarda
-// en un local antes de la copia del `finally` (medido en el parrafo 75 sobre `Fin2.retorno` y
-// `Fin2.ruptura`). Ese guardado aun no esta escrito, asi que estos casos se rechazan por nombre.
-func escapaDelTry(s jstmt, enBucle bool) bool {
-	switch v := s.(type) {
-	case jretorno:
-		return true
-	case jrompe, jcontinua:
-		return !enBucle
-	case jbloque:
-		for _, x := range v.sentencias {
-			if escapaDelTry(x, enBucle) {
-				return true
-			}
-		}
-	case jif:
-		if escapaDelTry(v.entonces, enBucle) || (v.siNo != nil && escapaDelTry(v.siNo, enBucle)) {
-			return true
-		}
-	case jmientras:
-		return escapaDelTry(v.cuerpo, true)
-	case jhacer:
-		return escapaDelTry(v.cuerpo, true)
-	case jpara:
-		return escapaDelTry(v.cuerpo, true)
-	case jswitch:
-		for _, c := range v.casos {
-			if escapaDelTry(jbloque{sentencias: c.cuerpo}, true) {
-				return true
-			}
-		}
-		if v.defecto != nil && escapaDelTry(jbloque{sentencias: v.defecto}, true) {
-			return true
-		}
-	case jtry:
-		if escapaDelTry(v.cuerpo, enBucle) {
-			return true
-		}
-		for _, c := range v.atrapas {
-			if escapaDelTry(c.atrapa, enBucle) {
-				return true
-			}
-		}
-		if v.finalmente != nil && escapaDelTry(v.finalmente, enBucle) {
-			return true
+// pendienteTry: un `finally` por delante de una salida abrupta. `trozo` es el pc donde empieza el tramo
+// del cuerpo que todavia no cerró ninguna salida, y `registra` anota la fila `any` de ese tramo con el
+// manejador por rellenar. Medido en el parrafo 76 sobre `Fin5` y `Fin6`: cada `return` o `break` que cruza
+// el bloque cierra su tramo ([trozo, pc donde empieza la copia]), que puede estar mas adelante que el
+// principio del `try` porque el tramo anterior ya lo cerró otra salida.
+type pendienteTry struct {
+	bloque      jstmt
+	lineaCierre int
+	trozo       int
+	registra    func(inicio, fin int)
+}
+
+// finalmenteVivo: el `finally` mas cercano por delante de donde esta el emisor.
+func (e *emisor) finalmenteVivo() *pendienteTry {
+	if len(e.finalmente) == 0 {
+		return nil
+	}
+	return e.finalmente[len(e.finalmente)-1]
+}
+
+// sueltaTrozo: anota la fila `any` del tramo abierto. Un tramo vacio no se anota: medido en
+// `Fin6.soloVoid`, cuyo cuerpo es solamente el `return` y cuya tabla del `Code` sale sin filas.
+func (e *emisor) sueltaTrozo(c *pendienteTry) {
+	if len(e.codigo) > c.trozo {
+		c.registra(c.trozo, len(e.codigo))
+	}
+}
+
+// copiaElFinally: la copia del bloque delante de la salida abrupta. El trozo siguiente lo abre el que
+// escribe la salida, porque en javac el siguiente rango empieza **despues** del `return` o del `goto`
+// (medido en `Fin5.ramaVoid`: la copia en 4, el `return` en 9 y el trozo que sigue arranca en 10).
+func (e *emisor) copiaElFinally(c *pendienteTry) error {
+	e.sueltaTrozo(c)
+	return e.stm(c.bloque)
+}
+
+// motivoPendiente: que impide escribir la salida abrupta que hay dentro del cuerpo de un `try` con
+// `finally`. Devuelve vacio cuando no hay ninguna, y es el nombre del caso cuando hay que rechazarlo:
+// el `continue` que sale (no esta medido), un `return` o `break` que esta dentro de **otro** `try`
+// anidado —con `Fin6.anidado` javac copia los dos bloques seguidos y la tabla queda con rangos que se
+// solapan, y en el dex los `try_item` no pueden solaparse—, o el que sale desde dentro del propio
+// `finally`.
+func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally bool) string {
+	motivo := ""
+	apunta := func(c string) {
+		if motivo == "" {
+			motivo = c
 		}
 	}
-	return false
+	switch v := s.(type) {
+	case jretorno:
+		if dentroDelFinally {
+			return "un `return` dentro del propio `finally` no esta medido"
+		}
+		if bajoOtroTry {
+			return "un `return` que cruza otro `try` anidado no esta medido"
+		}
+		return ""
+	case jrompe:
+		if enBucle {
+			return ""
+		}
+		if dentroDelFinally {
+			return "un `break` dentro del propio `finally` no esta medido"
+		}
+		if bajoOtroTry {
+			return "un `break` que cruza otro `try` anidado no esta medido"
+		}
+		return ""
+	case jcontinua:
+		if !enBucle {
+			return "un `continue` que sale de un `try` con `finally` no esta medido"
+		}
+		return ""
+	case jbloque:
+		for _, x := range v.sentencias {
+			apunta(motivoPendiente(x, enBucle, bajoOtroTry, dentroDelFinally))
+		}
+	case jif:
+		apunta(motivoPendiente(v.entonces, enBucle, bajoOtroTry, dentroDelFinally))
+		if v.siNo != nil {
+			apunta(motivoPendiente(v.siNo, enBucle, bajoOtroTry, dentroDelFinally))
+		}
+	case jmientras:
+		apunta(motivoPendiente(v.cuerpo, true, bajoOtroTry, dentroDelFinally))
+	case jhacer:
+		apunta(motivoPendiente(v.cuerpo, true, bajoOtroTry, dentroDelFinally))
+	case jpara:
+		apunta(motivoPendiente(v.cuerpo, true, bajoOtroTry, dentroDelFinally))
+	case jswitch:
+		for _, c := range v.casos {
+			apunta(motivoPendiente(jbloque{sentencias: c.cuerpo}, true, bajoOtroTry, dentroDelFinally))
+		}
+		if v.defecto != nil {
+			apunta(motivoPendiente(jbloque{sentencias: v.defecto}, true, bajoOtroTry, dentroDelFinally))
+		}
+	case jtry:
+		// dentro de otro `try` la forma medida deja de servir: javac solapa los rangos (§76)
+		apunta(motivoPendiente(v.cuerpo, enBucle, true, dentroDelFinally))
+		for _, c := range v.atrapas {
+			apunta(motivoPendiente(c.atrapa, enBucle, true, dentroDelFinally))
+		}
+		if v.finalmente != nil {
+			apunta(motivoPendiente(v.finalmente, enBucle, true, true))
+		}
+	}
+	return motivo
 }
 
 // bloqueVacio: un `finally { }` sin sentencias. javac lo suelta entero —ni copia, ni goto, ni fila en
@@ -3292,22 +3353,47 @@ func (e *emisor) intenta(v jtry) error {
 		finalmente = nil
 	}
 	if finalmente != nil {
-		if escapaDelTry(v.cuerpo, false) {
-			return fmt.Errorf("linea %d: un `return`, `break` o `continue` que sale de un `try` con `finally` guarda el valor pendiente en un local y eso no esta escrito", v.donde.linea)
-		}
-		for _, c := range v.atrapas {
-			if escapaDelTry(c.atrapa, false) {
-				return fmt.Errorf("linea %d: un `return`, `break` o `continue` que sale de un `catch` con `finally` guarda el valor pendiente en un local y eso no esta escrito", v.donde.linea)
+		caminos := append([]jstmt{v.cuerpo}, func() []jstmt {
+			out := make([]jstmt, 0, len(v.atrapas))
+			for _, c := range v.atrapas {
+				out = append(out, c.atrapa)
 			}
+			return out
+		}()...)
+		for _, camino := range caminos {
+			if motivo := motivoPendiente(camino, false, false, false); motivo != "" {
+				return fmt.Errorf("linea %d: %s", v.donde.linea, motivo)
+			}
+		}
+		// el bloque copiado tampoco puede tener una salida propia: javac la escribe, pero esa forma
+		// no esta medida
+		if motivo := motivoPendiente(finalmente, false, false, true); motivo != "" {
+			return fmt.Errorf("linea %d: %s", v.donde.linea, motivo)
 		}
 	}
 	base := e.siguiente
 	alto := base
 	salida := e.nuevaEtiqueta()
+	// las filas `any` del cuerpo y de los cuerpos del catch, con el manejador por rellenar al final
+	var filasCuerpo, filasCatch []entradaTry
+	nuevoTrozo := func(registra func(int, int)) *pendienteTry {
+		return &pendienteTry{bloque: finalmente, lineaCierre: v.lineaCierre, registra: registra}
+	}
+	ctxCuerpo := nuevoTrozo(func(a, b int) {
+		filasCuerpo = append(filasCuerpo, entradaTry{inicio: a, fin: b, tipo: ""})
+	})
 
 	inicio := len(e.codigo)
+	fin := inicio
+	if finalmente != nil {
+		ctxCuerpo.trozo = inicio
+		e.finalmente = append(e.finalmente, ctxCuerpo)
+	}
 	if err := e.stm(v.cuerpo); err != nil {
 		return err
+	}
+	if finalmente != nil {
+		e.finalmente = e.finalmente[:len(e.finalmente)-1]
 	}
 	// un `try` anidado ya usó huecos por su cuenta: el temporal del `finally` de arriba va en el
 	// mas alto que haya visto el metodo (medido en `Fini.anidado`, donde el interior usa el 2 y el
@@ -3315,7 +3401,7 @@ func (e *emisor) intenta(v jtry) error {
 	if e.siguiente > alto {
 		alto = e.siguiente
 	}
-	fin := len(e.codigo)
+	fin = len(e.codigo)
 	if finalmente == nil {
 		// javac saca del rango protegido el `return`/`goto` final (no pueden lanzar) pero deja dentro
 		// el `athrow`: medido en el parrafo 71 (`lee`: 0..3, con el `ireturn` en 3; `T.f`: 0..10, con el
@@ -3330,25 +3416,22 @@ func (e *emisor) intenta(v jtry) error {
 	}
 	// las filas de la tabla salen en el orden de javac: los tipos del cuerpo, el `any` del cuerpo y
 	// despues el `any` de cada cuerpo del catch (medido en `Fin.multi` y `Fin3.lanzaTyped`)
-	type rango struct{ inicio, fin int }
-	var cuerpos []rango
-	saltaALaSalida := func() {
-		e.marcaLinea(v.lineaCierre)
-		e.saltoEmite(opGOTO, salida, 0)
-	}
-	cierraCamino := func(cuerpo jstmt) error {
+	tacha := func(cuerpo jstmt, c *pendienteTry) error {
 		if terminaEnSalida(cuerpo) {
 			return nil
 		}
 		if finalmente != nil {
+			e.sueltaTrozo(c)
 			if err := e.stm(finalmente); err != nil {
 				return err
 			}
+			c.trozo = len(e.codigo)
 			if terminaEnSalida(finalmente) {
 				return nil
 			}
 		}
-		saltaALaSalida()
+		e.marcaLinea(v.lineaCierre)
+		e.saltoEmite(opGOTO, salida, 0)
 		return nil
 	}
 
@@ -3356,9 +3439,24 @@ func (e *emisor) intenta(v jtry) error {
 	// si queda algo despues (un `try` sin `catch` ni `finally` despues de recortar el bloque vacio
 	// no deja nada que saltar, y javac no escribe el `goto`: `Fin3.vacioFinalmente`)
 	if len(v.atrapas) > 0 || finalmente != nil {
-		if err := cierraCamino(v.cuerpo); err != nil {
+		if err := tacha(v.cuerpo, ctxCuerpo); err != nil {
 			return err
 		}
+	}
+	// con `catch` y `finally` javac escribe un solo rango para el cuerpo; si el cuerpo sale por dos
+	// trozos —un `return` en una rama y ademas la caida— hay que repartir los tipos por trozos, y esa
+	// forma no esta medida. El rango del `any` que queda es el que manda sobre los tipos.
+	if finalmente != nil && len(v.atrapas) > 0 {
+		if len(filasCuerpo) != 1 {
+			return fmt.Errorf("linea %d: un `try` con `catch` y `finally` cuyo cuerpo sale por dos trozos no esta medido", v.donde.linea)
+		}
+		fin = filasCuerpo[0].fin
+	}
+	if finalmente != nil && len(v.atrapas) == 0 && len(filasCuerpo) == 0 {
+		// `Fin6.soloVoid` (`try { return; } finally { a = 5; }`): no queda nada protegido, y javac
+		// escribe el manejador `any` **sin fila en la tabla** —codigo muerto—. Este emisor no lo
+		// reproduce: el caminante de marcos llama la atencion sobre el pc inalcanzable
+		return fmt.Errorf("linea %d: un cuerpo que no deja nada protegido dentro de un `try` con `finally` no esta medido", v.donde.linea)
 	}
 	// los `catch`, cada uno desde el hueco de local que deja el `try`: javac reutiliza el mismo
 	// numero para la excepcion de cada brazo (medido en `Fin.multi`: los dos `astore_1`)
@@ -3371,8 +3469,18 @@ func (e *emisor) intenta(v jtry) error {
 		indice := e.reserva(c.excep, descs[i])
 		e.sube() // la excepción que el verificador deja en la pila al entrar al handler
 		e.guardaDe(indice, descs[i])
+		ctxCatch := nuevoTrozo(func(a, b int) {
+			filasCatch = append(filasCatch, entradaTry{inicio: a, fin: b, tipo: ""})
+		})
+		ctxCatch.trozo = h
+		if finalmente != nil {
+			e.finalmente = append(e.finalmente, ctxCatch)
+		}
 		if err := e.stm(c.atrapa); err != nil {
 			return err
+		}
+		if finalmente != nil {
+			e.finalmente = e.finalmente[:len(e.finalmente)-1]
 		}
 		if e.siguiente > alto {
 			alto = e.siguiente
@@ -3383,7 +3491,7 @@ func (e *emisor) intenta(v jtry) error {
 			if i == len(v.atrapas)-1 {
 				break
 			}
-			if err := cierraCamino(c.atrapa); err != nil {
+			if err := tacha(c.atrapa, ctxCatch); err != nil {
 				return err
 			}
 			continue
@@ -3391,14 +3499,11 @@ func (e *emisor) intenta(v jtry) error {
 		if e.ultimaEsLanza(h, len(e.codigo)) {
 			return fmt.Errorf("linea %d: un `throw` como ultima sentencia de un `catch` con `finally` no esta medido", v.donde.linea)
 		}
-		if !terminaEnSalida(c.atrapa) {
-			cuerpos = append(cuerpos, rango{inicio: h, fin: len(e.codigo)})
-		}
-		if err := cierraCamino(c.atrapa); err != nil {
+		if err := tacha(c.atrapa, ctxCatch); err != nil {
 			return err
 		}
 	}
-	filas := make([]entradaTry, 0, len(v.atrapas)+1+len(cuerpos))
+	filas := make([]entradaTry, 0, len(v.atrapas)+len(filasCuerpo)+len(filasCatch))
 	for i := range v.atrapas {
 		filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: manejadores[i], tipo: descs[i]})
 	}
@@ -3421,9 +3526,13 @@ func (e *emisor) intenta(v jtry) error {
 			e.emite(0xbf)
 			e.baja(1)
 		}
-		filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: hAny, tipo: ""})
-		for _, r := range cuerpos {
-			filas = append(filas, entradaTry{inicio: r.inicio, fin: r.fin, handler: hAny, tipo: ""})
+		for _, f := range filasCuerpo {
+			f.handler = hAny
+			filas = append(filas, f)
+		}
+		for _, f := range filasCatch {
+			f.handler = hAny
+			filas = append(filas, f)
 		}
 	}
 	e.cierra(salida)
@@ -3499,14 +3608,31 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		return nil
 	case jretorno:
-		e.marcaLinea(v.donde.linea)
+		c := e.finalmenteVivo()
+		if c == nil {
+			e.marcaLinea(v.donde.linea)
+		}
 		if v.e == nil {
 			if e.vuelta != "V" {
 				return fmt.Errorf("linea %d: un `return` suelto en un metodo que devuelve %s", v.donde.linea, e.vuelta)
 			}
+			if c != nil {
+				// `return;` con un `finally` por delante: primero el bloque copiado y despues el
+				// `return`, sin hueco pendiente y sin fila para el `return` hasta su instruccion
+				// (medido en `Fin6.ramaVoid`: la copia en 4 con la linea del bloque, el `return` en 9
+				// con la del `return;`)
+				if err := e.copiaElFinally(c); err != nil {
+					return err
+				}
+			}
+			e.marcaLinea(v.donde.linea)
 			e.emite(retorno('V'))
+			if c != nil {
+				c.trozo = len(e.codigo)
+			}
 			return nil
 		}
+		e.marcaLinea(v.donde.linea)
 		d, err := e.expA(v.e, e.vuelta)
 		if err != nil {
 			return err
@@ -3517,8 +3643,23 @@ func (e *emisor) stm(s jstmt) error {
 		if len(d) > 0 && len(e.vuelta) > 0 && d[0] != e.vuelta[0] && !(d == "Ljava/lang/String;" && e.vuelta[0] == 'L') {
 			return fmt.Errorf("linea %d: el metodo devuelve %s y se devuelve un %s", v.donde.linea, e.vuelta, d)
 		}
+		if c != nil {
+			// el valor espera en un hueco que no nombra nadie mientras se copia el bloque: medido en
+			// `Fin5.rama` (`4 iconst_1; 5 istore_1`, la copia en 6, `10 iload_1; 11 ireturn` con la
+			// linea del `return`)
+			indice := e.reserva("", d)
+			e.guardaDe(indice, d)
+			if err := e.copiaElFinally(c); err != nil {
+				return err
+			}
+			e.marcaLinea(v.donde.linea)
+			e.cargaDe(indice, d)
+		}
 		e.emite(retorno(d[0]))
 		e.bajaPor(d)
+		if c != nil {
+			c.trozo = len(e.codigo)
+		}
 		return nil
 	case jdecl:
 		e.marcaLinea(v.donde.linea)
@@ -3646,6 +3787,19 @@ func (e *emisor) stm(s jstmt) error {
 	case jrompe:
 		if len(e.quiebres) == 0 {
 			return fmt.Errorf("linea %d: un `break` fuera de un bucle o de un `switch`", v.donde.linea)
+		}
+		if c := e.finalmenteVivo(); c != nil {
+			// el `break` que sale de un `try` con `finally` copia el bloque delante del salto, y el
+			// `goto` lleva la linea del `break` (medido en `Fin5.breakConFinally`: `11 iconst_3;
+			// 12 putstatic; 15 goto 43`, y en `Fin2.ruptura` la fila 54 en el pc del `goto`). El
+			// trozo que sigue al `try` arranca despues del salto: la fila de javac es `18..22`
+			if err := e.copiaElFinally(c); err != nil {
+				return err
+			}
+			e.marcaLinea(v.donde.linea)
+			e.saltoEmite(opGOTO, e.quiebres[len(e.quiebres)-1], 0)
+			c.trozo = len(e.codigo)
+			return nil
 		}
 		e.saltoEmite(opGOTO, e.quiebres[len(e.quiebres)-1], 0)
 		return nil
@@ -4068,6 +4222,7 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.quiebres = nil
 	e.continuar = nil
 	e.excepciones = nil
+	e.finalmente = nil
 	e.prof = 0
 	e.maxProf = 0
 	e.maxLoc = 0
@@ -4369,7 +4524,7 @@ func terminaEnSalida(s jstmt) bool {
 				return false
 			}
 		}
-		return v.finalmente == nil
+		return true
 	}
 	return false
 }

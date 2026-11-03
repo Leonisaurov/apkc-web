@@ -4216,3 +4216,66 @@ Suite: **248 PASS + 2 SKIP** nativa y **196 PASS + 54 SKIP** en el hospedador.
 **Frontera**: el valor pendiente que javac guarda cuando un `return`, un `break` o un `continue` **sale** de un
 `try` con `finally` (medido en `Fin2`, no escrito); el `throw` como última sentencia del cuerpo de un `try` con
 `finally` (el rango se pasa al propio manejador); `catch (A | B e)`; y `try`-with-resources.
+
+## 76. El valor pendiente: un `return` o un `break` que cruza el `finally`
+
+Dos sondas más (`Fin5`: un `return` en una rama del cuerpo y un `break` dentro de un bucle con `finally`;
+`Fin6`: el `return` de un `void`, el mismo en una rama, un `finally` anidado y un `return` en la rama `else`),
+con `javac --release 8 -g:lines,source` y `javap -c -p -l`.
+
+**El cuerpo deja de ser un rango único**: cada salida abrupta **cierra un trozo** y el siguiente trozo empieza
+**después** de la copia, del recargado y del `return` (o del `goto`). Medido en `Fin5.rama`
+(`try { if (n > 0) { return 1; } n = n + 1; } finally { a = 2; }`):
+`0 iload_0; 1 ifle 12; 4 iconst_1; 5 istore_1; 6 iconst_2; 7 putstatic; 10 iload_1; 11 ireturn;
+12 iload_0; 13 iconst_1; 14 iadd; 15 istore_0; 16 iconst_2; 17 putstatic; 20 goto 30` con la tabla
+`0..6 → 23 any` y `12..16 → 23 any`. El primer rango termina en 6 —justo después del `istore` que guarda el
+valor— y el segundo **empieza en 12**, no en 0: la copia y el `return` del camino primero no están protegidos
+(si estuvieran, el `finally` correría dos veces). Lo mismo con el `break` (`Fin5.breakConFinally`:
+`6..11 → 29 any` y `18..22 → 29 any`, con el `goto 43` del `break` en 15) y con el `void`
+(`Fin6.ramaVoid`: `0..4 → 22 any` y `10..14 → 22 any`).
+
+**El hueco del valor**: `reserva` sin nombre, en el hueco que toca (`Fin5.rama`: `istore_1` con `n` en el 0;
+`Fin2.retornoConCatch`: valor del `try` en 1, excepción del `catch` en 1, valor del `catch` en 2 y el temporal
+del `any` en 3 —el más alto que vio el método, regla del párrafo 75—). Un `return;` de `void` no deja valor y
+no usa hueco: la copia va primero y el `return` después (`Fin6.ramaVoid`: `4 bipush 6; 6 putstatic; 9 return`).
+
+**Las filas de línea**: el `goto` de un `break` que cruza el `finally` lleva **la línea del `break`** (medido
+en `Fin5.breakConFinally`: `21 en 15`, y en `Fin2.ruptura`: `54 en 9`), mientras que el `goto` del camino que
+cae lleva la de la **llave del `finally`** (párrafo 75). El `return` pendiente marca dos veces su propia
+línea: una en la evaluación/`istore` (pc 4 de `rama`) y otra en el `iload` (pc 10). En el `void` no hay fila
+para el `return` hasta su instrucción —`Fin6.ramaVoid`: `115 en 4` (la copia) y `111 en 9` (el `return`), sin
+fila del `return;` en 4—, así que la copia se escribe **antes** de marcar la línea de la sentencia.
+
+**Un cuerpo que no deja nada protegido escribe en javac un manejador muerto**: `Fin6.soloVoid`
+(`try { return; } finally { a = 5; }`) sale con la copia en 0, el `return` en 4, el `astore_0` en 5 y la
+**tabla sin filas** —el `walkJvmCode` de este emisor llama la atención sobre el pc inalcanzable, así que el
+caso se rechaza por nombre—. Con `catch` y `finally`, javac reparte los tipos por trozos cuando el cuerpo sale
+por dos (otro rechazo con nombre).
+
+**Anidado, medido y sin escribir**: `Fin6.anidado` (un `return` dentro de un `try` con `finally` dentro de otro
+`try` con `finally`) copia los dos bloques seguidos —`6 bipush 7; 8 putstatic; 11 bipush 8; 13 putstatic;
+16 iload_1; 17 ireturn`— y la tabla queda con `0..6 → 26 any`, `0..11 → 42 any` y `18..34 → 42 any`, es decir,
+**rangos que se solapan**. En el dex los `try_item` no pueden solaparse, así que hay que repartirlos; este
+emisor rechaza la forma por nombre.
+
+**En el dex** no hizo falta tocar nada otra vez: los rangos se agrupan por `(inicio, fin)` y cada uno lleva su
+lista de manejadores. El dex de la sonda ampliada (**doce métodos**, con `retorno`, `retornoConCatch`, `rama`,
+`ramaVoid` y `breakConFinally`) sale **byte a byte** el de javac: **2052 = 2052 bytes**.
+
+**Ejecutado**: el banco añade `Ver.salidaPendiente(5)` (el `return` pendiente, 10) y `Ver.salidaPendiente(0)`
+(la caída, 101); los cinco caminos y la JVM con **nuestra clase** bajo `-Xverify:all` dan
+`total 7|total 9|total 102|10|3|2|4|7|-1|10|6|8|306|22|7|10|101` con `rc 102`, y `dexdump` del aparato verifica
+los cuatro dex con `rc 0`.
+
+**Pruebas**: `apkc/javaemisor_finally_test.go` compara ahora doce métodos —instrucciones, `exception_table`,
+`LineNumberTable`, `max_stack` y huecos de local—, exige el dex idéntico, y fija siete rechazos: el
+`continue` que sale, un `return`/`break` que cruza otro `try` anidado, uno dentro del propio `finally`, el
+`throw` último del cuerpo y del `catch`, el cuerpo que sale por dos trozos con `catch`, el cuerpo sin nada
+protegido y el `catch (A | B e)`.
+
+Suite: **248 PASS + 2 SKIP** nativa y **196 PASS + 54 SKIP** en el hospedador.
+
+**Frontera**: los dos `finally` anidados con una salida pendiente (los rangos se solapan y el dex exige
+repartirlos), el `continue` que sale de un `try` con `finally`, el `catch (A | B e)`, `try`-with-resources, y
+lo que seguía del 75: `float`/`double`, las ramas sobre `long` (`lcmp`, `dup2`/`pop2`), los arreglos de largos y
+el `ConstantValue` de un `static final long`.

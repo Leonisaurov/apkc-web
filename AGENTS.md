@@ -482,8 +482,22 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   y ya ponía el `catch_all` con el tamaño negativo. El dex de la sonda (siete métodos) sale **byte a byte** el
   de javac (1452) y el banco lleva `finalmente(5)` y `finalmente(0)`: los cinco caminos y la JVM con nuestra
   clase dan `…|306|22|7` con `rc 102`. Frontera por nombre: el valor pendiente de un `return`/`break`/`continue`
-  que sale de un `try` con `finally` (medido en `Fin2`), el `throw` como última sentencia del cuerpo con
+  que sale de un `try` con `finally` (medido en `Fin2`, escrito en el §76), el `throw` como última sentencia del cuerpo con
   `finally` (el rango de javac se pasa a su propio manejador) y `catch (A | B e)`.
+- **El valor pendiente: un `return` o un `break` que cruza el `finally`** (§76): el cuerpo deja de ser un rango
+  único —cada salida abrupta **cierra un trozo** cuyo fin es el pc justo detrás del `istore` que guarda el valor, y
+  el trozo siguiente empieza **después** de la copia, del `iload` y del `return` (o del `goto` del `break`): medido
+  en `Fin5.rama` (`0..6 → 23 any` y `12..16 → 23 any`), `Fin5.breakConFinally` (`6..11` y `18..22`) y
+  `Fin6.ramaVoid` (`0..4` y `10..14`), donde la copia y el `return` intermedios quedan **sin proteger** (si no, el
+  `finally` correría dos veces). El valor espera en un hueco sin nombre; un `return;` de `void` no usa hueco y
+  escribe la copia antes de marcar la línea de la sentencia. El `goto` de un `break` que cruza lleva la línea del
+  `break`, no la de la llave. Rechazados por nombre, con la forma medida: el `continue` que sale, un
+  `return`/`break` que cruza **otro `try` anidado** (`Fin6.anidado` solapa rangos `0..6` y `0..11`, y en el dex los
+  `try_item` no pueden solaparse), uno dentro del propio `finally`, el cuerpo que no deja nada protegido (javac
+  escribe el manejador **muerto** y la tabla sin filas: `Fin6.soloVoid`) y el cuerpo que sale por dos trozos con
+  `catch`. En el dex no se tocó nada: `armaTries` agrupa por `(inicio, fin)` y cada grupo lleva su lista. El dex de
+  la sonda ampliada (doce métodos) sale **byte a byte** el de javac (2052) y el banco lleva `salidaPendiente(5)` y
+  `salidaPendiente(0)`: los cinco caminos y la JVM con nuestra clase dan `…|22|7|10|101` con `rc 102`.
 - **El hecho 2 está cerrado sobre el artefacto del navegador** (§55): instalado `pestanera-contador.apk` (el que
   escribe chromium, 10095 bytes; 10169 desde el §56) → `pm install -r` `Success`, `am start -W -S` `Status: ok` / `COLD` /
   `TotalTime: 316`, y dos `input tap` sobre el `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"`; con cuatro,
