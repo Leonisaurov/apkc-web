@@ -504,9 +504,22 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   `checkcast`. Marcos: `ITEM_Float` 2, `ITEM_Double` 3, una entrada por los dos huecos. Los trece métodos de la
   sonda salen con las mismas instrucciones, `max_stack`, huecos y filas de línea que `javac --release 8`, y
   **nuestra clase corre en la JVM con `-Xverify:all`** dando el mismo texto que la de javac (`36.39159` y
-  `1.5|2.5`, `rc 0`). Frontera por nombre: el traductor se para en `dload_0` (las formas de dalvik están por
-  medir), `faload`/`fastore`, las comparaciones sobre flotantes o dobles, `i2b`/`i2c`/`i2s` y el exponente con
+  `1.5|2.5`, `rc 0`). Frontera por nombre entonces: el traductor se paraba en `dload_0` (las formas de dalvik
+  entraron midiendo `d8` en el §80),
+  `faload`/`fastore`, las comparaciones sobre flotantes o dobles, `i2b`/`i2c`/`i2s` y el exponente con
   signo. La prueba del caminante cambió de byte (0x6a ya es `fmul`; es 0x94, `lcmp`).
+- **El punto flotante en el dex, medido con `d8` como oráculo sin aparato** (§80): sin `rish` no hay
+  `dexdump`, pero `d8 --debug` escribe el dex y `readDex` corta las palabras sin interpretarlas. Fijado:
+  **`instance-of` 0x20** (en el §79), conversiones = la rejilla del `.class` menos cuatro (`int-to-double`
+  0x83, `float-to-double` 0x89, `double-to-int` 0x8A, `double-to-float` 0x8C, ancladas en `int-to-long` 0x81
+  y `long-to-int` 0x84 del §74), `/2addr` de `float` 0xC6..0xCA y de `double` 0xCB..0xCF (cinco posiciones
+  cada bloque, porque no hay bit a bit sobre flotantes), `0.0f` es `const/4 v0,#0`, `1.0` y `-2.5` caben en
+  **`const-wide/high16` 0x19** (dos unidades) y `3.14159` va en `const-wide` 0x18. El `float` usa las formas
+  de una palabra (`sget`/`iget`/`move`/`return`) y el `double` las anchas del §74. Con eso el dex de `FyD`
+  (trece métodos) sale **byte a byte** igual escrito sobre nuestras clases que sobre las de javac. Quedan
+  rechazadas con nombre: la forma de **tres registros** de una cuenta ancha de flotante (ninguna sonda la
+  escribió), `faload`/`fastore`, `aget-wide`/`aput-wide`, `l2f`/`l2d`/`f2l`/`d2l` (inferidas del mismo paso,
+  sin sonda) y la comprobación en ART, que espera `rish`.
 - **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
   —el indice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
   del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
@@ -562,9 +575,9 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
-  los arreglos de largos o de flotantes, las ramas sobre `long` o sobre punto flotante (el `long` entero
-  —`.class` y dex— ya está, párrafo 74; el `float` y el `double` entraron en el `.class`, párrafo 77, y el
-  traductor se para en `dload_0`), y anotaciones que no sean `@Override`.
+  los arreglos de largos o de flotantes y las ramas sobre `long` o sobre punto flotante (el `long` entero
+  —`.class` y dex— ya está, párrafo 74; el `float` y el `double` entraron en el `.class` (párrafo 77) y en
+  el dex (párrafo 80), pero faltan sus arreglos y sus comparaciones), y anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

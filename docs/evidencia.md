@@ -4325,14 +4325,15 @@ pila simulada cuenta palabras: el `double` suma dos y el `float` una (`altoPilas
 contra **nuestra** `.class` con `java -Xverify:all` y da el mismo texto que contra la de javac: `36.39159` y
 `1.5|2.5`, `rc 0` en los dos caminos. Nuestro `FyD.class` son 1181 bytes.
 
-**Frontera por nombre**: el traductor se para en `dload_0` (`outside the measured subset`) —las formas de
-dalvik para el flotante y el doble están por medir—; `faload`/`fastore` (un arreglo de `F` o de `D` sale con
-«un arreglo de F no está medido»); las comparaciones sobre flotantes o dobles (`>` entre `D` y `D`); los casts
-a `byte`, `short` y `char` (`i2b`/`i2c`/`i2s`, sin medir) y el exponente con signo.
+**Frontera por nombre, en aquel momento**: el traductor se paraba en `dload_0` (`outside the measured subset`)
+—las formas de dalvik para el flotante y el doble entraron midiendo el fichero de `d8` en el párrafo 80—;
+`faload`/`fastore` (un arreglo de `F` o de `D` sale con «un arreglo de F no está medido»); las comparaciones
+sobre flotantes o dobles (`>` entre `D` y `D`); los casts a `byte`, `short` y `char`
+(`i2b`/`i2c`/`i2s`, sin medir) y el exponente con signo.
 
 **Pruebas**: `apkc/javaemisor_flotante_test.go` — tres pruebas: compara los trece métodos uno a uno contra
-`javac --release 8 -g:lines,source` (instrucciones, `max_stack`, huecos de local y filas de línea), fija la
-frontera del dexer por el nombre (`dload_0`) y fija tres rechazos. Cayeron dos rechazos que ya no son
+`javac --release 8 -g:lines,source` (instrucciones, `max_stack`, huecos de local y filas de línea), exige el
+dex idéntico entre nuestras clases y las de javac, y fija tres rechazos. Cayeron dos rechazos que ya no son
 ciertos —`double d = 1.0` en la prueba del largo y el del léxico sobre `1.0`— y la prueba del caminante
 cambió de byte (0x6a ya es `fmul`; ahora es 0x94, `lcmp`).
 
@@ -4423,10 +4424,10 @@ Suite: **254 PASS + 2 SKIP** nativa, **196 PASS + 60 SKIP** en el hospedador y `
 por `d8`).
 
 **Frontera**: el `instanceof` en ART hasta que vuelva `rish`; `x instanceof T[]`; la forma negada; y lo que
-seguía: el punto flotante en el dex (`dload_0` sigue sin forma medida), las ramas sobre `long`
-(`lcmp`, `dup2`/`pop2`) y los arreglos de largos o flotantes.
+seguía: las ramas sobre `long` (`lcmp`, `dup2`/`pop2`) y los arreglos de largos o flotantes. El punto flotante
+en el dex entró después, en el párrafo 80.
 
-## 80. Las formas dalvik del `float` y el `double`, medidas sobre el fichero de `d8` (solo medición)
+## 80. Las formas dalvik del `float` y el `double`, medidas sobre el fichero de `d8` —y ya implementadas
 
 Sin `rish` no hay `dexdump` en el aparato, pero el oráculo sigue siendo ajeno: **`d8 --debug` escribe el
 dex y las palabras las corta `readDex`**, que no comparte nada con el traductor (no interpreta opcode).
@@ -4471,8 +4472,13 @@ clase de `javac` (1728 bytes), y las listas de palabras por método:
   `iget-wide` 0x53 / `iput-wide` 0x5a). Un local `float` o `double` cargado desde el sitio que le da la
   frame no emite nada, como con el `long` ✓ (en `suma` y `resta` no hay ninguna instrucción de carga).
 
-**Sin cambio de código todavía**: el traductor sigue parándose en `dload_0` (lo fija
-`TestElFlotanteTodaviaNoSeDexa`, párrafo 77). Esta medición es la que hay que convertir en las cuatro
-ramas que faltan —`ldc`/`ldc2_w` de `Float`/`Double`, `dload`/`dstore` y `fload`/`fstore` sobre el
-reparto de registros, las cinco cuentas y las seis conversiones—, y después cerrar en ART con `dexdump` y
-el banco cuando vuelva `rish`.
+**Implementado sobre esta medición** (y volviendo a cambiar `TestElFlotanteSeDexaComoJavac` por la
+comparación de bytes): el traductor acepta `fload`/`dload` (con sus breves), `fstore`/`dstore`, las cinco
+cuentas de cada tipo en forma `/2addr`, las conversiones `i2f`/`i2d`/`f2d`/`d2i`/`d2f`/`f2i` (más las que
+conservan palabra), `fconst_*`/`dconst_*`, el `ldc` de una entrada `Float` y el `ldc2_w` de una `Double`,
+el `freturn`/`dreturn` y el acceso a campos de `float` por la forma de una palabra (`sget`/`sput`/`iget`/`iput`,
+como `d8`) y a los de `double` por la ancha ya medida. **El dex de `FyD` (trece métodos) sale byte a byte el
+mismo escrito sobre nuestras clases que sobre las de javac**, y la frontera que queda es concreta: la forma de
+**tres registros** de una cuenta ancha de `float`/`double` (ninguna sonda la escribió; se rechaza con el nombre
+del opcode), `faload`/`fastore` y `aget-wide`/`aput-wide` (arreglos de flotantes), `l2f`/`l2d`/`f2l`/`d2l`
+(inferidas del mismo paso, sin sonda) y la comprobación en ART, que necesita `rish`.

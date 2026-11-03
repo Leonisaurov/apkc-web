@@ -12,6 +12,11 @@ package main
 // ins_size`, medido en §20) y los temporales debajo. Un `dup` no cuesta una instrucción: empuja el
 // mismo registro, igual que hizo `d8` con el `new`/`dup` del listener.
 
+import (
+	"math"
+	"strings"
+)
+
 // Los opcodes dalvik que este traductor sabe escribir, con el número que tienen en las palabras de
 // d8. Un formato 11x pone el registro en la mitad alta de la primera unidad; un 12x parte esa mitad
 // en dos nibbles de cuatro bits; un 21c lleva el índice en la segunda unidad; un 22c hace lo mismo
@@ -46,6 +51,8 @@ const (
 	opConst4          = 0x12 // 11n const/4 vAA, #+B
 	opConst16         = 0x13 // 21c const/16 vAA, #+BBBB
 	opConstAlto16     = 0x15 // 21c const/high16 vAA, #+BBBB0000
+	opConst           = 0x14 // 31u const vAA, #+BBBBBBBB —asi sale `1.0f` (`1400 0000 803f`, parrafo 80)
+	opConstWideAlto16 = 0x19 // 21c const-wide/high16 vAA, #+BBBB000000000000 (`1902 f03f` = 1.0, parrafo 80)
 	opConstString     = 0x1a // 21c const-string vAA, string@BBBB
 	opNuevaInstancia  = 0x22 // 21c new-instance vAA, type@BBBB
 	opIget            = 0x52 // 22c iget vAA, vBB, field@CCCC
@@ -246,19 +253,27 @@ func (p *traduce) cargaLargo(in jvmInstr, v int64) {
 	p.push(r)
 }
 
-// cuentaAncha: las cinco cuentas de `long`, con el mismo reparto que `cuentaEntera` (parrafo 66):
-// `/2addr` sobre el operando muerto, conmutando si hace falta, y la forma de tres registros si los dos
-// siguen vivos. Medido en `d8`: `add-long/2addr v0, v4` (`bb40`), `mul-long v4, v4, v0` (`9d04 0400`)
-// y `div-long/2addr v0, v2` (`be20`) (parrafo 74).
+// cuentaAncha: las cinco cuentas de `long`, `float` y `double`, con el mismo reparto que
+// `cuentaEntera` (parrafo 66): `/2addr` sobre el operando muerto, conmutando si hace falta, y la forma
+// de tres registros si los dos siguen vivos. Medido en `d8`: `add-long/2addr v0, v4` (`bb40`),
+// `mul-long v4, v4, v0` (`9d04 0400`) y `div-long/2addr v0, v2` (`be20`) (parrafo 74); para el punto
+// flotante, `sub-float/2addr v0, v1` = `c701` en `resta` y `add`/`mul`/`div` de `double` =
+// 0xcb/0xcd/0xce en `suma`, `por` y `divide`, leidos sobre su fichero en el parrafo 80. Las formas de
+// tres registros del `float` y del `double` no las escribio ninguna sonda, asi que ese camino se
+// rechaza por nombre.
 func (p *traduce) cuentaAncha(in jvmInstr) {
-	dos := map[string]byte{"ladd": 0xbb, "lsub": 0xbc, "lmul": 0xbd, "ldiv": 0xbe, "lrem": 0xbf}
+	dos := map[string]byte{
+		"ladd": 0xbb, "lsub": 0xbc, "lmul": 0xbd, "ldiv": 0xbe, "lrem": 0xbf,
+		"fadd": 0xc6, "fsub": 0xc7, "fmul": 0xc8, "fdiv": 0xc9, "frem": 0xca,
+		"dadd": 0xcb, "dsub": 0xcc, "dmul": 0xcd, "ddiv": 0xce, "drem": 0xcf,
+	}
 	tres := map[string]byte{"ladd": 0x9b, "lsub": 0x9c, "lmul": 0x9d, "ldiv": 0x9e, "lrem": 0x9f}
 	op, ok := dos[in.name]
 	if !ok {
 		p.falla(in, "a wide arithmetic opcode this translator does not know")
 		return
 	}
-	conmuta := in.name == "ladd" || in.name == "lmul"
+	conmuta := strings.HasSuffix(in.name, "add") || strings.HasSuffix(in.name, "mul")
 	b := p.pop(in)
 	a := p.pop(in)
 	if p.err != nil {
@@ -288,6 +303,11 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		p.push(b)
 		p.sueltaPar(a)
 	default:
+		tresOp, medida := tres[in.name]
+		if !medida {
+			p.falla(in, "the three-register form of a float or double arithmetic: only the /2addr was measured (parrafo 80)")
+			return
+		}
 		r := p.tomaPar(in)
 		if p.err != nil {
 			return
@@ -295,13 +315,98 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		if !p.octeto(r, in) || !p.octeto(a, in) || !p.octeto(b, in) {
 			return
 		}
-		u1, u2 := unidad23x(tres[in.name], r, a, b)
+		u1, u2 := unidad23x(tresOp, r, a, b)
 		p.palabra(u1)
 		p.palabra(u2)
 		p.push(r)
 		p.sueltaPar(a)
 		p.sueltaPar(b)
 	}
+}
+
+// conviertePalabra: una conversion que no cambia el numero de palabras (`int-to-float` 0x82 y
+// `float-to-int` 0x87, parrafo 80): un registro dentro y otro fuera.
+func (p *traduce) conviertePalabra(in jvmInstr, op byte) {
+	r := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	d := p.toma(in)
+	if p.err != nil {
+		return
+	}
+	if !p.nibble(r, in) || !p.nibble(d, in) {
+		return
+	}
+	p.palabra(unidad12x(op, d, r))
+	p.suelta(r)
+	p.push(d)
+}
+
+// cargaFlotante: un `float` en un temporal. Lo que va en el registro son los **bits** de 32, no el
+// numero: `0.0f` sale `const/4 v0, #0` —asi lo escribe `d8` en `FyD.constanteCorta`— y `1.0f` es
+// `const v0, #+0x3F800000` (parrafo 80).
+func (p *traduce) cargaFlotante(in jvmInstr, v float64) {
+	r := p.toma(in)
+	if p.err != nil {
+		return
+	}
+	if !p.nibble(r, in) {
+		return
+	}
+	p.palabraFlotante(r, v, in)
+	p.push(r)
+}
+
+// palabraFlotante: la instruccion de constante que cabe, con el destino ya elegido.
+func (p *traduce) palabraFlotante(r int, v float64, in jvmInstr) {
+	bits := uint32(math.Float32bits(float32(v)))
+	switch {
+	case bits == uint32(uint32(int8(bits))):
+		p.palabra(unidad11n(opConst4, r, int(int8(bits))))
+	case bits == uint32(uint32(int16(bits))):
+		p.palabra(uint16(opConst16) | uint16(r&0xff)<<8)
+		p.palabra(uint16(int16(bits)))
+	default:
+		// `const vAA, #+BBBBBBBB` (31u): dos unidades de literal
+		p.palabra(uint16(opConst) | uint16(r&0xff)<<8)
+		p.palabra(uint16(bits))
+		p.palabra(uint16(bits >> 16))
+	}
+}
+
+// cargaDoble: un `double` en un par de registros, con los bits de 64. `d8` escribe `1.0` como
+// `const-wide/high16 v2, #+0x3FF0` (dos unidades) y `3.14159` como `const-wide` de cinco (parrafo 80);
+// la eleccion es del emisor, no del formato, así que basta con que la forma sea valida.
+func (p *traduce) cargaDoble(in jvmInstr, v float64) {
+	r := p.tomaPar(in)
+	if p.err != nil {
+		return
+	}
+	if !p.octeto(r, in) {
+		return
+	}
+	bits := math.Float64bits(v)
+	switch {
+	case bits == uint64(uint64(int64(int16(bits)))):
+		p.palabra(uint16(opConstWide16) | uint16(r&0xff)<<8)
+		p.palabra(uint16(int16(bits)))
+	case bits<<16 == 0:
+		// los dieciseis bits altos con signo y el resto ceros: `const-wide/high16` (0x19), dos
+		// unidades —asi escribe `d8` el `1.0` de `deEntero` y el `-2.5` de `negativo` (parrafo 80)—
+		p.palabra(uint16(opConstWideAlto16) | uint16(r&0xff)<<8)
+		p.palabra(uint16(bits >> 48))
+	case bits == uint64(uint64(int64(int32(bits)))):
+		p.palabra(uint16(opConstWide32) | uint16(r&0xff)<<8)
+		p.palabra(uint16(uint32(bits)))
+		p.palabra(uint16(uint32(bits) >> 16))
+	default:
+		p.palabra(uint16(opConstWide) | uint16(r&0xff)<<8)
+		for i := 0; i < 4; i++ {
+			p.palabra(uint16(bits >> uint(16*i)))
+		}
+	}
+	p.push(r)
 }
 
 // convierteEnAncho: `i2l` sale `int-to-long vA, vB` (`8120` para v0, v2), un registro suelto dentro de
@@ -553,8 +658,8 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if len(desc) > 0 {
 		tipo = desc[0]
 	}
-	if desc != "I" && !esObjeto(desc) && !esAncho(desc) {
-		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, la referencia y el largo; lo demas no")
+	if desc != "I" && desc != "F" && !esObjeto(desc) && !esAncho(desc) {
+		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, la referencia, el flotante y los anchos; lo demas no")
 		return
 	}
 	campo, ok := p.t.fieldIdx[fieldKey{owner: owner, typeOf: desc, name: nombre}]
@@ -983,7 +1088,7 @@ func (p *traduce) recorre() error {
 			p.push(valor)
 		case "return":
 			p.palabra(uint16(opRetornaV))
-		case "ireturn":
+		case "ireturn", "freturn":
 			r := p.pop(in)
 			if !p.nibble(r, in) {
 				return p.err
@@ -1012,7 +1117,9 @@ func (p *traduce) recorre() error {
 			p.accesoEstatico(in, in.name == "putstatic")
 		case "iadd", "isub", "imul", "idiv", "irem":
 			p.cuentaEntera(in)
-		case "ladd", "lsub", "lmul", "ldiv", "lrem":
+		case "ladd", "lsub", "lmul", "ldiv", "lrem",
+			"fadd", "fsub", "fmul", "fdiv", "frem",
+			"dadd", "dsub", "dmul", "ddiv", "drem":
 			p.cuentaAncha(in)
 		case "lconst_0", "lconst_1":
 			v := int64(0)
@@ -1020,16 +1127,31 @@ func (p *traduce) recorre() error {
 				v = 1
 			}
 			p.cargaLargo(in, v)
+		case "fconst_0", "fconst_1", "fconst_2", "dconst_0", "dconst_1":
+			// `0.0f` cabe en `const/4 v0, #0` y `1.0` en `const-wide/high16 #+0x3FF0`, igual que hace
+			// `d8` en `FyD.constanteCorta` y `FyD.deEntero` (parrafo 80)
+			if in.name[0] == 'f' {
+				p.cargaFlotante(in, float64(int(in.name[len(in.name)-1]-'0')))
+			} else {
+				p.cargaDoble(in, float64(int(in.name[len(in.name)-1]-'0')))
+			}
 		case "ldc2_w":
 			idx := int(dexU16(in.ops))
-			if p.x.tagOf(idx) != cpLong {
-				p.falla(in, "a ldc2_w whose pool entry is not a Long: doubles and floats are not measured here")
+			switch p.x.tagOf(idx) {
+			case cpLong:
+				p.cargaLargo(in, p.x.longOf(idx))
+			case cpDouble:
+				// `ldc2_w #7 // double 3.14159d` sale en `d8` como `const-wide` con los ocho bytes
+				// en little-endian (parrafos 77 y 80)
+				p.cargaDoble(in, math.Float64frombits(uint64(p.x.longOf(idx))))
+			default:
+				p.falla(in, "a ldc2_w whose pool entry is neither a Long nor a Double")
 				return p.err
 			}
-			p.cargaLargo(in, p.x.longOf(idx))
-		case "lload", "lload_0", "lload_1", "lload_2", "lload_3":
+		case "lload", "lload_0", "lload_1", "lload_2", "lload_3",
+			"dload", "dload_0", "dload_1", "dload_2", "dload_3":
 			n := 0
-			if in.name == "lload" {
+			if in.name == "lload" || in.name == "dload" {
 				n = int(in.ops[0])
 			} else {
 				n = int(in.name[len(in.name)-1]) - '0'
@@ -1039,19 +1161,43 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(r)
-		case "lstore", "lstore_0", "lstore_1", "lstore_2", "lstore_3":
+		case "lstore", "lstore_0", "lstore_1", "lstore_2", "lstore_3",
+			"dstore", "dstore_0", "dstore_1", "dstore_2", "dstore_3":
 			n := 0
-			if in.name == "lstore" {
+			if in.name == "lstore" || in.name == "dstore" {
 				n = int(in.ops[0])
 			} else {
 				n = int(in.name[len(in.name)-1]) - '0'
 			}
 			p.guardaLocalEn(in, n, true)
-		case "i2l":
-			p.convierteEnAncho(in, opIntALargo)
-		case "l2i":
-			p.convierteDeAncho(in, opLargoAInt)
-		case "lreturn":
+		case "i2l", "i2f", "i2d", "l2i", "l2f", "l2d", "f2i", "f2l", "f2d", "d2i", "d2l", "d2f":
+			// la rejilla de conversiones, medida en `FyD` con `d8` en el parrafo 80: `int-to-double`
+			// 0x83 (`divide`, `deEntero`), `float-to-double` 0x89 (`por`, `aDoble`, `campoEstatico`),
+			// `double-to-int` 0x8A (`aEntero`) y `double-to-float` 0x8C (`aFlotante`). Las demas salen
+			// del mismo paso —el bloque es la rejilla del `.class` menos cuatro, anclada en `int-to-long`
+			// 0x81 y `long-to-int` 0x84 del parrafo 74— y `l2f`, `l2d`, `f2l` y `d2l` no los escribio
+			// todavia ninguna sonda.
+			op, medida := map[string]byte{
+				"i2l": opIntALargo, "i2f": 0x82, "i2d": 0x83,
+				"l2i": opLargoAInt, "l2f": 0x85, "l2d": 0x86,
+				"f2i": 0x87, "f2l": 0x88, "f2d": 0x89,
+				"d2i": 0x8a, "d2l": 0x8b, "d2f": 0x8c,
+			}[in.name]
+			if !medida {
+				p.falla(in, "a numeric conversion outside the measured grid")
+				break
+			}
+			switch in.name {
+			case "i2f", "f2i":
+				p.conviertePalabra(in, op) // una palabra dentro y una fuera
+			case "i2l", "i2d", "f2d", "l2d", "d2l":
+				p.convierteEnAncho(in, op) // un registro suelto dentro de un par, o el par entero
+			case "l2i", "l2f", "d2i", "d2f":
+				p.convierteDeAncho(in, op)
+			case "f2l":
+				p.convierteEnAncho(in, op)
+			}
+		case "lreturn", "dreturn":
 			r := p.pop(in)
 			if p.err != nil {
 				return p.err
@@ -1127,10 +1273,11 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(r)
-		case "iload", "aload", "iload_0", "iload_1", "iload_2", "iload_3", "aload_2", "aload_3":
+		case "iload", "aload", "fload", "iload_0", "iload_1", "iload_2", "iload_3", "aload_2", "aload_3",
+			"fload_0", "fload_1", "fload_2", "fload_3":
 			n := 0
 			switch in.name {
-			case "iload", "aload":
+			case "iload", "aload", "fload":
 				n = int(in.ops[0])
 			default:
 				n = int(in.name[len(in.name)-1]) - '0'
@@ -1140,10 +1287,11 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(r)
-		case "istore", "astore", "istore_0", "istore_1", "istore_2", "istore_3", "astore_0", "astore_1", "astore_2", "astore_3":
+		case "istore", "astore", "fstore", "istore_0", "istore_1", "istore_2", "istore_3", "astore_0", "astore_1", "astore_2", "astore_3",
+			"fstore_0", "fstore_1", "fstore_2", "fstore_3":
 			n := 0
 			switch in.name {
-			case "istore", "astore":
+			case "istore", "astore", "fstore":
 				n = int(in.ops[0])
 			default:
 				n = int(in.name[len(in.name)-1]) - '0'
@@ -1285,6 +1433,9 @@ func (p *traduce) ldc(in jvmInstr) {
 		if !p.entero(r, int(p.x.intOf(i)), in) {
 			return
 		}
+	case cpFloat:
+		// `ldc #25 // float 1.5f` del parrafo 77: en el dex son los bits de 32, no el numero
+		p.palabraFlotante(r, float64(math.Float32frombits(uint32(p.x.intOf(i)))), in)
 	default:
 		p.falla(in, "an ldc of a pool type that is neither string nor int")
 		return
@@ -1337,14 +1488,16 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		op = opIputObject
 	case !escribe && esObjeto(desc):
 		op = opIgetObject
-	case !escribe && desc[0] == 'I':
+	case !escribe && (desc[0] == 'I' || desc[0] == 'F'):
 		op = opIget
-	case escribe && desc[0] == 'I':
+	case escribe && (desc[0] == 'I' || desc[0] == 'F'):
 		// medido en el <init> de la sonda (parrafo 50): seis putfields salen como iput 0x59,
-		// `iput v0, v1, field@1`, con el valor en el primer registro y el objeto en el segundo
+		// `iput v0, v1, field@1`, con el valor en el primer registro y el objeto en el segundo. El
+		// `float` comparte forma: vale una palabra, como `sget v2, field@1` que `d8` escribe para el
+		// campo `ff` de `FyD.campoEstatico` (parrafo 80)
 		op = opIput
 	default:
-		p.falla(in, "a field access of type "+string(desc[0])+": only int, object and wide fields were measured")
+		p.falla(in, "a field access of type "+string(desc[0])+": only int, float, object and wide fields were measured")
 		return
 	}
 	if escribe {

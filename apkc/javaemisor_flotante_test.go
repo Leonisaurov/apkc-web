@@ -102,17 +102,30 @@ func TestElFlotanteSeEscribeComoJavac(t *testing.T) {
 	}
 }
 
-// TestElFlotanteTodaviaNoSeDexa: la frontera del traductor, fija por su nombre. El `Code` del `.class`
-// ya es el de javac; el traductor se para en `dload_0`, que es la primera instrucción de la sonda que
-// no tiene forma medida en dalvik. Cuando entre, esta prueba se cambia por la comparación de bytes.
-func TestElFlotanteTodaviaNoSeDexa(t *testing.T) {
-	nuestra, _ := dosClasesFlotante(t)
-	_, err := dexDeClases([]classFull{nuestra})
-	if err == nil {
-		t.Fatalf("el traductor ya dexa el punto flotante: hay que pasar a comparar los bytes")
+// TestElFlotanteSeDexaComoJavac: el dex que escribe este fork sobre nuestras clases es byte a byte el
+// que escribe sobre las de javac, con las formas dalvik del punto flotante medidas en el parrafo 80
+// (`const`/`const-wide/high16`, `add-double/2addr` 0xcb, `float-to-double` 0x89, `sget` para el
+// `float`). La comprobacion en ART la hace el banco, que ademas ejecuta.
+func TestElFlotanteSeDexaComoJavac(t *testing.T) {
+	nuestra, suya := dosClasesFlotante(t)
+	deUno, err := dexDeClases([]classFull{nuestra})
+	if err != nil {
+		t.Fatalf("dexando lo nuestro: %v", err)
 	}
-	if !bytes.Contains([]byte(err.Error()), []byte("dload_0")) {
-		t.Errorf("el rechazo no nombra `dload_0`: %v", err)
+	deOtro, err := dexDeClases([]classFull{suya})
+	if err != nil {
+		t.Fatalf("dexando lo de javac: %v", err)
+	}
+	if !bytes.Equal(deUno, deOtro) {
+		difiere := -1
+		for i := range deUno {
+			if i < len(deOtro) && deUno[i] != deOtro[i] {
+				difiere = i
+				break
+			}
+		}
+		t.Errorf("el dex nuestro son %d bytes y el de javac %d; el primer byte distinto esta en el offset %d (%#02x contra %#02x)",
+			len(deUno), len(deOtro), difiere, deUno[difiere], deOtro[difiere])
 	}
 }
 
