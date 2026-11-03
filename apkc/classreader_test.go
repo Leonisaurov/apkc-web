@@ -279,11 +279,12 @@ func TestReadClassFullRefusesWhatTheForkDoesNotDex(t *testing.T) {
 }
 
 func TestWalkJvmCodeStopsAndNamesTheByteItDoesNotKnow(t *testing.T) {
-	// 0x6a es baload, fuera de los dieciseis medidos. El caminante tiene que decir cual: media
-	// instruccion contada como completa es justo el casi-correcto que llega al dispositivo
-	if _, err := walkJvmCode([]byte{0x2a, 0x6a, 0xb1}); err == nil {
+	// 0x94 es lcmp, fuera del subconjunto medido (el `fmul` 0x6a que se usaba aqui entro en el
+	// parrafo 77). El caminante tiene que decir cual: media instruccion contada como completa es
+	// justo el casi-correcto que llega al dispositivo
+	if _, err := walkJvmCode([]byte{0x2a, 0x94, 0xb1}); err == nil {
 		t.Error("an unmeasured opcode walked as if it were known")
-	} else if !strings.Contains(err.Error(), "0x6a") {
+	} else if !strings.Contains(err.Error(), "0x94") {
 		t.Errorf("the refusal does not name the byte: %v", err)
 	}
 	if _, err := walkJvmCode([]byte{0x12}); err == nil {

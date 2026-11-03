@@ -27,10 +27,11 @@ type jexpr interface{ jexprPuede() }
 
 // jlit es un literal: cadena, entero, booleano o nulo.
 type jlit struct {
-	tipoJ    byte // 's' cadena, 'i' entero, 'j' entero largo, 'b' booleano, 'n' nulo
+	tipoJ    byte // 's' cadena, 'i' entero, 'j' entero largo, 'f' flotante, 'd' doble, 'b' booleano, 'n' nulo
 	texto    string
 	entero   int32
 	largo    int64
+	flotante float64
 	booleano bool
 	donde    pos
 }
@@ -430,6 +431,19 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			}
 			if i < len(fuente) && (fuente[i] == 'L' || fuente[i] == 'l') {
 				i++
+			}
+			// el punto decimal: `FyD` (parrafo 77) trae `2.5` y `1.5f`, y el bucle de arriba partia el
+			// numero en `2`, `.` y `5`. Se aceptan punto con digitos y despues las letras que el mismo
+			// bucle admitia (el exponente con `e` y el sufijo `f`/`d`); con un signo en el exponente
+			// (`1e-3`) el token sale partido y el lector de literales lo rechaza por su nombre.
+			if i+1 < len(fuente) && fuente[i] == '.' && esDigito(fuente[i+1]) {
+				i++
+				for i < len(fuente) && (esDigito(fuente[i]) || fuente[i] == 'x' || fuente[i] == 'X' ||
+					fuente[i] == 'a' || fuente[i] == 'b' || fuente[i] == 'c' || fuente[i] == 'd' || fuente[i] == 'e' || fuente[i] == 'f' ||
+					fuente[i] == 'A' || fuente[i] == 'B' || fuente[i] == 'C' || fuente[i] == 'D' || fuente[i] == 'E' || fuente[i] == 'F' ||
+					fuente[i] == '_') {
+					i++
+				}
 			}
 			out = append(out, tokenJava{kind: 'n', valor: fuente[desde:i], donde: pos{linea}})
 		default:
@@ -1488,6 +1502,13 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 			return nil, fmt.Errorf("linea %d: la negacion de algo que no es un literal entero no esta medida", donde.linea)
 		}
 		a.avanzar()
+		if esLiteralFlotante(t.valor) {
+			v, tipo, err := flotanteJava(t.valor)
+			if err != nil {
+				return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+			}
+			return jlit{tipoJ: tipo, flotante: -v, donde: donde}, nil
+		}
 		if esLiteralLargo(t.valor) {
 			n, err := enteroLargoJava(t.valor)
 			if err != nil {
@@ -1645,6 +1666,13 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		return jlit{tipoJ: 's', texto: t.valor, donde: t.donde}, nil
 	case t.kind == 'n':
 		a.avanzar()
+		if esLiteralFlotante(t.valor) {
+			v, tipo, err := flotanteJava(t.valor)
+			if err != nil {
+				return nil, fmt.Errorf("linea %d: %w", t.donde.linea, err)
+			}
+			return jlit{tipoJ: tipo, flotante: v, donde: t.donde}, nil
+		}
 		if esLiteralLargo(t.valor) {
 			n, err := enteroLargoJava(t.valor)
 			if err != nil {
@@ -1890,6 +1918,52 @@ func enteroLargoJava(texto string) (int64, error) {
 		return 0, fmt.Errorf("%s no es un entero de 64 bits", texto)
 	}
 	return n, nil
+}
+
+// esLiteralFlotante: el token numerico lleva punto o exponente, o el sufijo `f`/`d`. Medido con
+// `javap -c` sobre la sonda `FyD` (parrafo 77): `3.14159` sale `ldc2_w` con una entrada `Double` del
+// pool, `1.5f` sale `ldc` con una entrada `Float` (una sola posicion) y `0.0f` es `fconst_0`.
+func esLiteralFlotante(texto string) bool {
+	if texto == "" {
+		return false
+	}
+	if strings.HasPrefix(texto, "0x") || strings.HasPrefix(texto, "0X") {
+		// los hexos con `p` de exponente no estan medidos
+		return strings.ContainsAny(texto, ".pP")
+	}
+	if strings.ContainsAny(texto, ".") {
+		return true
+	}
+	if i := strings.LastIndexAny(texto, "fFdD"); i >= 0 {
+		return true
+	}
+	return strings.ContainsAny(texto, "eE")
+}
+
+// flotanteJava: el valor y el tipo del literal. Con `f` el tipo es `float` (32 bits, entrada `Float`
+// del pool y `ldc`); sin sufijo o con `d` es `double` (64 bits, entrada `Double` con dos posiciones y
+// `ldc2_w`).
+func flotanteJava(texto string) (float64, byte, error) {
+	limpio := strings.ReplaceAll(texto, "_", "")
+	tipo := byte('d')
+	if c := limpio[len(limpio)-1]; c == 'f' || c == 'F' {
+		tipo = 'f'
+		limpio = limpio[:len(limpio)-1]
+	} else if c == 'd' || c == 'D' {
+		limpio = limpio[:len(limpio)-1]
+	}
+	if strings.HasPrefix(limpio, "0x") || strings.HasPrefix(limpio, "0X") {
+		return 0, 0, fmt.Errorf("un literal flotante hexadecimal (%s) no esta medido", texto)
+	}
+	anchura := 64
+	if tipo == 'f' {
+		anchura = 32
+	}
+	v, err := strconv.ParseFloat(limpio, anchura)
+	if err != nil {
+		return 0, 0, fmt.Errorf("%s no es un literal flotante", texto)
+	}
+	return v, tipo, nil
 }
 
 // enteroJava: los literales numericos de 32 bits del subconjunto; el largo va por enteroLargoJava.

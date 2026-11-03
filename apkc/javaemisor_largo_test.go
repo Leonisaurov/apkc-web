@@ -77,7 +77,6 @@ func TestElLargoSeEscribeComoJavac(t *testing.T) {
 // anonima salen por su nombre.
 func TestElLargoRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"double", "class A { static void f() { double d = 1.0; } }\n", "punto"},
 		{"arreglo de largos", "class A { static void f() { long[] v = new long[2]; v[0] = 1L; } }\n", "no esta medido"},
 		{"comparacion de largos", "class A { static long f(long n) { if (n > 0L) { return 1L; } return 2L; } }\n", "entre J y J"},
 	}

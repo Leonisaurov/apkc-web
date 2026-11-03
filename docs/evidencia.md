@@ -4279,3 +4279,67 @@ Suite: **248 PASS + 2 SKIP** nativa y **196 PASS + 54 SKIP** en el hospedador.
 repartirlos), el `continue` que sale de un `try` con `finally`, el `catch (A | B e)`, `try`-with-resources, y
 lo que seguía del 75: `float`/`double`, las ramas sobre `long` (`lcmp`, `dup2`/`pop2`), los arreglos de largos y
 el `ConstantValue` de un `static final long`.
+
+## 77. El `float` y el `double` en el `.class`: un hueco contra dos, y los tags 4 y 6 del pool
+
+**El léxico era la frontera real**, no el emisor: el lector de números paraba en los dígitos y las letras
+`a`–`f`, así que `2.5` salía como `2`, `.`, `5` («tras el punto se esperaba un nombre y hay "5"»). Se le
+añade el punto decimal —punto seguido de dígito, y después lo que ya admitía el bucle (dígitos, letras y el
+sufijo `f`/`d`)—. El exponente con signo (`1e-3`) sigue sin armarse, porque el `+`/`-` no entra en el token, y
+el hexadecimal con `p` se rechaza con su nombre.
+
+**Los *tags*, medidos en los bytes de `FyD.class` y no en la memoria**: se busca la secuencia del `2.5`
+(`40 04 00 00 00 00 00 00`) y el byte anterior es **0x06**; la del `1.5f` (`3F C0 00 00`) va precedida de
+**0x04**. O sea `Float` = tag 4 con cuatro bytes y **una** posición, `Double` = tag 6 con ocho y **dos**, como
+la `Long` tag 5 del párrafo 74. La tabla del JVMS confirmada a mano: `Integer` es 3 (el que ya usábamos).
+
+**Un hueco contra dos, con `javap -c`**: `resta(float a, float b)` es `fload_0; fload_1` —dos flotantes en
+huecos consecutivos— mientras `suma(double a, double b)` es `dload_0; dload_2`, y `por(float a, double b)`
+pone `a` en 0 y `b` en 1-2. El `esAncho` del párrafo 74 contaba el `F` como ancho: estaba mal y no se
+ejercitaba porque el guardia lo rechazaba; **ancho es `J` y `D`**, el `float` vale un hueco y una palabra.
+
+**Las cuentas y la promoción**, leídas de `FyD`: `fadd` 0x62, `fsub` 0x66, `fmul` 0x6a, `fdiv` 0x6e,
+`frem` 0x72 y `dadd` 0x63, `dsub` 0x67, `dmul` 0x6b, `ddiv` 0x6f, `drem` 0x73 —cada familia va justo después
+de la entera y la larga, que ya estaban medidas (0x60/0x61, 0x64/0x65, …)—. La conversión va **en el sitio del
+operando**: `por` es `fload_0; f2d; dload_1; dmul`, `divide(double a, int b)` es `dload_0; iload_2; i2d; ddiv`
+y `campoEstatico` (`dd + ff`) es `getstatic dd; getstatic ff; f2d; dadd`. La promoción de Java es
+**doble > flotante > largo > entero**, así que `float + long` da flotante: por eso `tipoPrevisto` devuelve el
+tipo promocionado en vez de mirar solamente el `J`.
+
+**Las constantes cortas**: `0.0f` es `fconst_0` (0x0b) y `1.0` es `dconst_1` (0x0f), medido en `deEntero`
+(`x + 1.0` sale `dconst_1`); lo demás va por pool —`3.14159` con `ldc2_w`, `1.5f` con `ldc #25`—. El menos se
+pliega en la constante: `negativo()` es `ldc2_w #21 // double -2.5d`.
+
+**Retornos, cargas y guardas**: `freturn` 0xae, `dreturn` 0xaf; `fload` 0x17 con `fload_0..3` 0x22..0x25,
+`dload` 0x18 con `dload_0..3` 0x26..0x29, `fstore` 0x38 con `fstore_0..3` 0x43..0x46 y `dstore` 0x39 con
+`dstore_0..3` 0x47..0x4a. La rejilla de conversiones es `i2l` 0x85, `i2f` 0x86, `i2d` 0x87, `l2i` 0x88,
+`l2f` 0x89, `l2d` 0x8a, `f2i` 0x8b, `f2l` 0x8c, `f2d` 0x8d, `d2i` 0x8e, `d2l` 0x8f, `d2f` 0x90 —anclada en los
+dos valores medidos del párrafo 74 y confirmada instrucción a instrucción contra `FyD`—. Un cast numérico
+**no** es `checkcast`: `(int) d` sale `d2i` y `(float) d` sale `d2f`.
+
+**Los marcos del verificador**: `ITEM_Float` es 2 y `ITEM_Double` 3 (el `ITEM_Long` 4 del párrafo 74 sigue
+valiendo), y el doble entra en el marco con **una** entrada para los dos huecos, igual que el largo. La
+pila simulada cuenta palabras: el `double` suma dos y el `float` una (`altoPilas`).
+
+**Ejecutado**: un conductor compilado con javac (`Driver`, que suma los trece métodos e imprime) corre
+contra **nuestra** `.class` con `java -Xverify:all` y da el mismo texto que contra la de javac: `36.39159` y
+`1.5|2.5`, `rc 0` en los dos caminos. Nuestro `FyD.class` son 1181 bytes.
+
+**Frontera por nombre**: el traductor se para en `dload_0` (`outside the measured subset`) —las formas de
+dalvik para el flotante y el doble están por medir—; `faload`/`fastore` (un arreglo de `F` o de `D` sale con
+«un arreglo de F no está medido»); las comparaciones sobre flotantes o dobles (`>` entre `D` y `D`); los casts
+a `byte`, `short` y `char` (`i2b`/`i2c`/`i2s`, sin medir) y el exponente con signo.
+
+**Pruebas**: `apkc/javaemisor_flotante_test.go` — tres pruebas: compara los trece métodos uno a uno contra
+`javac --release 8 -g:lines,source` (instrucciones, `max_stack`, huecos de local y filas de línea), fija la
+frontera del dexer por el nombre (`dload_0`) y fija tres rechazos. Cayeron dos rechazos que ya no son
+ciertos —`double d = 1.0` en la prueba del largo y el del léxico sobre `1.0`— y la prueba del caminante
+cambió de byte (0x6a ya es `fmul`; ahora es 0x94, `lcmp`).
+
+Suite: **251 PASS + 2 SKIP** nativa y **196 PASS + 57 SKIP** en el hospedador (las tres pruebas nuevas se
+saltan si el hospedador no lleva `android.jar` montado). **El `studio/e2e.sh` y el banco no se pudieron correr
+en esta sesión**: el proceso del CLI cambió de usuario de Android y los enlaces de
+`~/Android/build-tools/34.0.0/` apuntan al directorio privado de la otra app —`aapt2: permission denied` y
+`d8: Permission denied`, medido con `ls -lL aapt2`, que no puede leer el enlace—. Vuelve a pasar como antes de
+este párrafo en cuanto se arranque la CLI desde la instancia que es dueña del SDK; nada de lo de arriba
+(léxico, emisor, marcos y la ejecución en la JVM) depende de esas dos herramientas.

@@ -484,6 +484,23 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   clase dan `…|306|22|7` con `rc 102`. Frontera por nombre: el valor pendiente de un `return`/`break`/`continue`
   que sale de un `try` con `finally` (medido en `Fin2`, escrito en el §76), el `throw` como última sentencia del cuerpo con
   `finally` (el rango de javac se pasa a su propio manejador) y `catch (A | B e)`.
+- **El `float` y el `double` en el `.class`** (§77): la frontera era el **léxico** —partía `2.5` en `2`, `.` y
+  `5`—, no el emisor. Los *tags* del pool se midieron en los bytes de la sonda (`FyD.class`): `Float` es **tag 4**
+  con cuatro bytes y **una** posición; `Double` **tag 6** con ocho y **dos** (la `Long` del §74 es 5). Un
+  `float` ocupa un hueco y una palabra (`resta(float a, float b)` es `fload_0; fload_1`), el `double` dos de cada
+  (`suma` es `dload_0; dload_2`): el `esAncho` del §74 contaba `F` como ancho y estaba mal. Cuentas
+  `fadd` 0x62..`frem` 0x72 y `dadd` 0x63..`drem` 0x73; la conversión va **en el sitio del operando** (`por` es
+  `fload_0; f2d; dload_1; dmul`, `divide(double,int)` es `dload_0; iload_2; i2d; ddiv`) con la promoción
+  doble > flotante > largo > entero, así que `tipoPrevisto` devuelve el tipo promocionado. `0.0f` es
+  `fconst_0`, `1.0` es `dconst_1`, lo demás por pool (`ldc` / `ldc2_w`) y `-2.5` se pliega en la constante;
+  `freturn` 0xae, `dreturn` 0xaf; la rejilla de conversiones es `i2f` 0x86, `i2d` 0x87, `l2f` 0x89, `l2d` 0x8a,
+  `f2i` 0x8b, `f2l` 0x8c, `f2d` 0x8d, `d2i` 0x8e, `d2l` 0x8f, `d2f` 0x90 y un cast numérico **no** es
+  `checkcast`. Marcos: `ITEM_Float` 2, `ITEM_Double` 3, una entrada por los dos huecos. Los trece métodos de la
+  sonda salen con las mismas instrucciones, `max_stack`, huecos y filas de línea que `javac --release 8`, y
+  **nuestra clase corre en la JVM con `-Xverify:all`** dando el mismo texto que la de javac (`36.39159` y
+  `1.5|2.5`, `rc 0`). Frontera por nombre: el traductor se para en `dload_0` (las formas de dalvik están por
+  medir), `faload`/`fastore`, las comparaciones sobre flotantes o dobles, `i2b`/`i2c`/`i2s` y el exponente con
+  signo. La prueba del caminante cambió de byte (0x6a ya es `fmul`; es 0x94, `lcmp`).
 - **El valor pendiente: un `return` o un `break` que cruza el `finally`** (§76): el cuerpo deja de ser un rango
   único —cada salida abrupta **cierra un trozo** cuyo fin es el pc justo detrás del `istore` que guarda el valor, y
   el trozo siguiente empieza **después** de la copia, del `iload` y del `return` (o del `goto` del `break`): medido
@@ -523,12 +540,13 @@ verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **248 PASS + 2 SKIP** nativa y **196 PASS + 54 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **251 PASS + 2 SKIP** nativa y **196 PASS + 57 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
-  tipos de punto flotante, los arreglos de largos y las ramas sobre `long` (el `long` entero —`.class` y
-  dex— ya está, párrafo 74), anotaciones que no sean `@Override`.
+  los arreglos de largos o de flotantes, las ramas sobre `long` o sobre punto flotante (el `long` entero
+  —`.class` y dex— ya está, párrafo 74; el `float` y el `double` entraron en el `.class`, párrafo 77, y el
+  traductor se para en `dload_0`), y anotaciones que no sean `@Override`.
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

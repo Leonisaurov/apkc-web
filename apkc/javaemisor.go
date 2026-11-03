@@ -27,6 +27,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,15 +90,16 @@ var descPrimitivo = map[string]string{
 	"long": "J", "float": "F", "double": "D", "void": "V",
 }
 
-// puntoFlotante son los tipos que este emisor todavia no escribe: ocupan dos huecos y llevan sus
-// propias constates (`fconst_*`/`dconst_*`) y su comparacion. El `long` entro medido en el parrafo 74.
-var puntoFlotante = map[byte]bool{'F': true, 'D': true}
+// puntoFlotante era el guardia que rechazaba `F` y `D`: entraron medidos en el parrafo 77 y ya no
+// queda nada de tipos primitivos fuera del subconjunto salvo el `char` (5.3).
 
-// esAncho: los descriptores que ocupan DOS huecos de local y dos palabras de pila (`J`, `F`, `D`).
-// Medido con `javap -v` sobre la sonda `F`: `conRama(long a, int n)` con un local `long x` sale con
-// `locals=5` y los huecos 0-1 para `a`, 2 para `n` y 3-4 para `x`.
+// esAncho: los descriptores que ocupan DOS huecos de local y dos palabras de pila: `J` y `D`. Medido
+// con `javap -v` sobre la sonda `F` (parrafo 74): `conRama(long a, int n)` con un local `long x` sale con
+// `locals=5`, huecos 0-1 para `a`, 2 para `n` y 3-4 para `x`; y con `javap -c` sobre `FyD`: el `float`
+// ocupa UN hueco (`por(float a, double b)` carga `a` en 0 con `fload_0` y `b` en 1 con `dload_1`) y el
+// `double` dos (`suma(double a, double b)` es `dload_0; dload_2`).
 func esAncho(desc string) bool {
-	return desc != "" && (desc[0] == 'J' || desc[0] == 'F' || desc[0] == 'D')
+	return desc != "" && (desc[0] == 'J' || desc[0] == 'D')
 }
 
 // ----- el constant pool -----
@@ -139,6 +141,22 @@ func (p *poolBuilder) largo8(v int64) int {
 	b := []byte{5, 0, 0, 0, 0, 0, 0, 0, 0}
 	binary.BigEndian.PutUint64(b[1:], uint64(v))
 	return p.agregarDos(fmt.Sprintf("j\x00%d", v), b)
+}
+
+// doble8: la entrada `Double` —**tag 6**, medido en los bytes de `FyD.class`, donde el `2.5d` del campo
+// estático va precedido del 0x06— y ocupa dos posiciones como la `Long`. Sale con `ldc2_w` (parrafo 77).
+func (p *poolBuilder) doble8(v float64) int {
+	b := []byte{6, 0, 0, 0, 0, 0, 0, 0, 0}
+	binary.BigEndian.PutUint64(b[1:], math.Float64bits(v))
+	return p.agregarDos(fmt.Sprintf("d\x00%v", v), b)
+}
+
+// flotante4: la entrada `Float` (**tag 4**, medido igual), de cuatro bytes y **una sola posicion**:
+// `FyD` la escribe con `ldc #25 // float 1.5f` (parrafo 77).
+func (p *poolBuilder) flotante4(v float64) int {
+	b := []byte{4, 0, 0, 0, 0}
+	binary.BigEndian.PutUint32(b[1:], math.Float32bits(float32(v)))
+	return p.agregar(fmt.Sprintf("f\x00%v", v), b)
 }
 
 // agregarDos: una entrada de ocho bytes seguida del hueco que ocupa su segunda posicion.
@@ -230,9 +248,18 @@ func carga(desc byte) (breve byte, conIndice byte) {
 	if desc == 'I' || desc == 'B' || desc == 'C' || desc == 'S' || desc == 'Z' {
 		return 0x1a, 0x15
 	}
-	// `long`: lload_0 0x1e y lload 0x16, medidos en `javap -c` de la sonda `W` (parrafo 74)
+	// `long`: lload_0 0x1e y lload 0x16, medidos en `javap -c` de la sonda `W` (parrafo 74).
+	// `float`/`double`: fload_0 0x22 con fload 0x17, y dload_0 0x26 con dload 0x18, leidos de `FyD`
+	// en el parrafo 77 (`resta(float a, float b)` es `fload_0; fload_1` y `suma(double,double)` es
+	// `dload_0; dload_2`)
 	if desc == 'J' {
 		return 0x1e, 0x16
+	}
+	if desc == 'F' {
+		return 0x22, 0x17
+	}
+	if desc == 'D' {
+		return 0x26, 0x18
 	}
 	return 0x2a, 0x19
 }
@@ -241,9 +268,16 @@ func guarda(desc byte) (breve byte, conIndice byte) {
 	if desc == 'I' || desc == 'B' || desc == 'C' || desc == 'S' || desc == 'Z' {
 		return 0x3b, 0x36
 	}
-	// lstore_0 0x3f y lstore 0x37 (parrafo 74)
+	// lstore_0 0x3f y lstore 0x37 (parrafo 74); fstore_0 0x43 con fstore 0x38 y dstore_0 0x47 con
+	// dstore 0x39 (parrafo 77, `FyD.local`: `dconst_0; dstore_1`)
 	if desc == 'J' {
 		return 0x3f, 0x37
+	}
+	if desc == 'F' {
+		return 0x43, 0x38
+	}
+	if desc == 'D' {
+		return 0x47, 0x39
 	}
 	return 0x4b, 0x3a
 }
@@ -256,6 +290,10 @@ func retorno(desc byte) byte {
 		return 0xac
 	case 'J':
 		return 0xad
+	case 'F':
+		return 0xae // freturn, leido de `FyD.resta` (parrafo 77)
+	case 'D':
+		return 0xaf // dreturn, leido de `FyD.suma` (parrafo 77)
 	default:
 		return 0xb0
 	}
@@ -709,9 +747,6 @@ func (ctx *contextoJava) descriptorDe(tipo string) (string, error) {
 		return "[" + elem, nil
 	}
 	if d, ok := descPrimitivo[tipo]; ok {
-		if puntoFlotante[d[0]] {
-			return "", fmt.Errorf("el tipo %s es de punto flotante: no esta medido en este emisor", tipo)
-		}
 		return d, nil
 	}
 	i, err := ctx.tipoAInterno(tipo)
@@ -1794,6 +1829,36 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			}
 			e.subePor("J")
 			return "J", nil
+		case 'f':
+			// medido en `javap -c` de `FyD` (parrafo 77): `0.0f` es `fconst_0` (0x0b) y cualquier otro
+			// va por `ldc` con una entrada `Float` del pool, que ocupa **una** posicion (`1.5f` sale
+			// `ldc #25`)
+			switch v.flotante {
+			case 0:
+				e.emite(0x0b)
+			case 1:
+				e.emite(0x0c)
+			case 2:
+				e.emite(0x0d)
+			default:
+				e.ldc(e.pool.flotante4(v.flotante))
+			}
+			e.sube()
+			return "F", nil
+		case 'd':
+			// `1.0` sale `dconst_1` (0x0f) y `3.14159` es `ldc2_w #7` con una entrada `Double` que
+			// reserva su segunda posicion, igual que la `Long` del parrafo 74
+			switch v.flotante {
+			case 0:
+				e.emite(0x0e)
+			case 1:
+				e.emite(0x0f)
+			default:
+				idx := e.pool.doble8(v.flotante)
+				e.emite(0x14, byte(idx>>8), byte(idx))
+			}
+			e.subePor("D")
+			return "D", nil
 		case 's':
 			e.ldc(e.pool.cadena(v.texto))
 			e.sube()
@@ -1822,6 +1887,24 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		e.cargaDe(0, "L")
 		return "L" + e.interno + ";", nil
 	case jcast:
+		if destino, ok := descPrimitivo[v.tipo]; ok && strings.IndexByte("IJFD", destino[0]) >= 0 {
+			// un cast numerico es la conversion de la rejilla, no un `checkcast`: medido en `FyD`,
+			// donde `aEntero` es `dload_0; d2i` y `aFlotante` `dload_0; d2f` (parrafo 77)
+			d, err := e.exp(v.dentro)
+			if err != nil {
+				return "", err
+			}
+			if d == destino {
+				return d, nil
+			}
+			if strings.IndexByte("IJFD", d[0]) < 0 || len(d) != 1 {
+				return "", fmt.Errorf("linea %d: se convierte %s a %s, y eso no es una cuenta numerica medida", v.donde.linea, d, v.tipo)
+			}
+			if !e.convierte(d, destino) {
+				return "", fmt.Errorf("linea %d: la conversion de %s a %s no esta medida (el `byte`, el `short` y el `char` no los escribió sonda alguna)", v.donde.linea, d, v.tipo)
+			}
+			return destino, nil
+		}
 		interno, err := e.ctx.tipoAInterno(v.tipo)
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
@@ -1853,7 +1936,14 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			return e.concatenar(v)
 		}
 		codes := map[string]byte{"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem}
-		codesLargo := map[string]byte{"+": 0x61, "-": 0x65, "*": 0x69, "/": 0x6d, "%": 0x71}
+		codesAnchas := map[string]map[string]byte{
+			// la familia larga, medida en `javap -c` de `L` (parrafo 74)
+			"J": {"+": 0x61, "-": 0x65, "*": 0x69, "/": 0x6d, "%": 0x71},
+			// la de `float` y la de `double`, leidas de `FyD` en el parrafo 77: cada familia ocupa
+			// cuatro opcodes seguidos despues del entero (fadd 0x62, dadd 0x63, fsub 0x66, ...)
+			"F": {"+": 0x62, "-": 0x66, "*": 0x6a, "/": 0x6e, "%": 0x72},
+			"D": {"+": 0x63, "-": 0x67, "*": 0x6b, "/": 0x6f, "%": 0x73},
+		}
 		code, esAritmetica := codes[v.op]
 		if !esAritmetica {
 			return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
@@ -1868,26 +1958,45 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		// el tipo se puede prever sin emitir.
 		tIzq, okIzq := e.tipoPrevisto(v.izq)
 		tDer, okDer := e.tipoPrevisto(v.der)
-		if (okIzq && tIzq == "J") || (okDer && tDer == "J") {
+		// `int + long`, `float * double`: javac **ensancha cada operando en su propio sitio** y en el
+		// orden del fuente (`W.suma` mide `iload_0; i2l; lload_1; ladd`, parrafo 74, y `FyD.por` es
+		// `fload_0; f2d; dload_1; dmul` con `FyD.divide` `dload_0; iload_2; i2d; ddiv`, parrafo 77).
+		// Para meter esa conversion en su sitio hay que saber el tipo de los dos lados **antes** de
+		// escribirlos, y eso solo da cuando el tipo se puede prever sin emitir. La promocion de Java es
+		// doble > flotante > largo > entero.
+		nivel := map[string]int{"": 0, "I": 0, "J": 1, "F": 2, "D": 3}
+		ancho := ""
+		if okIzq && nivel[tIzq] > nivel[ancho] {
+			ancho = tIzq
+		}
+		if okDer && nivel[tDer] > nivel[ancho] {
+			ancho = tDer
+		}
+		if ancho != "" {
 			if !okIzq || !okDer {
-				return "", fmt.Errorf("linea %d: `%s` con un largo y un operando cuyo tipo no se puede saber antes de escribirlo: el `i2l` va en el sitio de javac y adivinarlo aqui no esta medido",
-					v.donde.linea, v.op)
+				return "", fmt.Errorf("linea %d: `%s` con un %s y un operando cuyo tipo no se puede saber antes de escribirlo: la conversion va en el sitio de javac y adivinarlo aqui no esta medido",
+					v.donde.linea, v.op, ancho)
 			}
-			di, err := e.expA(v.izq, "J")
+			di, err := e.expA(v.izq, ancho)
 			if err != nil {
 				return "", err
 			}
-			dd, err := e.expA(v.der, "J")
+			dd, err := e.expA(v.der, ancho)
 			if err != nil {
 				return "", err
 			}
-			if di != "J" || dd != "J" {
-				return "", fmt.Errorf("linea %d: `%s` aplicado a %s y %s: la cuenta larga solo se midio entre enteros y largos",
+			if di != ancho || dd != ancho {
+				return "", fmt.Errorf("linea %d: `%s` aplicado a %s y %s: la cuenta ancha solo se midio entre enteros, largos, flotantes y dobles",
 					v.donde.linea, v.op, di, dd)
 			}
-			e.emite(codesLargo[v.op])
-			e.baja(2) // dos largos (cuatro palabras) dentro, uno (dos) fuera
-			return "J", nil
+			e.emite(codesAnchas[ancho][v.op])
+			// dos elementos dentro y uno fuera: cuatro palabras a dos con `J`/`D`, dos a uno con `F`
+			if ancho == "F" {
+				e.baja(1)
+			} else {
+				e.baja(2)
+			}
+			return ancho, nil
 		}
 		izq, err := e.exp(v.izq)
 		if err != nil {
@@ -2667,6 +2776,10 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			return "I", nil
 		case 'j':
 			return "J", nil
+		case 'f':
+			return "F", nil
+		case 'd':
+			return "D", nil
 		case 'b':
 			return "Z", nil
 		case 's':
@@ -2733,6 +2846,10 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 			return "I", true
 		case 'j':
 			return "J", true
+		case 'f':
+			return "F", true
+		case 'd':
+			return "D", true
 		case 'b':
 			return "Z", true
 		case 's':
@@ -2784,12 +2901,21 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 		}
 		return "", false
 	case joperador:
-		// una cuenta es larga si alguno de sus dos lados lo es, y entera si los dos lo son; lo que
-		// mezcla tipos que no se pueden prever sale con ok falso (parrafo 74)
+		// una cuenta es ancha si alguno de sus lados lo es, con la promocion de Java (doble > flotante
+		// > largo > entero); lo que mezcla tipos que no se pueden prever sale con ok falso (parrafos
+		// 74 y 77)
 		di, okI := e.tipoPrevisto(v.izq)
 		dd, okD := e.tipoPrevisto(v.der)
-		if okI && di == "J" || okD && dd == "J" {
-			return "J", true
+		nivel := map[string]int{"": 0, "I": 0, "J": 1, "F": 2, "D": 3}
+		ancho := ""
+		if okI && nivel[di] > nivel[ancho] {
+			ancho = di
+		}
+		if okD && nivel[dd] > nivel[ancho] {
+			ancho = dd
+		}
+		if ancho != "" {
+			return ancho, true
 		}
 		if okI && okD && di == "I" && dd == "I" {
 			return "I", true
@@ -2818,12 +2944,36 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	if d == deseado {
 		return d, nil
 	}
-	if deseado == "J" && d == "I" {
-		e.emite(0x85)
-		e.sube() // el entero era una palabra y el largo son dos
-		return "J", nil
+	if len(d) == 1 && len(deseado) == 1 && e.convierte(d, deseado) {
+		return deseado, nil
 	}
 	return d, nil
+}
+
+// convierte: la conversion numerica entre los tipos medidos, con las palabras que cambia. La rejilla
+// sale de `i2l` 0x85 (parrafo 74) y de las leidas en `FyD` (parrafo 77): `f2d` en `por`, `i2d` en
+// `divide` y `deEntero`, `d2i` en `aEntero`, `d2f` en `aFlotante`. Devuelve false si el par no esta.
+func (e *emisor) convierte(de, a string) bool {
+	codes := map[[2]byte]byte{
+		{'I', 'J'}: 0x85, {'I', 'F'}: 0x86, {'I', 'D'}: 0x87,
+		{'J', 'I'}: 0x88, {'J', 'F'}: 0x89, {'J', 'D'}: 0x8a,
+		{'F', 'I'}: 0x8b, {'F', 'J'}: 0x8c, {'F', 'D'}: 0x8d,
+		{'D', 'I'}: 0x8e, {'D', 'J'}: 0x8f, {'D', 'F'}: 0x90,
+	}
+	peso := map[byte]int{'I': 1, 'F': 1, 'J': 2, 'D': 2}
+	c, ok := codes[[2]byte{de[0], a[0]}]
+	if !ok {
+		return false
+	}
+	e.emite(c)
+	if delta := peso[a[0]] - peso[de[0]]; delta > 0 {
+		for i := 0; i < delta; i++ {
+			e.sube()
+		}
+	} else {
+		e.baja(-delta)
+	}
+	return true
 }
 
 // ----- sentencias -----

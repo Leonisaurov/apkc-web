@@ -32,11 +32,15 @@ type tipoVerif struct {
 }
 
 var (
-	verifTop     = tipoVerif{etiqueta: 't'}
-	verifInt     = tipoVerif{etiqueta: 'i'}
-	verifNulo    = tipoVerif{etiqueta: 'l'}
-	verifLargo   = tipoVerif{etiqueta: 'j'}
-	verifSegundo = tipoVerif{etiqueta: 's'}
+	verifTop   = tipoVerif{etiqueta: 't'}
+	verifInt   = tipoVerif{etiqueta: 'i'}
+	verifNulo  = tipoVerif{etiqueta: 'l'}
+	verifLargo = tipoVerif{etiqueta: 'j'}
+	// el `float` vale una palabra y el `double` dos, medido con `javap -c -v` sobre `FyD` (parrafo 77):
+	// `por(float a, double b)` tiene `a` en el hueco 0 y `b` en el 1-2.
+	verifFlotante = tipoVerif{etiqueta: 'f'}
+	verifDoble    = tipoVerif{etiqueta: 'd'}
+	verifSegundo  = tipoVerif{etiqueta: 's'}
 )
 
 func verifRef(clase string) tipoVerif { return tipoVerif{etiqueta: 'l', clase: clase} }
@@ -47,6 +51,10 @@ func (t tipoVerif) String() string {
 		return "entero"
 	case 'j':
 		return "largo"
+	case 'f':
+		return "flotante"
+	case 'd':
+		return "doble"
 	case 's':
 		return "segunda mitad de un ancho"
 	case 'l':
@@ -147,6 +155,10 @@ func (l *lectorPool) tipoDeConstante(i int) (tipoVerif, error) {
 		return verifRef("java/lang/Class"), nil
 	case 5: // Long (`ldc2_w`, parrafo 74)
 		return verifLargo, nil
+	case 4: // Float (`ldc`, parrafo 77)
+		return verifFlotante, nil
+	case 6: // Double (`ldc2_w`, parrafo 77)
+		return verifDoble, nil
 	}
 	return tipoVerif{}, fmt.Errorf("un `ldc` de la etiqueta %d del pool no esta medido", e[0])
 }
@@ -173,6 +185,12 @@ func tipoDeDesc(desc string) (tipoVerif, error) {
 		// el largo ocupa DOS huecos: medido en `javap -v` de la sonda `F`, donde el append de javac
 		// escribe `locals = [ long ]` para un local que va del hueco 3 al 4 (parrafo 74)
 		return verifLargo, nil
+	case 'F':
+		return verifFlotante, nil
+	case 'D':
+		// el doble, igual que el largo, se escribe con **una** entrada del marco para dos huecos
+		// (parrafo 77, medido en `javap -v -c` de `FyD.local`)
+		return verifDoble, nil
 	}
 	return tipoVerif{}, fmt.Errorf("el tipo %q de un descriptor no esta medido", desc)
 }
@@ -309,7 +327,7 @@ func (a *analisis) empuja(t tipoVerif) { a.est.pila = append(a.est.pila, t) }
 func altoPilas(pila []tipoVerif) int {
 	n := 0
 	for _, t := range pila {
-		if t.etiqueta == 'j' {
+		if t.etiqueta == 'j' || t.etiqueta == 'd' {
 			n += 2
 			continue
 		}
@@ -388,13 +406,27 @@ func (a *analisis) guardaLocal(idx int, que byte) error {
 		return fmt.Errorf("se guarda %s en el hueco %d y se esperaba %s", t, idx, nombreTipoVerif(que))
 	}
 	a.est.locales[idx] = t
-	if t.etiqueta == 'j' {
-		// el largo ocupa tambien el hueco siguiente, que el verificador no nombra: medido en la sonda
-		// `F`, donde `long x` vive en los huecos 3 y 4 (parrafo 74)
+	if t.etiqueta == 'j' || t.etiqueta == 'd' {
+		// el largo y el doble ocupan tambien el hueco siguiente, que el verificador no nombra: medido
+		// en la sonda `F`, donde `long x` vive en los huecos 3 y 4 (parrafo 74), y en `FyD.por`, donde
+		// el `double b` vive en el 1 y el 2 (parrafo 77)
 		if idx+1 >= len(a.est.locales) {
 			return fmt.Errorf("el largo del hueco %d se sale del marco de %d huecos", idx, len(a.est.locales))
 		}
 		a.est.locales[idx+1] = verifSegundo
+	}
+	return nil
+}
+
+// sacaDe: lo que exige una cuenta, una conversion o un retorno del tipo que se nombre ('f' flotante o
+// 'd' doble, parrafo 77).
+func (a *analisis) sacaDe(que byte) error {
+	t, err := a.saca()
+	if err != nil {
+		return err
+	}
+	if t.etiqueta != que {
+		return fmt.Errorf("se esperaba %s y hay %s", nombreTipoVerif(que), t)
 	}
 	return nil
 }
@@ -406,6 +438,10 @@ func nombreTipoVerif(que byte) string {
 		return "un entero"
 	case 'j':
 		return "un largo"
+	case 'f':
+		return "un flotante"
+	case 'd':
+		return "un doble"
 	case 'l':
 		return "una referencia"
 	}
@@ -533,13 +569,17 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		a.empuja(a.est.pila[len(a.est.pila)-1])
 	case op == 0x09 || op == 0x0a: // lconst_0, lconst_1 (medidos en `W.cero` y `F.conComparacion`)
 		a.empuja(verifLargo)
-	case op == 0x14: // ldc2_w: la constante larga del pool
+	case op == 0x0b || op == 0x0c || op == 0x0d: // fconst_0..2 (`FyD.constanteCorta`, parrafo 77)
+		a.empuja(verifFlotante)
+	case op == 0x0e || op == 0x0f: // dconst_0, dconst_1 (`FyD.deEntero`: el `1.0` es dconst_1)
+		a.empuja(verifDoble)
+	case op == 0x14: // ldc2_w: la constante larga o doble del pool
 		t, err := a.lector.tipoDeConstante(u2De(in.ops, 0))
 		if err != nil {
 			return nil, false, err
 		}
-		if t.etiqueta != 'j' {
-			return nil, false, fmt.Errorf("el ldc2_w del indice %d no trae un largo", u2De(in.ops, 0))
+		if t.etiqueta != 'j' && t.etiqueta != 'd' {
+			return nil, false, fmt.Errorf("el ldc2_w del indice %d no trae un largo ni un doble", u2De(in.ops, 0))
 		}
 		a.empuja(t)
 	case op == 0x16: // lload
@@ -576,6 +616,112 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifInt)
+	// ----- el `float` y el `double`, leidos de `javap -c` sobre `FyD` (parrafo 77) -----
+	case op == 0x17: // fload
+		if err := a.cargaLocal(int(in.ops[0]), 'f'); err != nil {
+			return nil, false, err
+		}
+	case op == 0x18: // dload
+		if err := a.cargaLocal(int(in.ops[0]), 'd'); err != nil {
+			return nil, false, err
+		}
+	case op >= 0x22 && op <= 0x25: // fload_0 .. fload_3
+		if err := a.cargaLocal(int(op-0x22), 'f'); err != nil {
+			return nil, false, err
+		}
+	case op >= 0x26 && op <= 0x29: // dload_0 .. dload_3
+		if err := a.cargaLocal(int(op-0x26), 'd'); err != nil {
+			return nil, false, err
+		}
+	case op == 0x38: // fstore
+		if err := a.guardaLocal(int(in.ops[0]), 'f'); err != nil {
+			return nil, false, err
+		}
+	case op == 0x39: // dstore
+		if err := a.guardaLocal(int(in.ops[0]), 'd'); err != nil {
+			return nil, false, err
+		}
+	case op >= 0x43 && op <= 0x46: // fstore_0 .. fstore_3
+		if err := a.guardaLocal(int(op-0x43), 'f'); err != nil {
+			return nil, false, err
+		}
+	case op >= 0x47 && op <= 0x4a: // dstore_0 .. dstore_3
+		if err := a.guardaLocal(int(op-0x47), 'd'); err != nil {
+			return nil, false, err
+		}
+	case op == 0x62 || op == 0x66 || op == 0x6a || op == 0x6e || op == 0x72: // fadd, fsub, fmul, fdiv, frem
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifFlotante)
+	case op == 0x63 || op == 0x67 || op == 0x6b || op == 0x6f || op == 0x73: // dadd, dsub, dmul, ddiv, drem
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifDoble)
+	case op == 0x86: // i2f
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifFlotante)
+	case op == 0x87: // i2d (`FyD.deEntero`)
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifDoble)
+	case op == 0x89 || op == 0x8a: // l2f, l2d
+		if err := a.sacaLargo(); err != nil {
+			return nil, false, err
+		}
+		if op == 0x89 {
+			a.empuja(verifFlotante)
+		} else {
+			a.empuja(verifDoble)
+		}
+	case op == 0x8b: // f2i
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
+	case op == 0x8c: // f2l
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifLargo)
+	case op == 0x8d: // f2d (`FyD.por` y `FyD.aDoble`)
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifDoble)
+	case op == 0x8e: // d2i (`FyD.aEntero`)
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
+	case op == 0x8f: // d2l
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifLargo)
+	case op == 0x90: // d2f (`FyD.aFlotante`)
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifFlotante)
+	case op == 0xae: // freturn
+		if err := a.sacaDe('f'); err != nil {
+			return nil, false, err
+		}
+	case op == 0xaf: // dreturn
+		if err := a.sacaDe('d'); err != nil {
+			return nil, false, err
+		}
 	case op == 0xad: // lreturn
 		if err := a.sacaLargo(); err != nil {
 			return nil, false, err
@@ -856,9 +1002,9 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 	}
 	for _, t := range args {
 		inicial.locales = append(inicial.locales, t)
-		if t.etiqueta == 'j' {
-			// un argumento largo ocupa el hueco y el siguiente (medido en `F.conRama`: `a` en 0-1 y
-			// `n` en 2, parrafo 74)
+		if t.etiqueta == 'j' || t.etiqueta == 'd' {
+			// un argumento largo o doble ocupa el hueco y el siguiente (medido en `F.conRama`: `a` en
+			// 0-1 y `n` en 2, parrafo 74; y en `FyD.por`: `a` en 0 y `b` en 1-2, parrafo 77)
 			inicial.locales = append(inicial.locales, verifSegundo)
 		}
 	}
@@ -1011,6 +1157,10 @@ func codificaTipo(t tipoVerif, pool *poolBuilder) []byte {
 	case 'j':
 		// ITEM_Long 4; la segunda mitad del hueco no se escribe (parrafo 74)
 		return []byte{4}
+	case 'f':
+		return []byte{2} // ITEM_Float 2
+	case 'd':
+		return []byte{3} // ITEM_Double 3, una entrada para los dos huecos
 	case 'l':
 		if t.clase == "" {
 			return []byte{5}
