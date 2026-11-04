@@ -311,12 +311,18 @@ func itoa(n int) string {
 	if n == 0 {
 		return "0"
 	}
-	digits := []byte{}
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
+	signo := ""
+	m := int64(n)
+	if m < 0 {
+		signo = "-"
+		m = -m
 	}
-	return string(digits)
+	digits := []byte{}
+	for m > 0 {
+		digits = append([]byte{byte('0' + int(m%10))}, digits...)
+		m /= 10
+	}
+	return signo + string(digits)
 }
 
 func hexByte(b byte) string {

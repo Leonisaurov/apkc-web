@@ -1659,6 +1659,52 @@ func (e *emisor) cargaEntero(v int32) {
 	e.sube()
 }
 
+// cargaConstante: la forma corta que le corresponde a un valor ya plegado y ya promocionado. Medida
+// método por método en el párrafo 85: depende del **valor y del tipo promocionado**, no del token
+// escrito —`d + 1` es `dconst_1`, `l + 1` es `lconst_1`, `l + 2` es `ldc2_w` porque no existe
+// `lconst_2`, y `d * 2` es `ldc2_w` porque javac **nunca** usa `dconst_2` aunque exista (0x10)—. El
+// signo es parte de la constante: `-0.0f` va por `ldc`, no por `fconst_0`.
+func (e *emisor) cargaConstante(c constNum) {
+	switch c.tipo {
+	case 'I':
+		e.cargaEntero(int32(c.entero))
+	case 'J':
+		switch c.entero {
+		case 0:
+			e.emite(0x09)
+		case 1:
+			e.emite(0x0a)
+		default:
+			idx := e.pool.largo8(c.entero)
+			e.emite(0x14, byte(idx>>8), byte(idx))
+		}
+		e.subePor("J")
+	case 'F':
+		switch {
+		case c.real == 0 && !math.Signbit(c.real):
+			e.emite(0x0b)
+		case c.real == 1:
+			e.emite(0x0c)
+		case c.real == 2:
+			e.emite(0x0d)
+		default:
+			e.ldc(e.pool.flotante4(c.real))
+		}
+		e.sube()
+	case 'D':
+		switch {
+		case c.real == 0 && !math.Signbit(c.real):
+			e.emite(0x0e)
+		case c.real == 1:
+			e.emite(0x0f)
+		default:
+			idx := e.pool.doble8(c.real)
+			e.emite(0x14, byte(idx>>8), byte(idx))
+		}
+		e.subePor("D")
+	}
+}
+
 // ldc: `ldc` lleva el indice en un byte; a partir de 256 javac usa `ldc_w`. Un fichero de la pagina no
 // llega, y si lo hiciera es mejor nombrarlo que escribir el indice truncado.
 func (e *emisor) ldc(idx int) {
@@ -1843,46 +1889,18 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		case 'j':
 			// medido en `javap -c` de `W`: `long x = 0` es `lconst_0` (0x09), `1L` es `lconst_1`
 			// (0x0a) y cualquier otro va por `ldc2_w` (0x14) con el indice de una entrada `Long`
-			switch v.largo {
-			case 0:
-				e.emite(0x09)
-			case 1:
-				e.emite(0x0a)
-			default:
-				idx := e.pool.largo8(v.largo)
-				e.emite(0x14, byte(idx>>8), byte(idx))
-			}
-			e.subePor("J")
+			e.cargaConstante(constNum{tipo: 'J', entero: v.largo})
 			return "J", nil
 		case 'f':
 			// medido en `javap -c` de `FyD` (parrafo 77): `0.0f` es `fconst_0` (0x0b) y cualquier otro
 			// va por `ldc` con una entrada `Float` del pool, que ocupa **una** posicion (`1.5f` sale
-			// `ldc #25`)
-			switch v.flotante {
-			case 0:
-				e.emite(0x0b)
-			case 1:
-				e.emite(0x0c)
-			case 2:
-				e.emite(0x0d)
-			default:
-				e.ldc(e.pool.flotante4(v.flotante))
-			}
-			e.sube()
+			// `ldc #25`). El signo entra en la constante: `-0.0f` es `ldc`, no `fconst_0` (parrafo 85)
+			e.cargaConstante(constNum{tipo: 'F', real: float64(float32(v.flotante))})
 			return "F", nil
 		case 'd':
 			// `1.0` sale `dconst_1` (0x0f) y `3.14159` es `ldc2_w #7` con una entrada `Double` que
 			// reserva su segunda posicion, igual que la `Long` del parrafo 74
-			switch v.flotante {
-			case 0:
-				e.emite(0x0e)
-			case 1:
-				e.emite(0x0f)
-			default:
-				idx := e.pool.doble8(v.flotante)
-				e.emite(0x14, byte(idx>>8), byte(idx))
-			}
-			e.subePor("D")
+			e.cargaConstante(constNum{tipo: 'D', real: v.flotante})
 			return "D", nil
 		case 's':
 			e.ldc(e.pool.cadena(v.texto))
@@ -1996,9 +2014,9 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		if !esAritmetica {
 			return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
 		}
-		if plegado, esConstante := plegarEntero(v); esConstante {
-			e.cargaEntero(plegado)
-			return "I", nil
+		if plegado, esConstante := plegarConstante(v); esConstante {
+			e.cargaConstante(plegado)
+			return string(plegado.tipo), nil
 		}
 		// `int + long`: javac **ensancha el entero antes de la cuenta** y en el orden del fuente
 		// (`W.suma` mide `iload_0; i2l; lload_1; ladd`, parrafo 74). Para poder meter ese `i2l` en su
@@ -2186,49 +2204,156 @@ func (e *emisor) concatenar(v joperador) (string, error) {
 	return "Ljava/lang/String;", nil
 }
 
-// plegarEntero: javac dobla las cuentas de literales (parrafo 53): `1 + 2` es `iconst_3`, `1 + 2 * 3` es
-// `bipush 7` —el 7 va en bipush porque iconst llega al 5—, `7 - 10` es `bipush -3` y `9 / 2` es `iconst_4`.
-// Con un divisor de cero NO lo dobla: `1 / 0` sale `iconst_1; iconst_0; idiv`, que es la excepcion en
-// tiempo de ejecucion y no en la compilacion.
-func plegarEntero(x jexpr) (int32, bool) {
-	lit, esLit := x.(jlit)
-	if esLit {
-		if lit.tipoJ != 'i' {
-			return 0, false
+// constNum: una expresion numerica que javac pliega a una constante, con el tipo que le da la
+// promocion binaria ('I', 'J', 'F', 'D'). El valor entero va en `entero` y el del punto en `real`
+// (almacenado ya con la precision del tipo: un `F` cabe en un float32).
+type constNum struct {
+	tipo   byte
+	entero int64
+	real   float64
+}
+
+// nivelNum: el orden de la promocion de Java, doble > flotante > largo > entero (parrafo 77).
+func nivelNum(t byte) int {
+	switch t {
+	case 'J':
+		return 1
+	case 'F':
+		return 2
+	case 'D':
+		return 3
+	}
+	return 0
+}
+
+// comoReal: el valor de la constante visto por una cuenta de punto flotante.
+func (c constNum) comoReal() float64 {
+	if c.tipo == 'I' || c.tipo == 'J' {
+		return float64(c.entero)
+	}
+	return c.real
+}
+
+// promocionA: el mismo valor escrito en el tipo al que Java lo ensancha. El destino nunca es mas
+// estrecho: quien llama comprueba el nivel antes.
+func (c constNum) promocionA(t byte) constNum {
+	if c.tipo == t {
+		return c
+	}
+	r := constNum{tipo: t}
+	switch t {
+	case 'J':
+		r.entero = c.entero
+	case 'F':
+		r.real = float64(float32(c.comoReal()))
+	case 'D':
+		r.real = c.comoReal()
+	}
+	return r
+}
+
+// plegarConstante: javac dobla las cuentas de literales ANTES de emitir (parrafo 53 para la entera,
+// parrafo 85 para la del punto). Las formas medidas:
+//
+//	`1 + 2` → iconst_3, `1 + 2 * 3` → bipush 7 (iconst llega al 5), `7 - 10` → bipush -3,
+//	`9 / 2` → iconst_4, `2147483647 + 1` → ldc -2147483648 (el desborde envuelve)
+//	`1 / 0` y `1L / 0` NO se doblan: la excepcion tiene que saltar en ejecucion
+//	`2.5f * 2` → ldc 5.0f, `1.0 / 0` → ldc2_w Infinity, `1.0 % 0` → ldc2_w NaN (el cero flotante
+//	no es excepcion, es el resultado de la cuenta de IEEE)
+//	`1.0f / 3.0f` → ldc 0.33333334f: la cuenta de `float` se hace en precision de float32
+//	`1.5f + 2L` → ldc 3.5f y `1.0 + 2.5f` → ldc2_w 3.5d: cada operando entra ya promocionado
+func plegarConstante(x jexpr) (constNum, bool) {
+	switch v := x.(type) {
+	case jlit:
+		switch v.tipoJ {
+		case 'i':
+			return constNum{tipo: 'I', entero: int64(v.entero)}, true
+		case 'j':
+			return constNum{tipo: 'J', entero: v.largo}, true
+		case 'f':
+			return constNum{tipo: 'F', real: float64(float32(v.flotante))}, true
+		case 'd':
+			return constNum{tipo: 'D', real: v.flotante}, true
 		}
-		return lit.entero, true
-	}
-	op, esOp := x.(joperador)
-	if !esOp {
-		return 0, false
-	}
-	a, ok := plegarEntero(op.izq)
-	if !ok {
-		return 0, false
-	}
-	b, ok := plegarEntero(op.der)
-	if !ok {
-		return 0, false
-	}
-	switch op.op {
-	case "+":
-		return a + b, true
-	case "-":
-		return a - b, true
-	case "*":
-		return a * b, true
-	case "/":
-		if b == 0 {
-			return 0, false
+		return constNum{}, false
+	case joperador:
+		switch v.op {
+		case "+", "-", "*", "/", "%":
+		default:
+			return constNum{}, false
 		}
-		return a / b, true
-	case "%":
-		if b == 0 {
-			return 0, false
+		a, ok := plegarConstante(v.izq)
+		if !ok {
+			return constNum{}, false
 		}
-		return a % b, true
+		b, ok := plegarConstante(v.der)
+		if !ok {
+			return constNum{}, false
+		}
+		t := a.tipo
+		if nivelNum(b.tipo) > nivelNum(t) {
+			t = b.tipo
+		}
+		if t == 'I' || t == 'J' {
+			if (v.op == "/" || v.op == "%") && b.entero == 0 {
+				return constNum{}, false
+			}
+			if t == 'J' {
+				r := int64(0)
+				switch v.op {
+				case "+":
+					r = a.entero + b.entero
+				case "-":
+					r = a.entero - b.entero
+				case "*":
+					r = a.entero * b.entero
+				case "/":
+					r = a.entero / b.entero
+				case "%":
+					r = a.entero % b.entero
+				}
+				return constNum{tipo: 'J', entero: r}, true
+			}
+			var r int32
+			ia, ib := int32(a.entero), int32(b.entero)
+			switch v.op {
+			case "+":
+				r = ia + ib
+			case "-":
+				r = ia - ib
+			case "*":
+				r = ia * ib
+			case "/":
+				r = ia / ib
+			case "%":
+				r = ia % ib
+			}
+			return constNum{tipo: 'I', entero: int64(r)}, true
+		}
+		fa, fb := a.comoReal(), b.comoReal()
+		if t == 'F' {
+			fa = float64(float32(fa))
+			fb = float64(float32(fb))
+		}
+		var r float64
+		switch v.op {
+		case "+":
+			r = fa + fb
+		case "-":
+			r = fa - fb
+		case "*":
+			r = fa * fb
+		case "/":
+			r = fa / fb
+		case "%":
+			r = math.Mod(fa, fb)
+		}
+		if t == 'F' {
+			r = float64(float32(r))
+		}
+		return constNum{tipo: t, real: r}, true
 	}
-	return 0, false
+	return constNum{}, false
 }
 
 // aplanar: los segmentos de una cadena de puntos y su base, que viene vacia si empezo por un nombre.
@@ -2745,7 +2870,10 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 			return "", fmt.Errorf("linea %d: el arreglo es %s y el elemento %d es %s", v.donde.linea, elem, i, d)
 		}
 		e.emite(guarda)
-		e.baja(3)
+		// el `*astore` se come el arreglo, el indice y el valor: el valor de un `long` o un `double`
+		// son DOS palabras, así que la cuenta del `int[]` del §73 no sirve aquí
+		e.baja(2)
+		e.bajaPor(elem)
 	}
 	return "[" + elem, nil
 }
@@ -3011,6 +3139,17 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 // expA: emite la expresion y, si el hueco que hay que llenar es ancho y lo que sale es un entero, mete
 // el `i2l` (0x85) que javac pone en su lugar.
 func (e *emisor) expA(x jexpr, deseado string) (string, error) {
+	// La promocion de un literal se hace **sobre la constante**, antes de elegir su forma: medido en el
+	// parrafo 85, `d + 1` es `dconst_1`, `l + 2` es `ldc2_w 2l` y `f * -2` es `ldc -2.0f`, ninguno con la
+	// conversion del parrafo 77 detras. Si el operando no es una constante plegable, la conversion si va
+	// en su sitio (`d + i` con `i` variable es `iload_0; i2d`).
+	if len(deseado) == 1 && strings.IndexByte("IJFD", deseado[0]) >= 0 {
+		if c, ok := plegarConstante(x); ok && nivelNum(c.tipo) <= nivelNum(deseado[0]) {
+			c = c.promocionA(deseado[0])
+			e.cargaConstante(c)
+			return string(c.tipo), nil
+		}
+	}
 	d, err := e.exp(x)
 	if err != nil {
 		return "", err

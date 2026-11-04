@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -143,16 +144,12 @@ func formaDeMetodo(t *testing.T, cf classFull, m classMethod) string {
 			texto += " " + dueno + "." + nombre + ":" + desc
 		case "new", "checkcast", "instanceof", "anewarray":
 			texto += " " + x.classDescriptor(u2De(in.ops, 0))
-		case "ldc", "ldc_w":
+		case "ldc", "ldc_w", "ldc2_w":
 			idx := int(in.ops[0])
-			if in.name == "ldc_w" {
+			if in.name != "ldc" {
 				idx = u2De(in.ops, 0)
 			}
-			if x.p.tag[idx] == cpString {
-				texto += " \"" + x.stringValue(idx) + "\""
-			} else {
-				texto += " " + itoa(int(x.intOf(idx)))
-			}
+			texto += " " + constanteDelPool(x, idx)
 		case "bipush":
 			texto += " " + itoa(int(int8(in.ops[0])))
 		case "sipush":
@@ -161,6 +158,28 @@ func formaDeMetodo(t *testing.T, cf classFull, m classMethod) string {
 		fila = append(fila, texto)
 	}
 	return strings.Join(fila, " | ")
+}
+
+// constanteDelPool: la entrada nombrada por un `ldc`/`ldc_w`/`ldc2_w` renderizada como el valor que es,
+// no como el indice. Comparar indices entre dos compiladores no vale porque el pool se ordena distinto,
+// y leerla siempre como entero ocultaba el valor: con la sonda del párrafo 85, un `ldc` de 3.0f y uno de
+// 5.0f salían con la misma palabra.
+func constanteDelPool(x poolIndex, idx int) string {
+	switch x.p.tag[idx] {
+	case cpString:
+		return "\"" + x.stringValue(idx) + "\""
+	case cpInteger:
+		return itoa(int(x.intOf(idx)))
+	case cpFloat:
+		return strconv.FormatFloat(float64(x.floatOf(idx)), 'g', -1, 32) + "f"
+	case cpLong:
+		return strconv.FormatInt(x.longOf(idx), 10) + "l"
+	case cpDouble:
+		return strconv.FormatFloat(x.doubleOf(idx), 'g', -1, 64) + "d"
+	}
+	// El `tag` es un mapa y solo guarda las entradas que no son `Utf8` ni `Class`, asi que la ausencia
+	// dice el indice: un `ldc` apuntando a un nombre o a un tipo es un defecto que hay que ver.
+	return "pool?" + itoa(idx)
 }
 
 // TestUnaClaseAnidadaPrivadaSigueRechazada: la frontera del parrafo 72. Una anidada `private` pide en
