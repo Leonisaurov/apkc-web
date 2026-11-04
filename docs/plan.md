@@ -523,7 +523,11 @@ y un icono en `res/drawable`, y esa app se instala y arranca en un teléfono rea
    layout ART que recorra el fichero entero.
 5. **Gate**: un bloque nuevo en `studio/e2e.sh` (o en `prueba-pestana.js` si toca la pestaña) y, cuando el
    caso lo pide, **el teléfono**: instalar, arrancar y ver la traza o el `content-desc`.
-6. **Párrafo nuevo en `docs/evidencia.md`** con el comando que reproduce cada afirmación, y su commit.
+6. **Registro**, en este orden y cada texto en su sitio: el párrafo nuevo en `docs/evidencia.md` con el
+   comando que reproduce cada afirmación, y su commit; **la fila** del inventario de arriba si cambia lo
+   que el subconjunto acepta o rechaza (y la tabla Estado si cambia el estado de una fase); `AGENTS.md`
+   **solo** si cambia una regla, un muro del entorno o el gate — nunca un bullet de hallazgos (regla 7 de
+   `AGENTS.md`; el recap de las mediciones es `docs/situacion.md`, que tampoco recibe bullets nuevos).
 
 Orden recomendado abajo. Los **costes son hipótesis** (XS/S/M/L/XL), no mediciones: lo que manda este repo es
 que la *tarea de medición* va siempre antes que la estimación de trabajo.

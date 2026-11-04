@@ -34,6 +34,7 @@ página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** 
 | [AGENTS.md](AGENTS.md) | reglas del repo, entorno de Termux y el gate que hay que pasar antes de dar nada por hecho |
 | [docs/plan.md](docs/plan.md) | el plan detallado: fases, tareas con su criterio de aceptación, y lo que abandona cada una |
 | [docs/evidencia.md](docs/evidencia.md) | lo medido, con el comando que lo produce y la fecha |
+| [docs/situacion.md](docs/situacion.md) | el recap de lo medido, bullet por bullet: dice qué dejó de estar abierto, pero el original es el `§` de evidencia que cada bullet cita |
 | [docs/bloqueos.md](docs/bloqueos.md) | las cuatro herramientas externas, qué existe hoy y qué costaría sustituir cada una |
 | [shim/navegador-sim.js](shim/navegador-sim.js) | el hospedador de forma-navegador (un `fs` en memoria con la API de Node) que hace correr `apkc.wasm` sin Node |
 | [studio/](studio/) | apkc-studio: genera proyectos de apkc, traduce su salida real y mide dónde se atasca quien lo usa |
