@@ -486,9 +486,11 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   camino «todo nuestro» ejecuta en ART `7 9 3 7 5 9`, como la JVM. **Defecto que solo vio ART**: la pila
   guarda solo el registro bajo de un par, así que la mitad alta se liberaba con el par vivo y `tomaPar`
   creaba pares solapados (`wide register v7 has type Double (Low Half)`); se cerró con `altos` (mitad alta
-  protegida), `sueltaPar` que espera a que el par muera y `ocupado` en `toma`/`tomaPar`. Queda pendiente el
-  plegado de `fa * 2` a la constante `float` —hoy `int-to-float`, mismo resultado—, el test de la sonda y el
-  caso del banco.
+  protegida), `sueltaPar` que espera a que el par muera y `ocupado` en `toma`/`tomaPar`. Las tres cosas que
+  quedaron pendientes entonces están cerradas: el plegado del literal promocionado y el `baja(3)` del
+  inicializador ancho en el §85, el marco por encima de v15 y las formas `/from16` en el §86, con el test de
+  la sonda (`javaemisor_arreglos_anchos_test.go`, `.class` y dex de 1496 bytes byte a byte) y el caso
+  `arreglosAnchos(2)` en el banco.
 - **El `instanceof` y el oráculo de `d8` sin aparato** (§79): en el `.class` es `aload_0; instanceof #7; 4: ifeq 9`
   —el índice ocupa **dos bytes** (0xc1) y la condición va **sin invertir**, al revés que las seis comparaciones
   del §52—, consume la referencia y deja un entero (el alto de pila no cambia, el marco del `else` es `same`).
@@ -541,7 +543,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **258 PASS + 2 SKIP** nativa y **198 PASS + 62 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **265 PASS + 2 SKIP** nativa y **198 PASS + 69 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,

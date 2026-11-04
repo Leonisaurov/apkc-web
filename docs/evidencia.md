@@ -4726,8 +4726,124 @@ con tres piezas: `altos` (la mitad alta de un par vivo no se libera), `sueltaPar
 mientras el par siga en la pila, y `ocupado`, que hace que `toma`/`tomaPar` **salten** los registros
 vivos al repartir un par nuevo (de dos en dos, para no partir pares).
 
-**Pendiente, para cuando se retome**: el `Code` de la sonda del driver **no** es idéntico al de javac
-porque javac pliega `fa * 2` a la constante `fconst_2` (2.0f) y este emisor escribe `int-to-float`; el
-resultado es el mismo y el dex ejecuta igual, pero la igualdad de forma que piden los otros tests queda
-para cuando se mida ese plegado. Faltan además el test permanente de la sonda y el caso en el banco
-(hoy la evidencia de ejecución es la corrida de arriba).
+**Lo que quedó pendiente entonces y se midió después**: el `Code` de la sonda del driver no era idéntico al
+de javac porque javac pliega `fa * 2` a la constante `fconst_2` (2.0f) y este emisor escribía
+`iconst_2; i2f` —cerrado en el §85—, y faltaban el test permanente de la sonda y el caso en el banco, que
+al meterlo destapó dos defectos más (el `baja(3)` del inicializador ancho, §85, y el marco por encima de
+v15, §86).
+
+## 85. El literal se promociona **sobre la constante**, antes de elegir su forma
+
+Sonda `Plega` (veinte métodos) medida con `javac --release 8 -g:lines,source Plega.java`, `javap -c -p
+Plega.class` y el fixture en base64 dentro de `apkc/javaemisor_plega_test.go`. Para reproducir:
+
+```sh
+sh -c 'export PATH="$PREFIX/lib/jvm/java-21-openjdk/bin:$PATH"; cd "$PREFIX/tmp/plega" &&
+  javac --release 8 -g:lines,source Plega.java && javap -c -p Plega.class && base64 -w0 Plega.class'
+sh -c 'cd apkc && go test -count=1 -run Plega .'
+```
+
+| fuente | `.class` que escribe javac | qué fija |
+| --- | --- | --- |
+| `f * 2` | `fload_0; fconst_2; fmul` | el 2 llega siendo flotante: no hay `i2f` |
+| `f + 0.0f` / `f + 0` | `fconst_0` | da igual cómo esté escrito el cero |
+| `f + 3` / `f * 100` | `ldc` con entrada `Float` (tag 4, **una** posición) | 3.0f y 100.0f no son forma corta |
+| `f * -2` | `ldc` con `-2.0f` | el signo entra en la constante: no es `fconst_2; fneg` |
+| `-0.0` / `-0.0f` / `0.0 * -1.0` | `ldc2_w` / `ldc` con el cero con signo | `dconst_0` es el cero **positivo**; el signo se mira |
+| `d * 2` / `d + 2.0` | `ldc2_w` con `2.0d` | javac **nunca** usa `dconst_2` (0x10 existe, no lo escribe) |
+| `d + 1` / `l + 1` / `l + 0` | `dconst_1` / `lconst_1` / `lconst_0` | la forma corta la decide el valor ya promocionado |
+| `l + 2` / `l * 3` | `ldc2_w` | no existe `lconst_2` |
+| `i + 100` / `i + 3000` / `i + -1` | `bipush` / `sipush` / `iconst_m1` | la regla del §53 sigue entera |
+| `2.5f * 2` | una sola `ldc 5.0f`, sin `fmul` | dos literales se pliegan, cada operando entra ya promocionado |
+| `1.5f + 2L` / `1.0 + 2.5f` | `ldc 3.5f` / `ldc2_w 3.5d` | la promoción binaria antes de la cuenta |
+| `1.0f / 3.0f` | `ldc 0.33333334f` | la cuenta de `float` se hace en precisión de `float32`, no de `float64` |
+| `2.5f / 0` / `1.0 / 0` / `1.0 % 0` | `ldc Infinity` / `ldc2_w Infinity` / `ldc2_w NaN` | el cero flotante de divisor **sí** se pliega: es el resultado de IEEE, no una excepción |
+| `1 / 0` y `1L / 0` | `iconst_1; iconst_0; idiv` y `lconst_1; lconst_0; ldiv` | la entera y la larga no: la excepción tiene que saltar en ejecución (§53) |
+| `2147483647 + 1` | `ldc -2147483648` | el desborde envuelve |
+| `d + i` (`i` variable) | `iload_0; i2d` | una variable sí se convierte **en su sitio** (§77), no se pliega |
+| `if (f > 2)` | `fconst_2; fcmpl; ifle` | la comparación promociona igual (§81) |
+| `float g = 2` / `return 3` de un `double` | `fconst_2` / `ldc2_w 3.0d` | la regla no es solo de las cuentas: rige en asignación, retorno y campo |
+
+Implementado en `apkc/javaemisor.go` con `plegarConstante` (reemplaza a `plegarEntero` del §53, que solo
+sabía de enteros), `cargaConstante` (las formas cortas de la tabla) y la promoción dentro de `expA`, que es
+por donde ya pasaban la cuenta, la comparación, el retorno, la declaración y la asignación. La lectura de
+los literales `j`/`f`/`d` del fuente pasa por el mismo `cargaConstante`, así que `-0.0f` deja de salir con
+`fconst_0`.
+
+Oráculos: `TestElLiteralPromocionadoSeEscribeComoJavac` (los veinte cuerpos instrucción a instrucción,
+con `max_stack`, huecos de local y filas de línea), `TestElLiteralPromocionadoSeDexaComoJavac` (el dex sale
+**byte a byte** igual sobre nuestras clases que sobre las de javac: **1872 bytes**) y
+`TestLaAsignacionYElRetornoPromocionanSuLiteral`.
+
+**El defecto que destapó meter el caso en el banco**: `new double[] {1.5, 2.0}`. El inicializador del §73
+bajaba **tres** palabras de pila por elemento (`e.baja(3)`: arreglo, índice y valor), correcto para
+`int[]` y `String[]`, y un valor ancho son **cuatro**. El emisor respondía `quedan 2 valores en la pila al
+cerrar el metodo` y el `.class` no salía. Con `ArreglosAnchos` (diez métodos: las seis operaciones del §84
+más `new long[n]`, `new double[] {…}`, `.length` de un `float[]` y una suma con bucle) el `.class` sale con
+el mismo `Code`, la misma pila, los mismos huecos y las mismas filas que el de javac, y el dex es **byte a
+byte** el de javac: **1496 bytes**, `TestLosArreglosAnchosSeEscribenComoJavac` y
+`TestLosArreglosAnchosSeDexanIgualQueLosDeJavac`.
+
+## 86. Un marco por encima de v15: las formas `/from16` que escribe `d8`, medidas sin aparato
+
+El caso nuevo del banco (`Ver.arreglosAnchos`) reventó el camino «todo nuestro» con
+
+```
+[dex] Lp/Ver;arreglosAnchos: at pc 0, iload_0: register v22 does not fit a four-bit format
+      (the /range or /from16 form is not measured here)
+```
+
+Los argumentos van al FINAL de la frame (§57): en cuanto el pico de temporales sube, un hueco se escribe en
+v16 o más y las formas 11n, 12x, 21t, 22c y 22s no lo alcanzan. Fallaba igual sobre las clases de `javac`,
+así que el defecto era del traductor, no del emisor.
+
+Medición. Sin `rish` (el reset dejó solo `sudo`), el oráculo es `d8 --debug` y el `dexdump -d` del aparato:
+
+```sh
+sh -c 'export PATH="$PREFIX/lib/jvm/java-21-openjdk/bin:$PATH"; cd "$PREFIX/tmp/dieciseis" &&
+  javac --release 8 -g:lines,source D16.java && d8 --debug --min-api 28 --output d8_16 D16.class &&
+  base64 -w0 d8_16/classes.dex | sudo sh -c "toybox base64 -d > /data/local/tmp/d16.dex;
+  /apex/com.android.art/bin/dexdump -d /data/local/tmp/d16.dex"'
+```
+
+Lo que hace `d8` con un registro alto, palabra escrita por palabra:
+
+| situación | palabra | decodificada | qué significa |
+| --- | --- | --- | --- |
+| leer un argumento alto para una cuenta de cuatro bits | `0202 1200` | `move/from16 v2, v18` | forma 22v: **destino de ocho bits** en la primera palabra, **fuente de dieciséis** en la segunda; el valor baja y de ahí `int-to-double v2, v2` |
+| lo mismo con un `long`/`double` | `0501 1300` | `move-wide/from16 v1, v19` | la pareja de destino tiene que caber entera en cuatro bits (techo v14) |
+| lo mismo con una referencia | `0801 1300` | `move-object/from16 v1, v19` | y de ahí `iput-object v1, v0, field` |
+| una cuenta con un operando alto | `900a 0a10` / `ab02 0210` | `add-int v10, v10, v16` / `add-double v2, v2, v16` | cambia la forma de dos registros por la de **tres**, que lleva ocho bits por campo |
+| una llamada con los argumentos altos | `7714 0200 0100` / `7401 0500 1200` | `invoke-static/range {v1..v20}` / `invoke-virtual/range {v18}` | la `/range` toma un registro inicial de 16 bits |
+| reasignar un argumento alto | `d804 1001` | `add-int/lit8 v4, v16, #1` | **nunca escribe sobre el alto**: renombra el local a v4 (el `/lit8` sí lee un fuente de ocho bits) |
+
+Corregido en `apkc/dexinstr.go`: `bajaAlto` ata el hueco a un temporal bajo con la 22v medida y
+`guardaLocalEn` copia sobre ese bajo. La copia se emite **una vez por hueco**, no por lectura: atar el hueco
+es el mismo mecanismo con el que `guardaLocal` ata la primera escritura, así que el registro alto no se
+vuelve a nombrar y no hace falta ningún análisis de viveza. Copiar en cada lectura (la primera versión) le
+costaba a `Ver.compara` un temporal más por uso y su marco se salía también de v15 —el test
+`TestElMarcoSeReintentaCuandoLaPasadaFinalPideMas` lo cazó—. De paso se arregló `unidad23x`, que recortaba
+a nibbles el segundo y el tercer registro: los dos campos de esa palabra son de **ocho** bits, como
+demuestra el `add-int v10, v10, v16` medido arriba.
+
+Frontera, rechazada por nombre: las formas `/range` de las llamadas y cualquier `/from16` de una cuenta
+(`const/16`, `add-int/lit16`) siguen sin emitirse —plan 5.4—; con el `move` abajo basta para lo que hoy
+compila el subconjunto, y escribir SOBRE un registro alto no lo hace `d8`, así que no está medido y no se
+hace.
+
+Prueba permanente: `apkc/dex16_test.go`, dos fuentes cuyo cuerpo entero es leer un argumento alto y
+volverlo, para que el cuerpo salga predecible palabra por palabra —`[move/from16 v0, v17][return v0]` y
+`[move-wide/from16 v0, v18][return-wide v0]`—, y que el destino de la copia quede por debajo del techo.
+Ejecutada, la prueba es el banco con el caso nuevo (`Ver.arreglosAnchos(2)`, que usa el alta ancha, el
+inicializador `new double[] {1.5, 2.0}`, el `u[0] * 2` del §85 y una comparación larga):
+
+```
+jvm (javac): rc=102, salida: total 7|…|6|7|10
+  nuestro dex (Go de punta a punta): rc=102 y salida igual a la JVM  ok   dexdump verificando: rc 0
+  dex de d8 sobre javac:             rc=102 y salida igual a la JVM  ok   dexdump verificando: rc 0
+  dex de d8 sobre nuestra Ver:       rc=102 y salida igual a la JVM  ok   dexdump verificando: rc 0
+  nuestro dex con nuestro main:      rc=102 y salida igual a la JVM  ok   dexdump verificando: rc 0
+  jvm con nuestra clase emitida (Xverify:all): rc=102 y salida igual a la JVM  ok
+banco: en orden
+```
+
