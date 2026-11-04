@@ -34,6 +34,14 @@ const (
 	opMueve       = 0x01 // 12x move vA, vB
 	opMueveObjeto = 0x07 // 12x move-object vA, vB
 
+	// las mismas tres copias en la forma 22v —destino de OCHO bits y fuente de DIECISÉIS—, medida sobre
+	// el fichero que escribe `d8 --debug` (parrafo 86): `0202 1200` es `move/from16 v2, v18`,
+	// `0501 1300` `move-wide/from16 v1, v19` y `0801 1300` `move-object/from16 v1, v19`. Es lo que hace
+	// `d8` cuando una instrucción de cuatro bits tiene que leer un registro alto: lo baja.
+	opMueveFrom16       = 0x02 // 22v move/from16 vAA, vBBBB
+	opMueveWideFrom16   = 0x05 // 22v move-wide/from16 vAA, vBBBB
+	opMueveObjetoFrom16 = 0x08 // 22v move-object/from16 vAA, vBBBB
+
 	// el `long` en el dex, medido con `dexdump -d` sobre `d8 --release` en las sondas `L`, `V` y `M`
 	// (parrafo 74): dos registros por valor, el de en medio de cada trío de acceso a campo
 	opMueveWide       = 0x04 // 12x move-wide vA, vB
@@ -671,15 +679,112 @@ func (p *traduce) guardaLocalEn(in jvmInstr, n int, ancho bool) {
 	case in.name == "astore" || (len(in.name) == 8 && in.name[:6] == "astore"):
 		op = opMueveObjeto
 	}
-	if !p.nibble(r, in) || !p.nibble(destino, in) {
+	// El destino de la escritura es el registro del local; si es inalcanzable para cuatro bits se baja el
+	// hueco a un temporal (parrafo 86) y el valor se copia sobre ese bajo. La otra dirección —escribir
+	// SOBRE un registro alto— no la emite `d8` nunca: renombra (medido en `D16d.reasignaEntero`).
+	destino = p.bajaAlto(in, n, op)
+	if p.err != nil {
 		return
 	}
-	p.palabra(unidad12x(op, destino, r))
+	if r > 15 {
+		p.palabra(unidad22v(mueveFrom16(op), destino))
+		p.palabra(uint16(r))
+	} else {
+		if !p.nibble(r, in) {
+			return
+		}
+		p.palabra(unidad12x(op, destino, r))
+	}
 	if ancho {
 		p.sueltaPar(r)
 		return
 	}
 	p.suelta(r)
+}
+
+// cargaLocal: leer un hueco JVM que no es ancho. Con el registro del local por debajo de v16 se empuja
+// el suyo propio, sin instrucción (la fusión que midió el parrafo 50); con v16 o más hay que bajarlo,
+// porque las formas de cuatro bits no lo alcanzan y `d8` lo copia a un temporal con la forma 22v
+// (medido en `D16.junta`, parrafo 86: `0202 1200` = `move/from16 v2, v18`, y de ahí `int-to-double v2,
+// v2`). `op` es el move de cuatro bits que habría que emitir, y su pareja en 22v sale sola.
+func (p *traduce) cargaLocal(in jvmInstr, n int, op byte) {
+	r := p.bajaAlto(in, n, op)
+	if p.err != nil {
+		return
+	}
+	p.push(r)
+}
+
+// cargaLocalPar: lo mismo para un `long` o un `double`, cuyo valor ocupa DOS registros: la pareja de
+// destino tiene que caber entera en cuatro bits, así que el techo es v14. Medido el
+// `move-wide/from16` en `D16c.guardaLargo` (`0501 1300`, parrafo 86).
+func (p *traduce) cargaLocalPar(in jvmInstr, n int) {
+	p.cargaLocal(in, n, opMueveWide)
+}
+
+// mueveFrom16: la forma 22v del move que se habría emitido en 12x.
+func mueveFrom16(op byte) byte {
+	switch op {
+	case opMueveObjeto:
+		return opMueveObjetoFrom16
+	case opMueveWide:
+		return opMueveWideFrom16
+	}
+	return opMueveFrom16
+}
+
+// bajaAlto: atar a un temporal bajo un hueco cuyo registro no cabe en cuatro bits, y devolver ese
+// registro. `d8` resuelve esto renombrando el local (medido en `D16d.reasignaEntero`, donde el `k` del
+// argumento v16 se va a v4); aquí no hace falta ningún análisis de viveza: el hueco queda atado al
+// temporal con el mismo mecanismo con el que `guardaLocal` ata la primera escritura, así que el
+// registro alto no se vuelve a nombrar nunca. La copia se emite UNA sola vez por hueco, no por lectura:
+// copiar en cada lectura costaba un temporal más por uso y el marco de `Ver.compara` se salía de v15.
+func (p *traduce) bajaAlto(in jvmInstr, n int, op byte) int {
+	ancho := op == opMueveWide
+	techo := 15
+	if ancho {
+		techo = 14
+	}
+	r := p.local(n)
+	if r <= techo {
+		return r
+	}
+	var t int
+	if ancho {
+		t = p.tomaPar(in)
+	} else {
+		t = p.toma(in)
+	}
+	if p.err != nil {
+		return 0
+	}
+	if t > techo {
+		p.falla(in, "no low register is free to carry a high slot down")
+		return 0
+	}
+	p.palabra(unidad22v(mueveFrom16(op), t))
+	p.palabra(uint16(r))
+	if p.renom == nil {
+		p.renom = map[int]int{}
+	}
+	p.renom[n] = t
+	if p.fijos == nil {
+		p.fijos = map[int]bool{}
+	}
+	quitar := []int{t}
+	if ancho {
+		quitar = append(quitar, t+1)
+	}
+	for _, q := range quitar {
+		p.fijos[q] = true
+		for i, vivo := range p.libres {
+			if vivo == q {
+				p.libres = append(p.libres[:i], p.libres[i+1:]...)
+				break
+			}
+		}
+	}
+	return t
 }
 
 // local: el registro dalvik del enésimo hueco JVM. Un long o un double ocupa dos huecos aquí y dos
@@ -773,10 +878,18 @@ func unidad12x(op byte, a, b int) uint16 {
 	return uint16(op) | uint16((b&0xf)<<4|a&0xf)<<8
 }
 
-// unidad23x: el opcode y el primer registro en una unidad, y los otros dos (segundo en el nibble
-// bajo) en la siguiente. Medido en `4402 0301` (aget v2, v3, v1) y `4b02 0001` (aput v2, v0, v1).
+// unidad22v: el opcode y el destino de OCHO bits en la primera palabra; la fuente de DIECISÉIS va en la
+// unidad siguiente, que el llamante escribe despues. Medido en `0202 1200` = `move/from16 v2, v18`
+// (parrafo 86).
+func unidad22v(op byte, destino int) uint16 {
+	return uint16(op) | uint16(destino&0xff)<<8
+}
+
+// unidad23x: el opcode y el primer registro (OCHO bits) en una unidad, y los otros dos en la siguiente,
+// cada uno en su byte. Medido en `4402 0301` (aget v2, v3, v1) y `4b02 0001` (aput v2, v0, v1); los dos
+// campos de la segunda unidad son de ocho bits, no de cuatro, así que un v16 no se recorta.
 func unidad23x(op byte, a, b, c int) (uint16, uint16) {
-	return uint16(op) | uint16(a&0xff)<<8, uint16(b&0xf) | uint16(c&0xf)<<8
+	return uint16(op) | uint16(a&0xff)<<8, uint16(b&0xff) | uint16(c&0xff)<<8
 }
 
 // tiposNewArray: el atype del JVMS 4.9 para `newarray` y el array que nombra. Los ocho son la tabla
@@ -1360,11 +1473,7 @@ func (p *traduce) recorre() error {
 			} else {
 				n = int(in.name[len(in.name)-1]) - '0'
 			}
-			r := p.local(n)
-			if !p.nibble(r, in) {
-				return p.err
-			}
-			p.push(r)
+			p.cargaLocalPar(in, n)
 		case "lstore", "lstore_0", "lstore_1", "lstore_2", "lstore_3",
 			"dstore", "dstore_0", "dstore_1", "dstore_2", "dstore_3":
 			n := 0
@@ -1486,11 +1595,13 @@ func (p *traduce) recorre() error {
 			default:
 				n = int(in.name[len(in.name)-1]) - '0'
 			}
-			r := p.local(n)
-			if !p.nibble(r, in) {
-				return p.err
+			// la lectura del local: con el registro alto, `move*/from16` lo baja a un temporal
+			// (parrafo 86); con v15 o menos se empuja el del local, sin instrucción
+			if in.name[0] == 'a' {
+				p.cargaLocal(in, n, opMueveObjeto)
+			} else {
+				p.cargaLocal(in, n, opMueve)
 			}
-			p.push(r)
 		case "istore", "astore", "fstore", "istore_0", "istore_1", "istore_2", "istore_3", "astore_0", "astore_1", "astore_2", "astore_3",
 			"fstore_0", "fstore_1", "fstore_2", "fstore_3":
 			n := 0

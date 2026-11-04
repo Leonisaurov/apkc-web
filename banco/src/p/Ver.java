@@ -225,4 +225,28 @@ public class Ver {
         r.run();
         return (int) ancho;
     }
+
+    // Los arreglos de `long`, `float` y `double` (párrafo 84) con el literal ya promocionado (párrafo
+    // 85): el alta `new long[n]`, el inicializador `new double[] {…}` —que en el `.class` es `newarray`
+    // con el atype y un `dastore` por elemento, y en la pila el valor ancho vale DOS palabras—, la
+    // lectura y la escritura anchas, el `.length`, la cuenta `u[0] * 2` (el 2 sale `fconst_2`, no
+    // `iconst_2; i2f`) y la comparación larga. Con n = 2: v = {3, 5}, s = 1.5 + 2 + 1.0 = 4.5, un
+    // `v[i] > 3` y `v[1]` de vuelta, así que devuelve 4 + 1 + 5 = 10.
+    public static int arreglosAnchos(int n) {
+        long[] v = new long[n];
+        v[0] = 3L;
+        v[1] = v[0] + 2;
+        double[] w = new double[] {1.5, 2.0};
+        double s = w[0] + n;
+        float[] u = new float[] {0.5f, 1.0f};
+        float fa = u[0] * 2;
+        s = s + fa;
+        int c = 0;
+        for (int i = 0; i < v.length; i++) {
+            if (v[i] > 3L) {
+                c = c + 1;
+            }
+        }
+        return (int) s + c + (int) v[1];
+    }
 }
