@@ -1,11 +1,18 @@
 package p;
 
+import java.io.IOException;
+
+// Interface propia del párrafo 92: `Ver` la implementa y `usa` la llama por `invokeinterface`.
+interface Operable {
+    int doble(int x);
+}
+
 // Un static de clase, una cuenta entera, un `if` con la condición invertida y un `System.out.println`
 // con concatenación: lo que este fork emite y dexa hoy sin rechazar nada. Medido en el parrafo 61:
 // nuestro emisor escribe `if_icmple 24` (al retorno), igual que javac, y `d8` lo baja a `if-le v1, v2`
 // con el brazo `then` cayendo dentro del `if`. El `println` es el que hizo falta para que el banco
 // compare **texto** además del código de salida, y el que destapó la elección de sobrecarga del §62.
-public class Ver {
+public class Ver implements Operable {
     static int total = 5;
     int campoCtor = 5;
     int otroCtor;
@@ -22,6 +29,20 @@ public class Ver {
 
     public int sumaCtor() {
         return campoCtor + otroCtor;
+    }
+
+    // Interface y `throws` (párrafo 92): `usa` llama por la interface y `conThrows` lleva el atributo
+    // Exceptions. Devuelven 6 y 5.
+    public int doble(int x) {
+        return x * 2;
+    }
+
+    public static int usa(Operable o) {
+        return o.doble(3);
+    }
+
+    public static int conThrows() throws IOException {
+        return 5;
     }
 
     public static void cuenta() {

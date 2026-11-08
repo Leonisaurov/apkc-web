@@ -324,7 +324,12 @@ type jmetodo struct {
 	esPrivado   bool
 	esProtegido bool
 	esFinal     bool
-	linea       int
+	// abstracto: el metodo no tiene cuerpo; en una interface es implicito y en una clase viene del
+	// modificador `abstract` (parrafo 92).
+	abstracto bool
+	// lanza: las clases del atributo Exceptions de un `throws A, B` (parrafo 92).
+	lanza []string
+	linea int
 	// lineaFin es la llave que cierra el cuerpo: javac anota ahi el `return` implicito de un metodo void,
 	// medido en el parrafo 40 (line 16 en la plantilla, que es donde esta el `}` de onCreate).
 	lineaFin int
@@ -340,6 +345,7 @@ type jclas struct {
 	metodos       []jmetodo
 	interior      []*jclas
 	abstracta     bool
+	esInterface   bool
 	final         bool
 	esPublica     bool
 	esEstatica    bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
@@ -383,7 +389,7 @@ var palabrasJava = map[string]bool{
 	"boolean": true, "int": true, "long": true, "float": true, "double": true, "byte": true, "short": true,
 	"char": true, "switch": true, "case": true, "default": true, "break": true, "continue": true, "throw": true, "native": true,
 	"synchronized": true, "volatile": true, "transient": true, "instanceof": true, "do": true,
-	"finally": true,
+	"finally": true, "throws": true,
 }
 
 // simbolesJava, de mas largo a mas corto para que `>>` no se lea como dos `>`.
@@ -820,7 +826,11 @@ func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
 			a.avanzar()
 			goto nombre
 		case a.es('k', "interface"):
-			return nil, fmt.Errorf("linea %d: una `interface` escrita a mano no esta medida (la del source generado si: se implementa con una clase anonima, parrafo 41)", t.donde.linea)
+			// una interface propia (parrafo 92): flags ACC_INTERFACE|ACC_ABSTRACT y metodos sin cuerpo
+			c.esInterface = true
+			c.abstracta = true
+			a.avanzar()
+			goto nombre
 		case a.es('p', "@"):
 			if err := a.anotacion(); err != nil {
 				return nil, err
@@ -845,13 +855,33 @@ nombre:
 		}
 		a.avanzar()
 	}
+	if c.esInterface && exteriores != nil {
+		// una interface anidada cambia los flags del InnerClasses y el acceso; queda fuera del
+		// subconjunto hasta que una sonda los mida (parrafo 92)
+		return nil, fmt.Errorf("linea %d: una interface anidada no esta medida", c.linea)
+	}
 	if a.es('k', "extends") {
 		a.avanzar()
-		nombre, err := a.nombrePunto()
-		if err != nil {
-			return nil, err
+		if c.esInterface {
+			// una interface puede extender varias; van en el mismo `interfaces` del ClassFile
+			for {
+				nombre, err := a.nombrePunto()
+				if err != nil {
+					return nil, err
+				}
+				c.implementa = append(c.implementa, nombre)
+				if !a.es('p', ",") {
+					break
+				}
+				a.avanzar()
+			}
+		} else {
+			nombre, err := a.nombrePunto()
+			if err != nil {
+				return nil, err
+			}
+			c.super = nombre
 		}
-		c.super = nombre
 	}
 	if a.es('k', "implements") {
 		a.avanzar()
@@ -954,13 +984,26 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 		a.avanzar()
 	}
 cuerpo:
-	_ = esAbstracta
 	// `private` y `protected` en un metodo son los flags ACC_PRIVATE (0x0002) y ACC_PROTECTED (0x0004),
 	// medidos en el parrafo 72 con `javap -v`; en un campo ya venian del parrafo 49. Un miembro privado
 	// del exterior que usa una anonima pasa por los metodos sinteticos `access$NNN`, que mide ese mismo
 	// parrafo.
 	leerMetodo := func(retorno string) (interface{}, error) {
-		return a.metodo(c, retorno, esEstatico, esFinal, esPublico, esPrivado, esProtegido, linea)
+		m, err := a.metodo(c, retorno, esEstatico, esFinal, esPublico, esPrivado, esProtegido, linea)
+		if err != nil {
+			return m, err
+		}
+		if esAbstracta || c.esInterface {
+			m.abstracto = true
+		}
+		if c.esInterface {
+			// en una interface los metodos son public abstract aunque el fuente no lo diga
+			m.esPublico = true
+			if len(m.cuerpo) > 0 {
+				return m, fmt.Errorf("linea %d: un metodo de interface con cuerpo (default) no esta medido", linea)
+			}
+		}
+		return m, nil
 	}
 	if a.es('k', "void") {
 		a.avanzar()
@@ -1035,7 +1078,20 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 		return m, err
 	}
 	if a.es('k', "throws") {
-		return m, fmt.Errorf("linea %d: un `throws` no esta medido: cambia el atributo Exceptions del method_info", a.actual().donde.linea)
+		// `throws A, B`: cada nombre va al atributo Exceptions del method_info (parrafo 92). Se guarda
+		// el nombre tal como lo escribe el fuente; el emisor lo resuelve contra el fuente y el jar.
+		a.avanzar()
+		for {
+			nombre, err := a.nombrePunto()
+			if err != nil {
+				return m, err
+			}
+			m.lanza = append(m.lanza, nombre)
+			if !a.es('p', ",") {
+				break
+			}
+			a.avanzar()
+		}
 	}
 	if a.es('p', ";") { // un metodo abstracto o de interface: sin cuerpo
 		a.avanzar()

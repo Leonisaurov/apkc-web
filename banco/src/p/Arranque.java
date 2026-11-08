@@ -1,12 +1,14 @@
 package p;
 
+import java.io.IOException;
+
 // El banco se ejecuta con `app_process` en el aparato, que exige un `main(String[])`. Desde el §66
 // este fork **si** emite tipos de array, asi que el banco compila esta fuente de dos maneras: con
 // javac (para el camino de la JVM y el de `d8`) y con `apkc compile` (el camino "todo nuestro", que
 // corre el dex escrito por nosotros sin javac ni d8 de por medio). Aqui no hay `+` de cadenas: javac 21
 // lo baja con `invokedynamic` y el dexer lo rechaza por nombre (plan 5.22).
 public class Arranque {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws IOException {
         Ver.cuenta();
         Ver.cuenta();
         Ver.suma(3);
@@ -40,6 +42,8 @@ public class Arranque {
         System.out.println(new Ver().seisInstLlama());
         System.out.println(Ver.seisAnchoLlama());
         System.out.println(new Ver().sumaCtor());
+        System.out.println(Ver.usa(new Ver()));
+        System.out.println(Ver.conThrows());
         int t = Ver.total;
         System.exit(t);
     }

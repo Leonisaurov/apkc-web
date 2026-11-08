@@ -838,6 +838,11 @@ func (ctx *contextoJava) accesosDe(internal string) (int, error) {
 		if c.abstracta {
 			acc |= accAbstract
 		}
+		if c.esInterface {
+			// sin esto una llamada `I.doble()` se emitia como invokevirtual; medido en `Uso.usa`
+			// del parrafo 92: javac escribe `invokeinterface I.doble:(I)I`
+			acc |= accInterface
+		}
 		return acc, nil
 	}
 	c, err := ctx.busc.claseDelJar(internal)
@@ -4525,10 +4530,6 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		e.usar(s)
 		superIdx = e.pool.clase(s)
 	}
-	if len(c.implementa) > 0 && !c.anonima {
-		return nil, fmt.Errorf("linea %d: una clase escrita a mano que implementa interfaces no esta medida: faltan sus metodos abstractos y sus flags", c.linea)
-	}
-
 	iface := []int{}
 	for _, im := range c.implementa {
 		nombre, err := ctx.tipoAInterno(im)
@@ -4551,14 +4552,23 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	}
 
 	access := accSuper
-	if c.esPublica {
-		access |= accPublic
-	}
-	if c.final {
-		access |= accFinal
-	}
-	if c.abstracta {
-		access |= accAbstract
+	if c.esInterface {
+		// `javap -v` de la interface del parrafo 92: 0x0601 = public interface abstract; sin
+		// ACC_SUPER y sin ACC_FINAL. Una interface package-private es 0x0600.
+		access = accInterface | accAbstract
+		if c.esPublica {
+			access |= accPublic
+		}
+	} else {
+		if c.esPublica {
+			access |= accPublic
+		}
+		if c.final {
+			access |= accFinal
+		}
+		if c.abstracta {
+			access |= accAbstract
+		}
 	}
 
 	campos := []byte{}
@@ -4594,7 +4604,7 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		}
 		metodos = append(metodos, b...)
 		conte++
-	} else if !constructorEscrito {
+	} else if !constructorEscrito && !c.esInterface {
 		b, err := e.initSintetico()
 		if err != nil {
 			return nil, err
@@ -4792,8 +4802,14 @@ func (e *emisor) cuerpoEnclosingMethod() ([]byte, error) {
 }
 
 func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
+	esPublico, esEstatico, esFinal := f.esPublico, f.esEstatico, f.esFinal
+	if e.c.esInterface {
+		// en una interface los campos son implicitamente public static final (JVMS 4.5); medido en
+		// la sonda del parrafo 92: flags 0x0019 y ConstantValue
+		esPublico, esEstatico, esFinal = true, true, true
+	}
 	acc := 0
-	if f.esPublico {
+	if esPublico {
 		acc |= accPublic
 	}
 	if f.esPrivado {
@@ -4802,10 +4818,10 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 	if f.esProtegido {
 		acc |= accProtected
 	}
-	if f.esEstatico {
+	if esEstatico {
 		acc |= accStatic
 	}
-	if f.esFinal {
+	if esFinal {
 		acc |= accFinal
 	}
 	desc, err := e.ctx.descriptorDe(f.tipo)
@@ -4814,6 +4830,9 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 	}
 	attrs := []byte{}
 	conte := 0
+	if e.c.esInterface && f.valor == nil {
+		return nil, fmt.Errorf("un campo de interface sin inicializador no esta medido (Java lo exige final y con valor)")
+	}
 	if f.valor != nil {
 		// medido con `javap -v` (parrafo 49): `static final int x = 6` se dobla y lleva ConstantValue sin
 		// codigo; `final int fijo = 6` lleva ConstantValue *y* su `bipush 6; putfield` en el <init>; y uno
@@ -4824,10 +4843,10 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 		// `Integer` y sin `putstatic` en el `<clinit>` (medido en `Letras`, `ConstantValue: int 90`,
 		// parrafo 87)
 		constante := esLit && (lit.tipoJ == 'i' || lit.tipoJ == 'c')
-		if f.esFinal && !constante {
+		if esFinal && !constante {
 			return nil, fmt.Errorf("el ConstantValue de un campo `final` cuyo inicializador no es un entero literal no esta medido")
 		}
-		if f.esFinal {
+		if esFinal {
 			attrs = append(attrs, attrInfo(e.pool, "ConstantValue", u2be(uint16(e.pool.entero(lit.entero))))...)
 			conte = 1
 		}
@@ -4961,14 +4980,68 @@ func delegacionDeConstructor(cuerpo []jstmt) (jllamada, bool) {
 	return jllamada{}, false
 }
 
-func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
-	if len(m.cuerpo) == 0 {
-		return nil, fmt.Errorf("un metodo sin cuerpo (%s) pide ACC_ABSTRACT y ese camino no esta medido", m.nombre)
+// flagsDeMetodo: los modificadores del fuente a los access_flags del method_info. El abstracto y el
+// public de una interface se suman aparte, porque son implicitos (parrafo 92).
+func (e *emisor) flagsDeMetodo(m jmetodo) int {
+	acc := 0
+	if m.esPublico {
+		acc |= accPublic
 	}
+	if m.esPrivado {
+		acc |= accPrivate
+	}
+	if m.esProtegido {
+		acc |= accProtected
+	}
+	if m.esEstatico {
+		acc |= accStatic
+	}
+	if m.esFinal {
+		acc |= accFinal
+	}
+	return acc
+}
+
+// excepcionesAttr: el atributo Exceptions de un `throws A, B`: cuenta y un indice de Class por nombre.
+func (e *emisor) excepcionesAttr(lanza []string) ([]byte, error) {
+	body := u2be(uint16(len(lanza)))
+	for _, t := range lanza {
+		interno, err := e.ctx.tipoAInterno(t)
+		if err != nil {
+			return nil, err
+		}
+		e.usar(interno)
+		body = append(body, u2be(uint16(e.pool.clase(interno)))...)
+	}
+	return attrInfo(e.pool, "Exceptions", body), nil
+}
+
+func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	desc, err := e.ctx.descDeMetodo(m)
 	if err != nil {
 		return nil, err
 	}
+	if m.abstracto {
+		// un metodo sin Code: `public abstract` en una clase abstracta o en una interface. Medido
+		// en el parrafo 92: flags 0x0401 y solo el atributo Exceptions cuando hay `throws`.
+		acc := e.flagsDeMetodo(m)
+		acc |= accAbstract
+		if e.c.esInterface {
+			acc |= accPublic
+		}
+		attrs := []byte{}
+		conte := 0
+		if len(m.lanza) > 0 {
+			b, err := e.excepcionesAttr(m.lanza)
+			if err != nil {
+				return nil, err
+			}
+			attrs = b
+			conte = 1
+		}
+		return e.methodInfo(m.nombre, desc, acc, attrs, conte), nil
+	}
+	// Un cuerpo vacio `{ }` no es abstracto: emite el `return` implicito con la linea de la llave.
 	e.preparaMetodo(desc, m.esEstatico)
 	if !m.esEstatico {
 		e.reserva("", "L") // this en el hueco 0
@@ -5036,27 +5109,22 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	if e.truncado {
 		return nil, fmt.Errorf("linea %d: el pool de %s pasa de 255 entradas y `ldc_w` no esta medido en este emisor", m.linea, e.interno)
 	}
-	acc := 0
-	if m.esPublico {
-		acc |= accPublic
-	}
-	if m.esPrivado {
-		acc |= accPrivate
-	}
-	if m.esProtegido {
-		acc |= accProtected
-	}
-	if m.esEstatico {
-		acc |= accStatic
-	}
-	if m.esFinal {
-		acc |= accFinal
-	}
+	acc := e.flagsDeMetodo(m)
 	codigo, err := e.codeAttr()
 	if err != nil {
 		return nil, fmt.Errorf("linea %d: %w", m.linea, err)
 	}
-	return e.methodInfo(m.nombre, desc, acc, attrInfo(e.pool, "Code", codigo), 1), nil
+	attrs := attrInfo(e.pool, "Code", codigo)
+	conte := 1
+	if len(m.lanza) > 0 {
+		b, err := e.excepcionesAttr(m.lanza)
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, b...)
+		conte++
+	}
+	return e.methodInfo(m.nombre, desc, acc, attrs, conte), nil
 }
 
 // initSintetico: la clase no escribe constructor y javac lo pone: aload_0, invokespecial al <init> del padre

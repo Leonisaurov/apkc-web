@@ -5125,3 +5125,57 @@ javac; `metodo` deja el retorno vacío en un constructor y ya no consume dos vec
 añade a `Ver` los dos constructores y `sumaCtor()`: `new Ver().sumaCtor()` da **9** por los cinco
 caminos, porque `Ver()` delega en `Ver(3)` (`campoCtor = 5`, `otroCtor = 4`).
 
+## 92. `throws`, interfaces propias, métodos abstractos y `invokeinterface`
+
+Sonda `I`/`Impl`/`Uso`/`A`: una interface con una constante y dos métodos sin cuerpo, una clase que la
+implementa, una llamada por la interface y un método con uno y con dos `throws`; una clase abstracta
+con un método abstracto. Medida con `javac --release 8 -g:lines,source`, `d8 --debug`, `dexdump` y el
+banco:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/iface
+javac --release 8 -g:lines,source sonda/I.java sonda/Impl.java sonda/Uso.java sonda/A.java
+javap -c -p -v sonda/I.class sonda/Impl.class sonda/Uso.class sonda/A.class
+d8 --debug --min-api 28 --output d8 sonda/I.class sonda/Impl.class sonda/Uso.class sonda/A.class
+/data/data/com.termux/files/usr/tmp/apkc-gate compile \
+  --android-jar /data/data/com.termux/files/home/Android/platforms/android-34/android.jar \
+  -o nuestra sonda/I.java sonda/Impl.java sonda/Uso.java sonda/A.java
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o nuestro.dex nuestra
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o javac.dex sonda
+cmp nuestro.dex javac.dex
+/apex/com.android.art/bin/dexdump -d nuestro.dex
+cd /data/data/com.termux/files/home/Develop/Go/apkc-web && sh banco/banco.sh
+```
+
+En el `.class`:
+
+| pieza | forma | qué fija |
+| --- | --- | --- |
+| interface `I` | flags **0x0601** (`PUBLIC INTERFACE ABSTRACT`), `super java/lang/Object`, sin `<init>` | una interface no lleva constructor ni `ACC_SUPER` |
+| campo `I.N` | flags **0x0019** y `ConstantValue: int 3` | en una interface el campo es `public static final` aunque el fuente no lo diga |
+| `I.doble`, `I.nada` | flags **0x0401**, **sin** `Code` | los métodos de una interface son `public abstract` |
+| `Impl` | `interfaces: 1`, flags **0x0021** | la clase declara la interface y conserva `ACC_SUPER` |
+| `A` y `A.x` | clase **0x0421**, método **0x0401** sin `Code` | una clase abstracta conserva `ACC_SUPER` y añade `ACC_ABSTRACT` |
+| `Uso.falla` / `falla2` | `Code` y después `Exceptions` con 1 / 2 clases | el atributo cuenta y nombra `java/io/IOException` y `java/lang/IllegalStateException` |
+| `Uso.usa` | `invokeinterface #7, 2  // InterfaceMethod I.doble:(I)I` | la llamada se decide por el tipo de la interface, no por la clase del receptor |
+
+En el dex: `invoke-interface` **0x72** en 35c, medido como `7220 0200 0100` (`{v1, v0}`,
+`method@2`); los métodos abstractos y la interface no llevan `code_item`; el `Exceptions` no viaja al
+dex (es una comprobación de compilación). Nuestro dex sobre nuestras clases y sobre las de javac es
+**1172 bytes** y `cmp` mudo; `d8 --debug` da **1504 bytes** sobre cualquiera de las dos y los dos
+ficheros de `d8` son idénticos. `dexdump -d` verifica con `rc 0`.
+
+Tres defectos del camino, destapados por la sonda: (a) `throws` no estaba en `palabrasJava`, así que
+el tokenizador lo leía como identificador y el cuerpo del método fallaba con «se esperaba `{` y hay
+`throws`»; (b) un cuerpo vacío `{ }` se confundía con un método abstracto y se rechazaba; (c)
+`accesosDe` no devolvía `ACC_INTERFACE` para una interface del propio fuente, así que `Uso.usa` salía
+como `invokevirtual`. Corregidos los tres.
+
+Implementado: el parser lee `throws` (lista en `jmetodo.lanza`), `interface` y su `extends` múltiple,
+y marca `abstracto` en el `;` o en la interface (`apkc/javafuente.go`); el emisor escribe los flags, el
+`Exceptions`, los campos implícitos de la interface y el `invokeinterface`
+(`apkc/javaemisor.go`). Oráculos: `apkc/javaemisor_iface_test.go` (flags, `Code`, `Thrown`,
+`interfaces` y dex byte a byte) y el banco, donde `Ver implements Operable` y
+`Ver.usa(new Ver())` devuelve **6** y `Ver.conThrows()` **5** por los cinco caminos; `Arranque.main`
+declara `throws IOException` y también pasa por nuestro compilador.
+
