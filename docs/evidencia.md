@@ -5410,3 +5410,24 @@ en `platformBuildVersionName`). Las APIs 27 (`8.1`) y 32 (`12L`) no tienen un no
 siguen rechazando por nombre, igual que cualquier API fuera de la tabla; para ellas queda `--codename`.
 Prueba: `TestVersionesDeAndroidMedidas`.
 
+## 99. Una anónima dentro de un método `static` sin captura
+
+La mitad de 5.14 que no necesita capturar locales: una anónima creada en un método `static` no lleva
+`this$0`. Medido con `javac --release 8 -g:lines,source`, `javap -c -p -v` y el doble oráculo:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/cap/javac
+javac --release 8 -g:lines,source Captura.java
+javap -c -p -v Captura.class 'Captura$1.class'
+# y la sonda por el emisor/dexer del fork:
+cd /data/data/com.termux/files/home/Develop/Go/apkc-web
+tools/entorno.sh -- sh -c 'cd apkc && go test -count=1 -run "AnonimaEnStatic" .'
+```
+
+`Captura$1` de javac tiene constructor **`()V`** (`aload_0; invokespecial Object.<init>; return`), **sin**
+campo `this$0` y con `EnclosingMethod` apuntando a `Captura.uno`. Nuestra clase y su dex salen byte a
+byte los de javac; los tests comparan el `Code` de `<init>`/`run`, las filas de línea y el dex.
+
+La otra mitad de 5.14 —capturar un parámetro o una local effectively-final (`val$x`)— sigue
+rechazada por nombre: el cuerpo de la anónima no resuelve el nombre `x` todavía. No se da por cerrada.
+

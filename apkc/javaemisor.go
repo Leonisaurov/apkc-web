@@ -2873,9 +2873,6 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		// la anonima se nombra Exterior$N como la nombra javac y su constructor recibe primero la captura
 		// del exterior: medido en el parrafo 42 (`new #28; dup; aload_0; invokespecial <init>
 		// :(Lcom/hola/apkcstudio/MainActivity;)V`)
-		if e.estatico {
-			return "", fmt.Errorf("linea %d: una anonima creada en un metodo estatico no tiene capturado un this y ese caso no esta medido", n.donde.linea)
-		}
 		interno := internoDe(n.cuerpo.paquete, n.cuerpo.nombre)
 		e.usar(interno)
 		idx := e.pool.clase(interno)
@@ -2883,12 +2880,17 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		e.sube()
 		e.emite(opDup)
 		e.sube()
-		e.cargaDe(0, "L")
+		if !e.estatico {
+			e.cargaDe(0, "L")
+		}
 		if _, err := e.argumentos(n.args); err != nil {
 			return "", err
 		}
 		sb := strings.Builder{}
-		sb.WriteString("(L" + e.interno + ";")
+		sb.WriteString("(")
+		if !e.estatico {
+			sb.WriteString("L" + e.interno + ";")
+		}
 		for _, arg := range n.args {
 			d, err := e.tipoEstimado(arg)
 			if err != nil {
@@ -2900,7 +2902,11 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		// un descriptor de metodo lleva siempre la vuelta: sin la V del constructor el dexer internaria un
 		// tipo que no existe
 		sb.WriteString("V")
-		e.invoca(opInvokespec, interno, "<init>", sb.String(), len(n.args)+2)
+		enPila := len(n.args) + 1
+		if !e.estatico {
+			enPila++
+		}
+		e.invoca(opInvokespec, interno, "<init>", sb.String(), enPila)
 		return "L" + interno + ";", nil
 	}
 	interno, err := e.ctx.tipoAInterno(n.tipo)
@@ -4573,9 +4579,10 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 
 	campos := []byte{}
 	nCampos := 0
-	if c.anonima {
+	if c.anonima && !(c.metodoEncierre != nil && c.metodoEncierre.esEstatico) {
 		// javac abre la anonima con su campo de captura, antes de lo que el fuente escriba (parrafo 42:
-		// `final com.hola.apkcstudio.MainActivity this$0;` con flags 0x1010, ACC_FINAL y ACC_SYNTHETIC)
+		// `final com.hola.apkcstudio.MainActivity this$0;` con flags 0x1010, ACC_FINAL y ACC_SYNTHETIC).
+		// Una anonima creada en un metodo `static` no captura `this` y no lleva este campo (5.14).
 		campos = append(campos, e.campoCaptura()...)
 		nCampos++
 	}
@@ -4758,17 +4765,28 @@ func (e *emisor) encierreInterno() string {
 // de subir al padre y anade el atributo MethodParameters marcando el parametro como `final mandated`
 // (0x8010), todo medido en el parrafo 42 sobre MainActivity$1.
 func (e *emisor) initCaptura() ([]byte, error) {
-	externo := "L" + e.encierreInterno() + ";"
-	desc := "(" + externo + ")V"
+	// Una anonima en un metodo `static` no captura el exterior: el constructor es `()V`, sin
+	// `this$0` y sin MethodParameters (5.14). La captura de locales effectively-final sigue fuera.
+	estatica := e.c.metodoEncierre != nil && e.c.metodoEncierre.esEstatico
+	desc := "()V"
+	externo := ""
+	if !estatica {
+		externo = "L" + e.encierreInterno() + ";"
+		desc = "(" + externo + ")V"
+	}
 	e.preparaMetodo(desc, false)
 	e.reserva("", "L")
-	e.reserva("", externo)
+	if !estatica {
+		e.reserva("", externo)
+	}
 	e.marcaLinea(e.c.linea)
-	e.cargaDe(0, "L")
-	e.cargaDe(1, externo)
-	idx := e.pool.campo(e.interno, "this$0", externo)
-	e.emite(opPutfield, byte(idx>>8), byte(idx))
-	e.baja(2)
+	if !estatica {
+		e.cargaDe(0, "L")
+		e.cargaDe(1, externo)
+		idx := e.pool.campo(e.interno, "this$0", externo)
+		e.emite(opPutfield, byte(idx>>8), byte(idx))
+		e.baja(2)
+	}
 	e.cargaDe(0, "L")
 	e.invoca(opInvokespec, "java/lang/Object", "<init>", "()V", 1)
 	e.emite(retorno('V'))
@@ -4777,12 +4795,16 @@ func (e *emisor) initCaptura() ([]byte, error) {
 		return nil, err
 	}
 	attrs := attrInfo(e.pool, "Code", codigo)
-	// MethodParameters: conteo u1, y por cada uno nombre u2 y flags u2. El de la captura no tiene nombre.
-	mp := []byte{1}
-	mp = append(mp, u2be(0)...)
-	mp = append(mp, u2be(uint16(accFinal|accMandated))...)
-	attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
-	return e.methodInfo("<init>", desc, 0, attrs, 2), nil
+	conte := 1
+	if !estatica {
+		// MethodParameters: conteo u1, y por cada uno nombre u2 y flags u2. El de la captura no tiene nombre.
+		mp := []byte{1}
+		mp = append(mp, u2be(0)...)
+		mp = append(mp, u2be(uint16(accFinal|accMandated))...)
+		attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
+		conte = 2
+	}
+	return e.methodInfo("<init>", desc, 0, attrs, conte), nil
 }
 
 // enclosingMethod: el atributo que dice en que metodo de que clase se creo la anonima. javac lo escribe y
