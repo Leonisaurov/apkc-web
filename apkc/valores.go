@@ -16,6 +16,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -414,6 +415,11 @@ func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recu
 		if v.tipo != tipoEnteroDec {
 			return recursoEntabla{}, fmt.Errorf("%s/%s declara %s y el texto %q no es un numero", tipo, nombre, tipo, texto)
 		}
+	case "fraction":
+		v, err = fraccionDeTexto(texto)
+		if err != nil {
+			return recursoEntabla{}, fmt.Errorf("%s/%s: %w", tipo, nombre, err)
+		}
 	default:
 		return recursoEntabla{}, fmt.Errorf("el tipo %q de %s/%s no esta medido por este enlazador", tipo, tipo, nombre)
 	}
@@ -609,6 +615,42 @@ func enteroDeTexto(texto string) (valorEscribir, error) {
 		return valorEscribir{}, fmt.Errorf("no es entero")
 	}
 	return valorEscribir{tipo: tipoEnteroDec, datos: uint32(int32(n))}, nil
+}
+
+// fraccionDeTexto: `50%` y `50%p` salen tipo fracción 0x06. Medido en el parrafo 105: 0.25/0.5/0.75
+// usan radix 3 (`0x20000030`/`0x40000030`/`0x60000030`), 1.0 es `0x100`, 1.5 es `0xC00020` y el
+// bit bajo distingue `%p` (`0x31`). La cuenta se hace en float32, como aapt2: 10% da `0x0CCCCD30`.
+func fraccionDeTexto(texto string) (valorEscribir, error) {
+	s := strings.TrimSpace(texto)
+	porcentaje := false
+	if strings.HasSuffix(s, "%p") {
+		porcentaje, s = true, strings.TrimSuffix(s, "%p")
+	} else if strings.HasSuffix(s, "%") {
+		s = strings.TrimSuffix(s, "%")
+	} else {
+		return valorEscribir{}, fmt.Errorf("%q no es una fracción (falta %%)", texto)
+	}
+	f, err := strconv.ParseFloat(s, 32)
+	if err != nil || f < 0 {
+		return valorEscribir{}, fmt.Errorf("%q no es una fracción positiva", texto)
+	}
+	v := float32(f) / 100
+	var datos uint32
+	switch {
+	case v == 0:
+		datos = 0
+	case v == 1:
+		datos = 0x100
+	case v < 1:
+		// aapt2 redondea hacia arriba el valor de 24 bits: 10% da 0x0CCCCD30, no 0x0CCCCC30
+		datos = uint32(math.Ceil(float64(v*float32(8388608.0))))<<8 | 0x30
+	default:
+		datos = uint32(math.Ceil(float64(v*float32(8388608.0)))) | 0x20
+	}
+	if porcentaje {
+		datos |= 1
+	}
+	return valorEscribir{tipo: 0x06, datos: datos}, nil
 }
 
 // colorDeTexto: #RGB, #RRGGBB y #AARRGGBB salen como ARGB8 (0x1d), el tipo que llevo statusBarColor

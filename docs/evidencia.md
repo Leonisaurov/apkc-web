@@ -5583,6 +5583,38 @@ grep -n "invokedynamic" apkc/classreader.go
 # pool entry %d is an invokedynamic: lambdas and dynamic concatenation are not dexed here
 ```
 
-Por tanto la Fase 5 no se declara cerrada: quedan `fraction`/`attr`/`styleable` (5.18), las regiones
-de 5.17, la firma v3 escrita (5.21) y `invokedynamic` (5.22).
+Por tanto la Fase 5 no se declara cerrada: quedan `attr`/`styleable` (5.18), las regiones de 5.17,
+la firma v3 escrita (5.21) y `invokedynamic` (5.22).
+
+## 105. `fraction`: radix, 1.0 y el bit de `%p`
+
+El `<fraction>` de un `values` sale tipo **0x06** con un entero de 32 bits. Medido con nueve valores
+(0, 10, 25, 50, 75, 100, 150, 50p y 100p) y comparado byte a byte con aapt2:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/frac/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o aapt2.apk --manifest AndroidManifest.xml \
+  -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+unzip -p aapt2.apk resources.arsc > aapt2.arsc
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+unzip -p build/app.apk resources.arsc > nuestro.arsc
+cmp aapt2.arsc nuestro.arsc
+```
+
+El arsc sale **796 bytes idéntico**. La codificación medida:
+
+| valor | datos |
+| --- | --- |
+| `0%` | `0x00000000` |
+| `10%` | `0x0CCCCD30` (radix 3; el valor de 24 bits se redondea hacia arriba) |
+| `25%`, `50%`, `75%` | `0x20000030`, `0x40000030`, `0x60000030` |
+| `100%` | `0x00000100` (radix 0) |
+| `150%` | `0x00C00020` (radix 2) |
+| `50%p`, `100%p` | el mismo valor con el bit bajo a 1 (`0x…31` / `0x101`) |
+
+Implementado: `fraccionDeTexto` en `apkc/valores.go` calcula en `float32` (10% solo coincide así),
+redondea el valor de 24 bits con `math.Ceil` y conserva el bit de `%p`. Prueba:
+`apkc/valores_fraccion_test.go` (fixture de 796 bytes). `attr` y `styleable` siguen fuera.
 
