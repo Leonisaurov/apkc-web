@@ -5557,3 +5557,32 @@ entradas. Implementado en `apkc/linker.go` (acepta las carpetas y reescribe la r
 `apkc/arscwriter.go` (los bytes de configuración) y `apkc/valores.go` (`mascaraConfig`). Prueba:
 `apkc/valores_cal_test.go` (fixture de 1204 bytes).
 
+## 104. Estado de 5.21 (`v3`) y 5.22 (`invokedynamic`)
+
+**5.21 queda en parte.** `apkc verify` no verifica una firma v3, pero la tolera y lo dice: el cotejo
+de `studio/e2e.sh` firma el apk base con `--v3-signing-enabled true` y exige que las dos herramientas
+lo acepten y que `apkc verify` anote `no se verificó aquí`.
+
+```sh
+sh -c 'cd studio && APKC=... APKC_WASM=... sh e2e.sh' | grep con-v3
+# con-v3: apksigner si, apkc verify si
+grep -n "idParV3\|no se verificó aquí" apkc/verificar.go
+```
+
+Lo que falta es **escribir** v3 (y v4): el bloque `APK Signature Scheme v3` y su prueba de rotación
+no están implementados. La pestaña sigue firmando con el keystore de depuración; un keystore de
+release propio y `--min-sdk` del proyecto tampoco están en el camino de la página.
+
+**5.22 no se implementa aquí.** El lector de `.class` rechaza `invokedynamic` con nombre, y el
+compilador de fuente no tiene lambdas ni referencias de método; implementar la desugración de `d8`
+(externalizar `lambda$…`, `method_handle`/`method_type` y la tabla de bootstrap) es la pieza XL del
+plan y no se ha medido. El rechazo es deliberado:
+
+```sh
+grep -n "invokedynamic" apkc/classreader.go
+# pool entry %d is an invokedynamic: lambdas and dynamic concatenation are not dexed here
+```
+
+Por tanto la Fase 5 no se declara cerrada: quedan `fraction`/`attr`/`styleable` (5.18), las regiones
+de 5.17, la firma v3 escrita (5.21) y `invokedynamic` (5.22).
+
