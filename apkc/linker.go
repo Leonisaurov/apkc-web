@@ -117,6 +117,10 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			switch {
 			case strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+2:
 				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
+			case strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+6 &&
+				e.Name()[len("values-")+2:len("values-")+4] == "-r":
+				// values-es-rMX: idioma + región
+				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
 			case e.Name() == "layout-land":
 				tipo, config = "layout", "land"
 			case e.Name() == "drawable-hdpi":

@@ -87,6 +87,14 @@ type tablaEscribir struct {
 	claves        []string
 	clavesUTF8    bool
 	tipos         []tipoEscribir
+	// styleables son los <declare-styleable>; no llevan entrada en resources.arsc, solo la clase
+	// styleable de R.java (parrafo 106).
+	styleables []styleableEscribir
+}
+
+type styleableEscribir struct {
+	nombre string
+	attrs  []string
 }
 
 // escribeTablaRecursos arma el resources.arsc. Los unicos rechazos son los que se pueden comprobar
@@ -233,12 +241,16 @@ func escribeBloqueTipo(ti tipoEscribir, bloque bloqueEscribir) []byte {
 func configDe(lengua string) []byte {
 	b := make([]byte, 64)
 	binary.LittleEndian.PutUint32(b, 64)
-	switch lengua {
-	case "":
-	case "land":
+	switch {
+	case lengua == "":
+	case len(lengua) == 6 && lengua[2:4] == "-r":
+		// `es-rMX`: language en +8/+9 y country en +10/+11 (parrafo 107)
+		b[8], b[9] = lengua[0], lengua[1]
+		b[10], b[11] = lengua[4], lengua[5]
+	case lengua == "land":
 		// ResTable_config::orientation = ORIENTATION_LAND (2), en +12
 		b[12] = 2
-	case "hdpi":
+	case lengua == "hdpi":
 		// density = DENSITY_HDPI (240) en +14 y sdkVersion 4 en +24
 		b[14], b[15] = 0xf0, 0
 		b[24] = 4

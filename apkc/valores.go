@@ -48,7 +48,7 @@ type recursoEntabla struct {
 // uno, entradas de cada tipo por nombre, claves en el orden de emision y pool global ASCII con las
 // rutas de los layouts y los textos de las cadenas. Las banderas salen de la regla medida en el
 // parrafo 29: 0x0004 en el tipo id, 0x0001 en un valor complejo, 0 en el resto.
-func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, paquete string) (*tablaEscribir, error) {
+func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, styleables []styleableEscribir, paquete string) (*tablaEscribir, error) {
 	// aapt2 descarta una clave que solo existe en una configuracion secundaria: avisa
 	// «removing resource … without required default value» y no entra ni en la tabla ni en el pool
 	// (medido en el parrafo 94). La base define el conjunto de claves de cada tipo.
@@ -251,6 +251,7 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 		claves:        claves,
 		clavesUTF8:    true,
 		tipos:         escritos,
+		styleables:    styleables,
 	}, nil
 }
 
@@ -297,15 +298,21 @@ func claveDeLayout(ruta string) string {
 // resourcesDeValores traduce un res/values/*.xml en entradas listas para la tabla. `m` es la tabla del
 // framework, que hace falta para los nombres de atributo de los items de un estilo.
 func recursosDeValores(f fuenteXML, m *marcoRecursos) ([]recursoEntabla, error) {
+	out, _, err := recursosYStyleables(f, m)
+	return out, err
+}
+
+func recursosYStyleables(f fuenteXML, m *marcoRecursos) ([]recursoEntabla, []styleableEscribir, error) {
 	out := []recursoEntabla{}
+	estilos := []styleableEscribir{}
 	d := xml.NewDecoder(strings.NewReader(string(f.contenido)))
 	for {
 		tok, err := d.Token()
 		if err == io.EOF {
-			return out, nil
+			return out, estilos, nil
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		raiz, esInicio := tok.(xml.StartElement)
 		if !esInicio || raiz.Name.Local != "resources" {
@@ -314,7 +321,7 @@ func recursosDeValores(f fuenteXML, m *marcoRecursos) ([]recursoEntabla, error) 
 		for {
 			tok, err := d.Token()
 			if err != nil {
-				return nil, fmt.Errorf("el <resources> no se cierra: %w", err)
+				return nil, nil, fmt.Errorf("el <resources> no se cierra: %w", err)
 			}
 			if fin, esFin := tok.(xml.EndElement); esFin && fin.Name.Local == "resources" {
 				break
@@ -323,19 +330,108 @@ func recursosDeValores(f fuenteXML, m *marcoRecursos) ([]recursoEntabla, error) 
 			if !esInicio {
 				continue
 			}
+			if el.Name.Local == "declare-styleable" {
+				estilo, attrs, err := styleableDeElemento(d, el)
+				if err != nil {
+					return nil, nil, fmt.Errorf("%s: %w", el.Name.Local, err)
+				}
+				estilos = append(estilos, estilo)
+				out = append(out, attrs...)
+				continue
+			}
 			r, err := recursoDeValor(d, el, m)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", el.Name.Local, err)
+				return nil, nil, fmt.Errorf("%s: %w", el.Name.Local, err)
 			}
 			out = append(out, r)
 		}
 	}
 }
 
+// styleableDeElemento: un <declare-styleable name="Vista"> con sus <attr name="…"/>. El styleable no
+// lleva entrada en resources.arsc; sus atributos sí, y `aapt2` los declara si el hijo trae `format`
+// (parrafo 106).
+func styleableDeElemento(d *xml.Decoder, el xml.StartElement) (styleableEscribir, []recursoEntabla, error) {
+	estilo := styleableEscribir{}
+	for _, a := range el.Attr {
+		if a.Name.Local == "name" {
+			estilo.nombre = a.Value
+		}
+	}
+	if estilo.nombre == "" {
+		return estilo, nil, fmt.Errorf("un declare-styleable sin nombre")
+	}
+	attrs := []recursoEntabla{}
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return estilo, nil, fmt.Errorf("el declare-styleable no se cierra: %w", err)
+		}
+		if fin, esFin := tok.(xml.EndElement); esFin && fin.Name.Local == "declare-styleable" {
+			return estilo, attrs, nil
+		}
+		hijo, esInicio := tok.(xml.StartElement)
+		if !esInicio || hijo.Name.Local != "attr" {
+			continue
+		}
+		nombre, formato := "", ""
+		for _, a := range hijo.Attr {
+			switch a.Name.Local {
+			case "name":
+				nombre = a.Value
+			case "format":
+				formato = a.Value
+			}
+		}
+		if nombre == "" {
+			return estilo, nil, fmt.Errorf("un attr del styleable %s sin nombre", estilo.nombre)
+		}
+		estilo.attrs = append(estilo.attrs, nombre)
+		if formato != "" {
+			v, err := formatoDeAttr(formato)
+			if err != nil {
+				return estilo, nil, err
+			}
+			attrs = append(attrs, recursoEntabla{tipo: "attr", clave: nombre, compleja: true,
+				items: []registroEscribir{{nombre: 0x01000000, valor: valorEscribir{tipo: tipoEnteroDec, datos: v}}}})
+		}
+	}
+}
+
+// formatoDeAttr: los bits de `android:attr/format` medidos en el parrafo 106: string 0x01,
+// reference 0x02, integer 0x04, boolean 0x08, color 0x10, float 0x20, dimension 0x40 y fraction 0x80.
+func formatoDeAttr(formato string) (uint32, error) {
+	bits := uint32(0)
+	for _, parte := range strings.Split(formato, "|") {
+		switch strings.TrimSpace(parte) {
+		case "string":
+			bits |= 0x01
+		case "reference":
+			bits |= 0x02
+		case "integer":
+			bits |= 0x04
+		case "boolean":
+			bits |= 0x08
+		case "color":
+			bits |= 0x10
+		case "float":
+			bits |= 0x20
+		case "dimension":
+			bits |= 0x40
+		case "fraction":
+			bits |= 0x80
+		default:
+			return 0, fmt.Errorf("el format %q de un attr no esta medido", parte)
+		}
+	}
+	return bits, nil
+}
+
 // recursoDeValor lee un elemento hijo de <resources> y devuelve su entrada.
 func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recursoEntabla, error) {
 	nombre := ""
 	padre := ""
+	formato := ""
 	tipo := el.Name.Local
 	for _, a := range el.Attr {
 		if a.Name.Space == "xmlns" || a.Name.Local == "xmlns" {
@@ -350,10 +446,23 @@ func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recu
 			if tipo == "item" {
 				tipo = a.Value
 			}
+		case "format":
+			formato = a.Value
 		}
 	}
 	if nombre == "" {
 		return recursoEntabla{}, fmt.Errorf("un %s sin nombre", el.Name.Local)
+	}
+	if tipo == "attr" {
+		if formato == "" {
+			return recursoEntabla{}, fmt.Errorf("un attr sin format no esta medido")
+		}
+		bits, err := formatoDeAttr(formato)
+		if err != nil {
+			return recursoEntabla{}, err
+		}
+		return recursoEntabla{tipo: "attr", clave: nombre, compleja: true,
+			items: []registroEscribir{{nombre: 0x01000000, valor: valorEscribir{tipo: tipoEnteroDec, datos: bits}}}}, nil
 	}
 	if tipo == "style" {
 		items, err := itemsDeEstilo(d, "style", m)

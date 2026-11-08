@@ -1951,8 +1951,11 @@ func (p *traduce) entero(r int, v int, in jvmInstr) bool {
 		p.palabra(uint16(opConstAlto16) | uint16(r&0xff)<<8)
 		p.palabra(uint16(v >> 16))
 	default:
-		p.falla(in, "an int that fits neither const/4, const/16 nor const/high16: const (0x14) is not measured here")
-		return false
+		// `const` 0x14 (31i): opcode + registro, y las dos unidades del entero little-endian. Lo
+		// estrenan las ids de recurso de `R.styleable` (0x7f010000), que no caben en high16.
+		p.palabra(uint16(opConst) | uint16(r&0xff)<<8)
+		p.palabra(uint16(uint32(v)))
+		p.palabra(uint16(uint32(v) >> 16))
 	}
 	return true
 }

@@ -238,6 +238,7 @@ type proyectoEnlazado struct {
 // res/layout/*.xml y `manifiesto` el AndroidManifest.xml, todos en texto.
 func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML, m *marcoRecursos, opts opcionesDeEnlace) (*proyectoEnlazado, error) {
 	recursos := []recursoEntabla{}
+	styleables := []styleableEscribir{}
 	for _, f := range ficheros {
 		// el archivo no se parsea: su entrada es la ruta dentro del apk, tipo cadena, y el fichero
 		// viaja literal. Medido con `aapt2 dump resources` en el parrafo 93: `drawable/icono`
@@ -251,7 +252,7 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 		})
 	}
 	for _, f := range valores {
-		nuevos, err := recursosDeValores(f, m)
+		nuevos, estilos, err := recursosYStyleables(f, m)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.nombre, err)
 		}
@@ -259,6 +260,7 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 			nuevos[i].config = f.config
 		}
 		recursos = append(recursos, nuevos...)
+		styleables = append(styleables, estilos...)
 	}
 	// primera pasada por los arboles: descubrir los ids que declaran
 	arbolManifesto, err := leerArbolDe(manifiesto)
@@ -280,7 +282,7 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 	if err != nil {
 		return nil, err
 	}
-	tabla, err := tablaDeRecursos(recursos, layouts, ficheros, paquete)
+	tabla, err := tablaDeRecursos(recursos, layouts, ficheros, styleables, paquete)
 	if err != nil {
 		return nil, err
 	}

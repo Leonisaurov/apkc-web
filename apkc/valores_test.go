@@ -92,7 +92,7 @@ func TestValoresDelStudioDanLaMismaTabla(t *testing.T) {
 	recursos = append(recursos, recursoEntabla{tipo: "id", clave: "pulsar", valor: valorEscribir{tipo: tipoBooleano}})
 
 	layouts := []fuenteXML{{nombre: "res/layout/main.xml"}}
-	tabla, err := tablaDeRecursos(recursos, layouts, nil, "com.hola.apkcstudio")
+	tabla, err := tablaDeRecursos(recursos, layouts, nil, nil, "com.hola.apkcstudio")
 	if err != nil {
 		t.Fatal(err)
 	}

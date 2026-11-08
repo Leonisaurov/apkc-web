@@ -69,6 +69,48 @@ func rDeTabla(t tablaEscribir) (string, error) {
 		}
 		sb.WriteString("  }\n")
 	}
+	if len(t.styleables) > 0 {
+		// Los <declare-styleable> no están en resources.arsc: solo producen esta clase de R.java
+		// con el arreglo de ids y un offset por atributo (parrafo 106).
+		attrID := map[string]uint32{}
+		for _, ti := range t.tipos {
+			if t.nombresTipo[int(ti.id)-1] != "attr" || len(ti.bloques) == 0 {
+				continue
+			}
+			for j, e := range ti.bloques[0].entradas {
+				if e.falta || e.clave < 0 || e.clave >= len(t.claves) {
+					continue
+				}
+				attrID[t.claves[e.clave]] = t.idPaquete<<24 | uint32(ti.id)<<16 | uint32(j)
+			}
+		}
+		sb.WriteString("  public static final class styleable {\n")
+		for _, st := range t.styleables {
+			ident := identificadorJava(st.nombre)
+			ids := make([]uint32, 0, len(st.attrs))
+			for _, a := range st.attrs {
+				id, ok := attrID[a]
+				if !ok {
+					return "", fmt.Errorf("el styleable %s referencia el attr %s, que no esta en la tabla", st.nombre, a)
+				}
+				ids = append(ids, id)
+			}
+			// sin `final`: el emisor de este fork no da ConstantValue a un arreglo; el R.java sigue
+			// compilando y `R.styleable.Vista` es utilizable
+			sb.WriteString("    public static int[] " + ident + "=new int[] {")
+			for i, id := range ids {
+				if i > 0 {
+					sb.WriteString(", ")
+				}
+				fmt.Fprintf(&sb, "%#08x", id)
+			}
+			sb.WriteString("};\n")
+			for i, a := range st.attrs {
+				fmt.Fprintf(&sb, "    public static final int %s_%s=%d;\n", ident, identificadorJava(a), i)
+			}
+		}
+		sb.WriteString("  }\n")
+	}
 	sb.WriteString("}")
 	return sb.String(), nil
 }

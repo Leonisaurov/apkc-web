@@ -5616,5 +5616,64 @@ El arsc sale **796 bytes idéntico**. La codificación medida:
 
 Implementado: `fraccionDeTexto` en `apkc/valores.go` calcula en `float32` (10% solo coincide así),
 redondea el valor de 24 bits con `math.Ceil` y conserva el bit de `%p`. Prueba:
-`apkc/valores_fraccion_test.go` (fixture de 796 bytes). `attr` y `styleable` siguen fuera.
+`apkc/valores_fraccion_test.go` (fixture de 796 bytes).
+
+## 106. `attr` y `declare-styleable`
+
+`<attr format="…">` produce una entrada compleja del tipo `attr`; `<declare-styleable>` no produce
+entrada en `resources.arsc`, solo la clase `styleable` de `R.java`. Medido con
+`aapt2 dump resources` y comparado byte a byte:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/attrs/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o aapt2.apk --manifest AndroidManifest.xml --java ../java \
+  -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+aapt2 dump resources aapt2.apk
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+unzip -p build/app.apk resources.arsc > nuestro.arsc
+cmp aapt2.arsc nuestro.arsc
+```
+
+El arsc sale **596 bytes idéntico**. La entrada de un attr es compleja (`padre=0`, flags `0x0001`,
+un registro) con nombre `0x01000000` (`attr/format`) y tipo entero 0x10; los bits del formato medidos
+son:
+
+| format | bits |
+| --- | --- |
+| `string`, `reference`, `integer`, `boolean` | `0x01`, `0x02`, `0x04`, `0x08` |
+| `color`, `float`, `dimension`, `fraction` | `0x10`, `0x20`, `0x40`, `0x80` |
+
+El `R.java` de este fork lleva la clase `styleable` con el arreglo de ids y los offsets; el arreglo se
+escribe `new int[] {…}` (y sin `final`) porque el emisor de este fork todavía no da `ConstantValue` a
+un arreglo, pero Java lo acepta y `R.styleable.Vista`/`Vista_modo` quedan utilizables. Para el arreglo
+de ids hizo falta el `const` 0x14 de 31 bits en el dexer (las ids `0x7f010000` no caben en
+`const/high16`).
+
+Implementado: `attrDeElemento`/`styleableDeElemento`/`formatoDeAttr` en `apkc/valores.go`, la clase
+`styleable` en `apkc/r.go` y `const` 0x14 en `apkc/dexinstr.go`. Prueba:
+`apkc/valores_attrs_test.go` (arsc de 596 bytes y el texto de `R.java`). Frontera: `format="enum"` y
+`format="flags"` con sus hijos no están medidos.
+
+## 107. `values-es-rMX`: país dentro de la configuración
+
+Una región añade `country` a la configuración del idioma. Medido con `aapt2` y comparado byte a byte:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/region/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o aapt2.apk --manifest AndroidManifest.xml \
+  -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+unzip -p aapt2.apk resources.arsc > aapt2.arsc
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+unzip -p build/app.apk resources.arsc > nuestro.arsc
+cmp aapt2.arsc nuestro.arsc
+```
+
+El arsc de **680 bytes** es idéntico: `language[0]='e'` y `language[1]='s'` en +8/+9, `country[0]='M'` y
+`country[1]='X'` en +10/+11; la máscara del spec sigue siendo `0x0004` (locale). Implementado en
+`fuentesDelProyecto` (reconoce `values-xx-rYY`) y `configDe` (`apkc/arscwriter.go`). Prueba:
+`apkc/valores_region_test.go`.
 
