@@ -102,7 +102,8 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 // bootstrap; sus parámetros son los valores capturados.
 type lambdaSitio struct {
 	samNombre string
-	samDesc   string
+	samDesc   string // el descriptor ERASED que implementa la interfaz
+	samInst   string // el tipo instanciado; sus parámetros son los del implementador
 	interfaz  string
 	capturas  []string
 }
@@ -145,8 +146,21 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 	if sam == "" || inst == "" {
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("los argumentos 0 y 2 del bootstrap del sitio %q no son MethodType", nombre)
 	}
-	if sam != inst {
-		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el sitio %q tiene tipo SAM %q y tipo instanciado %q: el SAM generico (con casting) no se mide", nombre, sam, inst)
+	_, retSam, paramsSam := splitDescriptor(sam)
+	_, retInst, paramsInst := splitDescriptor(inst)
+	if len(paramsSam) != len(paramsInst) {
+		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el sitio %q tiene %d parametros SAM y %d instanciados", nombre, len(paramsSam), len(paramsInst))
+	}
+	for i := range paramsSam {
+		if paramsSam[i] == paramsInst[i] {
+			continue
+		}
+		if paramsSam[i] != "Ljava/lang/Object;" || !esObjeto(paramsInst[i]) {
+			return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el SAM generico del sitio %q pasa de %s a %s: solo se mide el borrado a Object con un tipo instanciado de referencia", nombre, paramsSam[i], paramsInst[i])
+		}
+	}
+	if retSam != retInst && !(retSam == "Ljava/lang/Object;" && esObjeto(retInst)) {
+		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el SAM generico del sitio %q devuelve %s y el tipo instanciado %s", nombre, retSam, retInst)
 	}
 	implKind, implOwner, implNombre, implDesc, _ := x.methodHandleDe(bm.args[1])
 	if implKind != 6 && implKind != 5 && implKind != 7 {
@@ -156,7 +170,6 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador del sitio %q vive en %s; solo se mide el de la propia clase", nombre, implOwner)
 	}
 	_, retImpl, paramsImpl := splitDescriptor(implDesc)
-	_, retSam, paramsSam := splitDescriptor(sam)
 	receptor := implKind == 5 || implKind == 7
 	// `this::m` captura el receptor; `Tipo::m` lo deja como primer parámetro del SAM.
 	receptorEnSam := false
@@ -172,17 +185,17 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 			return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador de instancia del sitio %q no tiene receptor: ni en las capturas %v ni en el primer parametro del SAM %s", nombre, capturas, sam)
 		}
 	}
-	if retSam != retImpl {
-		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el sitio %q devuelve %s en el SAM y %s en el implementador", nombre, retSam, retImpl)
+	if retImpl != retInst {
+		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el sitio %q devuelve %s en el tipo instanciado y %s en el implementador", nombre, retInst, retImpl)
 	}
 	esperado := append([]string{}, resto...)
 	if receptorEnSam {
-		esperado = append(esperado, paramsSam[1:]...)
+		esperado = append(esperado, paramsInst[1:]...)
 	} else {
-		esperado = append(esperado, paramsSam...)
+		esperado = append(esperado, paramsInst...)
 	}
 	if strings.Join(esperado, "") != strings.Join(paramsImpl, "") {
-		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("los valores capturados %v del sitio %q y el SAM %s no son los parametros del implementador %s", capturas, nombre, sam, implDesc)
+		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("los valores capturados %v del sitio %q y el SAM instanciado %s no son los parametros del implementador %s", capturas, nombre, inst, implDesc)
 	}
 	acceso := -1
 	for _, m := range cf.Methods {
@@ -200,7 +213,7 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 	if !receptor && acceso&accStatic == 0 {
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador %s del sitio %q no es estatico", implNombre, nombre)
 	}
-	return lambdaSitio{samNombre: nombre, samDesc: sam, interfaz: ret, capturas: capturas}, implDeLambda{
+	return lambdaSitio{samNombre: nombre, samDesc: sam, samInst: inst, interfaz: ret, capturas: capturas}, implDeLambda{
 		owner: implOwner, nombre: implNombre, desc: implDesc, acceso: acceso, kind: implKind,
 	}, nil
 }
@@ -244,6 +257,15 @@ func (b *poolDeLambda) ref(owner, nombre, desc string) int {
 
 func (b *poolDeLambda) campo(owner, nombre, desc string) int {
 	return b.add(cpFieldref, append(u2be(uint16(b.clase(owner))), u2be(uint16(b.nat(nombre, desc)))...))
+}
+
+// claseDeDescriptor: la entrada CONSTANT_Class de un descriptor. Un arreglo se nombra con su propio
+// descriptor (`[Ljava/lang/String;`); una clase, con el nombre interno.
+func (b *poolDeLambda) claseDeDescriptor(desc string) int {
+	if strings.HasPrefix(desc, "[") {
+		return b.clase(desc)
+	}
+	return b.clase(desc[1 : len(desc)-1])
 }
 
 // cargaDeSlot: el `iload`/`lload`/… de un parámetro. El hueco lo cuenta el llamador, que es quien
@@ -333,6 +355,7 @@ func claseDeLambda(descriptor string, sitio lambdaSitio, impl implDeLambda) clas
 	}
 
 	_, ret, params := splitDescriptor(samDesc)
+	_, _, paramsInst := splitDescriptor(sitio.samInst)
 	codigo := []byte{}
 	// el receptor de `this::m` es la primera captura; el de `Tipo::m` es el primer argumento del SAM
 	receptor := impl.kind == 5 || impl.kind == 7
@@ -347,8 +370,13 @@ func claseDeLambda(descriptor string, sitio lambdaSitio, impl implDeLambda) clas
 		codigo = append(codigo, 0x2a, 0xb4, byte(fieldRefs[i]>>8), byte(fieldRefs[i]))
 	}
 	hueco = 1
-	for _, p := range params {
+	for i, p := range params {
 		codigo = append(codigo, cargaDeSlot(p, hueco)...)
+		// el SAM borrado recibe Object: antes de llamar al implementador se moldea al tipo instanciado
+		if i < len(paramsInst) && p != paramsInst[i] {
+			idx := b.claseDeDescriptor(paramsInst[i])
+			codigo = append(codigo, 0xc0, byte(idx>>8), byte(idx))
+		}
 		if esAncho(p) {
 			hueco += 2
 		} else {

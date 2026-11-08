@@ -1,8 +1,9 @@
 #!/data/data/com.termux/files/usr/bin/sh
-# Banco de las lambdas desugradas (5.22, §110 y §111). `javac --release 8` deja el `invokedynamic`
+# Banco de las lambdas desugradas (5.22, §110-§113). `javac --release 8` deja el `invokedynamic`
 # y el `lambda$…`; este fork lo convierte en una clase sintética con sus campos de captura. Se
 # ejecuta el dex en el aparato con `app_process64` y se exige la misma salida que la JVM para los
-# cinco casos: estática sin capturas, captura de un local, captura de `this`, `this::m` y `Tipo::m`.
+# seis casos: estática sin capturas, captura de un local, captura de `this`, `this::m`, `Tipo::m` y
+# el SAM genérico (`Function<String,Integer>`), que necesita el descriptor borrado y un `checkcast`.
 #
 #   uso: sh banco/lambda.sh
 #        APKC=$PREFIX/tmp/apkc-gate sh banco/lambda.sh
@@ -82,12 +83,21 @@ public class LamUnb {
     public static void main(String[] a) { LamUnb o = new LamUnb(); o.y = 5; System.out.println(o.ref().f(o, 37)); }
 }
 EOF
+cat >"$TRABAJO/src/LamGen.java" <<'EOF'
+import java.util.function.Function;
+public class LamGen {
+    public static void main(String[] a) {
+        Function<String, Integer> f = s -> s.length();
+        System.out.println(f.apply("hola"));
+    }
+}
+EOF
 "$JDK/bin/javac" --release 8 -g:lines,source -d "$TRABAJO/clases" "$TRABAJO/src"/*.java 2>/dev/null
 "$APKC" dex -o "$TRABAJO/lam.dex" "$TRABAJO/clases" >"$TRABAJO/dex.log" 2>&1 || {
 	echo "lambda: apkc dex fallo"; tail -3 "$TRABAJO/dex.log"; exit 1; }
 
 base64 -w0 "$TRABAJO/lam.dex" | enAparato "toybox base64 -d > /data/local/tmp/lam.dex"
-for c in Lam LamLoc LamThis LamRef LamUnb; do
+for c in Lam LamLoc LamThis LamRef LamUnb LamGen; do
 	set +e
 	jvm_out=$("$JDK/bin/java" -cp "$TRABAJO/clases" "$c" 2>&1); jvm=$?
 	set -e
@@ -103,4 +113,4 @@ enAparato "$DEXDUMP /data/local/tmp/lam.dex >/dev/null 2>&1; echo \$?" > "$TRABA
 dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
 [ "$dv" = "0" ] || { echo "lambda: dexdump rc=$dv"; exit 1; }
 echo "  dexdump verificando: rc 0"
-echo "lambda: las cinco lambdas se desugraron y corren igual que la JVM"
+echo "lambda: las seis lambdas se desugraron y corren igual que la JVM"

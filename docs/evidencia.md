@@ -5869,5 +5869,40 @@ dueño (`this::m`); si no hay capturas, el primer parámetro del SAM tiene que s
 (`Tipo::m`), y los parámetros del implementador son los del SAM menos ese receptor. Prueba:
 `TestLaReferenciaSinReceptor` en `apkc/lambda_test.go` y el caso `LamUnb` de `banco/lambda.sh`.
 
-Sigue fuera: `altMetafactory`, el SAM genérico con casting y la concatenación dinámica de JDK 9
-(`makeConcatWithConstants`), que se rechazan por nombre.
+Sigue fuera: `altMetafactory` y la concatenación dinámica de JDK 9 (`makeConcatWithConstants`), que
+se rechazan por nombre. El SAM genérico se mide en el §113.
+
+## 113. SAM genérico: descriptor borrado y `checkcast` al tipo instanciado
+
+`Function<String,Integer> f = s -> s.length()` tiene dos tipos en el bootstrap: el **borrado**
+`(Ljava/lang/Object;)Ljava/lang/Object;`, que es el que implementa la interfaz, y el **instanciado**
+`(Ljava/lang/String;)Ljava/lang/Integer;`, que es el del implementador. La clase sintética declara
+el SAM borrado y, antes de llamar, moldea el argumento:
+
+```sh
+sh banco/lambda.sh
+```
+
+```text
+  LamGen: jvm rc=0 «4» · aparato rc=0 «4»
+  dexdump verificando: rc 0
+lambda: las seis lambdas se desugraron y corren igual que la JVM
+```
+
+`dexdump -d` del SAM de la sintética:
+
+```text
+  name          : 'apply'
+000230: 1f02 0600    check-cast v2, Ljava/lang/String;
+000234: 7110 0300 0200 invoke-static {v2}, LLamGen;.lambda$main$0:(Ljava/lang/String;)Ljava/lang/Integer;
+```
+
+La validación admite que el parámetro borrado sea `Object` y el instanciado una referencia; el
+implementador se comprueba contra el tipo instanciado. En el cuerpo, cada parámetro que difiere se
+carga con su tipo del SAM y se moldea con `checkcast` (0xc0) antes de la llamada; la vuelta usa el
+tipo del SAM (`Object` acepta el `Integer` del implementador, que ya viene encajado por `javac`).
+Prueba: `TestElSamGenericoUsaElDescriptorBorrado` y el caso `LamGen` de `banco/lambda.sh`.
+
+Frontera: el borrado a un tipo que no sea `Object` (una variable acotada, `T extends Number`) y el
+`altMetafactory` (serializables, marcadores) siguen fuera; la concatenación dinámica de JDK 9
+también.
