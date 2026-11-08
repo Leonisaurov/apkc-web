@@ -5340,3 +5340,50 @@ Prueba: `apkc/valores_tipos_test.go` (fixture de 1152 bytes de `aapt2`).
 **Frontera**: `fraction`, `attr` y `styleable` siguen fuera; se rechazan por nombre. `bool`, `color` e
 `integer` ya estaban desde el §29.
 
+## 97. `menu`, `xml` y `raw`: AXML de raíz libre y fichero literal
+
+`res/menu` y `res/xml` se enlazan como los layouts (son AXML), y `res/raw` como un fichero binario.
+Medido con `aapt2 dump resources` y el empaquetado de la página:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/otros/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o aapt2.apk --manifest AndroidManifest.xml -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+aapt2 dump resources aapt2.apk
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+aapt2 dump resources build/app.apk
+unzip -l build/app.apk
+```
+
+`aapt2 dump resources` del apk de este fork:
+
+```text
+type id id=01 entryCount=1
+  resource 0x7f010000 id/accion
+type menu id=02 entryCount=1
+  resource 0x7f020000 menu/principal
+    () (file) res/menu/principal.xml type=XML
+type raw id=03 entryCount=1
+  resource 0x7f030000 raw/dato
+    () (file) res/raw/dato.txt
+type string id=04 entryCount=1
+  resource 0x7f040000 string/app_name
+    () "Otros"
+type xml id=05 entryCount=1
+  resource 0x7f050000 xml/prefs
+    () (file) res/xml/prefs.xml type=XML
+```
+
+El `menu` y el `xml` viajan como AXML (`res/menu/principal.xml`, `res/xml/prefs.xml`) y el `raw` viaja
+con sus bytes (`res/raw/dato.txt`). `aapt2` añade además `res/menu-v1/principal.xml` por la misma
+configuración por API que ya se acepta en el §28; este enlace emite una sola. La tabla y el `R.java`
+llevan los tipos `menu`, `raw` y `xml` como cualquier otro recurso.
+
+Implementado en `apkc/linker.go` (se aceptan las carpetas, `menu`/`xml` van a la lista de AXML y
+`raw` a los ficheros) y `apkc/valores.go`/`apkc/enlazar.go` (el tipo sale de la ruta). Prueba:
+`apkc/linker_otros_test.go` exige los tres tipos, el AXML de los dos XML y los bytes del `raw`.
+
+**Frontera**: el `<permission>` del manifiesto sigue rechazado, porque `aapt2` escribe además un
+`Manifest.java` que este enlace no genera.
+

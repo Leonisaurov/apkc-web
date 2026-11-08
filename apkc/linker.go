@@ -69,7 +69,10 @@ name, because those need a second configuration or a file copy, and neither is m
 
 // tiposDeResQueSeEnlazan: las dos carpetas cuyos ficheros se tradacen a modelos. Los demas nombres de
 // carpeta son recursos que este enlazador no sabe escribir.
-var tiposDeResQueSeEnlazan = map[string]bool{"values": true, "layout": true, "drawable": true, "mipmap": true}
+var tiposDeResQueSeEnlazan = map[string]bool{
+	"values": true, "layout": true, "drawable": true, "mipmap": true,
+	"menu": true, "xml": true, "raw": true,
+}
 
 // tipoDeRecurso: la carpeta de res/ que da el tipo, sin calificador. Un nombre con guion todavía no
 // se acepta (5.17), así que basta el primer segmento.
@@ -112,7 +115,7 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			if strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+2 {
 				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
 			} else {
-				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, drawable y mipmap. Un calificador de layout, densidad o version de API es otra configuracion que no esta medida (parrafo 28); otro tipo de recurso (raw, anim, font) tampoco", e.Name())
+				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, menu, xml, drawable, mipmap y raw. Un calificador de layout, densidad o version de API es otra configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
 			}
 		}
 		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
@@ -135,11 +138,16 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: values solo admite .xml", e.Name(), f.Name())
 				}
 				valores = append(valores, fuente)
-			case "layout":
+			case "layout", "menu", "xml":
+				// los tres son AXML; la raiz de menu/xml no tiene que ser un layout. Se guardan en la
+				// misma lista y el tipo sale de la ruta (parrafo 97).
 				if !strings.HasSuffix(f.Name(), ".xml") {
-					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: layout solo admite .xml", e.Name(), f.Name())
+					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: %s solo admite .xml", e.Name(), f.Name(), tipo)
 				}
 				layouts = append(layouts, fuente)
+			case "raw":
+				// un raw viaja literal, como un PNG; no se parsea
+				ficheros = append(ficheros, fuente)
 			default:
 				// drawable/mipmap: un PNG (o cualquier binario) viaja tal cual y su entrada es un
 				// Res_value de tipo cadena con la ruta (parrafo 93). Un XML dibujable (vector,

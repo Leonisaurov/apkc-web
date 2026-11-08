@@ -70,8 +70,8 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 	for _, r := range recursos {
 		nombresTipos[r.tipo] = true
 	}
-	if len(layouts) > 0 {
-		nombresTipos["layout"] = true
+	for _, f := range layouts {
+		nombresTipos[tipoDeRecurso(f.nombre)] = true
 	}
 	for _, f := range ficheros {
 		nombresTipos[tipoDeRecurso(f.nombre)] = true
@@ -138,15 +138,16 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 				entradas = append(entradas, r)
 			}
 		}
-		if nombreTipo == "layout" {
-			for _, f := range layouts {
-				entradas = append(entradas, recursoEntabla{
-					tipo:  "layout",
-					clave: claveDeLayout(f.nombre),
-					valor: valorEscribir{tipo: tipoCadena},
-					texto: f.nombre,
-				})
+		for _, f := range layouts {
+			if tipoDeRecurso(f.nombre) != nombreTipo {
+				continue
 			}
+			entradas = append(entradas, recursoEntabla{
+				tipo:  nombreTipo,
+				clave: claveDeLayout(f.nombre),
+				valor: valorEscribir{tipo: tipoCadena},
+				texto: f.nombre,
+			})
 		}
 		sort.SliceStable(entradas, func(a, b int) bool { return entradas[a].clave < entradas[b].clave })
 		// las claves del tipo son la union de las configuraciones; cada bloque lleva una entrada por
