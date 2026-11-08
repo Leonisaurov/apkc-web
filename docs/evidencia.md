@@ -5019,3 +5019,55 @@ y este emisor al escribir el `<clinit>`, y el oráculo de bytes es el dex), `Tes
 la ejecución: `Ver.clases()` en el banco (el `ldc`, el `getstatic` del primitivo, el arreglo y las dos
 comparaciones) devuelve **2** por los cinco caminos, con `dexdump` verificando `rc 0` en los cuatro dex.
 
+## 90. Las llamadas de más de cinco palabras: `invoke-*/range` (3rc)
+
+Sonda `Seis`: un estático con seis enteros, otro con dos `long` (ocho palabras) y un virtual con
+receptor y seis enteros (siete palabras). Medida con `javac --release 8 -g:lines,source`, `d8 --debug`,
+`dexdump -d` y la ejecución por el banco:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/seis
+javac --release 8 -g:lines,source sonda/Seis.java
+d8 --debug --min-api 28 --output d8 sonda/Seis.class
+/data/data/com.termux/files/usr/tmp/apkc-gate compile \
+  --android-jar /data/data/com.termux/files/home/Android/platforms/android-34/android.jar \
+  -o nuestra sonda/Seis.java
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o nuestro.dex nuestra
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o javac.dex sonda
+cmp nuestro.dex javac.dex
+d8 --debug --min-api 28 --output d8desde nuestra/Seis.class
+cmp d8/classes.dex d8desde/classes.dex
+/apex/com.android.art/bin/dexdump -d nuestro.dex
+cd /data/data/com.termux/files/home/Develop/Go/apkc-web && sh banco/banco.sh
+```
+
+Las palabras de `d8`, leídas con `dexdump -d`:
+
+| llamada | palabras | decodificada |
+| --- | --- | --- |
+| estática de seis enteros | `7706 0600 0000` | `invoke-static/range {v0…v5}`: opcode **0x77**, `AA=6` palabras, método `@6`, primer registro `0` |
+| estática con dos `long` | `7708 0100 0000` | `AA=8`: los dos pares cuentan dos palabras cada uno |
+| virtual de receptor + seis | `7407 0200 0000` | `invoke-virtual/range` **0x74**, `AA=7`; el receptor es el **primer** registro del bloque |
+
+El formato 3rc es: primera unidad `op | AA<<8` (AA = palabras), segunda el índice del método, tercera
+el primer registro del bloque contiguo. `d8` usa el bloque que ya tiene; este fork, cuando los
+argumentos no son contiguos, pide un bloque nuevo por encima de todo lo vivo (`tomaBloque`), copia
+cada valor en orden con `move`/`move-object`/`move-wide` (12x, o 22v `/from16` si el destino pasa de
+v15) y emite el 3rc con el receptor el primero. En `llamaInst` eso da `{v6…v12}` en vez del
+`{v0…v6}` de `d8`; las dos formas son legales y ART ejecuta la nuestra.
+
+La primera versión puso el receptor al final del bloque y ART la rechazó:
+`int p.Ver.seisInstLlama() failed to verify: [0x6] tried to get class from non-reference register v0
+(type=BooleanConstant)`. El verificador lee el primer registro como receptor; el orden del bloque es
+parte de la instrucción, no un detalle del asignador.
+
+Los dos dex de este fork —sobre nuestras clases y sobre las de javac— son **1032 bytes** y `cmp` mudo;
+`d8 --debug` da **1132 bytes** sobre cualquiera de las dos y los dos ficheros de `d8` son idénticos,
+con `rc 0`. La diferencia de tamaño es de nuevo el bloque de anotaciones/debug ya aceptado.
+
+Implementado: `invoca` elige 35c o 3rc según las palabras o si un registro no cabe en un nibble;
+`invocaRango` escribe el 3rc; `tomaBloque` reserva el bloque y `mueveRegistro` copia con 12x o 22v
+(`apkc/dexinstr.go`). El banco añade `seis`, `seisLlama`, `seisInst`, `seisInstLlama`, `seisAncho` y
+`seisAnchoLlama`; `java p.Arranque` y los cinco caminos dan `21|21|21`, con `dexdump` verificando
+`rc 0` en los cuatro dex.
+

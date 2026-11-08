@@ -286,4 +286,31 @@ public class Ver {
         }
         return 3;
     }
+
+    // Las llamadas de más de cinco palabras (párrafo 90): un estático con seis enteros, un virtual
+    // con receptor y seis, y un estático con dos `long` (ocho palabras). Los tres usan
+    // `invoke-*/range`; con los argumentos 1..6 el resultado es 21 en los tres casos.
+    public static int seis(int a, int b, int c, int d, int e, int f) {
+        return a + b + c + d + e + f;
+    }
+
+    public static int seisLlama() {
+        return seis(1, 2, 3, 4, 5, 6);
+    }
+
+    public int seisInst(int a, int b, int c, int d, int e, int f) {
+        return a + b + c + d + e + f;
+    }
+
+    public int seisInstLlama() {
+        return seisInst(1, 2, 3, 4, 5, 6);
+    }
+
+    public static long seisAncho(int a, int b, int c, int d, long e, long f) {
+        return a + b + c + d + e + f;
+    }
+
+    public static long seisAnchoLlama() {
+        return seisAncho(1, 2, 3, 4, 5L, 6L);
+    }
 }

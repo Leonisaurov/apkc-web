@@ -1275,10 +1275,24 @@ func (p *traduce) escribeArreglo(in jvmInstr) {
 // sale 2072 0003 0002. Con **cero** argumentos también vale 35c, medido el 2026-11-01 sobre
 // `invoke-static {}` de un `main` llamado desde javac: d8 escribe `7100 0600 0000`, o sea el recuento
 // a cero en el byte alto, el índice del método detras y la tercera unidad en cero.
-func (p *traduce) invoca(op byte, regs []int, metodo int, in jvmInstr) {
+func (p *traduce) invoca(op byte, regs []int, anchos, refs []bool, metodo int, in jvmInstr) {
 	n := len(regs)
-	if n > 5 {
-		p.falla(in, "a call of "+itoa(n)+" arguments: 35c goes up to five and invoke/range is not measured here")
+	// Las formas `/range` (3rc) son para más de cinco palabras o para un registro que no cabe en un
+	// nibble. Medido en la sonda `Seis` del parrafo 90: `7706 0600 0000` es invoke-static/range con
+	// seis palabras desde v0, `7407 0200 0000` invoke-virtual/range con siete y `7708 0100 0000` el
+	// estático con dos `long` (ocho palabras). El bloque tiene que ser contiguo; cuando no lo es, se
+	// rechaza por nombre en vez de inventar movimientos.
+	rango := n > 5
+	if !rango {
+		for _, r := range regs {
+			if r > 15 {
+				rango = true
+				break
+			}
+		}
+	}
+	if rango {
+		p.invocaRango(op, regs, anchos, refs, metodo, in)
 		return
 	}
 	for _, r := range regs {
@@ -1309,6 +1323,134 @@ func (p *traduce) invoca(op byte, regs []int, metodo int, in jvmInstr) {
 		unidadRegs |= uint16(regs[3]&0xf) << 12
 	}
 	p.palabra(unidadRegs)
+}
+
+// invocaRango escribe el 3rc de `invoke-*/range`: la primera unidad lleva el opcode y el número de
+// PALABRAS en el byte alto, la segunda el índice del método y la tercera el primer registro del bloque
+// contiguo. Medido en `Seis` (parrafo 90): `7706 0600 0000` (estático, seis palabras), `7407 0200 0000`
+// (virtual, siete) y `7708 0100 0000` (estático con dos `long`, ocho).
+func (p *traduce) invocaRango(op byte, regs []int, anchos, refs []bool, metodo int, in jvmInstr) {
+	if op < opInvocaVirtual || op > opInvocaInterfaz {
+		p.falla(in, "an invoke/range of an opcode that is not an invoke")
+		return
+	}
+	n := len(regs)
+	if n == 0 || n > 0xff {
+		p.falla(in, "a call of "+itoa(n)+" words: invoke/range counts them in one byte")
+		return
+	}
+	contiguos := func(rs []int) bool {
+		for i, r := range rs {
+			if r != rs[0]+i {
+				return false
+			}
+		}
+		return true
+	}
+	if !contiguos(regs) {
+		// El 3rc exige un bloque contiguo con el orden de los argumentos. Se pide un bloque nuevo por
+		// encima de todo lo vivo y se copian los valores en orden; así el receptor de una llamada de
+		// instancia queda el primero, como pide el formato (medido en `llamaInst`, parrafo 90). La
+		// pasada de medida crece `pico` con el bloque y la final lo deja por debajo de `base`.
+		inicio := p.tomaBloque(n, in)
+		if p.err != nil {
+			return
+		}
+		for k := 0; k < n; k++ {
+			if k > 0 && anchos[k] && anchos[k-1] {
+				continue // la mitad alta viaja con el move-wide de la baja
+			}
+			if !p.mueveRegistro(inicio+k, regs[k], anchos[k], refs[k], in) {
+				return
+			}
+		}
+		for i := 0; i < n; i++ {
+			p.suelta(inicio + i)
+		}
+		regs = make([]int, n)
+		for i := range regs {
+			regs[i] = inicio + i
+		}
+	}
+	primero := regs[0]
+	if primero < 0 || primero > 0xffff {
+		p.falla(in, "a call whose first register does not fit sixteen bits")
+		return
+	}
+	p.palabra(uint16(op+0x06) | uint16(n)<<8)
+	if !p.indice(metodo, in, "the method index") {
+		return
+	}
+	p.palabra(uint16(primero))
+}
+
+// tomaBloque: n registros temporales consecutivos y libres para el 3rc. No reutiliza la bolsa de
+// `libres` a proposito: un bloque partido en trozos no sirve para el formato, y moverlo despues sería
+// otra permutacion sin medir. Crece `siguiente`/`pico`, asi que la pasada final le da sitio debajo de
+// `base`.
+func (p *traduce) tomaBloque(n int, in jvmInstr) int {
+	inicio := p.siguiente
+	for {
+		libre := true
+		for i := 0; i < n; i++ {
+			if p.ocupado(inicio + i) {
+				libre = false
+				inicio = inicio + i + 1
+				break
+			}
+		}
+		if libre {
+			break
+		}
+	}
+	if p.techo && inicio+n > p.base {
+		p.falla(in, "the /range block needs more temporaries than the max stack javap measured")
+		return 0
+	}
+	if inicio+n > p.pico {
+		p.pico = inicio + n
+	}
+	if inicio+n > p.siguiente {
+		p.siguiente = inicio + n
+	}
+	return inicio
+}
+
+// mueveRegistro copia una palabra o un par ancho a un registro del bloque. Usa 12x mientras los dos
+// caben en un nibble y 22v (`move*/from16`, ya medido en el parrafo 86) cuando el destino pasa de v15.
+func (p *traduce) mueveRegistro(destino, origen int, ancho, ref bool, in jvmInstr) bool {
+	if destino == origen {
+		return true
+	}
+	if destino < 0 || origen < 0 {
+		p.falla(in, "a negative register in a /range move")
+		return false
+	}
+	if destino <= 15 && origen <= 15 {
+		op := byte(opMueve)
+		switch {
+		case ancho:
+			op = opMueveWide
+		case ref:
+			op = opMueveObjeto
+		}
+		p.palabra(unidad12x(op, destino, origen))
+		return true
+	}
+	if destino > 0xff || origen > 0xffff {
+		p.falla(in, "a /range move whose destination or source does not fit")
+		return false
+	}
+	op := byte(0x02) // move/from16
+	switch {
+	case ancho:
+		op = 0x05 // move-wide/from16
+	case ref:
+		op = 0x08 // move-object/from16
+	}
+	p.palabra(unidad22v(op, destino))
+	p.palabra(uint16(origen))
+	return true
 }
 
 // recorre traduce todo el Code del método. Se usa dos veces seguidas, con bases distintas.
@@ -1957,10 +2099,24 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 		return i > 0 && esAncho(params[i-1])
 	}
 	regs := make([]int, 0, total)
+	anchos := make([]bool, 0, total)
+	refs := make([]bool, 0, total)
 	for i, v := range valores {
 		regs = append(regs, v)
+		ref := false
+		if i == 0 && !estatico {
+			ref = true
+		} else if estatico {
+			ref = i < len(params) && esObjeto(params[i])
+		} else {
+			ref = i-1 < len(params) && esObjeto(params[i-1])
+		}
+		anchos = append(anchos, ancho(i))
+		refs = append(refs, ref)
 		if ancho(i) {
 			regs = append(regs, v+1)
+			anchos = append(anchos, true)
+			refs = append(refs, false)
 		}
 	}
 	for i, v := range valores {
@@ -1973,7 +2129,7 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 	if total > p.outs {
 		p.outs = total
 	}
-	p.invoca(op, regs, metodo, in)
+	p.invoca(op, regs, anchos, refs, metodo, in)
 	if p.err != nil {
 		return
 	}
