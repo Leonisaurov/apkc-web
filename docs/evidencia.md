@@ -5287,3 +5287,56 @@ Lo que **no** está hecho: instalarlo y arrancarlo en el teléfono. Eso exige `r
 —instala y arranca en un teléfono real— ya se midió en el §55 con el contador, pero no con esta app de
 cierre.
 
+## 96. `string-array`, `integer-array` y `plurals` en un `values`
+
+El enlace de recursos acepta los valores compuestos de un `values`: `string-array`, `integer-array` y
+`plurals`, además de `bool`, `color` e `integer` que ya estaban. La tabla de la sonda sale **byte a
+byte** la de `aapt2` (1152 bytes):
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/tipos/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o aapt2.apk --manifest AndroidManifest.xml -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+unzip -p aapt2.apk resources.arsc > aapt2.arsc
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+unzip -p build/app.apk resources.arsc > nuestro.arsc
+cmp aapt2.arsc nuestro.arsc
+aapt2 dump resources build/app.apk
+```
+
+`aapt2 dump resources`:
+
+```text
+type array id=01 entryCount=2
+  resource 0x7f010000 array/nombres
+    () (array) size=2
+      ["uno", "dos"]
+  resource 0x7f010001 array/numeros
+    () (array) size=2
+      [1, 2]
+type plurals id=05 entryCount=1
+  resource 0x7f050000 plurals/cuenta
+    () (plurals) size=2
+      one="uno"
+      other="varios"
+```
+
+Lo que fija el binario (medido con el lector del §24 y `aapt2 dump`):
+
+| pieza | valor |
+| --- | --- |
+| entrada de array | compleja, `padre=0`, flags `0x0001`, un registro por elemento |
+| nombre del registro | `0x01000000 \| (índice + 1)` (0x01000001, 0x01000002, …) |
+| valor de `string-array` | tipo cadena 0x03 con el índice del pool global |
+| valor de `integer-array` | tipo entero decimal 0x10 con el número |
+| plural | compleja, registros con los ids de cantidad de Android: other 0x01000004, zero 0x01000005, one 0x01000006, two 0x01000007, few 0x01000008, many 0x01000009 |
+| orden de los plurales | **el del fuente** (one antes que other en la sonda), no ordenado por id |
+
+Implementado en `apkc/valores.go`: `itemsDeArray`/`itemsDePlural` leen los hijos, y
+`tablaDeRecursos` añade los textos de los registros al pool global y los resuelve al escribir.
+Prueba: `apkc/valores_tipos_test.go` (fixture de 1152 bytes de `aapt2`).
+
+**Frontera**: `fraction`, `attr` y `styleable` siguen fuera; se rechazan por nombre. `bool`, `color` e
+`integer` ya estaban desde el §29.
+

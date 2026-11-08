@@ -96,6 +96,14 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 		if r.config == "" && r.valor.tipo == tipoCadena && r.texto != "" {
 			global = append(global, r.texto)
 		}
+		if r.compleja {
+			// los `string-array` y los `plurals` llevan sus textos en los registros, no en r.texto
+			for _, item := range r.items {
+				if item.valor.tipo == tipoCadena && item.valor.texto != "" {
+					global = append(global, item.valor.texto)
+				}
+			}
+		}
 	}
 	sort.Strings(global)
 	configsGlobal := map[string][]string{}
@@ -178,7 +186,17 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 					bloque.entradas = append(bloque.entradas, entradaEscribir{clave: indiceClave[clave], falta: true})
 					continue
 				}
-				e := entradaEscribir{clave: indiceClave[clave], compleja: r.compleja, padre: r.padre, registros: r.items}
+				registros := append([]registroEscribir(nil), r.items...)
+				for i := range registros {
+					if registros[i].valor.tipo == tipoCadena {
+						indice, ok := indiceGlobal[registros[i].valor.texto]
+						if !ok {
+							return nil, fmt.Errorf("la cadena de un registro de %s/%s no esta en el pool global", r.tipo, r.clave)
+						}
+						registros[i].valor.datos = uint32(indice)
+					}
+				}
+				e := entradaEscribir{clave: indiceClave[clave], compleja: r.compleja, padre: r.padre, registros: registros}
 				switch {
 				case r.compleja:
 					e.flags = 0x0001
@@ -336,6 +354,20 @@ func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recu
 		return recursoEntabla{tipo: "style", clave: nombre, compleja: true, padre: padreId, items: items}, nil
 	}
 
+	if tipo == "string-array" || tipo == "integer-array" {
+		items, err := itemsDeArray(d, el.Name.Local, tipo == "integer-array")
+		if err != nil {
+			return recursoEntabla{}, err
+		}
+		return recursoEntabla{tipo: "array", clave: nombre, compleja: true, items: items}, nil
+	}
+	if tipo == "plurals" {
+		items, err := itemsDePlural(d, el.Name.Local)
+		if err != nil {
+			return recursoEntabla{}, err
+		}
+		return recursoEntabla{tipo: "plurals", clave: nombre, compleja: true, items: items}, nil
+	}
 	texto, err := textoDeElemento(d, el.Name.Local)
 	if err != nil {
 		return recursoEntabla{}, err
@@ -370,6 +402,81 @@ func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recu
 		return recursoEntabla{}, fmt.Errorf("el tipo %q de %s/%s no esta medido por este enlazador", tipo, tipo, nombre)
 	}
 	return recursoEntabla{tipo: tipo, clave: nombre, valor: v, texto: texto}, nil
+}
+
+// itemsDeArray: los `<item>` de un `string-array` o `integer-array`. Medido en el parrafo 95: el
+// nombre de cada registro es 0x01000000 | (índice + 1), el padre 0 y la bandera 0x0001; el valor es
+// una cadena (0x03) o un entero (0x10).
+func itemsDeArray(d *xml.Decoder, nombre string, entero bool) ([]registroEscribir, error) {
+	out := []registroEscribir{}
+	indice := 0
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return nil, fmt.Errorf("el %s no se cierra: %w", nombre, err)
+		}
+		if fin, esFin := tok.(xml.EndElement); esFin && fin.Name.Local == nombre {
+			return out, nil
+		}
+		item, esInicio := tok.(xml.StartElement)
+		if !esInicio || item.Name.Local != "item" {
+			continue
+		}
+		texto, err := textoDeElemento(d, "item")
+		if err != nil {
+			return nil, err
+		}
+		v := valorEscribir{tipo: tipoCadena, texto: texto}
+		if entero {
+			v, err = enteroDeTexto(texto)
+			if err != nil {
+				return nil, fmt.Errorf("el item %q de %s no es un entero", texto, nombre)
+			}
+		}
+		indice++
+		out = append(out, registroEscribir{nombre: 0x01000000 | uint32(indice), valor: v})
+	}
+}
+
+// itemsDePlural: los `<item quantity="one|other|…">` de un `<plurals>`. Los nombres de los registros
+// son los ids de cantidad medidos con aapt2 (parrafo 95): other 0x01000004, zero 0x01000005,
+// one 0x01000006, two 0x01000007, few 0x01000008 y many 0x01000009.
+func itemsDePlural(d *xml.Decoder, nombre string) ([]registroEscribir, error) {
+	cantidades := map[string]uint32{
+		"other": 0x01000004, "zero": 0x01000005, "one": 0x01000006,
+		"two": 0x01000007, "few": 0x01000008, "many": 0x01000009,
+	}
+	out := []registroEscribir{}
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return nil, fmt.Errorf("el %s no se cierra: %w", nombre, err)
+		}
+		if fin, esFin := tok.(xml.EndElement); esFin && fin.Name.Local == nombre {
+			// aapt2 conserva el orden del fuente en los registros de un plural (medido: one antes
+			// que other, no ordenado por id)
+			return out, nil
+		}
+		item, esInicio := tok.(xml.StartElement)
+		if !esInicio || item.Name.Local != "item" {
+			continue
+		}
+		cantidad := ""
+		for _, a := range item.Attr {
+			if a.Name.Local == "quantity" {
+				cantidad = a.Value
+			}
+		}
+		id, ok := cantidades[cantidad]
+		if !ok {
+			return nil, fmt.Errorf("la cantidad %q de %s no esta medida", cantidad, nombre)
+		}
+		texto, err := textoDeElemento(d, "item")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, registroEscribir{nombre: id, valor: valorEscribir{tipo: tipoCadena, texto: texto}})
+	}
 }
 
 // itemsDeEstilo anda los <item name="android:X">valor</item> de un estilo y los deja ordenados por su

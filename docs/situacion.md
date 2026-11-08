@@ -547,7 +547,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **283 PASS + 2 SKIP** nativa y **200 PASS + 85 SKIP**
+  idénticos a los del binario nativo (§43). Suite actual: **284 PASS + 2 SKIP** nativa y **201 PASS + 85 SKIP**
   en el hospedador: los tests del traductor (branquias incluidas) pasan dentro; los del emisor se saltan si el
   hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
@@ -559,8 +559,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   el literal `X.class` con `const-class` 0x1c y la igualdad de referencias con `if_acmp*` del 89, las
   llamadas de más de cinco palabras con `invoke-*/range` del 90, los constructores propios con
   `super`/`this`, sus inicializadores y los dos `code_item` de una sobrecarga del 91, `throws`,
-  interfaces propias, abstractos e `invokeinterface` del 92, el PNG de `drawable`/`mipmap` del 93 y
-  `values-xx` del 94).
+  interfaces propias, abstractos e `invokeinterface` del 92, el PNG de `drawable`/`mipmap` del 93,
+  `values-xx` del 94 y `string-array`/`integer-array`/`plurals` del 96).
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden
