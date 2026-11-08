@@ -22,10 +22,9 @@ package main
 // metodos, `MethodParameters` (`accessFlags` y `names`, dos arreglos paralelos) cuando el `.class` trae
 // el atributo, con los flags de javac copiados tal cual (medidos: 0x1010 y 0x8010).
 //
-// **No se emite `Signature`**: `d8` copia con ella el atributo `Signature` del `.class`, pero troceada
-// en un array de cuerdas a su manera (`"<T::" "Ljava/lang/CharSequence;" ">" "Ljava/lang/Object;"`,
-// medido en una sonda generica) y esa regla de troceado no esta medida. Ademas el subconjunto de Java
-// que `apkc compile` acepta no tiene parametros de tipo. Queda escrita como diferencia en el parrafo 58.
+// `Signature` sí se emite desde el parrafo 101: `d8` copia el atributo `Signature` del `.class` en un
+// array de cuerdas troceado a su manera (`"<T::" "Ljava/lang/CharSequence;" ">" "Ljava/lang/Object;"`).
+// El `annotation_set_item` va ordenado por `type_idx` (lo exige ART, parrafo 114).
 
 import (
 	"encoding/binary"
