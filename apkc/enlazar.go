@@ -243,10 +243,11 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 		// viaja literal. Medido con `aapt2 dump resources` en el parrafo 93: `drawable/icono`
 		// `(file) res/drawable/icono.png type=PNG`.
 		recursos = append(recursos, recursoEntabla{
-			tipo:  tipoDeRecurso(f.nombre),
-			clave: claveDeLayout(f.nombre),
-			valor: valorEscribir{tipo: tipoCadena},
-			texto: f.nombre,
+			tipo:   tipoDeRecurso(f.nombre),
+			config: f.config,
+			clave:  claveDeLayout(f.nombre),
+			valor:  valorEscribir{tipo: tipoCadena},
+			texto:  f.nombre,
 		})
 	}
 	for _, f := range valores {

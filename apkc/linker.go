@@ -79,7 +79,11 @@ var tiposDeResQueSeEnlazan = map[string]bool{
 func tipoDeRecurso(ruta string) string {
 	partes := strings.Split(filepath.ToSlash(ruta), "/")
 	if len(partes) >= 2 && partes[0] == "res" {
-		return partes[1]
+		carpeta := partes[1]
+		if i := strings.IndexByte(carpeta, '-'); i >= 0 {
+			carpeta = carpeta[:i]
+		}
+		return carpeta
 	}
 	return ""
 }
@@ -108,12 +112,17 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 		}
 		tipo, config := e.Name(), ""
 		if !tiposDeResQueSeEnlazan[tipo] {
-			// `values-es`: una segunda configuracion por idioma, la unica que se midio (parrafo 94).
-			// Un calificador de layout/densidad/API sigue fuera.
-			if strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+2 {
+			// `values-es` (idioma), `layout-land` (orientación) y `drawable-hdpi` (densidad) son las
+			// configuraciones medidas (parrafos 94 y 103). Cualquier otra sigue fuera.
+			switch {
+			case strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+2:
 				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
-			} else {
-				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, menu, xml, drawable, mipmap y raw. Un calificador de layout, densidad o version de API es otra configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
+			case e.Name() == "layout-land":
+				tipo, config = "layout", "land"
+			case e.Name() == "drawable-hdpi":
+				tipo, config = "drawable", "hdpi"
+			default:
+				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, layout-land, menu, xml, drawable, drawable-hdpi, mipmap y raw. Otra densidad, orientacion o version de API es una configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
 			}
 		}
 		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
@@ -124,7 +133,13 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			if f.IsDir() {
 				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
 			}
-			ruta := filepath.Join("res", e.Name(), f.Name())
+			carpetaSalida := e.Name()
+			if tipo == "drawable" && config != "" {
+				// la densidad nacio en la API 4: aapt2 deja `drawable-hdpi-v4` también con
+				// --no-auto-version (parrafo 103)
+				carpetaSalida += "-v4"
+			}
+			ruta := filepath.Join("res", carpetaSalida, f.Name())
 			contenido, err := os.ReadFile(filepath.Join(res, e.Name(), f.Name()))
 			if err != nil {
 				return nil, nil, nil, manifiesto, err

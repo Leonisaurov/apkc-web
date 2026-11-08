@@ -143,10 +143,11 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 				continue
 			}
 			entradas = append(entradas, recursoEntabla{
-				tipo:  nombreTipo,
-				clave: claveDeLayout(f.nombre),
-				valor: valorEscribir{tipo: tipoCadena},
-				texto: f.nombre,
+				tipo:   nombreTipo,
+				config: f.config,
+				clave:  claveDeLayout(f.nombre),
+				valor:  valorEscribir{tipo: tipoCadena},
+				texto:  f.nombre,
 			})
 		}
 		sort.SliceStable(entradas, func(a, b int) bool { return entradas[a].clave < entradas[b].clave })
@@ -229,7 +230,7 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 		for j, clave := range clavesTipo {
 			for _, cfg := range configs[1:] {
 				if _, ok := porConfigYClave[cfg+"\x00"+clave]; ok {
-					specFlags[j] |= 0x0004
+					specFlags[j] |= mascaraConfig(cfg)
 				}
 			}
 		}
@@ -250,6 +251,20 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, p
 		clavesUTF8:    true,
 		tipos:         escritos,
 	}, nil
+}
+
+// mascaraConfig: las banderas del spec_map que aapt2 pone para cada configuración medida. `es` es
+// locale (0x0004), `land` orientación (0x0080) y `hdpi` densidad (0x0100) más la marca 0x0400 que
+// aapt2 añade al tipo drawable con densidad (medido en el parrafo 103: 0x0500).
+func mascaraConfig(cfg string) uint32 {
+	switch cfg {
+	case "land":
+		return 0x0080
+	case "hdpi":
+		return 0x0500
+	default:
+		return 0x0004
+	}
 }
 
 // sinRepetidos conserva el orden, que ya viene sorted.

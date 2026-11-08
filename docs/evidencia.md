@@ -5524,3 +5524,36 @@ Implementado: `manifestJavaDe` recorre los `<permission android:name=…>` del �
 en la detección de recompilación. Prueba: `TestManifestJavaDePermissions`. Queda fuera cualquier
 atributo de `<permission>` distinto de `android:name`.
 
+## 103. `layout-land` y `drawable-hdpi`: orientación y densidad
+
+Las dos configuraciones que faltaban de 5.17. Se comparó contra `aapt2 link --no-auto-version`, que
+es la forma que coincide con la configuración única de este enlace (el `aapt2` por defecto añade
+además una copia `layout-v1` de cada layout, ya aceptada en el §28):
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/cal/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link --no-auto-version -o noauto.apk --manifest AndroidManifest.xml \
+  -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+aapt2 dump resources noauto.apk
+unzip -p noauto.apk resources.arsc > noauto.arsc
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+unzip -p build/app.apk resources.arsc > nuestro.arsc
+cmp noauto.arsc nuestro.arsc
+```
+
+Los dos arsc son **1204 bytes idénticos**. Lo que fija:
+
+| configuración | `ResTable_config` | spec |
+| --- | --- | --- |
+| `layout-land` | orientation `2` en +12 | `0x0080` |
+| `drawable-hdpi` | density `240` en +14 y sdkVersion `4` en +24 | `0x0500` |
+| `values-es` | language 'e','s' en +8/+9 | `0x0004` |
+
+La ruta de la densidad lleva el sufijo que usa `aapt2`: `res/drawable-hdpi-v4/icono.png`; la de
+orientación, `res/layout-land/main.xml`. `aapt2 dump resources` del apk de este fork declara las dos
+entradas. Implementado en `apkc/linker.go` (acepta las carpetas y reescribe la ruta de densidad),
+`apkc/arscwriter.go` (los bytes de configuración) y `apkc/valores.go` (`mascaraConfig`). Prueba:
+`apkc/valores_cal_test.go` (fixture de 1204 bytes).
+

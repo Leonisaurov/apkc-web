@@ -233,10 +233,18 @@ func escribeBloqueTipo(ti tipoEscribir, bloque bloqueEscribir) []byte {
 func configDe(lengua string) []byte {
 	b := make([]byte, 64)
 	binary.LittleEndian.PutUint32(b, 64)
-	if lengua != "" {
+	switch lengua {
+	case "":
+	case "land":
+		// ResTable_config::orientation = ORIENTATION_LAND (2), en +12
+		b[12] = 2
+	case "hdpi":
+		// density = DENSITY_HDPI (240) en +14 y sdkVersion 4 en +24
+		b[14], b[15] = 0xf0, 0
+		b[24] = 4
+	default:
 		if len(lengua) != 2 {
-			// el parser solo deja `values-xx` de dos letras; una región (`es-rMX`) pide country y
-			// otra máscara que no está medida
+			// una región (`es-rMX`) pide country y otra máscara que no está medida
 			return b
 		}
 		b[8], b[9] = lengua[0], lengua[1]
