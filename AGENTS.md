@@ -12,6 +12,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/situacion.md` | el recap de lo medido, bullet por bullet (movido desde este fichero el 2026-11-03); el original es el `§` que cada bullet cita | leerlo y comprobar que su `§` existe |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
+| `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco` y `doctor` | `tools/entorno.sh doctor` |
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
 | `studio/` | apkc-studio: genera proyectos apkc, traduce su salida para medir fricción **y hace correr `apkc.wasm` en la pestaña** (OPFS + worker) | `cd studio && APKC=<binario> sh e2e.sh`; la pestaña: `APKC_WASM=… node studio/prueba-pestana.js` |
@@ -55,14 +56,20 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
   asignaciones de entorno en `sh -c '...'`.
 - Comando pesado por `tcr` (`tcr -j 1 -q -- <cmd>`), jamás `-j$(nproc)`. Antes de algo caro:
   `free -m` y `df -h "$PREFIX"`.
-^- El SDK está en `~/Android` (`platforms/android-34/android.jar`) y el JDK en
+- **El shell puede arrancar con `HOME=/home/leonisauro`**, que no tiene `Develop/` ni `Android/`; el repo
+  y el SDK viven bajo `/data/data/com.termux/files/home`. Los guiones que usan `$HOME/Develop` o `../apkc`
+  fallan con ENOENT. `tools/entorno.sh` fija `HOME`, `PREFIX`, `ANDROID_HOME` y `PATH`, y evita repetir
+  asignaciones en cada comando.
+- El SDK está en `~/Android` (`platforms/android-34/android.jar`) y el JDK en
   `$PREFIX/lib/jvm/java-21-openjdk`. Las build-tools accesibles son `~/Android/build-tools/34.9.0/`, unos
   enlaces **nuevos** a los binarios del paquete (`$PREFIX/bin/{aapt,aapt2,apksigner,d8,zipalign}`): los
   enlaces viejos de `34.0.0` quedaron con el contexto SELinux del usuario anterior tras un reset de fábrica
   y son inaccesibles (ni `readlink` ni `unlink`). **El número de la carpeta no puede superar al de la
   platform**, porque apkc deriva de ahí la platform (`35.0.0` pedía `android-35`, que no existe).
   `studio/e2e.sh` y `banco/banco.sh` eligen la carpeta más alta con `sort -V`. Tras ese reset `rish`
-  desapareció del PATH, así que los caminos de aparato del banco no corren hasta reponer Shizuku.
+  desapareció del PATH; el banco usa entonces **`/usr/sbin/sudo`** (el del sistema; el `sudo` de Termux no
+  encuentra un `su` que soporte `-c`) y copia el `BOOTCLASSPATH` de `zygote64`, porque sin él
+  `app_process64` aborta con `BOOTCLASSPATH and DEX2OATBOOTCLASSPATH must not be empty`.
 - **Dos trampas de wasm ya conocidas**: (a) `go test -exec=$GOROOT/lib/wasm/go_js_wasm_exec` falla
   con `total length of command line and environment variables exceeds limit` si no se le da
   `env -i`; (b) sin `GOOS=js GOARCH=wasm` el lanzador recibe un ELF y se queja de
@@ -71,9 +78,9 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
   `zipalign -c -p`, `~/Develop/Go/apkc-harness/zipcheck.py`, `javap`, `java -Xverify:all` (la JVM del
   Termux ejecuta **nuestros** `.class`: destapó el `StackMapTable` que faltaba en el §61 y lo cierra en
   el §65) y
-  `dexdump`/`app_process64` **del aparato por `rish`** (no hay `adb`): `/apex/com.android.art/bin/dexdump`
+  `dexdump`/`app_process64` **del aparato por `rish` o `sudo`** (no hay `adb`): `/apex/com.android.art/bin/dexdump`
   verifica y desarma, y `app_process64` con `CLASSPATH` ejecuta un `.dex` suelto **sin instalar nada**
-  (`sh banco/banco.sh` lo hace por los cuatro caminos y compara el código de salida, §61).
+  (`sh banco/banco.sh` lo hace por los cinco caminos y compara el código de salida, §61).
 - **Trampas de OPFS/cromium ya conocidas** (detalle completo con síntoma en `docs/evidencia.md` §12):
   `navigator.storage` no existe dentro del worker (la raíz baja desde la página por `postMessage`);
   `crypto`/`performance` son de solo lectura en un worker de módulo; `entries()` rinde
@@ -102,6 +109,9 @@ sh -c 'cd studio && APKC="$PREFIX/tmp/apkc-gate" APKC_WASM="$PREFIX/tmp/apkc-was
 
 `studio/e2e.sh` es innegociable antes de decir "la página funciona": su test de node solo veía
 verdes seis fallos que solo aparecían al descomprimir y compilar lo generado.
+Los bloques de arriba se lanzan con el entorno ya puesto por `tools/entorno.sh test|wasm|gate|banco`;
+sin el wrapper, `HOME` y `PREFIX` tienen que apuntar a `/data/data/com.termux/files/home` y
+`/data/data/com.termux/files/usr`.
 
 ## Lo que ya está medido, para no reabrirlo
 

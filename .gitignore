@@ -15,3 +15,7 @@ studio/wasm_exec.js
 node_modules/
 .DS_Store
 *.log
+
+# planes y ajustes locales de los agentes: no son del repo
+.hermes/
+.qoder/

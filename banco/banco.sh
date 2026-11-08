@@ -35,12 +35,25 @@ if [ -z "$RISH" ]; then
 	fi
 fi
 
+# con `sudo`, `app_process64` arranca sin el entorno de Android y aborta con
+# «BOOTCLASSPATH and DEX2OATBOOTCLASSPATH must not be empty». Shizuku ya lo trae; para root se copia
+# el de zygote64, que es el mismo que usa el sistema (medido tras el reset, 2026-11-08).
+PRELUDIO_APARATO=
+if [ "$RISH" = "sudo" ]; then
+	zygote=$(sudo sh -c 'pidof zygote64 2>/dev/null || pidof zygote 2>/dev/null' | tr -d '\r')
+	if [ -n "$zygote" ]; then
+		PRELUDIO_APARATO=$(sudo sh -c "tr '\0' '\n' < /proc/$zygote/environ |
+			grep -E '^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH|SYSTEMSERVERCLASSPATH|STANDALONE_SYSTEMSERVER_JARS)=' |
+			sed 's/^/export /'")
+	fi
+fi
+
 # enAparato: un comando en la shell del aparato. `rish -c` y `sudo sh -c` son lo mismo para lo que
 # hace falta aquí (escribir en /data/local/tmp, correr `app_process64` y `dexdump`), y el resto del
 # guion llama a esta función en vez de a `$RISH` porque el modo root son dos palabras.
 enAparato() {
 	case $RISH in
-	sudo) sudo sh -c "$1" ;;
+	sudo) if [ -n "$PRELUDIO_APARATO" ]; then sudo sh -c "$PRELUDIO_APARATO; $1"; else sudo sh -c "$1"; fi ;;
 	*) "$RISH" -c "$1" ;;
 	esac
 }
