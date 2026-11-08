@@ -5800,7 +5800,9 @@ Lo que se mide y lo que se rechaza:
 | sitio en el llamador | `new-instance` + `invoke-direct {v}, <init>()V`; el valor queda en el mismo registro |
 | capturas (`(I)`, `(LLam;)`) y `this::m` | se desugran con campos de captura en el §111 |
 | referencias sin receptor (`Tipo::m`) | se desugran en el §112 |
-| `altMetafactory`, SAM genérico y concatenación dinámica | se rechazan por nombre |
+| SAM genérico y borrado a una cota | se desugran con el descriptor borrado y `checkcast` en los §113 y §114 |
+| `altMetafactory` serializable y con marcadores | se desugra con las interfaces extra en el §115 |
+| puentes de `altMetafactory` y concatenación dinámica | se rechazan por nombre |
 
 Implementado en `apkc/lambda.go` (expansión, validación y clase sintética), `apkc/classreader.go`
 (`BootstrapMethods` y los tags del pool), `apkc/dextabla.go` (internado del sitio),
@@ -5869,8 +5871,8 @@ dueño (`this::m`); si no hay capturas, el primer parámetro del SAM tiene que s
 (`Tipo::m`), y los parámetros del implementador son los del SAM menos ese receptor. Prueba:
 `TestLaReferenciaSinReceptor` en `apkc/lambda_test.go` y el caso `LamUnb` de `banco/lambda.sh`.
 
-Sigue fuera: `altMetafactory` y la concatenación dinámica de JDK 9 (`makeConcatWithConstants`), que
-se rechazan por nombre. El SAM genérico se mide en el §113.
+Sigue fuera: la concatenación dinámica de JDK 9 (`makeConcatWithConstants`), que se rechaza por
+nombre. El SAM genérico se mide en el §113 y `altMetafactory` en el §115.
 
 ## 113. SAM genérico: descriptor borrado y `checkcast` al tipo instanciado
 
@@ -5904,7 +5906,7 @@ tipo del SAM (`Object` acepta el `Integer` del implementador, que ya viene encaj
 Prueba: `TestElSamGenericoUsaElDescriptorBorrado` y el caso `LamGen` de `banco/lambda.sh`.
 
 Frontera: el borrado a un tipo que no sea `Object` se mide en el §114; `altMetafactory`
-(serializables, marcadores) sigue fuera, igual que la concatenación dinámica de JDK 9.
+(serializables y marcadores) en el §115; la concatenación dinámica de JDK 9 sigue fuera.
 
 ## 114. Borrado a una cota (`T extends Number`) y el orden del `annotation_set`
 
@@ -5935,3 +5937,76 @@ verificaba.
 
 Prueba: `TestElSamConCotaUsaElDescriptorBorrado` (descriptor `Number`, `checkcast` y dex) y el caso
 `LamBound` de `banco/lambda.sh`, que pasa por `dexdump` y por `app_process64`.
+
+## 115. `altMetafactory`: lambda serializable y marcadores de una intersección
+
+Cuando el tipo destino no es una interfaz sola, `javac` cambia el bootstrap a
+`LambdaMetafactory.altMetafactory`. Los tres primeros argumentos son los de `metafactory` (SAM,
+implementador y tipo instanciado) y detrás vienen los `flags`, la cuenta de marcadores con sus
+clases y la cuenta de puentes con sus `MethodType`. Los bits medidos son `1` (serializable), `2`
+(marcadores) y `4` (puentes).
+
+```sh
+P=/data/data/com.termux/files/usr
+W=$P/tmp/lamser
+cat >"$W/src/LamSer.java" <<'J'
+public class LamSer {
+    interface R extends Runnable, java.io.Serializable {}
+    static R make() { return () -> System.out.println("hola"); }
+    public static void main(String[] a) { make().run(); }
+}
+J
+"$P/lib/jvm/java-21-openjdk/bin/javac" --release 8 -g:lines,source -d "$W/clases" "$W/src/LamSer.java"
+"$HOME/Android/build-tools/34.9.0/d8" --release --min-api 21 --output "$W/d8" \
+  "$W/clases/LamSer.class" "$W/clases/LamSer\$R.class"
+/apex/com.android.art/bin/dexdump "$W/d8/classes.dex"
+```
+
+`javap -v` del sitio de `LamSer` deja `()V`, el `MethodHandle` del implementador, `()V`, `5` y `0`:
+`5` es serializable **y** puentes, y la cuenta de puentes es cero. `d8` no escribe ni `writeReplace`
+ni `$deserializeLambda$`: borra el `$deserializeLambda$` que dejó `javac` y añade
+`java/io/Serializable` a las interfaces de la clase sintética. El orden que escribe es el del sitio,
+luego los marcadores y `Serializable` al final:
+
+```text
+  Class descriptor  : 'LLamSer$0;'
+  Interfaces        -
+    #0              : 'LLamSer$R;'
+    #1              : 'Ljava/io/Serializable;'
+```
+
+Con una intersección de dos marcadores, `(R & Runnable & Serializable & Cloneable)`, `javac` deja
+`flags 7` y los marcadores `R` y `Cloneable`; `d8` los lista en ese orden detrás del tipo del sitio:
+
+```text
+    #0              : 'Ljava/lang/Runnable;'
+    #1              : 'LLamSer3$R;'
+    #2              : 'Ljava/lang/Cloneable;'
+    #3              : 'Ljava/io/Serializable;'
+```
+
+Este fork hace lo mismo: lee los flags y los marcadores, añade esas interfaces a la clase sintética,
+quita `$deserializeLambda$` del dueño y deja el dex sin `writeReplace`, como `d8`. Un `altMetafactory`
+con puentes distintos de cero se rechaza por nombre, porque no está medido. La lambda corre en ART
+junto a las siete anteriores:
+
+```sh
+APKC=$P/tmp/apkc-gate sh banco/lambda.sh
+```
+
+```text
+  LamSer: jvm rc=0 «hola» · aparato rc=0 «hola»
+  LamSerCap: jvm rc=0 «hola7» · aparato rc=0 «hola7»
+  LamMarcas: jvm rc=0 «x» · aparato rc=0 «x»
+  dexdump verificando: rc 0
+lambda: las diez lambdas se desugraron y corren igual que la JVM
+```
+
+`LamSerCap` captura un `int` y demuestra que el flag serializable no cambia el campo ni el
+constructor; `LamMarcas` es la intersección con dos marcadores. Pruebas:
+`TestLaLambdaSerializableAceptaAltMetafactory`, `TestLaLambdaSerializableConCapturas` y
+`TestLosMarcadoresDeLaInterseccion` en `apkc/lambda_test.go`, más los tres casos de
+`banco/lambda.sh` que pasan por `dexdump` y `app_process64`.
+
+Frontera: la serialización de ida y vuelta no se mide; se mide que el dex se construya y ejecute
+como el de `d8`. Los puentes de `altMetafactory` y la concatenación dinámica de JDK 9 siguen fuera.

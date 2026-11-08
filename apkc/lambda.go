@@ -6,9 +6,10 @@ package main
 // capturado, un constructor que los guarda y un método SAM que llama al implementador; aquí se hace
 // lo mismo, sin copiar el nombre ni la anotación de `d8` (medido en los §109 y §111).
 //
-// Se cubren las lambdas estáticas con o sin capturas, las que capturan `this` y las referencias a
-// métodos de instancia con receptor fijo (`this::m`). Lo que sigue fuera se rechaza por nombre:
-// `altMetafactory`, el SAM genérico, las referencias de instancia sin receptor (`Tipo::m`) y la
+// Se cubren las lambdas estáticas con o sin capturas, las que capturan `this`, las referencias a
+// métodos de instancia con receptor fijo (`this::m`), el SAM genérico con su descriptor borrado y
+// `altMetafactory` en su forma medida: el flag serializable, los marcadores de una intersección y
+// cero puentes. Lo que sigue fuera se rechaza por nombre: los puentes de `altMetafactory` y la
 // concatenación de cadenas de JDK 9, que no son el mismo bootstrap.
 
 import (
@@ -46,6 +47,17 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 		if cf.Lambdas == nil {
 			cf.Lambdas = map[int]classLambda{}
 		}
+		// `javac` deja `$deserializeLambda$` para que la JVM reconstruya una lambda serializable.
+		// `d8` la quita y la clase sintética implementa Serializable a secas (medido en el §115);
+		// aquí se quita igual, porque además su `invokedynamic` repetiría el sitio.
+		sinDeserializar := cf.Methods[:0]
+		for _, m := range cf.Methods {
+			if m.Name == "$deserializeLambda$" && m.Access&accSynthetic != 0 {
+				continue
+			}
+			sinDeserializar = append(sinDeserializar, m)
+		}
+		cf.Methods = sinDeserializar
 		privados := map[methodKey]bool{}
 		contador := 0
 		for mi := range cf.Methods {
@@ -101,11 +113,13 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 // `invokedynamic`: el del sitio describe la fábrica (`(I)LLam$F;`) y el SAM sale del MethodType del
 // bootstrap; sus parámetros son los valores capturados.
 type lambdaSitio struct {
-	samNombre string
-	samDesc   string // el descriptor ERASED que implementa la interfaz
-	samInst   string // el tipo instanciado; sus parámetros son los del implementador
-	interfaz  string
-	capturas  []string
+	samNombre    string
+	samDesc      string // el descriptor ERASED que implementa la interfaz
+	samInst      string // el tipo instanciado; sus parámetros son los del implementador
+	interfaz     string
+	marcadores   []string // las interfaces extra de `altMetafactory`, en su orden
+	serializable bool
+	capturas     []string
 }
 
 // implDeLambda: el método que implementa el cuerpo de la lambda.
@@ -135,11 +149,21 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 	}
 	bm := cf.BootstrapMethods[boot]
 	_, owner, met, mdesc, _ := x.methodHandleDe(bm.handle)
-	if owner != "Ljava/lang/invoke/LambdaMetafactory;" || met != "metafactory" {
-		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el bootstrap del sitio %q es %s.%s.%s, y solo se mide LambdaMetafactory.metafactory", nombre, owner, met, mdesc)
+	if owner != "Ljava/lang/invoke/LambdaMetafactory;" || (met != "metafactory" && met != "altMetafactory") {
+		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el bootstrap del sitio %q es %s.%s.%s, y solo se miden LambdaMetafactory.metafactory y altMetafactory", nombre, owner, met, mdesc)
 	}
-	if len(bm.args) != 3 {
-		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el bootstrap del sitio %q lleva %d argumentos (altMetafactory o serialización): no medido", nombre, len(bm.args))
+	var (
+		marcadores   []string
+		serializable bool
+		err          error
+	)
+	if met == "altMetafactory" {
+		marcadores, serializable, err = argumentosAltMeta(x, nombre, bm.args)
+		if err != nil {
+			return lambdaSitio{}, implDeLambda{}, err
+		}
+	} else if len(bm.args) != 3 {
+		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el bootstrap del sitio %q lleva %d argumentos y no es altMetafactory", nombre, len(bm.args))
 	}
 	sam := x.methodTypeDe(bm.args[0])
 	inst := x.methodTypeDe(bm.args[2])
@@ -215,9 +239,67 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 	if !receptor && acceso&accStatic == 0 {
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador %s del sitio %q no es estatico", implNombre, nombre)
 	}
-	return lambdaSitio{samNombre: nombre, samDesc: sam, samInst: inst, interfaz: ret, capturas: capturas}, implDeLambda{
+	return lambdaSitio{
+		samNombre: nombre, samDesc: sam, samInst: inst, interfaz: ret,
+		marcadores: marcadores, serializable: serializable, capturas: capturas,
+	}, implDeLambda{
 		owner: implOwner, nombre: implNombre, desc: implDesc, acceso: acceso, kind: implKind,
 	}, nil
+}
+
+// argumentosAltMeta lee lo que `altMetafactory` añade a los tres argumentos de `metafactory`:
+// `flags`, los marcadores de una intersección (`(Runnable & Serializable & Cloneable)`) y los
+// puentes. Se miden el flag serializable y los marcadores; los puentes, que `javac` deja en cero,
+// se rechazan por nombre si alguna vez vienen. El orden que exige el dex no es el de los flags: la
+// interfaz del sitio primero, luego los marcadores en su orden y `Serializable` al final (medido en
+// el §115 contra `d8`).
+func argumentosAltMeta(x poolIndex, nombre string, args []int) ([]string, bool, error) {
+	const (
+		flagSerializable = 1
+		flagMarcadores   = 2
+		flagPuentes      = 4
+	)
+	if len(args) < 4 || x.tagOf(args[3]) != cpInteger {
+		return nil, false, fmt.Errorf("el sitio %q no trae los flags de altMetafactory", nombre)
+	}
+	flags := x.intOf(args[3])
+	if flags&^(flagSerializable|flagMarcadores|flagPuentes) != 0 {
+		return nil, false, fmt.Errorf("el sitio %q pide flags 0x%x en altMetafactory: no medido", nombre, flags)
+	}
+	i := 4
+	var marcadores []string
+	if flags&flagMarcadores != 0 {
+		if i >= len(args) || x.tagOf(args[i]) != cpInteger {
+			return nil, false, fmt.Errorf("el sitio %q no trae el numero de marcadores de altMetafactory", nombre)
+		}
+		n := int(x.intOf(args[i]))
+		i++
+		for j := 0; j < n; j++ {
+			if i >= len(args) {
+				return nil, false, fmt.Errorf("el sitio %q declara %d marcadores y solo trae %d", nombre, n, j)
+			}
+			d := x.classDescriptor(args[i])
+			if d == "" {
+				return nil, false, fmt.Errorf("el marcador %d del sitio %q no es una clase", j, nombre)
+			}
+			marcadores = append(marcadores, d)
+			i++
+		}
+	}
+	if flags&flagPuentes != 0 {
+		if i >= len(args) || x.tagOf(args[i]) != cpInteger {
+			return nil, false, fmt.Errorf("el sitio %q no trae el numero de puentes de altMetafactory", nombre)
+		}
+		n := int(x.intOf(args[i]))
+		i++
+		if n != 0 {
+			return nil, false, fmt.Errorf("el sitio %q pide %d puentes en altMetafactory: no medido", nombre, n)
+		}
+	}
+	if i != len(args) {
+		return nil, false, fmt.Errorf("el sitio %q deja %d argumentos sin leer en altMetafactory", nombre, len(args)-i)
+	}
+	return marcadores, flags&flagSerializable != 0, nil
 }
 
 // poolDeLambda: el pool mínimo de la clase sintética. Se construye aquí y no se reutiliza el de la
@@ -401,11 +483,17 @@ func claseDeLambda(descriptor string, sitio lambdaSitio, impl implDeLambda) clas
 		Access: accPublic, Name: samNombre, Desc: samDesc,
 		HasCode: true, MaxStack: maxPila, LocalCount: samArg, ArgCount: samArg, Code: codigo,
 	}
+	// d8 lista la interfaz del sitio, luego los marcadores de la intersección y `Serializable` al
+	// final, sin quitar los repetidos que ya hereda la interfaz del sitio (§115).
+	interfaces := append([]string{sitio.interfaz}, sitio.marcadores...)
+	if sitio.serializable {
+		interfaces = append(interfaces, "Ljava/io/Serializable;")
+	}
 	return classFull{
 		Access:     accPublic | accFinal | accSynthetic,
 		Name:       descriptor + ";",
 		Super:      "Ljava/lang/Object;",
-		Interfaces: []string{sitio.interfaz},
+		Interfaces: interfaces,
 		Fields:     campos,
 		Methods:    []classMethod{init, sam},
 		SourceFile: "",
