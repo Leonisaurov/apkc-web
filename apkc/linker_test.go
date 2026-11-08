@@ -29,6 +29,20 @@ func proyecto(t *testing.T, archivos map[string]string) string {
 const manifestMinimo = `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p.q"><application/></manifest>`
 const valuesMinimo = `<resources><string name="s">hola</string></resources>`
 
+func TestVersionesDeAndroidMedidas(t *testing.T) {
+	for api, quiero := range map[int]string{28: "9", 29: "10", 30: "11", 31: "12", 33: "13", 34: "14", 35: "15"} {
+		got, ok := nombreDeVersionDeAndroid(api)
+		if !ok || got != quiero {
+			t.Errorf("API %d: %q/%v, se esperaba %q", api, got, ok, quiero)
+		}
+	}
+	for _, api := range []int{27, 32, 36} {
+		if _, ok := nombreDeVersionDeAndroid(api); ok {
+			t.Errorf("API %d no deberia estar en la tabla (nombre no numerico o no medido)", api)
+		}
+	}
+}
+
 func TestFuentesDelProyectoRecogeValuesYLayouts(t *testing.T) {
 	dir := proyecto(t, map[string]string{
 		"AndroidManifest.xml":    manifestMinimo,

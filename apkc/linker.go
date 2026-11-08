@@ -275,8 +275,25 @@ func opcionesDelProyecto(androidJar string, version int, codename string) (opcio
 // versionesMedidasDeAndroid: API -> version de Android en texto. Solo la que se comprobado contra los
 // ficheros de aapt2; pedir otra es rechazar con nombre, no adivinar.
 func nombreDeVersionDeAndroid(api int) (string, bool) {
-	if api == 34 {
+	// La versión de Android que corresponde a la API. La 34/14 es la medida en el §37; las demás
+	// salen de la misma tabla que usa aapt2 (`--compile-sdk-version-code`/`--compile-sdk-version-name`)
+	// y se comprobaron con el volcado del §98. Las que no tienen nombre numérico (API 32 = 12L, 27 =
+	// 8.1) se dejan fuera: `platformBuildVersionName` las escribiría como entero y eso no se midió.
+	switch api {
+	case 28:
+		return "9", true
+	case 29:
+		return "10", true
+	case 30:
+		return "11", true
+	case 31:
+		return "12", true
+	case 33:
+		return "13", true
+	case 34:
 		return "14", true
+	case 35:
+		return "15", true
 	}
 	return "", false
 }
