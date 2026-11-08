@@ -1,10 +1,13 @@
 #!/data/data/com.termux/files/usr/bin/sh
-# Banco de las lambdas desugradas (5.22, §110-§115). `javac --release 8` deja el `invokedynamic`
-# y el `lambda$…`; este fork lo convierte en una clase sintética con sus campos de captura. Se
-# ejecuta el dex en el aparato con `app_process64` y se exige la misma salida que la JVM para los
-# diez casos: estática sin capturas, captura de un local, captura de `this`, `this::m`, `Tipo::m`,
-# el SAM genérico (`Function<String,Integer>`), el borrado a una cota (`T extends Number`), la
-# lambda serializable sin capturas y con captura, y una intersección con dos marcadores.
+# Banco de las lambdas desugradas y de la concatenación (5.22, §110-§116). `javac --release 8`
+# deja el `invokedynamic` de lambda y el `lambda$…`; este fork lo convierte en una clase sintética
+# con sus campos de captura. `javac --release 11` deja `makeConcatWithConstants`, que baja a
+# `StringBuilder`. Se ejecuta el dex en el aparato con `app_process64` y se exige la misma salida
+# que la JVM para los trece casos: estática sin capturas, captura de un local, captura de `this`,
+# `this::m`, `Tipo::m`, el SAM genérico (`Function<String,Integer>`), el borrado a una cota
+# (`T extends Number`), la lambda serializable sin capturas y con captura, una intersección con dos
+# marcadores, la concatenación básica, la receta con constantes del bootstrap y el `append` de cada
+# tipo.
 #
 #   uso: sh banco/lambda.sh
 #        APKC=$PREFIX/tmp/apkc-gate sh banco/lambda.sh
@@ -121,12 +124,42 @@ public class LamMarcas {
     public static void main(String[] a) { make().run(); }
 }
 EOF
+mkdir -p "$TRABAJO/src11"
+cat >"$TRABAJO/src11/Concat.java" <<'EOF'
+public class Concat {
+    public static void main(String[] a) {
+        int n = a.length;
+        String r = "n=" + n + "!";
+        System.out.println(r);
+    }
+}
+EOF
+cat >"$TRABAJO/src11/ConcatB.java" <<'EOF'
+public class ConcatB {
+    public static void main(String[] a) {
+        int n = a.length;
+        String r = "a" + "\u0001" + "b" + "\u0002" + "c" + n;
+        System.out.println(r.length() + ":" + r.equals("a\u0001b\u0002c" + n));
+    }
+}
+EOF
+cat >"$TRABAJO/src11/ConcatW.java" <<'EOF'
+public class ConcatW {
+    static String uno(boolean z, char c) { return "z" + z + "c" + c; }
+    static String dos(long j, float f, double d) { return "j" + j + "f" + f + "d" + d; }
+    static String tres(int i, String s, Object o) { return "i" + i + "s" + s + "o" + o; }
+    public static void main(String[] a) {
+        System.out.println(uno(true, 'x') + dos(2L, 1.5f, 2.5) + tres(a.length, "s", "obj"));
+    }
+}
+EOF
 "$JDK/bin/javac" --release 8 -g:lines,source -d "$TRABAJO/clases" "$TRABAJO/src"/*.java 2>/dev/null
+"$JDK/bin/javac" --release 11 -g:lines,source -d "$TRABAJO/clases" "$TRABAJO/src11"/*.java 2>/dev/null
 "$APKC" dex -o "$TRABAJO/lam.dex" "$TRABAJO/clases" >"$TRABAJO/dex.log" 2>&1 || {
 	echo "lambda: apkc dex fallo"; tail -3 "$TRABAJO/dex.log"; exit 1; }
 
 base64 -w0 "$TRABAJO/lam.dex" | enAparato "toybox base64 -d > /data/local/tmp/lam.dex"
-for c in Lam LamLoc LamThis LamRef LamUnb LamGen LamBound LamSer LamSerCap LamMarcas; do
+for c in Lam LamLoc LamThis LamRef LamUnb LamGen LamBound LamSer LamSerCap LamMarcas Concat ConcatB ConcatW; do
 	set +e
 	jvm_out=$("$JDK/bin/java" -cp "$TRABAJO/clases" "$c" 2>&1); jvm=$?
 	set -e
@@ -142,4 +175,4 @@ enAparato "$DEXDUMP /data/local/tmp/lam.dex >/dev/null 2>&1; echo \$?" > "$TRABA
 dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
 [ "$dv" = "0" ] || { echo "lambda: dexdump rc=$dv"; exit 1; }
 echo "  dexdump verificando: rc 0"
-echo "lambda: las diez lambdas se desugraron y corren igual que la JVM"
+echo "lambda: las trece lambdas y concatenaciones se desugraron y corren igual que la JVM"

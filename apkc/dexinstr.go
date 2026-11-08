@@ -1585,7 +1585,11 @@ func (p *traduce) recorre() error {
 			}
 			p.push(r)
 		case "invokedynamic":
-			p.lambda(in)
+			if _, ok := p.clase.Concats[in.pc]; ok {
+				p.concat(in)
+			} else {
+				p.lambda(in)
+			}
 		case "invokevirtual", "invokespecial", "invokestatic", "invokeinterface":
 			p.invocaMetodo(in, seTira)
 			if seTira && p.err == nil {

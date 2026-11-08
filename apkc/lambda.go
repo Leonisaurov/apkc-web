@@ -73,6 +73,17 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 				if in.name != "invokedynamic" {
 					continue
 				}
+				// La concatenación de JDK 9 es otro bootstrap: si el sitio es suyo, se anota en
+				// `Concats` y no se crea ninguna clase sintética.
+				if concat, es, err := sitioDeConcat(cf, x, int(binary.BigEndian.Uint16(in.ops))); err != nil {
+					return nil, fmt.Errorf("%s%s pc %d: %w", cf.Name, m.Desc, in.pc, err)
+				} else if es {
+					if cf.Concats == nil {
+						cf.Concats = map[int]classConcat{}
+					}
+					cf.Concats[in.pc] = concat
+					continue
+				}
 				sitio, impl, err := sitioDeLambda(cf, x, int(binary.BigEndian.Uint16(in.ops)))
 				if err != nil {
 					return nil, fmt.Errorf("%s%s pc %d: %w", cf.Name, m.Desc, in.pc, err)

@@ -5802,7 +5802,8 @@ Lo que se mide y lo que se rechaza:
 | referencias sin receptor (`Tipo::m`) | se desugran en el §112 |
 | SAM genérico y borrado a una cota | se desugran con el descriptor borrado y `checkcast` en los §113 y §114 |
 | `altMetafactory` serializable y con marcadores | se desugra con las interfaces extra en el §115 |
-| puentes de `altMetafactory` y concatenación dinámica | se rechazan por nombre |
+| concatenación dinámica (`makeConcatWithConstants`) | se desugra a `StringBuilder` en el §116 |
+| puentes de `altMetafactory` y constantes dinámicas | se rechazan por nombre |
 
 Implementado en `apkc/lambda.go` (expansión, validación y clase sintética), `apkc/classreader.go`
 (`BootstrapMethods` y los tags del pool), `apkc/dextabla.go` (internado del sitio),
@@ -5871,8 +5872,8 @@ dueño (`this::m`); si no hay capturas, el primer parámetro del SAM tiene que s
 (`Tipo::m`), y los parámetros del implementador son los del SAM menos ese receptor. Prueba:
 `TestLaReferenciaSinReceptor` en `apkc/lambda_test.go` y el caso `LamUnb` de `banco/lambda.sh`.
 
-Sigue fuera: la concatenación dinámica de JDK 9 (`makeConcatWithConstants`), que se rechaza por
-nombre. El SAM genérico se mide en el §113 y `altMetafactory` en el §115.
+Sigue fuera: nada de lo que `javac` emite para una lambda. El SAM genérico se mide en el §113,
+`altMetafactory` en el §115 y la concatenación dinámica de JDK 9 en el §116.
 
 ## 113. SAM genérico: descriptor borrado y `checkcast` al tipo instanciado
 
@@ -5906,7 +5907,7 @@ tipo del SAM (`Object` acepta el `Integer` del implementador, que ya viene encaj
 Prueba: `TestElSamGenericoUsaElDescriptorBorrado` y el caso `LamGen` de `banco/lambda.sh`.
 
 Frontera: el borrado a un tipo que no sea `Object` se mide en el §114; `altMetafactory`
-(serializables y marcadores) en el §115; la concatenación dinámica de JDK 9 sigue fuera.
+(serializables y marcadores) en el §115 y la concatenación dinámica de JDK 9 en el §116.
 
 ## 114. Borrado a una cota (`T extends Number`) y el orden del `annotation_set`
 
@@ -6009,4 +6010,81 @@ constructor; `LamMarcas` es la intersección con dos marcadores. Pruebas:
 `banco/lambda.sh` que pasan por `dexdump` y `app_process64`.
 
 Frontera: la serialización de ida y vuelta no se mide; se mide que el dex se construya y ejecute
-como el de `d8`. Los puentes de `altMetafactory` y la concatenación dinámica de JDK 9 siguen fuera.
+como el de `d8`. Los puentes de `altMetafactory` siguen fuera y se rechazan por nombre; la
+concatenación dinámica de JDK 9 se mide en el §116.
+
+## 116. `makeConcatWithConstants`: la concatenación dinámica de JDK 9
+
+Desde Java 9, `javac` no escribe `StringBuilder` para `a + b + c`: deja un `invokedynamic` cuyo
+bootstrap es `java/lang/invoke/StringConcatFactory.makeConcatWithConstants`. El primer argumento del
+bootstrap es una **receta**: cada `\u0001` consume el siguiente argumento dinámico y cada `\u0002` la
+siguiente constante de la lista que viene detrás. Con `--min-api 21`, `d8` lo baja otra vez a
+`new-instance StringBuilder`, un `append` por trozo y `toString`.
+
+```sh
+P=/data/data/com.termux/files/usr
+W=$P/tmp/lamser
+cat >"$W/src/ConcatB.java" <<'J'
+public class ConcatB {
+    public static void main(String[] a) {
+        int n = a.length;
+        String r = "a" + "\u0001" + "b" + "\u0002" + "c" + n;
+        System.out.println(r.length() + ":" + r.equals("a\u0001b\u0002c" + n));
+    }
+}
+J
+"$P/lib/jvm/java-21-openjdk/bin/javac" --release 11 -g:lines,source -d "$W/clases" "$W/src/ConcatB.java"
+"$P/lib/jvm/java-21-openjdk/bin/javap" -v -cp "$W/clases" ConcatB
+"$HOME/Android/build-tools/34.9.0/d8" --release --min-api 21 --output "$W/d8catb" "$W/clases/ConcatB.class"
+/apex/com.android.art/bin/dexdump -d "$W/d8catb/classes.dex"
+```
+
+`javap -v` deja la receta `\u0002\u0001` y una sola constante, `a\u0001b\u0002c`. `\u0002` aparece
+justo cuando el texto contiene los marcadores; sin ellos, `javac` dobla el literal dentro de la
+propia receta y la lista de constantes queda vacía. `d8` escribe:
+
+```text
+0001: new-instance v0, Ljava/lang/StringBuilder;
+0003: const-string v1, "a\001b\002c"
+0005: invoke-direct {v0, v1}, Ljava/lang/StringBuilder;.<init>:(Ljava/lang/String;)V
+0008: invoke-virtual {v0, v5}, Ljava/lang/StringBuilder;.append:(I)Ljava/lang/StringBuilder;
+000c: invoke-virtual {v0}, Ljava/lang/StringBuilder;.toString:()Ljava/lang/String;
+```
+
+El constructor lleva el primer texto cuando la receta empieza por literal o por constante; si empieza
+por `\u0001`, `d8` usa el constructor vacío. Los `append` que elige son los del tipo del argumento:
+`(I)`, `(J)`, `(F)`, `(D)`, `(C)`, `(Z)`, `(Ljava/lang/String;)` y, para una referencia cualquiera,
+`(Ljava/lang/Object;)`. `javac` convierte antes las referencias y los arreglos con
+`String.valueOf`, así que en la práctica el descriptor solo trae `String` y primitivos.
+
+Este fork trocea la receta igual y baja cada sitio a `new-instance` + `<init>()V` + un `append` por
+trozo + `toString`, con el constructor vacío siempre y sin encadenar el `move-result-object` de cada
+`append`: el comportamiento es el mismo que el de `d8`, aunque la forma no sea idéntica. Está en
+`apkc/concat.go`; el sitio se valida en `expandirLambdas` (`apkc/lambda.go`) y se guarda en
+`classFull.Concats`, el internador lo sigue en `dextabla.collectCode` y el traductor lo despacha en
+`dexinstr.go`. Se rechazan por nombre la receta que no cuadra con el descriptor o con las
+constantes, las constantes dinámicas del bootstrap y cualquier otro bootstrap de
+`StringConcatFactory`.
+
+La ejecución en ART, junto a las diez lambdas del §115:
+
+```sh
+APKC=$P/tmp/apkc-gate sh banco/lambda.sh
+```
+
+```text
+  Concat: jvm rc=0 «n=0!» · aparato rc=0 «n=0!»
+  ConcatB: jvm rc=0 «6:true» · aparato rc=0 «6:true»
+  ConcatW: jvm rc=0 «ztruecxj2f1.5d2.5i0ssoobj» · aparato rc=0 «ztruecxj2f1.5d2.5i0ssoobj»
+  dexdump verificando: rc 0
+lambda: las trece lambdas y concatenaciones se desugraron y corren igual que la JVM
+```
+
+`Concat` es la forma básica; `ConcatB` es la receta con `\u0002`; `ConcatW` conserva un argumento
+dinámico de cada tipo y comprueba que el dex nombra los siete `append`. Pruebas:
+`TestLaConcatenacionConConstantesDelBootstrap` y `TestLaConcatenacionEligeElAppendDeCadaTipo` en
+`apkc/concat_test.go`, más los tres casos de `banco/lambda.sh` que pasan por `dexdump` y
+`app_process64`.
+
+Frontera: los puentes de `altMetafactory` con cuenta distinta de cero y las constantes dinámicas de
+la concatenación siguen fuera y se rechazan por nombre; `javac` no produce ninguna de las dos.

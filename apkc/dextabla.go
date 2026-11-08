@@ -243,9 +243,13 @@ func (t *dexTables) collectCode(cf classFull, m classMethod) error {
 				t.internType("[" + clase)
 			}
 		case "invokedynamic":
+			if concat, ok := cf.Concats[in.pc]; ok {
+				t.internConcat(concat)
+				break
+			}
 			sitio, ok := cf.Lambdas[in.pc]
 			if !ok {
-				return fmt.Errorf("an invokedynamic at pc %d that the lambda expansion did not cover", in.pc)
+				return fmt.Errorf("an invokedynamic at pc %d that the expansion did not cover", in.pc)
 			}
 			t.internType(sitio.clase)
 			t.internMethod(sitio.clase, sitio.ctorDesc, "<init>")
