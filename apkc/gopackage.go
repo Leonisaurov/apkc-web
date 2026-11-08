@@ -156,7 +156,11 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 	if err != nil {
 		return err
 	}
-	block := apkSigningBlock(v2Block)
+	v3Block, err := v3SignerBlock(digest, key, cert)
+	if err != nil {
+		return err
+	}
+	block := apkSigningBlock(v2Block, v3Block)
 
 	if _, err := out.Write(block); err != nil {
 		return err

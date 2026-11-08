@@ -31,6 +31,7 @@ import (
 const (
 	// the ID of the v2 block inside the APK Signing Block
 	apkSigningBlockIDv2 = 0x7109871a
+	apkSigningBlockIDv3 = 0xf05368c0
 	// RSASSA-PKCS1-v1_5 with SHA-256, the algorithm a debug RSA key signs with
 	sigAlgRSASSAWithSHA256 = 0x0103
 	// the magic that lets a verifier find the block before the central directory
@@ -161,12 +162,51 @@ func v2SignerBlock(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate) (
 	return seqOf(seqOf(signer)), nil
 }
 
+// v3SignerBlock: el firmante de APK Signature Scheme v3. El signed data lleva digests y
+// certificados y, al final, minSdk/maxSdk y la lista de atributos; el signer repite esos tres
+// campos fuera del signed data antes de las firmas y la clave pública. Medido sobre un apk de
+// `apksigner` en el parrafo 108: minSdk 24, maxSdk 0x7fffffff.
+func v3SignerBlock(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
+	pub, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		return nil, err
+	}
+	digests := pairsOf([][2]interface{}{{uint32(sigAlgRSASSAWithSHA256), digest}})
+	certs := seqOf(cert.Raw)
+	minSdk := appendUint32(nil, 24)
+	maxSdk := appendUint32(nil, 0x7fffffff)
+	attrs := appendUint32(nil, 0) // lista de atributos adicionales vacía (longitud 0)
+	// digests y certs van cada uno como elemento con su longitud, y después minSdk/maxSdk crudos y
+	// la lista de atributos. Ese envoltorio de más es la diferencia de 8 bytes con el v2.
+	signedData := seqOf(digests, certs)
+	signedData = append(signedData, minSdk...)
+	signedData = append(signedData, maxSdk...)
+	signedData = append(signedData, attrs...)
+	signedDigest := sha256.Sum256(signedData)
+	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, signedDigest[:])
+	if err != nil {
+		return nil, err
+	}
+	signatures := pairsOf([][2]interface{}{{uint32(sigAlgRSASSAWithSHA256), signature}})
+	// Fuera del signed data van solo minSdk, maxSdk, las firmas y la clave pública. La lista de
+	// atributos (vacía) va dentro del signed data; medido en el parrafo 108 sobre apksigner.
+	signer := seqOf(signedData)
+	signer = append(signer, minSdk...)
+	signer = append(signer, maxSdk...)
+	signer = append(signer, seqOf(signatures)...)
+	signer = append(signer, seqOf(pub)...)
+	return seqOf(seqOf(signer)), nil
+}
+
 // apkSigningBlock wraps the v2 block in the container the platform looks for, and
 // pads it to a multiple of the page size the way apksigner does: the central directory
 // that follows then starts on a page boundary, which is what lets ART map it.
-func apkSigningBlock(v2Block []byte) []byte {
+func apkSigningBlock(v2Block, v3Block []byte) []byte {
 	const fixed = 8 + 8 + 16 // the two size fields and the magic
 	pairs := uint64(8 + 4 + len(v2Block))
+	if len(v3Block) > 0 {
+		pairs += uint64(8 + 4 + len(v3Block))
+	}
 	blockSize := uint64(fixed) + pairs
 
 	padding := uint64(0)
@@ -184,6 +224,11 @@ func apkSigningBlock(v2Block []byte) []byte {
 	out = appendUint64(out, uint64(4+len(v2Block)))
 	out = appendUint32(out, apkSigningBlockIDv2)
 	out = append(out, v2Block...)
+	if len(v3Block) > 0 {
+		out = appendUint64(out, uint64(4+len(v3Block)))
+		out = appendUint32(out, apkSigningBlockIDv3)
+		out = append(out, v3Block...)
+	}
 	if padding > 0 {
 		out = appendUint64(out, padding-8)
 		out = appendUint32(out, apkVerityPaddingBlockID)

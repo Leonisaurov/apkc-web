@@ -5677,3 +5677,39 @@ El arsc de **680 bytes** es idéntico: `language[0]='e'` y `language[1]='s'` en 
 `fuentesDelProyecto` (reconoce `values-xx-rYY`) y `configDe` (`apkc/arscwriter.go`). Prueba:
 `apkc/valores_region_test.go`.
 
+## 108. APK Signature Scheme v3, escrito y verificado por `apksigner`
+
+El paquete Go escribe ahora el par v3 (`0xf05368c0`) junto al v2. El signer v3 se midió sobre un apk
+que firmó `apksigner --v3-signing-enabled true` y después se reprodujo:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/region/proj
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" \
+  --keystore "$HOME/.android/debug.keystore"
+apksigner verify --verbose --min-sdk-version 21 build/app.apk
+```
+
+Salida:
+
+```text
+Verifies
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+```
+
+La forma medida del signer v3:
+
+| campo | valor |
+| --- | --- |
+| `signed data` | `digests` y `certificates`, **cada uno con su longitud**, y después `minSdk` 24, `maxSdk` 0x7fffffff y la lista de atributos vacía (u32 0) |
+| signer | `signed data` con longitud, minSdk/maxSdk crudos, las firmas con longitud y la clave pública con longitud |
+| bloque | un par v2 y otro v3 dentro del mismo APK Signing Block |
+
+El defecto del primer intento fue no envolver `digests`/`certs` en su longitud (faltaban 8 bytes) y
+poner la lista de atributos **fuera** del signed data: `apksigner` respondía `Invalid SDK Version
+parameter(s)` y `No signatures`. Corregidos los dos, verifica v3. Prueba:
+`TestElBloqueV3LlevaSuParYSuSigner` (pares y longitudes del signer); `studio/e2e.sh` exige
+`v3 scheme … true` en el apk del proyecto y en el del icono.
+

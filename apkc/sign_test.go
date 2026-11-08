@@ -487,3 +487,61 @@ func TestOldSignatureEntryReadsWhatApksignerSpells(t *testing.T) {
 		}
 	}
 }
+
+// TestElBloqueV3LlevaSuParYSuSigner: APK Signature Scheme v3. El bloque lleva el par v3 además del
+// v2; el signer tiene signed data, minSdk 24, maxSdk 0x7fffffff, las firmas y la clave pública, con
+// los digests y certificados envueltos en su longitud (parrafo 108).
+func TestElBloqueV3LlevaSuParYSuSigner(t *testing.T) {
+	key, cert := signingPair(t)
+	digest := make([]byte, 32)
+	for i := range digest {
+		digest[i] = byte(i)
+	}
+	v2, err := v2SignerBlock(digest, key, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3, err := v3SignerBlock(digest, key, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bloque := apkSigningBlock(v2, v3)
+	if !bytes.HasSuffix(bloque, []byte(apkSigningBlockMagic)) {
+		t.Fatal("el bloque no termina en la magia")
+	}
+	leer := func(b []byte, o int) uint32 {
+		return uint32(b[o]) | uint32(b[o+1])<<8 | uint32(b[o+2])<<16 | uint32(b[o+3])<<24
+	}
+	pares := map[uint32]bool{}
+	fin := len(bloque) - 24
+	for o := 8; o < fin; {
+		l := int(uint64(leer(bloque, o)) | uint64(leer(bloque, o+4))<<32)
+		o += 8
+		pares[leer(bloque, o)] = true
+		o += l
+	}
+	if !pares[apkSigningBlockIDv2] || !pares[apkSigningBlockIDv3] {
+		t.Fatalf("faltan pares: v2=%v v3=%v", pares[apkSigningBlockIDv2], pares[apkSigningBlockIDv3])
+	}
+	// el value de v3: seq(seq(signer))
+	if int(leer(v3, 0))+4 != len(v3) {
+		t.Fatal("la longitud exterior de v3 no cierra")
+	}
+	inner := v3[4 : 4+leer(v3, 0)]
+	if int(leer(inner, 0))+4 != len(inner) {
+		t.Fatal("la longitud del signer no cierra")
+	}
+	signer := inner[4:]
+	sdLen := int(leer(signer, 0))
+	if sdLen+4 >= len(signer) {
+		t.Fatal("signed data fuera del signer")
+	}
+	pos := 4 + sdLen
+	if leer(signer, pos) != 24 || leer(signer, pos+4) != 0x7fffffff {
+		t.Fatalf("min/max son %d/%#x", leer(signer, pos), leer(signer, pos+4))
+	}
+	pos += 8
+	if int(leer(signer, pos))+4 > len(signer) {
+		t.Fatal("las firmas se salen del signer")
+	}
+}

@@ -63,6 +63,7 @@ variancia() { # $1 nombre, $2 kotlin (0/1)
   fi
   grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v1"
   grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v2"
+  grep -q 'v3 scheme (APK Signature Scheme v3): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v3"
   if ! python3 "$ZIPCHECK" build/app.apk >/dev/null 2>&1; then
     falla "$nombre: zipcheck rechaza el paquete"; python3 "$ZIPCHECK" build/app.apk | head -5
   fi
@@ -370,6 +371,8 @@ JAVA
     falla "el PNG del apk no es el del proyecto"
   "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$apk" >"$TMP/studio-icono-verify.log" 2>&1 ||
     falla "apksigner no verifica el apk con icono"
+  grep -q 'v3 scheme (APK Signature Scheme v3): true' "$TMP/studio-icono-verify.log" ||
+    falla "el apk con icono no lleva v3"
   "$BUILD_TOOLS/zipalign" -c -p 4 "$apk" >/dev/null 2>&1 || falla "zipalign rechaza el apk con icono"
   avisa "icono: apk de $(wc -c <"$apk" | tr -d ' ') bytes, aapt2 declara drawable/icono y el PNG viaja literal"
 }
