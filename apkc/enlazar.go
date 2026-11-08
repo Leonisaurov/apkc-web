@@ -193,9 +193,14 @@ func atributosQueElEnlaceAnade(opts opcionesDeEnlace, m *marcoRecursos) ([]atrib
 	// medido en el fichero fijado: platformBuildVersionCode es el numero de API (34) y
 	// platformBuildVersionName es el NUMERO DE VERSION de Android escrito como entero (14), con crudo
 	// -1. El nombre sale del codename, que en la fijacion vale "14".
-	nombrePlataforma, err := enteroDeTexto(opts.compileSdkCodename)
-	if err != nil {
-		return nil, fmt.Errorf("platformBuildVersionName sale del codename, y %q no es un numero: la forma con un codename no numerico no esta medida", opts.compileSdkCodename)
+	// `14` va como entero; un codename no numerico (`12L`, `8.1`) va como cadena, que es lo que
+	// escribe aapt2 (medido en el parrafo 108).
+	nombrePlataforma, errNumero := enteroDeTexto(opts.compileSdkCodename)
+	tipoNombre, datosNombre, textoNombre := byte(tipoEnteroDec), uint32(0), ""
+	if errNumero == nil {
+		datosNombre = nombrePlataforma.datos
+	} else {
+		tipoNombre, textoNombre = tipoCadena, opts.compileSdkCodename
 	}
 	out := []atributoEscribir{}
 	for _, par := range []struct {
@@ -206,7 +211,7 @@ func atributosQueElEnlaceAnade(opts opcionesDeEnlace, m *marcoRecursos) ([]atrib
 		{"android", "compileSdkVersion", "", tipoEnteroDec, uint32(opts.compileSdkVersion)},
 		{"android", "compileSdkVersionCodename", opts.compileSdkCodename, tipoCadena, 0},
 		{"", "platformBuildVersionCode", "", tipoEnteroDec, uint32(opts.compileSdkVersion)},
-		{"", "platformBuildVersionName", "", tipoEnteroDec, nombrePlataforma.datos},
+		{"", "platformBuildVersionName", textoNombre, tipoNombre, datosNombre},
 	} {
 		id, err := idDe(par.nombre)
 		if err != nil {

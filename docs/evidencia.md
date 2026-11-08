@@ -5395,7 +5395,7 @@ La tabla que usa `nombreDeVersionDeAndroid` para `compileSdkVersionCodename` y
 
 ```sh
 cd /data/data/com.termux/files/usr/tmp/tipos/proj
-for par in '35 15' '33 13' '31 12' '28 9'; do
+for par in '35 15' '33 13' '32 12L' '31 12' '28 9' '27 8.1'; do
   set -- $par
   aapt2 link -o v$1.apk --manifest AndroidManifest.xml \
     --compile-sdk-version-code "$1" --compile-sdk-version-name "$2" \
@@ -5404,11 +5404,11 @@ for par in '35 15' '33 13' '31 12' '28 9'; do
 done
 ```
 
-La tabla implementada es `28→9`, `29→10`, `30→11`, `31→12`, `33→13`, `34→14` y `35→15`. La 34/14
-se había medido en el §37; las demás se comprobaron con el comando de arriba (aapt2 escribe el número
-en `platformBuildVersionName`). Las APIs 27 (`8.1`) y 32 (`12L`) no tienen un nombre numérico y se
-siguen rechazando por nombre, igual que cualquier API fuera de la tabla; para ellas queda `--codename`.
-Prueba: `TestVersionesDeAndroidMedidas`.
+La tabla implementada es `27→8.1`, `28→9`, `29→10`, `30→11`, `31→12`, `32→12L`, `33→13`, `34→14`
+y `35→15`. La 34/14 se había medido en el §37; las demás se comprobaron con el comando de arriba.
+Cuando el nombre no es numérico (`8.1`, `12L`), `platformBuildVersionName` se escribe como **cadena**,
+que es lo que hace aapt2; con un nombre numérico sigue siendo entero. Cualquier API fuera de la tabla
+se rechaza por nombre y se puede pasar con `--codename`. Prueba: `TestVersionesDeAndroidMedidas`.
 
 ## 99. Una anónima dentro de un método `static` sin captura
 

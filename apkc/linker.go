@@ -306,6 +306,8 @@ func nombreDeVersionDeAndroid(api int) (string, bool) {
 	// y se comprobaron con el volcado del §98. Las que no tienen nombre numérico (API 32 = 12L, 27 =
 	// 8.1) se dejan fuera: `platformBuildVersionName` las escribiría como entero y eso no se midió.
 	switch api {
+	case 27:
+		return "8.1", true
 	case 28:
 		return "9", true
 	case 29:
@@ -314,6 +316,8 @@ func nombreDeVersionDeAndroid(api int) (string, bool) {
 		return "11", true
 	case 31:
 		return "12", true
+	case 32:
+		return "12L", true
 	case 33:
 		return "13", true
 	case 34:

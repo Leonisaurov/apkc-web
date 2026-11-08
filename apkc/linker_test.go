@@ -52,15 +52,15 @@ func TestManifestJavaDePermissions(t *testing.T) {
 }
 
 func TestVersionesDeAndroidMedidas(t *testing.T) {
-	for api, quiero := range map[int]string{28: "9", 29: "10", 30: "11", 31: "12", 33: "13", 34: "14", 35: "15"} {
+	for api, quiero := range map[int]string{27: "8.1", 28: "9", 29: "10", 30: "11", 31: "12", 32: "12L", 33: "13", 34: "14", 35: "15"} {
 		got, ok := nombreDeVersionDeAndroid(api)
 		if !ok || got != quiero {
 			t.Errorf("API %d: %q/%v, se esperaba %q", api, got, ok, quiero)
 		}
 	}
-	for _, api := range []int{27, 32, 36} {
+	for _, api := range []int{26, 36} {
 		if _, ok := nombreDeVersionDeAndroid(api); ok {
-			t.Errorf("API %d no deberia estar en la tabla (nombre no numerico o no medido)", api)
+			t.Errorf("API %d no deberia estar en la tabla (no medida)", api)
 		}
 	}
 }
