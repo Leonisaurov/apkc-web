@@ -5494,3 +5494,33 @@ Implementado: el lector guarda `Signature` de clase, campo y método (`apkc/clas
 directorio de anotaciones escribe `fields_size` y los `field_idx` además de clases y métodos.
 Prueba: `apkc/dexanota_firma_test.go` (los cuatro troceados y las tres reglas).
 
+## 102. El `<permission>` del manifiesto y su `Manifest.java`
+
+`aapt2` no rechaza un manifiesto con `<permission>`: además del AXML escribe
+`<paquete>/Manifest.java` con las constantes. Medido con `aapt2 link --java`:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/perm/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o app.apk --manifest AndroidManifest.xml --java ../java \
+  -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+cat ../java/com/perm/Manifest.java
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+cat src/com/perm/Manifest.java
+```
+
+El fichero que escribe este fork es el de aapt2, byte a byte salvo la ausencia de salto final (nosotros
+también lo omitimos): cabecera `AUTO-GENERATED`, `package com.perm;`, `public final class Manifest`,
+`public static final class permission` y una constante por permiso en el orden del manifiesto:
+
+```text
+public static final String CAMARA="com.perm.CAMARA";
+public static final String RED="com.perm.RED";
+```
+
+Implementado: `manifestJavaDe` recorre los `<permission android:name=…>` del árbol del manifiesto y
+`enlazarConGo` escribe `src/<paquete>/Manifest.java` junto a la `R.java`; el cambio de contenido entra
+en la detección de recompilación. Prueba: `TestManifestJavaDePermissions`. Queda fuera cualquier
+atributo de `<permission>` distinto de `android:name`.
+

@@ -29,6 +29,28 @@ func proyecto(t *testing.T, archivos map[string]string) string {
 const manifestMinimo = `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p.q"><application/></manifest>`
 const valuesMinimo = `<resources><string name="s">hola</string></resources>`
 
+func TestManifestJavaDePermissions(t *testing.T) {
+	a, err := leerArbolDe(fuenteXML{nombre: "AndroidManifest.xml", contenido: []byte(
+		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.perm"><permission android:name="com.perm.CAMARA"/><permission android:name="com.perm.RED"/><application/></manifest>`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := manifestJavaDe(a, "com.perm")
+	for _, quiero := range []string{
+		"package com.perm;",
+		"public final class Manifest {",
+		`public static final String CAMARA="com.perm.CAMARA";`,
+		`public static final String RED="com.perm.RED";`,
+	} {
+		if !strings.Contains(got, quiero) {
+			t.Errorf("Manifest.java no contiene %q:\n%s", quiero, got)
+		}
+	}
+	if manifestJavaDe(&arbolFuente{raiz: &nodoFuente{nombre: "manifest"}}, "p") != "" {
+		t.Error("un manifiesto sin permisos genero Manifest.java")
+	}
+}
+
 func TestVersionesDeAndroidMedidas(t *testing.T) {
 	for api, quiero := range map[int]string{28: "9", 29: "10", 30: "11", 31: "12", 33: "13", 34: "14", 35: "15"} {
 		got, ok := nombreDeVersionDeAndroid(api)
@@ -91,14 +113,6 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 			"un recurso que no es xml dentro de layout",
 			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/layout/nota.txt": "hola"},
 			"layout solo admite .xml",
-		},
-		{
-			"un manifiesto con permission, que aapt2 acompana de un Manifest.java",
-			map[string]string{
-				"AndroidManifest.xml": `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="p"><permission android:name="x"/><application/></manifest>`,
-				"res/values/a.xml":    valuesMinimo,
-			},
-			"Manifest.java",
 		},
 		{
 			"un proyecto sin manifiesto",

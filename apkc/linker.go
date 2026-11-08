@@ -92,9 +92,7 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 	if err != nil {
 		return nil, nil, nil, manifiesto, fmt.Errorf("el proyecto no tiene AndroidManifest.xml: %w", err)
 	}
-	if strings.Contains(string(manifiesto.contenido), "<permission") {
-		return nil, nil, nil, manifiesto, fmt.Errorf("el manifiesto declara <permission>: aapt2 escribe ademas un Manifest.java y este enlace no lo escribe")
-	}
+	// `<permission>` ya no se rechaza: el enlace escribe su Manifest.java (parrafo 102).
 
 	res := filepath.Join(raiz, "res")
 	entradas, err := os.ReadDir(res)
@@ -236,9 +234,18 @@ func enlazarConGo(raiz, androidJar string, opts opcionesDeEnlace) (bool, error) 
 	if err := os.WriteFile(ruta, []byte(enlazado.r), 0o644); err != nil {
 		return false, err
 	}
+	cambio := errLeer != nil || string(antes) != enlazado.r
+	if enlazado.manifestJava != "" {
+		mruta := filepath.Join(filepath.Dir(ruta), "Manifest.java")
+		manAntes, errMan := os.ReadFile(mruta)
+		if err := os.WriteFile(mruta, []byte(enlazado.manifestJava), 0o644); err != nil {
+			return false, err
+		}
+		cambio = cambio || errMan != nil || string(manAntes) != enlazado.manifestJava
+	}
 	// la R vale para javac: si el contenido no cambio, los fuentes que leen esas constantes no se
 	// invalidan (la misma regla que comprueba el enlace de aapt2 con snapshotGenJava)
-	return errLeer != nil || string(antes) != enlazado.r, nil
+	return cambio, nil
 }
 
 // opcionesDelProyecto saca lo que aapt2 recibe por bandera y aqui se pasa a mano. La version se puede
