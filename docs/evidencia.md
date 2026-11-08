@@ -5799,7 +5799,8 @@ Lo que se mide y lo que se rechaza:
 | clase sintética | `PUBLIC FINAL SYNTHETIC`, la interfaz SAM, `<init>()V` y el método SAM que llama al implementador |
 | sitio en el llamador | `new-instance` + `invoke-direct {v}, <init>()V`; el valor queda en el mismo registro |
 | capturas (`(I)`, `(LLam;)`) y `this::m` | se desugran con campos de captura en el §111 |
-| referencias sin receptor (`Tipo::m`), `altMetafactory` y concatenación dinámica | se rechazan por nombre |
+| referencias sin receptor (`Tipo::m`) | se desugran en el §112 |
+| `altMetafactory`, SAM genérico y concatenación dinámica | se rechazan por nombre |
 
 Implementado en `apkc/lambda.go` (expansión, validación y clase sintética), `apkc/classreader.go`
 (`BootstrapMethods` y los tags del pool), `apkc/dextabla.go` (internado del sitio),
@@ -5844,7 +5845,29 @@ demás capturas van en los campos y después los argumentos del SAM. En el llama
 se cambia por `new-instance` y `invoke-direct {objeto, capturas…}, <init>`, con las capturas que ya
 estaban en la pila.
 
-Frontera medida: `Tipo::suma` sin receptor deja el objeto como **primer argumento del SAM**, no como
-captura, y se rechaza por nombre (`banco/lambda.sh` no lo incluye); `altMetafactory`, el SAM genérico
-y la concatenación dinámica siguen fuera. Pruebas: `apkc/lambda_test.go` (los cuatro casos y el
-rechazo de la referencia sin receptor) y `banco/lambda.sh`.
+Pruebas: `apkc/lambda_test.go` (los cuatro casos) y `banco/lambda.sh`. La referencia sin receptor se
+mide en el §112.
+
+## 112. Referencia a un método de instancia sin receptor (`Tipo::m`)
+
+`LamUnb::suma` no captura nada: el sitio es `()LLamUnb$F;` y el **primer parámetro del SAM** es el
+receptor (`(LLamUnb;I)I`). La clase sintética no lleva campos; su método SAM carga todos los
+argumentos y llama con `invoke-virtual`, usando el primero como objeto. Medido y ejecutado:
+
+```sh
+sh banco/lambda.sh
+```
+
+```text
+  LamUnb: jvm rc=0 «42» · aparato rc=0 «42»
+  dexdump verificando: rc 0
+lambda: las cinco lambdas se desugraron y corren igual que la JVM
+```
+
+La validación distingue los dos caminos del receptor: si hay capturas, la primera tiene que ser el
+dueño (`this::m`); si no hay capturas, el primer parámetro del SAM tiene que ser el dueño
+(`Tipo::m`), y los parámetros del implementador son los del SAM menos ese receptor. Prueba:
+`TestLaReferenciaSinReceptor` en `apkc/lambda_test.go` y el caso `LamUnb` de `banco/lambda.sh`.
+
+Sigue fuera: `altMetafactory`, el SAM genérico con casting y la concatenación dinámica de JDK 9
+(`makeConcatWithConstants`), que se rechazan por nombre.

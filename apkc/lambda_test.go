@@ -155,12 +155,22 @@ func TestLaReferenciaAUnMetodoConReceptor(t *testing.T) {
 	}
 }
 
-// TestLaReferenciaSinReceptorSeRechazaPorNombre: `Tipo::suma` deja el receptor como primer argumento
-// del SAM, no como captura; ese caso no está medido.
-func TestLaReferenciaSinReceptorSeRechazaPorNombre(t *testing.T) {
-	_, err := expandirLambdas([]classFull{lambdaFixture(t, lamUnbJavac), lambdaFixture(t, lamUnbFJavac)})
-	if err == nil || !strings.Contains(err.Error(), "receptor") {
-		t.Fatalf("se esperaba el rechazo por receptor y salio: %v", err)
+// TestLaReferenciaSinReceptor: `Tipo::suma` no captura nada y deja el objeto como primer argumento
+// del SAM; el método SAM carga ese receptor y llama con invoke-virtual.
+func TestLaReferenciaSinReceptor(t *testing.T) {
+	clases := expandirPar(t, lamUnbJavac, lamUnbFJavac)
+	s := sinteticaDe(t, clases, "LLamUnb$$Lambda$0;")
+	if len(s.Fields) != 0 {
+		t.Fatalf("la sintetica sin capturas tiene campos: %+v", s.Fields)
+	}
+	if m, ok := buscaMetodo(s, "<init>"); !ok || m.Desc != "()V" {
+		t.Errorf("constructor: %+v", m)
+	}
+	if m, ok := buscaMetodo(s, "f"); !ok || m.Desc != "(LLamUnb;I)I" {
+		t.Errorf("SAM: %+v", m)
+	}
+	if _, err := dexDeClases(clases); err != nil {
+		t.Fatalf("el dex no sale: %v", err)
 	}
 }
 

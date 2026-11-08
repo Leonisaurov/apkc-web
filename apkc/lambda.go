@@ -156,21 +156,31 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador del sitio %q vive en %s; solo se mide el de la propia clase", nombre, implOwner)
 	}
 	_, retImpl, paramsImpl := splitDescriptor(implDesc)
+	_, retSam, paramsSam := splitDescriptor(sam)
 	receptor := implKind == 5 || implKind == 7
+	// `this::m` captura el receptor; `Tipo::m` lo deja como primer parámetro del SAM.
+	receptorEnSam := false
+	resto := capturas
 	if receptor {
-		if len(capturas) == 0 || capturas[0] != implOwner {
-			return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador de instancia del sitio %q no lleva el receptor en el primer valor capturado (%v)", nombre, capturas)
+		switch {
+		case len(capturas) > 0 && capturas[0] == implOwner:
+			resto = capturas[1:]
+		case len(capturas) == 0 && len(paramsSam) > 0 && paramsSam[0] == implOwner:
+			receptorEnSam = true
+			resto = nil
+		default:
+			return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el implementador de instancia del sitio %q no tiene receptor: ni en las capturas %v ni en el primer parametro del SAM %s", nombre, capturas, sam)
 		}
 	}
-	_, retSam, paramsSam := splitDescriptor(sam)
 	if retSam != retImpl {
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el sitio %q devuelve %s en el SAM y %s en el implementador", nombre, retSam, retImpl)
 	}
-	esperado := append([]string{}, capturas...)
-	if receptor {
-		esperado = esperado[1:]
+	esperado := append([]string{}, resto...)
+	if receptorEnSam {
+		esperado = append(esperado, paramsSam[1:]...)
+	} else {
+		esperado = append(esperado, paramsSam...)
 	}
-	esperado = append(esperado, paramsSam...)
 	if strings.Join(esperado, "") != strings.Join(paramsImpl, "") {
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("los valores capturados %v del sitio %q y el SAM %s no son los parametros del implementador %s", capturas, nombre, sam, implDesc)
 	}
@@ -324,10 +334,11 @@ func claseDeLambda(descriptor string, sitio lambdaSitio, impl implDeLambda) clas
 
 	_, ret, params := splitDescriptor(samDesc)
 	codigo := []byte{}
-	// el receptor de una referencia de instancia (`this::m`) es la primera captura
+	// el receptor de `this::m` es la primera captura; el de `Tipo::m` es el primer argumento del SAM
 	receptor := impl.kind == 5 || impl.kind == 7
+	receptorEnSam := receptor && len(sitio.capturas) == 0
 	desde := 0
-	if receptor {
+	if receptor && !receptorEnSam {
 		codigo = append(codigo, 0x2a, 0xb4, byte(fieldRefs[0]>>8), byte(fieldRefs[0]))
 		desde = 1
 	}

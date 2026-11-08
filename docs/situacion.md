@@ -563,7 +563,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   `values-xx` del 94, `string-array`/`integer-array`/`plurals` del 96, `menu`/`xml`/`raw` del 97, la
   anónima en `static` y la captura de locales del 99 y 100, `Signature` del 101, el `Manifest.java` de
   `<permission>` del 102, `layout-land`/`drawable-hdpi` del 103, `fraction` del 105, `attr`/`styleable`
-  del 106, `values-es-rMX` del 107, la firma v3 del 108 y las lambdas del 110 y 111).
+  del 106, `values-es-rMX` del 107, la firma v3 del 108 y las lambdas y referencias del 110 al 112).
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden
