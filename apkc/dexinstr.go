@@ -1584,6 +1584,8 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(r)
+		case "invokedynamic":
+			p.lambda(in)
 		case "invokevirtual", "invokespecial", "invokestatic", "invokeinterface":
 			p.invocaMetodo(in, seTira)
 			if seTira && p.err == nil {
@@ -2045,6 +2047,35 @@ func (p *traduce) metodoPrivado(nombre, desc string) bool {
 		}
 	}
 	return false
+}
+
+// lambda: un `invokedynamic` de lambda sin capturas ya desugrado en lambda.go. El objeto se crea con
+// `new-instance` y se construye con `invoke-direct {v}, <init>:()V`; el valor que deja en la pila es
+// el mismo registro (medido: `d8` escribe `new-instance v0` y detrás el constructor, §109).
+func (p *traduce) lambda(in jvmInstr) {
+	sitio, ok := p.clase.Lambdas[in.pc]
+	if !ok {
+		p.falla(in, "an invokedynamic that the lambda expansion did not cover")
+		return
+	}
+	metodo, ok := p.t.methodIdx[methodKey{owner: sitio.clase, proto: protoKeyOf("()V"), desc: "()V", name: "<init>"}]
+	if !ok {
+		p.falla(in, "the constructor of the synthetic lambda class "+sitio.clase+" was never interned")
+		return
+	}
+	r := p.toma(in)
+	p.palabra(uint16(opNuevaInstancia) | uint16(r&0xff)<<8)
+	if !p.indice(p.typeIdxDe(sitio.clase, in), in, "the type_id of the synthetic lambda class") {
+		return
+	}
+	p.invoca(opInvocaDirecto, []int{r}, []bool{false}, []bool{true}, metodo, in)
+	if p.err != nil {
+		return
+	}
+	if p.outs < 1 {
+		p.outs = 1
+	}
+	p.push(r)
 }
 
 func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {

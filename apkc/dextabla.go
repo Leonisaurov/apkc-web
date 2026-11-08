@@ -135,7 +135,7 @@ func (t *dexTables) collectClasses(classes []classFull) error {
 			if !m.HasCode {
 				continue
 			}
-			if err := t.collectCode(m, cf.p); err != nil {
+			if err := t.collectCode(cf, m); err != nil {
 				return fmt.Errorf("%s%s: %w", cf.Name, m.Name, err)
 			}
 		}
@@ -194,7 +194,8 @@ func (t *dexTables) collectClasses(classes []classFull) error {
 // collectCode follows the operands of the instructions the walker knows. Each of the sixteen has a
 // different kind of operand — a pool index for a field, a type for new, a string for ldc — and the
 // table below is what the dexer needs to know which one, exactly like the translation does.
-func (t *dexTables) collectCode(m classMethod, p *pool) error {
+func (t *dexTables) collectCode(cf classFull, m classMethod) error {
+	p := cf.p
 	if p == nil {
 		return errors.New("the class came without its constant pool")
 	}
@@ -241,6 +242,13 @@ func (t *dexTables) collectCode(m classMethod, p *pool) error {
 			if clase != "" {
 				t.internType("[" + clase)
 			}
+		case "invokedynamic":
+			sitio, ok := cf.Lambdas[in.pc]
+			if !ok {
+				return fmt.Errorf("an invokedynamic at pc %d that the lambda expansion did not cover", in.pc)
+			}
+			t.internType(sitio.clase)
+			t.internMethod(sitio.clase, "()V", "<init>")
 		}
 	}
 	// los tipos de la exception_table también: el handler los nombra por type_idx (parrafo 71)

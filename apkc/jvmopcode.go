@@ -187,6 +187,7 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xb7: {"invokespecial", 2},
 	0xb8: {"invokestatic", 2},
 	0xb9: {"invokeinterface", 4}, // index u16, then count u8 and a reserved u8
+	0xba: {"invokedynamic", 4},   // index u16, then two reserved bytes (medido en el §109)
 	0xbb: {"new", 2},
 	0xc0: {"checkcast", 2},
 	0xc1: {"instanceof", 2}, // medido en `Ins.esCadena` (parrafo 79): indice de dos bytes con la clase

@@ -10,8 +10,9 @@ package main
 //
 // Lo que entra tienen que ser `.class` ya compilados: hasta que la Fase 1G escriba el compilador de
 // Java en Go, el `javac` del equipo sigue siendo el que produce esos `.class`. Lo que sale es un dex
-// del subconjunto medido (§14 y §21): fuera quedan lambdas, `invokedynamic` y cualquier cosa que
-// necesite desugaring.
+// del subconjunto medido (§14, §21 y §110): una lambda estática sin capturas se desugra a una clase
+// sintética; las capturas, las referencias de instancia y la concatenación dinámica se rechazan por
+// nombre.
 
 import (
 	"flag"
@@ -32,8 +33,9 @@ subprocess anywhere. The input is whatever javac left on disk (build/classes, or
 output of a jar); the output is the named file, because the progress lines share stdout with
 the user and a dex does not belong among them.
 
-Only the measured subset is dexed: an invokedynamic, a lambda or a call returning long/float/double
-stops the command with its name, not a half-written dex.
+Only the measured subset is dexed: a static lambda without captures is desugared to a synthetic
+class; captures, instance method references or a dynamic concatenation stop the command with their
+name, not a half-written dex.
 `)
 	}
 	out := set.String("o", "build/outputs/classes.dex", "where the classes.dex goes")
@@ -78,6 +80,10 @@ stops the command with its name, not a half-written dex.
 // sale es el fichero. En dos líneas para que la página la pueda llamar sin reproducir el orden de
 // internar, ordenar y ensamblar.
 func dexDeClases(clases []classFull) ([]byte, error) {
+	clases, err := expandirLambdas(clases)
+	if err != nil {
+		return nil, err
+	}
 	td := newDexTables()
 	if err := td.collectClasses(clases); err != nil {
 		return nil, err

@@ -262,19 +262,24 @@ func TestArgCountIsTheSlotsTheParametersTake(t *testing.T) {
 }
 
 func TestReadClassFullRefusesWhatTheForkDoesNotDex(t *testing.T) {
-	// un lambda, o la concatenacion de strings que el JDK 9 compila como dynamic, dejan
-	// invokedynamic en el pool: el lector lo dice por su nombre en vez de dexar a medias
+	// un `invokedynamic` de lambda y su `MethodHandle` ya no se rechazan: los desugra lambda.go.
+	// Lo que sigue fuera es la constante dinámica (tag 17), que solo existe para alimentar un
+	// bootstrap y ninguno de los medidos la produce.
 	x := poolIndex{p: &pool{tag: map[int]byte{7: cpInvokeDynamic}}}
-	if err := x.refuseOutsideSubset(); err == nil || !strings.Contains(err.Error(), "invokedynamic") {
-		t.Errorf("an invokedynamic was accepted or refused in silence: %v", err)
+	if err := x.refuseOutsideSubset(); err != nil {
+		t.Errorf("an invokedynamic was refused, and it is desugared now: %v", err)
 	}
 	x2 := poolIndex{p: &pool{tag: map[int]byte{3: cpMethodHandle}}}
-	if err := x2.refuseOutsideSubset(); err == nil {
-		t.Error("a method handle was accepted, and only a dynamic call uses one")
+	if err := x2.refuseOutsideSubset(); err != nil {
+		t.Errorf("a method handle was refused, and it is read for the bootstrap: %v", err)
 	}
 	x3 := poolIndex{p: &pool{tag: map[int]byte{1: cpClass, 2: cpUtf8, 4: cpMethodref}}}
 	if err := x3.refuseOutsideSubset(); err != nil {
 		t.Errorf("the ordinary pool was refused: %v", err)
+	}
+	x4 := poolIndex{p: &pool{tag: map[int]byte{9: cpDynamic}}}
+	if err := x4.refuseOutsideSubset(); err == nil || !strings.Contains(err.Error(), "dynamic constant") {
+		t.Errorf("a dynamic constant was accepted or refused in silence: %v", err)
 	}
 }
 

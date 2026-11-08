@@ -5749,3 +5749,60 @@ pool entry %d is an invokedynamic: lambdas and dynamic concatenation are not dex
 No se declara hecha. La Fase 5 queda abierta por esta pieza (y por el keystore de release/v4 de
 5.21).
 
+
+## 110. `invokedynamic` de una lambda estática sin capturas, desugrado y ejecutado
+
+El único caso de 5.22 que se implementa: `x -> x + 1` dentro de un método `static`. `javac
+--release 8` deja el sitio con `LambdaMetafactory.metafactory`, el `MethodType` SAM, el
+`MethodHandle` del implementador y el `MethodType` instanciado; este fork lee el sitio y lo
+convierte en una clase sintética con constructor y método SAM.
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/lamok
+javac --release 8 -g:lines,source -d clases src/Lam.java
+apkc dex -o lamok.dex clases
+dexdump -d lamok.dex
+sh banco/lambda.sh
+```
+
+`dexdump -d` de nuestro fichero:
+
+```text
+Class descriptor  : 'LLam$$Lambda$0;'
+  name          : '<init>'
+000220: 7010 0800 0000  invoke-direct {v0}, Ljava/lang/Object;.<init>:()V
+  name          : 'f'
+000238: 7110 0400 0200  invoke-static {v2}, LLam;.lambda$uno$0:(I)I
+...
+  name          : 'uno'
+00026c: 2200 0100           new-instance v0, LLam$$Lambda$0;
+000270: 7010 0000 0000      invoke-direct {v0}, LLam$$Lambda$0;.<init>:()V
+```
+
+`banco/lambda.sh` compila con `javac`, dexa con este fork y ejecuta el `.dex` en el aparato con
+`app_process64`; la salida es la misma que la JVM y `dexdump` lo verifica:
+
+```text
+  jvm (javac): rc=0, salida: 42
+  aparato: rc=0, salida: 42
+  dexdump verificando: rc 0
+lambda: la lambda estatica sin capturas se desugro y corre igual que la JVM
+```
+
+Lo que se mide y lo que se rechaza:
+
+| pieza | qué hace este fork |
+| --- | --- |
+| `CONSTANT_InvokeDynamic` (tag 18), `BootstrapMethods`, `MethodHandle` (15) y `MethodType` (16) | se leen; el `invokedynamic` deja de rechazarse |
+| bootstrap `LambdaMetafactory.metafactory` con 3 argumentos | se acepta si el SAM y el tipo instanciado coinciden (nada de SAM genérico) |
+| implementador | `REF_invokeStatic` de la propia clase; a un `private static synthetic` se le quita `private`, como hace `d8` |
+| clase sintética | `PUBLIC FINAL SYNTHETIC`, la interfaz SAM, `<init>()V` y el método SAM que llama al implementador |
+| sitio en el llamador | `new-instance` + `invoke-direct {v}, <init>()V`; el valor queda en el mismo registro |
+| capturas (`(LLam;)LLam$F;`), referencias de instancia, `altMetafactory` y concatenación dinámica | se rechazan por nombre |
+
+Implementado en `apkc/lambda.go` (expansión, validación y clase sintética), `apkc/classreader.go`
+(`BootstrapMethods` y los tags del pool), `apkc/dextabla.go` (internado del sitio),
+`apkc/dexinstr.go` (el `new`/`invoke-direct`) y `apkc/jvmopcode.go` (el ancho 0xba). Pruebas:
+`apkc/lambda_test.go` (fixture de `javac`, estructura de la clase y del dex, y el rechazo de la
+captura) y `banco/lambda.sh` (ejecución en ART). El compilador de fuente de este fork sigue sin
+aceptar lambdas: esto mide el dexer sobre `.class` de `javac`, no la sintaxis.

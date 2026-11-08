@@ -59,6 +59,11 @@ type classFull struct {
 	Enclosing       classEnclosing
 	Signature       string // el attribute Signature de la clase, en texto MUTF-8
 
+	// BootstrapMethods y los sitios de lambda desugrados (lambda.go). El mapa va por pc y solo
+	// lleva los invokedynamic que este fork convierte a new/invokespecial.
+	BootstrapMethods []classBootstrap
+	Lambdas          map[int]classLambda
+
 	// p is the class's own constant pool. The dexer's interning follows operands that name
 	// pool entries, so the pool belongs with the class it came from; it is not part of what
 	// the shape of the class means.
@@ -241,6 +246,14 @@ func readClassFull(data []byte) (classFull, error) {
 		case "Signature":
 			r := &cursor{b: a.body}
 			cf.Signature = p.utf[r.u2()]
+		case "BootstrapMethods":
+			// JVMS 4.7.23: conteo, y por cada fila el MethodHandle y su lista de argumentos.
+			r := &cursor{b: a.body}
+			for i, n := 0, r.u2(); i < n && !r.failed(); i++ {
+				bm := classBootstrap{handle: r.u2()}
+				bm.args = append(bm.args, r.u2s()...)
+				cf.BootstrapMethods = append(cf.BootstrapMethods, bm)
+			}
 		}
 	}
 	cf.p = p
@@ -416,18 +429,15 @@ func (x poolIndex) doubleOf(i int) float64 {
 
 func (x poolIndex) tagOf(i int) byte { return x.p.tag[i] }
 
-// refuseOutsideSubset names the two things this fork does not dex. An invokedynamic or a dynamic
-// constant is a lambda or the string concatenation javac emits since JDK 9, and both need d8's
-// desugaring plus the bootstrap table that goes with them.
+// refuseOutsideSubset names the one thing this fork still does not dex. An invokedynamic of a
+// lambda without captures is desugared in lambda.go; the rest (captures, method references of an
+// instance, altMetafactory, the string concatenation of JDK 9) is refused there with its name. A
+// dynamic constant only exists to feed a bootstrap, and none of the measured bootstraps produce one.
 func (x poolIndex) refuseOutsideSubset() error {
 	for i, t := range x.p.tag {
 		switch t {
-		case cpInvokeDynamic:
-			return fmt.Errorf("pool entry %d is an invokedynamic: lambdas and dynamic concatenation are not dexed here (docs/plan.md, 2G.5)", i)
 		case cpDynamic:
 			return fmt.Errorf("pool entry %d is a dynamic constant, which only a bootstrap method produces: not dexed here", i)
-		case cpMethodHandle, cpMethodType:
-			return fmt.Errorf("pool entry %d is a method handle or type, used by dynamic calls: not desugared in this fork", i)
 		}
 	}
 	return nil
