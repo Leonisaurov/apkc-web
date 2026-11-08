@@ -5713,3 +5713,39 @@ parameter(s)` y `No signatures`. Corregidos los dos, verifica v3. Prueba:
 `TestElBloqueV3LlevaSuParYSuSigner` (pares y longitudes del signer); `studio/e2e.sh` exige
 `v3 scheme … true` en el apk del proyecto y en el del icono.
 
+## 109. `invokedynamic`: el coste medido de la desugración y por qué queda fuera
+
+Sonda `Lam` con una lambda estática, una referencia de método y una lambda que captura `this`:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/lam/sonda
+javac --release 8 -g:lines,source Lam.java
+cd .. && d8 --debug --min-api 28 --output d8 sonda/Lam.class sonda/Lam\$*.class
+/apex/com.android.art/bin/dexdump -d d8/classes.dex
+/apex/com.android.art/bin/dexdump -a d8/classes.dex
+```
+
+`d8` no deja el `invokedynamic`: **genera tres clases** y dos métodos sintéticos. Lo medido:
+
+| pieza | qué escribe `d8` |
+| --- | --- |
+| `Lam$0` | clase `PUBLIC FINAL SYNTHETIC`, campo `f$0:LLam;`, constructor `(LLam;)V`, `f(I)I` que llama a `lambda$captura$1$Lam` |
+| `Lam$1` | clase para `Lam::doble`, constructor `()V` y `f` que llama a `doble` |
+| `Lam$2` | clase para `x -> x + 1`, `f` que llama a `lambda$uno$0` |
+| `lambda$uno$0` / `lambda$captura$1$Lam` | métodos sintéticos en `Lam`, el segundo con el sufijo de la captura |
+| anotación | `Lcom/android/tools/r8/annotations/LambdaMethod;` con `holder`, `method` y `proto` |
+| bootstrap | `LambdaMetafactory.metafactory` con `samMethodType`, el `MethodHandle` de implementación y `instantiatedMethodType`, leídos del atributo `BootstrapMethods` |
+
+Para emitirlo desde este dexer haría falta leer `CONSTANT_InvokeDynamic` (tag 18), el atributo
+`BootstrapMethods`, el `MethodHandle` y los `MethodType`; sintetizar una clase por sitio con campos,
+constructor, método SAM y anotación; inyectar los `lambda$…` en la clase dueña; y sustituir la
+instrucción por `new`/`dup`/capturas/`invokespecial`. Es la pieza XL del plan (5.22), no un ítem de
+una sesión; el lector de `.class` la sigue rechazando por nombre:
+
+```text
+pool entry %d is an invokedynamic: lambdas and dynamic concatenation are not dexed here
+```
+
+No se declara hecha. La Fase 5 queda abierta por esta pieza (y por el keystore de release/v4 de
+5.21).
+
