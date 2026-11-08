@@ -418,7 +418,16 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			out = append(out, tokenJava{kind: 's', valor: texto, donde: pos{linea}})
 			i = nuevo
 		case c == '\'':
-			return nil, fmt.Errorf("linea %d: un literal de char no esta medido en este compilador", linea)
+			// el literal `char` del párrafo 87: un caracter entre comillas simples, con sus escapes. El
+			// valor que sale es el **punto de código**, que es lo que javac escribe con `iconst`/`bipush`/
+			// `sipush`/`ldc` medido en `Letras` (`'\n'` es `bipush 10`, `'á'` es `sipush 225` y `'\uFFFF'`
+			// es `ldc` con la entrada `Integer` 65535).
+			valor, nuevo, err := leerCharJava(fuente, i, linea)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, tokenJava{kind: 'c', valor: itoa(int(valor)), donde: pos{linea}})
+			i = nuevo
 		case esLetraJava(c) || c == '_' || c == '$':
 			// ASCII solo: Java permite letras de otros alfabetos en un identificador, pero la
 			// plantilla de la pagina y los fuentes que genera son ASCII, y leer un byte suelto de una
@@ -535,6 +544,93 @@ func leerCadenaJava(fuente string, i, linea int) (string, int, error) {
 }
 
 // ----- el parser -----
+
+// leerCharJava lee un literal `char` desde la comilla simple abre y devuelve su punto de código. Las
+// formas medidas con `javap -c` sobre la sonda `Letras` (párrafo 87): el caracter tal cual (`'A'` es
+// `bipush 65`), los escapes simples `\n \t \r \b \f \' \" \\` (`'\n'` es `bipush 10`, `'\''` es
+// `bipush 39`, `'\\'` es `bipush 92`), el escape octal (`'\101'` es `bipush 65`), el escape unicode
+// escrito en el fuente (`'\u0008'` es `bipush 8`, `'\uFFFF'` es `ldc` con la entrada `Integer` 65535)
+// y el caracter UTF-8 suelto (`'á'` es `sipush 225`). Con cualquier otra forma se rechaza por nombre.
+func leerCharJava(fuente string, i int, linea int) (int32, int, error) {
+	j := i + 1 // la comilla abre
+	if j >= len(fuente) {
+		return 0, 0, fmt.Errorf("linea %d: una comilla de char sin cerrar", linea)
+	}
+	var valor int32
+	if fuente[j] != '\'' {
+		v, nuevo, err := escapeJava(fuente, j, linea)
+		if err != nil {
+			return 0, 0, err
+		}
+		valor = v
+		j = nuevo
+	}
+	if j >= len(fuente) || fuente[j] != '\'' {
+		return 0, 0, fmt.Errorf("linea %d: un literal de char con mas de un caracter, o sin comilla de cierre", linea)
+	}
+	return valor, j + 1, nil
+}
+
+// escapeJava devuelve el punto de código de lo que hay detrás de la abre de un `char`: el caracter
+// mismo (con su longitud en bytes si es UTF-8) o su escape. `leerCadenaJava` usa la misma tabla de
+// escapes simples, medida ahí; lo que suma este camino es el octal, el unicode y el valor numérico.
+func escapeJava(fuente string, i int, linea int) (int32, int, error) {
+	if fuente[i] != '\\' {
+		r, tam := utf8.DecodeRuneInString(fuente[i:])
+		if r == utf8.RuneError && tam <= 1 {
+			return 0, 0, fmt.Errorf("linea %d: un byte que no es UTF-8 dentro de un literal de char", linea)
+		}
+		return int32(r), i + tam, nil
+	}
+	j := i + 1
+	if j >= len(fuente) {
+		return 0, 0, fmt.Errorf("linea %d: un escape truncado dentro de un literal de char", linea)
+	}
+	switch e := fuente[j]; e {
+	case 'n':
+		return '\n', j + 1, nil
+	case 't':
+		return '\t', j + 1, nil
+	case 'r':
+		return '\r', j + 1, nil
+	case 'b':
+		return '\b', j + 1, nil
+	case 'f':
+		return '\f', j + 1, nil
+	case '"':
+		return '"', j + 1, nil
+	case '\'':
+		return '\'', j + 1, nil
+	case '\\':
+		return '\\', j + 1, nil
+	case 'u':
+		// el escape unicode: cuatro cifras hexadecimales. Medido `'\u0008'` como `bipush 8` y
+		// `'\uFFFF'` como `ldc` con el entero 65535
+		if j+4 >= len(fuente) {
+			return 0, 0, fmt.Errorf("linea %d: un escape \\u sin sus cuatro cifras hexadecimales", linea)
+		}
+		v, err := strconv.ParseUint(fuente[j+1:j+5], 16, 16)
+		if err != nil {
+			return 0, 0, fmt.Errorf("linea %d: %q no es un escape \\u de cuatro cifras", linea, fuente[j+1:j+5])
+		}
+		return int32(v), j + 5, nil
+	default:
+		// el octal: hasta tres cifras entre 0 y 7, medido `'\101'` como `bipush 65`
+		if e < '0' || e > '7' {
+			return 0, 0, fmt.Errorf("linea %d: el escape \\%c no esta medido en un literal de char", linea, e)
+		}
+		cifras := ""
+		for j < len(fuente) && len(cifras) < 3 && fuente[j] >= '0' && fuente[j] <= '7' {
+			cifras += string(fuente[j])
+			j++
+		}
+		v, err := strconv.ParseUint(cifras, 8, 16)
+		if err != nil || v > 0o177 {
+			return 0, 0, fmt.Errorf("linea %d: %q no es un escape octal de char (llega hasta \\177)", linea, cifras)
+		}
+		return int32(v), j, nil
+	}
+}
 
 // analizadorJava lleva la posicion de lectura y el archivo que va armando. anonima cuenta las clases
 // internas anonimas del fuente, que javac numera por orden de aparicion (MainActivity$1).
@@ -1058,9 +1154,11 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 				return nil, false, err
 			}
 			lit, esLit := e.(jlit)
-			if !esLit || lit.tipoJ != 'i' {
+			if !esLit || (lit.tipoJ != 'i' && lit.tipoJ != 'c') {
 				return nil, false, fmt.Errorf("linea %d: una clave de `case` que no es un literal entero no esta medida", a.actual().donde.linea)
 			}
+			// una clave `char` es el punto de codigo: medido en `Letras2`, `switch (c) { case 'a': … }`
+			// sale `lookupswitch { 97: 20 … }` (parrafo 87)
 			valor = lit.entero
 		case a.es('k', "default"):
 			a.avanzar()
@@ -1711,6 +1809,14 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 			return nil, fmt.Errorf("linea %d: %w", t.donde.linea, err)
 		}
 		return jlit{tipoJ: 'i', entero: n, donde: t.donde}, nil
+	case t.kind == 'c':
+		// el literal `char` ya leído como punto de código por el léxico (parrafo 87)
+		a.avanzar()
+		n, err := enteroJava(t.valor)
+		if err != nil {
+			return nil, fmt.Errorf("linea %d: %w", t.donde.linea, err)
+		}
+		return jlit{tipoJ: 'c', entero: n, donde: t.donde}, nil
 	case a.es('k', "true"):
 		a.avanzar()
 		return jlit{tipoJ: 'b', booleano: true, donde: t.donde}, nil

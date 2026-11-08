@@ -920,8 +920,8 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if len(desc) > 0 {
 		tipo = desc[0]
 	}
-	if desc != "I" && desc != "F" && !esObjeto(desc) && !esAncho(desc) {
-		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, la referencia, el flotante y los anchos; lo demas no")
+	if desc != "I" && desc != "F" && desc != "C" && !esObjeto(desc) && !esAncho(desc) {
+		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, la referencia, el flotante, el char y los anchos; lo demas no")
 		return
 	}
 	campo, ok := p.t.fieldIdx[fieldKey{owner: owner, typeOf: desc, name: nombre}]
@@ -947,6 +947,17 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 			op = opSPutWide
 		} else {
 			op = opSGetWide
+		}
+	}
+	if desc == "C" {
+		// el `char` tiene formas propias de acceso estático, medidas sobre el fichero que escribe
+		// `d8 --debug` y leidas con el `dexdump -d` del aparato (parrafo 87): `6500 0100` es
+		// `sget-char v0, LLetras;.fijo:C` y `6c00 0100` es `sput-char v0, …`. El `int` y el `float`
+		// siguen por la genérica 0x60/0x67; el `boolean`, el `byte` y el `short` no los midió sonda.
+		if escribe {
+			op = 0x6c
+		} else {
+			op = 0x65
 		}
 	}
 	// al escribir el registro sale de la pila, y **no** se pide uno nuevo: pedirlo antes de sacarlo
@@ -1195,6 +1206,10 @@ func (p *traduce) leeArreglo(in jvmInstr) {
 	switch in.name {
 	case "aaload":
 		op = opAgetObjeto
+	case "caload":
+		// `aget-char` 0x49, medido en `Letras.lee` sobre el fichero de `d8 --debug`: `4900 0001` es
+		// `aget-char v0, v0, v1` (parrafo 87). El `char` no es una forma ancha: una palabra.
+		op = 0x49
 	case "laload", "daload":
 		// `aget-wide` 0x45: el destino es un PAR y las dos palabras se leen del arreglo (parrafo 84)
 		op = opAgetAncho
@@ -1228,6 +1243,9 @@ func (p *traduce) escribeArreglo(in jvmInstr) {
 	switch in.name {
 	case "aastore":
 		op = opAputObjeto
+	case "castore":
+		// `aput-char` 0x50: medido `5002 0001` = `aput-char v2, v0, v1` en `Letras.escribe` (parrafo 87)
+		op = 0x50
 	case "lastore", "dastore":
 		op = opAputAncho
 		ancho = true
@@ -1483,7 +1501,7 @@ func (p *traduce) recorre() error {
 				n = int(in.name[len(in.name)-1]) - '0'
 			}
 			p.guardaLocalEn(in, n, true)
-		case "i2l", "i2f", "i2d", "l2i", "l2f", "l2d", "f2i", "f2l", "f2d", "d2i", "d2l", "d2f":
+		case "i2l", "i2f", "i2d", "l2i", "l2f", "l2d", "f2i", "f2l", "f2d", "d2i", "d2l", "d2f", "i2c":
 			// la rejilla de conversiones, medida en `FyD` con `d8` en el parrafo 80: `int-to-double`
 			// 0x83 (`divide`, `deEntero`), `float-to-double` 0x89 (`por`, `aDoble`, `campoEstatico`),
 			// `double-to-int` 0x8A (`aEntero`) y `double-to-float` 0x8C (`aFlotante`). Las demas salen
@@ -1495,13 +1513,16 @@ func (p *traduce) recorre() error {
 				"l2i": opLargoAInt, "l2f": 0x85, "l2d": 0x86,
 				"f2i": 0x87, "f2l": 0x88, "f2d": 0x89,
 				"d2i": 0x8a, "d2l": 0x8b, "d2f": 0x8c,
+				// `int-to-char` 0x8e, medido en `Letras.deEntero` sobre el fichero de `d8 --debug`:
+				// `8e00` = `int-to-char v0, v0` (parrafo 87)
+				"i2c": 0x8e,
 			}[in.name]
 			if !medida {
 				p.falla(in, "a numeric conversion outside the measured grid")
 				break
 			}
 			switch in.name {
-			case "i2f", "f2i":
+			case "i2f", "f2i", "i2c":
 				p.conviertePalabra(in, op) // una palabra dentro y una fuera
 			case "i2l", "i2d", "f2d", "l2d", "d2l":
 				p.convierteEnAncho(in, op) // un registro suelto dentro de un par, o el par entero
@@ -1533,9 +1554,9 @@ func (p *traduce) recorre() error {
 			p.incrementa(in)
 		case "newarray", "anewarray":
 			p.nuevoArreglo(in)
-		case "iaload", "aaload", "laload", "faload", "daload":
+		case "iaload", "aaload", "laload", "faload", "daload", "caload":
 			p.leeArreglo(in)
-		case "iastore", "aastore", "lastore", "fastore", "dastore":
+		case "iastore", "aastore", "lastore", "fastore", "dastore", "castore":
 			p.escribeArreglo(in)
 		case "checkcast":
 			desc := p.x.classDescriptor(dexU16(in.ops))

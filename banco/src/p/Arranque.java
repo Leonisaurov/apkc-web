@@ -33,6 +33,8 @@ public class Arranque {
         System.out.println(Ver.compara(2));
         System.out.println(new Ver().anchoPrivado());
         System.out.println(Ver.arreglosAnchos(2));
+        char[] letra = new char[1];
+        System.out.println(Ver.letras(letra, 2));
         int t = Ver.total;
         System.exit(t);
     }

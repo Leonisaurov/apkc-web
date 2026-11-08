@@ -154,15 +154,22 @@ var jvmMeasured = map[byte]jvmOpcode{
 	// `newarray int` va de 1 a 3, `anewarray #7` de 1 a 4 y `arraylength` de 1 a 2. Las formas de
 	// `long`, `float` y `double` son las del JVMS y se midieron en el parrafo 84 sobre `Arr`
 	0x2e: {"iaload", 0},
+	0x34: {"caload", 0},
 	0x2f: {"laload", 0},
 	0x30: {"faload", 0},
 	0x31: {"daload", 0},
 	0x32: {"aaload", 0},
 	0x4f: {"iastore", 0},
+	0x55: {"castore", 0},
 	0x50: {"lastore", 0},
 	0x51: {"fastore", 0},
 	0x52: {"dastore", 0},
 	0x53: {"aastore", 0},
+	// el `char` en el `.class` (parrafo 87, sonda `Letras`): `caload` 0x34 y `castore` 0x55 son los
+	// opcodes propios del JVMS, y estrechar a `char` es `i2c` **0x92** —el 0x91 es `i2b` y el 0x93
+	// `i2s`, y ninguno de los dos lo escribió una sonda—. Una palabra dentro, una fuera. No hay `c2i`:
+	// ensanchar un `char` a `int` no escribe nada.
+	0x92: {"i2c", 0},
 	0xbc: {"newarray", 1},
 	0xbd: {"anewarray", 2},
 	0xbe: {"arraylength", 0},

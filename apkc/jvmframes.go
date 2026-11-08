@@ -699,6 +699,12 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifDoble)
+	case op == 0x92: // i2c (parrafo 87: `Letras.resta` es `isub; i2c`)
+		// una palabra dentro y otra fuera: el `char` sigue siendo `int` en la pila del verificador
+		if err := a.sacaEntero(); err != nil {
+			return nil, false, err
+		}
+		a.empuja(verifInt)
 	case op == 0x89 || op == 0x8a: // l2f, l2d
 		if err := a.sacaLargo(); err != nil {
 			return nil, false, err
@@ -799,7 +805,9 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		return nil, false, nil
-	case op == 0x2e: // iaload
+	case op == 0x2e || op == 0x34: // iaload, caload
+		// el `char` sale del arreglo como entero en la pila del intérprete: `caload` consume arreglo e
+		// indice y empuja `int`, igual que `iaload` (JVMS 2.11.3, medido en `Letras`, parrafo 87)
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
 		}
@@ -840,7 +848,8 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			elem = verifRef(arreglo.clase[1:])
 		}
 		a.empuja(elem)
-	case op == 0x4f: // iastore
+	case op == 0x4f || op == 0x55: // iastore, castore
+		// el `castore` consume arreglo, indice y un `int` de la pila (el `char` viaja como entero)
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
 		}

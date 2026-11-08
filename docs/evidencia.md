@@ -4847,3 +4847,108 @@ jvm (javac): rc=102, salida: total 7|…|6|7|10
 banco: en orden
 ```
 
+## 87. El `char`: viaja como entero, se estrecha con `i2c` y tiene opcodes propios en los dos mundos
+
+Sonda `Letras` (veintiún métodos y el `<clinit>`), medida con `javac --release 8 -g:lines,source`,
+`javap -c -p` y `javap -v` para el `ConstantValue`; el lado del dex, con `d8 --debug` sobre las mismas
+clases y el `dexdump -d` del aparato por `sudo` (tras el reset no queda `rish`):
+
+```sh
+sh -c 'export PATH="$PREFIX/lib/jvm/java-21-openjdk/bin:$PATH"; cd "$PREFIX/tmp/char/sonda" &&
+  javac --release 8 -g:lines,source Letras.java && javap -c -p Letras.class && base64 -w0 Letras.class'
+sh -c 'export PATH="$PREFIX/lib/jvm/java-21-openjdk/bin:$PATH"; cd "$PREFIX/tmp/char" &&
+  javac --release 8 -g:lines,source Letras.java && d8 --debug --min-api 28 --output d8out Letras.class &&
+  base64 -w0 d8out/classes.dex | sudo sh -c "toybox base64 -d > /data/local/tmp/letras.dex;
+  /apex/com.android.art/bin/dexdump -d /data/local/tmp/letras.dex"'
+sh -c 'cd apkc && go test -count=1 -run "Char|Letras" .'
+sh -c 'cd /data/data/com.termux/files/home/Develop/Go/apkc-web &&
+  APKC=/data/data/com.termux/files/usr/tmp/apkc-gate sh banco/banco.sh'
+```
+
+En el `.class` el `char` **es un `int` en la pila**; lo único propio son el descriptor `C` y cuatro
+opcodes:
+
+| fuente | `.class` | qué fija |
+| --- | --- | --- |
+| `'\n'`, `'\''`, `'\\'`, `'\t'` | `bipush 10 / 39 / 92 / 9` | la forma corta del entero, por valor (§53) |
+| `'á'` (UTF-8 suelto) y `'ÿ'` | `sipush 225`, `sipush 255` | el punto de código, no el byte |
+| `'\101'` y `'\u0008'` | `bipush 65`, `bipush 8` | el octal y el escape unicode |
+| `c + 1` con `char c` | `iload_0; iconst_1; iadd` | **ninguna** conversión: ensanchar `char` a `int` no escribe nada |
+| `(char) (a - b)` | `isub; i2c` | estrechar es `i2c` = **0x92** (el 0x91 es `i2b` y el 0x93 `i2s`) |
+| `char c = 65;` y `v[0] = 65` | `bipush 65; istore_0` / `bipush 65; castore` | la constante entera entra en el hueco `char` sin conversión |
+| `v[i]` / `v[i] = c` | `caload` **0x34** / `castore` **0x55** | las formas de arreglo propias del `char` |
+| `new char[n]` | `iload_0; newarray 5` | el atype 5, que ya estaba en la tabla del §84 |
+| `switch (c) { case 'a': … }` | `lookupswitch`/`tableswitch` con 97 | la clave `char` es el punto de código |
+| `static final char CONSTE = 'Z'` | descriptor `C`, flags `0x0018`, `ConstantValue: int 90` y **sin** `putstatic` | la misma dobladura del `static final int` |
+| `fijo = s; return fijo` con `static char fijo` | `putstatic`/`getstatic` con descriptor `C`, y en el `<clinit>` `bipush 65; putstatic` | el campo estático `char` existe |
+
+En el dex las formas son **tipadas**, no la genérica del `int`:
+
+| `.class` | palabra de `d8` | decodificada |
+| --- | --- | --- |
+| `caload` | `4900 0001` | `aget-char v0, v0, v1` —**0x49**, no el `aget` 0x44 del `int`— |
+| `castore` | `5002 0001` | `aput-char v2, v0, v1` —**0x50** |
+| `i2c` | `8e00` | `int-to-char v0, v0` —**0x8e**, en la rejilla de conversiones del §80 |
+| `getstatic` de `fijo:C` | `6500 0100` | `sget-char v0, LLetras;.fijo:C` —**0x65** |
+| `putstatic` de `fijo:C` | `6c00 0100` | `sput-char v0, …` —**0x6c** |
+| `newarray 5` | `2300 0700` | `new-array v0, v0, [C` (la forma del §66, con su `type_id`) |
+
+Medido de paso, y **no** implementado: `d8` reescribe el inicializador `new char[] {'a','b'}` como
+`fill-array-data` (`2600 0500 0000`) con un payload `0003 0200 0200 0000 6100 6200`, cuyo
+`element_width` es **2** —frente al 4 del `float` y al 8 del `double`, leídos en el volcado del §84—, en
+lugar de la cadena `dup`/`castore`. Es la misma diferencia de reescritura ya aceptada del §53 y del 2G.4:
+el oráculo manda sobre las estructuras, no sobre el cuerpo optimizado, y este fork emite la cadena de javac.
+
+**La elección `tableswitch`/`lookupswitch` queda como diferencia escrita** (era del §64 y se apoya ahora
+con datos): sobre una rejilla medida de claves equidistantes, javac escribe tabla en `(3 claves, rango 4)`,
+`(4, 8)`, `(5, 10)`, `(6, 18)`, `(6, 19)` y `(8, 24)`, y búsqueda en `(2, 1)`, `(3, 6)`, `(4, 12)`,
+`(5, 15)`, `(6, 24)` y `(8, 32)`; este emisor se queda con la tabla cuando `rango + 1 <= 2 · claves`, que
+es más conservador —con cuatro claves y rango 8 javac escribe tabla y el emisor, búsqueda—. Las dos formas
+son legales; la sonda del test usa claves consecutivas, donde los dos coinciden, y la comparación del `Code`
+no depende de ese criterio.
+
+Implementado: el léxico lee el literal con sus escapes (`leerCharJava` y `escapeJava` en
+`apkc/javafuente.go`), el emisor emite el `char` como entero con descriptor `C`, estrecha con `i2c`,
+conoce `caload`/`castore` y dobla el `ConstantValue`; el caminante y los marcos conocen los tres opcodes
+nuevos; y el traductor baja a `aget-char`, `aput-char`, `int-to-char`, `sget-char` y `sput-char`. El
+portero sigue rechazando por nombre `i2b`/`i2s` (el `byte` y el `short` no los escribió sonda alguna).
+
+Oráculos: `apkc/javaemisor_char_test.go` —`TestElCharSeEscribeComoJavac` (veintidós cuerpos con pila,
+huecos y filas de línea), `TestElCharSeDexaIgualQueLosDeJavac` (el dex sale **byte a byte** el mismo sobre
+nuestras clases que sobre las de javac: **2148 bytes**), `TestElCharConstantValueEsEntero` (tag `Integer`,
+valor 90) y `TestLasFormasDexDelChar`—, y la ejecución: `Ver.letras(char[], int)` en el banco
+(`new char[] {'a','b','c'}`, `'A' + n`, el `(char)`, la comparación y `v[0] = c`) da **32** por los cinco
+caminos, con `dexdump` verificando `rc 0` en los cuatro dex.
+
+## 88. El entorno del shell y el banco por `sudo` sin `rish`
+
+Medido el 2026-11-08 tras el reset de fábrica. El shell arranca con `HOME=/home/leonisauro`, que no
+tiene `Develop/` ni `Android/`; el repo y el SDK viven bajo `/data/data/com.termux/files/home`. Sin
+corregirlo, `studio/e2e.sh` no encuentra `../apkc` ni `~/Develop/Go/apkc-harness/zipcheck.py` y falla
+con `ENOENT` aunque el código esté bien:
+
+```sh
+sh -c 'HOME=/data/data/com.termux/files/home PREFIX=/data/data/com.termux/files/usr \
+  ANDROID_HOME=/data/data/com.termux/files/home/Android \
+  APKC=/data/data/com.termux/files/usr/tmp/apkc-gate \
+  APKC_WASM=/data/data/com.termux/files/usr/tmp/apkc-wasm.wasm \
+  sh studio/e2e.sh'
+```
+
+`tools/entorno.sh` fija esas cuatro variables y ofrece `test`, `wasm`, `gate`, `banco` y `doctor`.
+
+Sin `rish`, el banco corre por `sudo`, pero `app_process64` no hereda el entorno de Android y aborta con
+`Check failed: !location.empty() BOOTCLASSPATH and DEX2OATBOOTCLASSPATH must not be empty` (rc 134). La
+copia que funciona es la de `zygote64`:
+
+```sh
+sudo sh -c 'export CLASSPATH=/data/local/tmp/bnuestro.dex; \
+  eval "$(tr "\0" "\n" < /proc/$(pidof zygote64)/environ | \
+  grep -E "^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH|SYSTEMSERVERCLASSPATH|STANDALONE_SYSTEMSERVER_JARS)=" | \
+  sed "s/^/export /")"; /system/bin/app_process64 /data/local/tmp p.Arranque'
+```
+
+Da `rc=102` y la misma salida que la JVM; `banco/banco.sh` lo hace solo cuando `RISH=sudo`. El `sudo`
+que vale es **`/usr/sbin/sudo`** (el de Termux, `$PREFIX/bin/sudo`, no encuentra un `su` que soporte
+`-c`).
+

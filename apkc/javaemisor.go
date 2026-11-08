@@ -1168,9 +1168,11 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 					if !esLit {
 						return campoResuelto{}, fmt.Errorf("el campo %s.%s dice ser final pero su inicializador no es un literal", actual, nombre)
 					}
-					if lit.tipoJ != 'i' {
+					if lit.tipoJ != 'i' && lit.tipoJ != 'c' {
 						return campoResuelto{}, fmt.Errorf("doblar una constante %s.%s que no es un entero no esta medida", actual, nombre)
 					}
+					// un `static final char` lleva `ConstantValue` con una entrada `Integer`: medido en
+					// `Letras`, `CONSTE` es `ConstantValue: int 90` (parrafo 87)
 					cr.valor = lit.entero
 				}
 				return cr, nil
@@ -1878,6 +1880,13 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		case 'i':
 			e.cargaEntero(v.entero)
 			return "I", nil
+		case 'c':
+			// el `char` en la pila JVM ES un entero: medido en `Letras` (parrafo 87), `'\n'` sale
+			// `bipush 10; ireturn`, `'á'` es `sipush 225` y `'\uFFFF'` es `ldc` con la entrada `Integer`
+			// 65535. Lo único que lo distingue del `int` es el descriptor (`C`) y los opcodes de arreglo
+			// (`caload`/`castore`) y del cast (`i2c`).
+			e.cargaEntero(v.entero)
+			return "C", nil
 		case 'b':
 			if v.booleano {
 				e.emite(0x04)
@@ -1953,6 +1962,29 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		e.emite(0xc1, byte(idx>>8), byte(idx))
 		return "Z", nil
 	case jcast:
+		if destino, ok := descPrimitivo[v.tipo]; ok && destino == "C" {
+			// `(char) x`, medido en `Letras` (parrafo 87): `resta` es `iload_0; iload_1; isub; i2c;
+			// ireturn` y `cambia` `iload_0; iconst_1; iadd; i2c; istore_0`, con `i2c` = 0x92. Es una
+			// palabra dentro y una fuera, asi que la pila no se mueve. Desde un ancho (`long`, `float`,
+			// `double`) primero la conversion del parrafo 77 y despues el `i2c`.
+			d, err := e.exp(v.dentro)
+			if err != nil {
+				return "", err
+			}
+			if d == "C" {
+				return "C", nil
+			}
+			if len(d) != 1 || strings.IndexByte("IJFD", d[0]) < 0 {
+				return "", fmt.Errorf("linea %d: se convierte %s a `char`, y eso no es una cuenta numerica medida", v.donde.linea, d)
+			}
+			if d != "I" {
+				if !e.convierte(d, "I") {
+					return "", fmt.Errorf("linea %d: la conversion de %s a entero antes del `char` no esta medida", v.donde.linea, d)
+				}
+			}
+			e.emite(0x92)
+			return "C", nil
+		}
 		if destino, ok := descPrimitivo[v.tipo]; ok && strings.IndexByte("IJFD", destino[0]) >= 0 {
 			// un cast numerico es la conversion de la rejilla, no un `checkcast`: medido en `FyD`,
 			// donde `aEntero` es `dload_0; d2i` y `aFlotante` `dload_0; d2f` (parrafo 77)
@@ -1967,7 +1999,7 @@ func (e *emisor) exp(x jexpr) (string, error) {
 				return "", fmt.Errorf("linea %d: se convierte %s a %s, y eso no es una cuenta numerica medida", v.donde.linea, d, v.tipo)
 			}
 			if !e.convierte(d, destino) {
-				return "", fmt.Errorf("linea %d: la conversion de %s a %s no esta medida (el `byte`, el `short` y el `char` no los escribió sonda alguna)", v.donde.linea, d, v.tipo)
+				return "", fmt.Errorf("linea %d: la conversion de %s a %s no esta medida (el `byte` y el `short` no los escribió sonda alguna; el `char` tiene su propio camino con `i2c`, parrafo 87)", v.donde.linea, d, v.tipo)
 			}
 			return destino, nil
 		}
@@ -2024,6 +2056,10 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		// el tipo se puede prever sin emitir.
 		tIzq, okIzq := e.tipoPrevisto(v.izq)
 		tDer, okDer := e.tipoPrevisto(v.der)
+		// El `char` (y el `byte`, el `short` y el `booleano`) entra en la cuenta **como entero**, sin
+		// conversion: medido en `Letras`, `masUno(char c) { return c + 1; }` es `iload_0; iconst_1; iadd`
+		// y `mayor(char a, char b)` usa `if_icmp*` de entero (parrafo 87).
+		tIzq, tDer = enCuenta(tIzq), enCuenta(tDer)
 		// `int + long`, `float * double`: javac **ensancha cada operando en su propio sitio** y en el
 		// orden del fuente (`W.suma` mide `iload_0; i2l; lload_1; ladd`, parrafo 74, y `FyD.por` es
 		// `fload_0; f2d; dload_1; dmul` con `FyD.divide` `dload_0; iload_2; i2d; ddiv`, parrafo 77).
@@ -2064,11 +2100,14 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			}
 			return ancho, nil
 		}
-		izq, err := e.exp(v.izq)
+		// `expA` con el entero deseado: un operando `char` entra en la cuenta sin escribir ninguna
+		// conversion (`masUno(char c) { return c + 1; }` es `iload_0; iconst_1; iadd`, parrafo 87) y la
+		// constante del otro lado se pliega ya en el tipo de la cuenta (parrafo 53).
+		izq, err := e.expA(v.izq, "I")
 		if err != nil {
 			return "", err
 		}
-		der, err := e.exp(v.der)
+		der, err := e.expA(v.der, "I")
 		if err != nil {
 			return "", err
 		}
@@ -2226,6 +2265,17 @@ func nivelNum(t byte) int {
 	return 0
 }
 
+// enCuenta: el descriptor con el que un tipo entra en una cuenta o en una comparación. El `char` (y el
+// `byte`, el `short` y el `booleano`) entran como `int` y **sin conversion**: medido en `Letras`,
+// `masUno(char c) { return c + 1; }` es `iload_0; iconst_1; iadd` y `mayor(char a, char b)` usa
+// `if_icmp*` (parrafo 87). Lo contrario —estrechar— sí escribe `i2c` y es el cast del mismo párrafo.
+func enCuenta(d string) string {
+	if len(d) == 1 && strings.IndexByte("BCSZ", d[0]) >= 0 {
+		return "I"
+	}
+	return d
+}
+
 // comoReal: el valor de la constante visto por una cuenta de punto flotante.
 func (c constNum) comoReal() float64 {
 	if c.tipo == 'I' || c.tipo == 'J' {
@@ -2267,6 +2317,10 @@ func plegarConstante(x jexpr) (constNum, bool) {
 	case jlit:
 		switch v.tipoJ {
 		case 'i':
+			return constNum{tipo: 'I', entero: int64(v.entero)}, true
+		case 'c':
+			// un `char` pliega como entero: la suma de dos `char` es `int` en Java, y javac la escribe
+			// con los `iconst`/`bipush`/`sipush`/`ldc` de siempre (parrafo 87)
 			return constNum{tipo: 'I', entero: int64(v.entero)}, true
 		case 'j':
 			return constNum{tipo: 'J', entero: v.largo}, true
@@ -2853,6 +2907,10 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 		guarda = 0x51
 	case 'D':
 		guarda = 0x52
+	case 'C':
+		// `castore` 0x55 en la cadena del inicializador: `new char[] {'a','b'}` es `iconst_2; newarray
+		// char; dup; iconst_0; bipush 97; castore; dup; iconst_1; bipush 98; castore` (parrafo 87)
+		guarda = 0x55
 	case 'L', '[':
 		guarda = 0x53
 	default:
@@ -2862,7 +2920,7 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 		e.emite(opDup)
 		e.sube()
 		e.cargaEntero(int32(i))
-		d, err := e.exp(x)
+		d, err := e.expA(x, elem)
 		if err != nil {
 			return "", err
 		}
@@ -2905,6 +2963,9 @@ func (e *emisor) leeIndice(v jindice) (string, error) {
 		e.emite(0x30)
 	case 'D':
 		e.emite(0x31)
+	case 'C':
+		// `caload` 0x34, medido en `Letras.lee` (`aload_0; iload_1; caload; ireturn`, parrafo 87)
+		e.emite(0x34)
 	case 'L', '[':
 		e.emite(0x32)
 	default:
@@ -2936,11 +2997,13 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 	if d != "I" {
 		return fmt.Errorf("linea %d: el indice es %s y no un entero", v.donde.linea, d)
 	}
-	dv, err := e.exp(valor)
+	elem := base[1:]
+	// `expA` y no `exp`: un literal entero cabe en un elemento `char` sin conversion —medido `v[0] = 65`
+	// como `bipush 65; castore` (parrafo 87)— y una constante se pliega ya en el tipo del elemento.
+	dv, err := e.expA(valor, elem)
 	if err != nil {
 		return err
 	}
-	elem := base[1:]
 	if dv != elem {
 		return fmt.Errorf("linea %d: el arreglo es %s y se le asigna un %s", v.donde.linea, elem, dv)
 	}
@@ -2954,6 +3017,9 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 		e.emite(0x51)
 	case 'D':
 		e.emite(0x52)
+	case 'C':
+		// `castore` 0x55, medido en `Letras.escribe` (`aload_0; iload_1; iload_2; castore`, parrafo 87)
+		e.emite(0x55)
 	case 'L', '[':
 		e.emite(0x53)
 	default:
@@ -2976,6 +3042,8 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		switch v.tipoJ {
 		case 'i':
 			return "I", nil
+		case 'c':
+			return "C", nil
 		case 'j':
 			return "J", nil
 		case 'f':
@@ -3044,7 +3112,12 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 	switch v := x.(type) {
 	case jlit:
 		switch v.tipoJ {
-		case 'i':
+		case 'i', 'c':
+			// el `char` se prevé con su descriptor (`C`), que es lo que necesita la asignación y el
+			// arreglo; para la cuenta se estrecha a `I` antes de promover (parrafo 87)
+			if v.tipoJ == 'c' {
+				return "C", true
+			}
 			return "I", true
 		case 'j':
 			return "J", true
@@ -3108,6 +3181,7 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 		// 74 y 77)
 		di, okI := e.tipoPrevisto(v.izq)
 		dd, okD := e.tipoPrevisto(v.der)
+		di, dd = enCuenta(di), enCuenta(dd)
 		nivel := map[string]int{"": 0, "I": 0, "J": 1, "F": 2, "D": 3}
 		ancho := ""
 		if okI && nivel[di] > nivel[ancho] {
@@ -3150,12 +3224,30 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 			return string(c.tipo), nil
 		}
 	}
+	// El `char` se carga con el mismo `iconst`/`bipush`/`sipush`/`ldc` que el `int`, y la constante entera
+	// entra en un hueco `char` sin conversion alguna: medido en `Letras2`, `char c = 65` es `bipush 65;
+	// istore_0` y `v[0] = 65` es `bipush 65; castore` (parrafo 87). Fuera del rango javac da error, y aqui
+	// se rechaza con el mismo nombre.
+	if deseado == "C" {
+		if c, ok := plegarConstante(x); ok && (c.tipo == 'I' || c.tipo == 'J' || c.tipo == 'C') {
+			if c.entero < 0 || c.entero > 0xffff {
+				return "", fmt.Errorf("linea %d: la constante %d no cabe en un `char` (llega a 65535)", lineaDeExpr(x), c.entero)
+			}
+			e.cargaEntero(int32(c.entero))
+			return "C", nil
+		}
+	}
 	d, err := e.exp(x)
 	if err != nil {
 		return "", err
 	}
 	if d == deseado {
 		return d, nil
+	}
+	// Enschar un `char` a `int` no escribe nada: `int n = c;` es `iload_0; istore_1` y `aEntero(char)` es
+	// `iload_0; ireturn`, medidos en el parrafo 87.
+	if d == "C" && deseado == "I" {
+		return "I", nil
 	}
 	if len(d) == 1 && len(deseado) == 1 && e.convierte(d, deseado) {
 		return deseado, nil
@@ -3252,6 +3344,8 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 	// literal cero NO se ahorra aquí: `if (x > 0L)` es `lload_0; lconst_0; lcmp; ifle`.
 	tIzq, okIzq := e.tipoPrevisto(op.izq)
 	tDer, okDer := e.tipoPrevisto(op.der)
+	// `if (c > '0')` es `iload_0; bipush 48; if_icmple`, sin conversion del `char` (parrafo 87)
+	tIzq, tDer = enCuenta(tIzq), enCuenta(tDer)
 	nivel := map[string]int{"": 0, "I": 0, "J": 1, "F": 2, "D": 3}
 	ancho := ""
 	if okIzq && nivel[tIzq] > nivel[ancho] {
@@ -4597,7 +4691,10 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 		// que no es final solo el codigo. Un `static final` con algo que no es un literal entero no esta
 		// medido: se rechaza en vez de suponer donde lo pondria javac.
 		lit, esLit := f.valor.(jlit)
-		constante := esLit && lit.tipoJ == 'i'
+		// un `static final char` se dobla igual que un `static final int`: `ConstantValue` con una entrada
+		// `Integer` y sin `putstatic` en el `<clinit>` (medido en `Letras`, `ConstantValue: int 90`,
+		// parrafo 87)
+		constante := esLit && (lit.tipoJ == 'i' || lit.tipoJ == 'c')
 		if f.esFinal && !constante {
 			return nil, fmt.Errorf("el ConstantValue de un campo `final` cuyo inicializador no es un entero literal no esta medido")
 		}

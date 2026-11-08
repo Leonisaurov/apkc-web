@@ -277,7 +277,10 @@ func TestLexicoRechazaCaracteresYComentarios(t *testing.T) {
 		fuente string
 		razon  string
 	}{
-		{"class A { void a() { char c = 'x'; } }", "char"},
+		// el `char` dejó de ser un rechazo con la sonda del párrafo 87; lo que sigue sin medir es un
+		// escape que javac tampoco acepta, y un caracter suelto entre comillas de más de un punto
+		{"class A { void a() { char c = '\\z'; } }", "no esta medido"},
+		{"class A { void a() { char c = 'xy'; } }", "mas de un caracter"},
 		{"class A { } /* sin cerrar", "sin cerrar"},
 		{"class A { void a() { int x = 1; } }\n¥", "no es de este subconjunto"},
 		{"class A { void a() { String s = \"sin cerrar; } }", "una cadena sin cerrar"},

@@ -249,4 +249,21 @@ public class Ver {
         }
         return (int) s + c + (int) v[1];
     }
+
+    // El `char` de punta a punta (párrafo 87): el literal con escape (`'\n'` no aparece aquí porque la
+    // salida es numérica), el arreglo `new char[] {…}` con `caload`/`castore`, la cuenta sin conversión
+    // (`'A' + n` es `iadd`), el cast `(char)` con `i2c` y la comparación con `if_icmp*`. Con n = 2:
+    // c = 67 ('C') y el mayor de {'a','b','c'} es 99, así que devuelve 99 - 67 = 32.
+    public static int letras(char[] v, int n) {
+        char[] w = new char[] {'a', 'b', 'c'};
+        char c = (char) ('A' + n);
+        char m = w[0];
+        for (int i = 1; i < w.length; i++) {
+            if (w[i] > m) {
+                m = w[i];
+            }
+        }
+        v[0] = c;
+        return m - v[0];
+    }
 }
