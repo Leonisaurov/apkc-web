@@ -503,6 +503,10 @@ func (c *cursor) constantPool() (*pool, error) {
 	}
 	for i := 1; i < count && !c.failed(); i++ {
 		t := byte(c.u1())
+		// la etiqueta se guarda para TODAS las entradas, incluidas Utf8 y Class: `tagOf` es lo que
+		// distingue un `ldc` de una clase (parrafo 89) y antes solo se llenaba en el `else`, asi que
+		// una CONSTANT_Class se leia con etiqueta 0.
+		p.tag[i] = t
 		if t == cpUtf8 {
 			p.utf[i] = string(c.bytes(c.u2()))
 		} else if t == cpClass {
@@ -512,7 +516,6 @@ func (c *cursor) constantPool() (*pool, error) {
 			if !known {
 				return nil, fmt.Errorf("unknown constant pool tag %d at entry %d", t, i)
 			}
-			p.tag[i] = t
 			p.body[i] = c.bytes(size)
 			if t == cpLong || t == cpDouble {
 				i++ // the wide entries take the slot after them too

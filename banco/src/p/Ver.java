@@ -266,4 +266,24 @@ public class Ver {
         v[0] = c;
         return m - v[0];
     }
+
+    // El literal de clase de punta a punta (párrafo 89): `ldc` de CONSTANT_Class en el `.class` y
+    // `const-class` 0x1c en el dex, `getstatic Integer.TYPE` para el primitivo y `if_acmpne` en la
+    // comparación de referencias. Devuelve 2 cuando `String.class` es la misma clase que `c` y las
+    // otras dos comparaciones son falsas.
+    public static int clases() {
+        Class c = String.class;
+        if (Object.class == c) {
+            return 1;
+        }
+        if (String.class == c) {
+            Class arreglos = String[].class;
+            Class primos = int[].class;
+            if (arreglos == primos) {
+                return 4;
+            }
+            return 2;
+        }
+        return 3;
+    }
 }

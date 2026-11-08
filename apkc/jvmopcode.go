@@ -205,6 +205,8 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xa2: {"if_icmpge", 2},
 	0xa3: {"if_icmpgt", 2},
 	0xa4: {"if_icmple", 2},
+	0xa5: {"if_acmpeq", 2},
+	0xa6: {"if_acmpne", 2},
 	0xa7: {"goto", 2},
 	0xc6: {"ifnull", 2},
 	0xc7: {"ifnonnull", 2},

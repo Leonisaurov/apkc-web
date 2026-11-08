@@ -35,6 +35,7 @@ public class Arranque {
         System.out.println(Ver.arreglosAnchos(2));
         char[] letra = new char[1];
         System.out.println(Ver.letras(letra, 2));
+        System.out.println(Ver.clases());
         int t = Ver.total;
         System.exit(t);
     }

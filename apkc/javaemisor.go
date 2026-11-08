@@ -50,8 +50,8 @@ const (
 	opDupX1      = 0x5a
 	// las formas que duplican un valor de dos palabras: el `dup2` del access$ de un estático ancho y el
 	// `dup2_x1` del de instancia (medidos en el párrafo 83 sobre `E` y `D`)
-	opDup2   = 0x5c
-	opDup2X1 = 0x5d
+	opDup2       = 0x5c
+	opDup2X1     = 0x5d
 	opGetstatic  = 0xb2
 	opPutstatic  = 0xb3
 	opGetfield   = 0xb4
@@ -64,18 +64,22 @@ const (
 	opCheckcast  = 0xc0
 	// las branquias, con la inversión que hace javac (medida en el parrafo 52 sobre `javap -c`):
 	// `if (a == b)` sale `if_icmpne`, `if (a > 0)` sale `ifle`, `if (o == null)` sale `ifnonnull`
-	opIFEQ      = 0x99
-	opIFNE      = 0x9a
-	opIFLT      = 0x9b
-	opIFGE      = 0x9c
-	opIFGT      = 0x9d
-	opIFLE      = 0x9e
-	opIFICMPEQ  = 0x9f
-	opIFICMPNE  = 0xa0
-	opIFICMPLT  = 0xa1
-	opIFICMPGE  = 0xa2
-	opIFICMPGT  = 0xa3
-	opIFICMPLE  = 0xa4
+	opIFEQ     = 0x99
+	opIFNE     = 0x9a
+	opIFLT     = 0x9b
+	opIFGE     = 0x9c
+	opIFGT     = 0x9d
+	opIFLE     = 0x9e
+	opIFICMPEQ = 0x9f
+	opIFICMPNE = 0xa0
+	opIFICMPLT = 0xa1
+	opIFICMPGE = 0xa2
+	opIFICMPGT = 0xa3
+	opIFICMPLE = 0xa4
+	// la comparacion de REFERENCIAS (parrafo 89): `if_acmpeq` 0xa5 y `if_acmpne` 0xa6, con la misma
+	// inversion que las de entero. `o.getClass() == String.class` de javac sale `if_acmpne`.
+	opIFACMPEQ  = 0xa5
+	opIFACMPNE  = 0xa6
 	opGOTO      = 0xa7
 	opIFNULL    = 0xc6
 	opIFNONNULL = 0xc7
@@ -99,6 +103,14 @@ const (
 var descPrimitivo = map[string]string{
 	"int": "I", "boolean": "Z", "short": "S", "byte": "B", "char": "C",
 	"long": "J", "float": "F", "double": "D", "void": "V",
+}
+
+// envoltorioDePrimitivo: el `Tipo.class` de un primitivo no es `ldc` sino el `getstatic` de
+// `Wrapper.TYPE:Ljava/lang/Class;`, medido en el parrafo 89 con `int.class` y `void.class`.
+var envoltorioDePrimitivo = map[string]string{
+	"boolean": "java/lang/Boolean", "byte": "java/lang/Byte", "char": "java/lang/Character",
+	"short": "java/lang/Short", "int": "java/lang/Integer", "long": "java/lang/Long",
+	"float": "java/lang/Float", "double": "java/lang/Double", "void": "java/lang/Void",
 }
 
 // puntoFlotante era el guardia que rechazaba `F` y `D`: entraron medidos en el parrafo 77 y ya no
@@ -1846,6 +1858,8 @@ func lineaDeExpr(x jexpr) int {
 	switch v := x.(type) {
 	case jlit:
 		return v.donde.linea
+	case jclase:
+		return v.donde.linea
 	case jthis:
 		return v.donde.linea
 	case jacceso:
@@ -1921,6 +1935,8 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			return "Ljava/lang/Object;", nil
 		}
 		return "", fmt.Errorf("linea %d: un literal de clase %q no esta medido", v.donde.linea, string(v.tipoJ))
+	case jclase:
+		return e.literalDeClase(v)
 	case jthis:
 		if v.nombre != "" {
 			// `Exterior.this` es leer el campo de captura: medido en el parrafo 42, `aload_0; getfield
@@ -2032,6 +2048,11 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		// hace (`1 + 2` sale `iconst_3`, `1 + 2 * 3` sale `bipush 7`, medido en el parrafo 53).
 		if v.op == "+" && e.esConcatenacion(v) {
 			return e.concatenar(v)
+		}
+		if v.op == "==" || v.op == "!=" {
+			// `return a == b` entre referencias: medido en `Clase.esCadena` del parrafo 89, javac
+			// escribe `if_acmpne` 0xa6 (o `if_acmpeq` 0xa5), `iconst_1`, `goto`, `iconst_0`.
+			return e.comparacionDeReferencias(v)
 		}
 		codes := map[string]byte{"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem}
 		codesAnchas := map[string]map[string]byte{
@@ -2526,6 +2547,45 @@ func (e *emisor) accesoEstatico(interno string, segs []string, linea int) (strin
 		return cr.desc, nil
 	}
 	return "", fmt.Errorf("linea %d: no se resuelve %s.%s", linea, interno, strings.Join(segs, "."))
+}
+
+// literalDeClase emite `X.class` con la forma que midió el párrafo 89: un tipo de referencia o un
+// arreglo es `ldc` de CONSTANT_Class (el nombre es el interno, o el descriptor si lleva `[]`), y un
+// primitivo suelto es `getstatic Wrapper.TYPE:Ljava/lang/Class;` porque javac no lo dobla a `ldc`.
+func (e *emisor) literalDeClase(v jclase) (string, error) {
+	if v.primitivo && v.dimensiones == 0 {
+		envoltorio, ok := envoltorioDePrimitivo[v.nombre]
+		if !ok {
+			return "", fmt.Errorf("linea %d: no hay envoltorio medido para `%s.class`", v.donde.linea, v.nombre)
+		}
+		return e.accesoEstatico(envoltorio, []string{"TYPE"}, v.donde.linea)
+	}
+	var nombre string
+	if v.primitivo {
+		d, ok := descPrimitivo[v.nombre]
+		if !ok {
+			return "", fmt.Errorf("linea %d: `%s` no es un primitivo medido en un literal de clase", v.donde.linea, v.nombre)
+		}
+		nombre = d
+		for i := 0; i < v.dimensiones; i++ {
+			nombre = "[" + nombre
+		}
+	} else {
+		interno, err := e.ctx.resolverSimple(v.nombre)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+		}
+		nombre = interno
+		if v.dimensiones > 0 {
+			nombre = "L" + interno + ";"
+			for i := 0; i < v.dimensiones; i++ {
+				nombre = "[" + nombre
+			}
+		}
+	}
+	e.ldc(e.pool.clase(nombre))
+	e.sube()
+	return "Ljava/lang/Class;", nil
 }
 
 // campoDeLaClaseActual: `menu` suelto cuando fuera un campo de esta clase.
@@ -3058,6 +3118,8 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			return "Ljava/lang/Object;", nil
 		}
 		return "", fmt.Errorf("linea %d: un literal de clase %q no esta medido", v.donde.linea, string(v.tipoJ))
+	case jclase:
+		return "Ljava/lang/Class;", nil
 	case jacceso:
 		segs, base := aplanar(v)
 		if base == nil && len(segs) == 1 {
@@ -3131,6 +3193,8 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 			return "Ljava/lang/String;", true
 		}
 		return "", false
+	case jclase:
+		return "Ljava/lang/Class;", true
 	case jthis:
 		if v.nombre != "" || e.estatico {
 			return "", false
@@ -3422,10 +3486,59 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	if esObjeto(dizq) || esObjeto(dder) {
+		// `o.getClass() == String.class` del parrafo 89: las dos referencias se comparan con
+		// `if_acmpeq`/`if_acmpne` (0xa5/0xa6), sin conversion. La igualdad es la unica relacion medida
+		// entre referencias; `<`, `>` y las demas se rechazan por nombre.
+		if !esObjeto(dizq) || !esObjeto(dder) {
+			return 0, 0, fmt.Errorf("linea %d: `%s` entre %s y %s: no se midio comparar una referencia con algo que no lo es", linea, op.op, dizq, dder)
+		}
+		switch op.op {
+		case "==":
+			return opIFACMPNE, 2, nil
+		case "!=":
+			return opIFACMPEQ, 2, nil
+		}
+		return 0, 0, fmt.Errorf("linea %d: `%s` entre dos referencias no esta medido (solo `==` y `!=`)", linea, op.op)
+	}
 	if !esEnteroDesc(dizq) || !esEnteroDesc(dder) {
-		return 0, 0, fmt.Errorf("linea %d: `%s` entre %s y %s: solo se midieron enteros y la referencia contra null", linea, op.op, dizq, dder)
+		return 0, 0, fmt.Errorf("linea %d: `%s` entre %s y %s: solo se midieron enteros, la referencia contra null y `==`/`!=` entre referencias", linea, op.op, dizq, dder)
 	}
 	return pares.dos, 2, nil
+}
+
+// comparacionDeReferencias: `a == b` / `a != b` como valor booleano. Los dos operandos se emiten, la
+// branquia invertida salta al `iconst_0`, y el camino verdadero escribe `iconst_1` y un `goto` al final.
+// Es la forma de `Clase.esCadena` (parrafo 89), con `if_acmpne` 0xa6 para `==` y `if_acmpeq` 0xa5
+// para `!=`. No se midio ninguna otra relacion entre referencias.
+func (e *emisor) comparacionDeReferencias(v joperador) (string, error) {
+	di, err := e.exp(v.izq)
+	if err != nil {
+		return "", err
+	}
+	dd, err := e.exp(v.der)
+	if err != nil {
+		return "", err
+	}
+	if !esObjeto(di) || !esObjeto(dd) {
+		return "", fmt.Errorf("linea %d: `%s` como valor solo se midio entre referencias (%s y %s)", v.donde.linea, v.op, di, dd)
+	}
+	op := byte(opIFACMPNE)
+	if v.op == "!=" {
+		op = opIFACMPEQ
+	}
+	falso := e.nuevaEtiqueta()
+	fin := e.nuevaEtiqueta()
+	e.saltoEmite(op, falso, 2)
+	base := e.prof
+	e.cargaEntero(1)
+	e.saltoEmite(opGOTO, fin, 0)
+	e.cierra(falso)
+	// la simulacion es lineal: en el camino falso la pila vuelve a estar como antes de la branquia
+	e.prof = base
+	e.cargaEntero(0)
+	e.cierra(fin)
+	return "Z", nil
 }
 
 // branca: el `if` y su `else`, en el orden que escribe javac (parrafo 52): los operandos, el salto con

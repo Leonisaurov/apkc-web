@@ -38,6 +38,18 @@ type jlit struct {
 
 func (jlit) jexprPuede() {}
 
+// jclase: el literal `X.class` del párrafo 89. `nombre` es el nombre simple del fuente (o el
+// primitivo) y `dimensiones` cuenta los `[]`; el emisor resuelve el nombre interno contra el fuente y
+// el jar. Un primitivo sin dimensiones no es `ldc`: javac escribe el `getstatic Wrapper.TYPE`.
+type jclase struct {
+	nombre      string
+	dimensiones int
+	primitivo   bool
+	donde       pos
+}
+
+func (jclase) jexprPuede() {}
+
 // jthis: `this`, y `Tipo.this` cuando nombre no esta vacio (captura del exterior en una interna).
 type jthis struct {
 	nombre string
@@ -547,7 +559,7 @@ func leerCadenaJava(fuente string, i, linea int) (string, int, error) {
 
 // leerCharJava lee un literal `char` desde la comilla simple abre y devuelve su punto de código. Las
 // formas medidas con `javap -c` sobre la sonda `Letras` (párrafo 87): el caracter tal cual (`'A'` es
-// `bipush 65`), los escapes simples `\n \t \r \b \f \' \" \\` (`'\n'` es `bipush 10`, `'\''` es
+// `bipush 65`), los escapes simples `\n \t \r \b \f \' \" \\` (`'\n'` es `bipush 10`, `'\”` es
 // `bipush 39`, `'\\'` es `bipush 92`), el escape octal (`'\101'` es `bipush 65`), el escape unicode
 // escrito en el fuente (`'\u0008'` es `bipush 8`, `'\uFFFF'` es `ldc` con la entrada `Integer` 65535)
 // y el caracter UTF-8 suelto (`'á'` es `sipush 225`). Con cualquier otra forma se rechaza por nombre.
@@ -661,6 +673,16 @@ func (a *analizadorJava) avanzar() tokenJava {
 func (a *analizadorJava) es(kind byte, valor string) bool {
 	t := a.actual()
 	return t.kind == kind && t.valor == valor
+}
+
+// mira: el token n posiciones delante del actual (0 es el actual). Devuelve el fin de fichero si se
+// pasa, para que las comprobaciones de forma no tengan que repetir los límites.
+func (a *analizadorJava) mira(n int) tokenJava {
+	i := a.i + n
+	if i < 0 || i >= len(a.toks) {
+		return tokenJava{kind: 'f'}
+	}
+	return a.toks[i]
 }
 
 func (a *analizadorJava) comer(kind byte, valor string) error {
@@ -1781,8 +1803,44 @@ func (a *analizadorJava) argumentos() ([]jexpr, error) {
 	return out, nil
 }
 
+// literalDeClase reconoce `X.class`, `int.class` y `String[].class` antes de que el nombre se lea como
+// un acceso. Medido en el párrafo 89: el de un tipo de referencia (o un arreglo) es `ldc` de una
+// CONSTANT_Class; el de un primitivo suelto es el `getstatic` del `TYPE` de su envoltorio.
+func (a *analizadorJava) literalDeClase() (jexpr, bool, error) {
+	t := a.actual()
+	if t.kind != 'i' && !(t.kind == 'k' && esNombreDeTipo(t.valor)) {
+		return nil, false, nil
+	}
+	n := 1
+	for a.mira(n).kind == 'p' && a.mira(n).valor == "[" &&
+		a.mira(n+1).kind == 'p' && a.mira(n+1).valor == "]" {
+		n += 2
+	}
+	if !(a.mira(n).kind == 'p' && a.mira(n).valor == "." &&
+		a.mira(n+1).kind == 'k' && a.mira(n+1).valor == "class") {
+		return nil, false, nil
+	}
+	a.avanzar() // el nombre
+	dimensiones := 0
+	for a.es('p', "[") {
+		a.avanzar()
+		if err := a.comerSimbolo("]"); err != nil {
+			return nil, false, err
+		}
+		dimensiones++
+	}
+	a.avanzar() // el punto
+	a.avanzar() // `class`
+	return jclase{nombre: t.valor, dimensiones: dimensiones, primitivo: t.kind == 'k', donde: t.donde}, true, nil
+}
+
 // atomo lee un literal, this, super, un nombre o un `new`.
 func (a *analizadorJava) atomo() (jexpr, error) {
+	if c, ok, err := a.literalDeClase(); err != nil {
+		return nil, err
+	} else if ok {
+		return c, nil
+	}
 	t := a.actual()
 	switch {
 	case t.kind == 's':

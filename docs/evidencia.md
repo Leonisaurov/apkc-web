@@ -4952,3 +4952,70 @@ Da `rc=102` y la misma salida que la JVM; `banco/banco.sh` lo hace solo cuando `
 que vale es **`/usr/sbin/sudo`** (el de Termux, `$PREFIX/bin/sudo`, no encuentra un `su` que soporte
 `-c`).
 
+## 89. El literal `X.class`: `ldc` de CONSTANT_Class, `getstatic` del primitivo y `if_acmp*`
+
+Sonda `Clase` (diez métodos y el `<clinit>`), medida con `javac --release 8 -g:lines,source`,
+`javap -c -p -v`, `d8 --debug`, el `dexdump -d` del aparato y la ejecución por el banco:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/clase2
+javac --release 8 -g:lines,source sonda/Clase.java
+javap -c -p -v sonda/Clase.class
+d8 --debug --min-api 28 --output d8 sonda/Clase.class
+/data/data/com.termux/files/usr/tmp/apkc-gate compile \
+  --android-jar /data/data/com.termux/files/home/Android/platforms/android-34/android.jar \
+  -o nuestra sonda/Clase.java
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o nuestro.dex nuestra
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o javac.dex sonda
+cmp nuestro.dex javac.dex
+d8 --debug --min-api 28 --output d8desde nuestra/Clase.class
+cmp d8/classes.dex d8desde/classes.dex
+/apex/com.android.art/bin/dexdump -d nuestro.dex
+cd /data/data/com.termux/files/home/Develop/Go/apkc-web && sh banco/banco.sh
+```
+
+En el `.class`:
+
+| fuente | forma | qué fija |
+| --- | --- | --- |
+| `String.class`, `Object.class` | `ldc #7 // class java/lang/String` | `ldc` de una entrada `CONSTANT_Class` (tag 7) |
+| `String[].class` | `ldc #9 // class "[Ljava/lang/String;"` | el nombre de la clase es el descriptor del arreglo |
+| `int[].class` | `ldc #20 // class "[I"` | también para el arreglo de un primitivo |
+| `int.class`, `void.class` | `getstatic java/lang/Integer.TYPE:Ljava/lang/Class;` / `Void.TYPE` | **no** es `ldc`: es el campo `TYPE` del envoltorio |
+| `o.getClass() == String.class` | `invokevirtual Object.getClass; ldc String.class; if_acmpne` | `if_acmpne` **0xa6**; `if_acmpeq` **0xa5** es el `!=` |
+| `String.class.getName()` | `ldc; invokevirtual Class.getName:()Ljava/lang/String;` | el tipo que sale del literal es `Ljava/lang/Class;` |
+
+En el dex, medido con `dexdump -d` sobre nuestro fichero:
+
+| `.class` | palabra | decodificada |
+| --- | --- | --- |
+| `ldc` de `String.class` | `1c00 0400` | `const-class v0, Ljava/lang/String;` —**0x1c**, formato 21c |
+| `ldc` de `String[].class` | `1c00 0900` | `const-class v0, [Ljava/lang/String;` |
+| `ldc` de `int[].class` | `1c00 0800` | `const-class v0, [I` |
+| `getstatic Integer.TYPE` | `6200 0100` | `sget-object v0, Ljava/lang/Integer;.TYPE:Ljava/lang/Class;` —**0x62** |
+| `if_acmpne` | `3310 0400` | `if-ne v0, v1, +0004` —**0x33** de dos registros; `if_acmpeq` baja a `if-eq` **0x32** |
+
+Los dos dex de este fork —sobre nuestras clases y sobre las de javac— son **1412 bytes** y `cmp` mudo;
+`d8 --debug` sobre cualquiera de las dos da **1512 bytes** y los dos ficheros de `d8` son idénticos, con
+`rc 0`. La diferencia de tamaño con el nuestro es el bloque de anotaciones y la forma del `debug_info`
+ya aceptada en el 2G.4 y el §53, no el cuerpo.
+
+La medición destapó un defecto del lector de clases: `constantPool` solo guardaba `tag[i]` en la rama
+`else`, así que una `CONSTANT_Class` (y una `Utf8`) quedaban con etiqueta **0** y el traductor no podía
+distinguir el `ldc` de una clase. Corregido en `apkc/classfile.go`; a partir de ahí el `ldc` de clase
+llega a `const-class`.
+
+Implementado: el parser reconoce `X.class`, `primitivo.class` y `T[].class` (`literalDeClase` en
+`apkc/javafuente.go`); el emisor escribe `ldc` de `CONSTANT_Class` o el `getstatic` del envoltorio y
+resuelve `==`/`!=` entre referencias con `if_acmpeq`/`if_acmpne` (`literalDeClase` y
+`comparacionDeReferencias` en `apkc/javaemisor.go`); el caminante y los marcos conocen los dos opcodes;
+y el traductor baja el `ldc` de clase a `const-class` 0x1c y las dos comparaciones a `if-eq`/`if-ne`
+(`apkc/dexinstr.go`).
+
+Oráculos: `apkc/javaemisor_clase_test.go` —`TestLaClaseSeEscribeComoJavac` (los diez cuerpos con pila,
+huecos y filas de línea; el índice del pool se normaliza porque javac interna `String` al leer el campo
+y este emisor al escribir el `<clinit>`, y el oráculo de bytes es el dex), `TestLaClaseSeDexaIgualQueLosDeJavac`
+(el dex byte a byte idéntico: **1412 bytes**) y `TestLasFormasDexDeLaClase` (los opcodes 0x1c y 0x62)—, y
+la ejecución: `Ver.clases()` en el banco (el `ldc`, el `getstatic` del primitivo, el arreglo y las dos
+comparaciones) devuelve **2** por los cinco caminos, con `dexdump` verificando `rc 0` en los cuatro dex.
+

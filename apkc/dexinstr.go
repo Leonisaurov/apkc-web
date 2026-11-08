@@ -62,6 +62,7 @@ const (
 	opConst           = 0x14 // 31u const vAA, #+BBBBBBBB —asi sale `1.0f` (`1400 0000 803f`, parrafo 80)
 	opConstWideAlto16 = 0x19 // 21c const-wide/high16 vAA, #+BBBB000000000000 (`1902 f03f` = 1.0, parrafo 80)
 	opConstString     = 0x1a // 21c const-string vAA, string@BBBB
+	opConstClase      = 0x1c // 21c const-class vAA, type@BBBB (medido en el parrafo 89: `1c00 0700`)
 	opNuevaInstancia  = 0x22 // 21c new-instance vAA, type@BBBB
 	opIget            = 0x52 // 22c iget vAA, vBB, field@CCCC
 	opIgetObject      = 0x54 // 22c iget-object vAA, vBB, field@CCCC
@@ -157,6 +158,8 @@ var ifContraCero = map[string]byte{
 var ifEntreDos = map[string]byte{
 	"if_icmpeq": opIfEq, "if_icmpne": opIfNe, "if_icmplt": opIfLt,
 	"if_icmpge": opIfGe, "if_icmpgt": opIfGt, "if_icmple": opIfLe,
+	// la comparacion de referencias baja a las mismas `if-eq`/`if-ne` de dos registros (parrafo 89)
+	"if_acmpeq": opIfEq, "if_acmpne": opIfNe,
 }
 
 // traduce es el estado de un método mientras se traduce. Se corre dos veces: la primera con una
@@ -425,7 +428,7 @@ func (p *traduce) comparaAncha(in jvmInstr) {
 	op, ok := map[string]byte{
 		"fcmpl": opFcmplDex, "fcmpg": opFcmpgDex,
 		"dcmpl": opDcmplDex, "dcmpg": opDcmpgDex,
-		"lcmp":  opLcmpDex,
+		"lcmp": opLcmpDex,
 	}[in.name]
 	if !ok {
 		p.falla(in, "a wide comparison this translator does not know")
@@ -1635,7 +1638,8 @@ func (p *traduce) recorre() error {
 			p.guardaLocal(in, n)
 		case "ifeq", "ifne", "iflt", "ifge", "ifgt", "ifle", "ifnull", "ifnonnull":
 			p.salto(ifContraCero[in.name], destinoDe(in), 1, in)
-		case "if_icmpeq", "if_icmpne", "if_icmplt", "if_icmpge", "if_icmpgt", "if_icmple":
+		case "if_icmpeq", "if_icmpne", "if_icmplt", "if_icmpge", "if_icmpgt", "if_icmple",
+			"if_acmpeq", "if_acmpne":
 			p.salto(ifEntreDos[in.name], destinoDe(in), 2, in)
 		case "goto":
 			p.salto(opSalto, destinoDe(in), 0, in)
@@ -1765,6 +1769,14 @@ func (p *traduce) ldc(in jvmInstr) {
 		if !p.indice(p.t.stringIdx[s], in, "the string_id of ldc") {
 			return
 		}
+	case cpClass:
+		// `String.class` es `ldc` de una CONSTANT_Class y en el dex es `const-class` 0x1c (21c),
+		// medido en `Clase.deCadena` del parrafo 89: `1c00 0700` con el type_id en la segunda unidad.
+		desc := p.x.classDescriptor(i)
+		p.palabra(uint16(opConstClase) | uint16(r&0xff)<<8)
+		if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of const-class") {
+			return
+		}
 	case cpInteger:
 		if !p.entero(r, int(p.x.intOf(i)), in) {
 			return
@@ -1773,7 +1785,7 @@ func (p *traduce) ldc(in jvmInstr) {
 		// `ldc #25 // float 1.5f` del parrafo 77: en el dex son los bits de 32, no el numero
 		p.palabraFlotante(r, float64(math.Float32frombits(uint32(p.x.intOf(i)))), in)
 	default:
-		p.falla(in, "an ldc of a pool type that is neither string nor int")
+		p.falla(in, "an ldc of a pool type that is neither string nor int (tag "+itoa(int(p.x.tagOf(i)))+", index "+itoa(i)+")")
 		return
 	}
 	p.push(r)

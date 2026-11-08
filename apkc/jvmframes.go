@@ -490,7 +490,7 @@ func destinosDeSwitch(in jvmInstr) ([]int, error) {
 }
 
 func esCondicional(op byte) bool {
-	return (op >= 0x99 && op <= 0xa4) || op == 0xc6 || op == 0xc7
+	return (op >= 0x99 && op <= 0xa6) || op == 0xc6 || op == 0xc7
 }
 
 func tieneCaida(op byte) bool {
@@ -1028,6 +1028,15 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 				return nil, false, err
 			}
 			if err := a.sacaEntero(); err != nil {
+				return nil, false, err
+			}
+		} else if op == 0xa5 || op == 0xa6 {
+			// `if_acmpeq`/`if_acmpne`: dos referencias, como en el JVMS; medido en `Clase.esCadena`
+			// del parrafo 89 (`invokevirtual Object.getClass; ldc String.class; if_acmpne`)
+			if _, err := a.sacaRef(); err != nil {
+				return nil, false, err
+			}
+			if _, err := a.sacaRef(); err != nil {
 				return nil, false, err
 			}
 		} else {
