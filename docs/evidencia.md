@@ -5260,3 +5260,30 @@ de `aapt2`; la segunda sonda de 716 bytes se midió igual y se comprueba en `stu
 `drawable-hdpi` y `values-<región>` piden las máscaras de orientación/densidad/país, que no están
 medidas; se rechazan por nombre. El criterio de cierre «dos idiomas en `res/values`» sí queda cubierto.
 
+## 95. La app del criterio de cierre, compilada y firmada sin `aapt2` ni `javac`
+
+El criterio de la Fase 5 se juntó en un proyecto `cierre`: un `MainActivity` con **bucle sobre un
+arreglo**, **`switch`**, **`try`/`catch`**, un icono en `res/drawable` y dos idiomas en
+`res/values`/`res/values-es`. Compilado y firmado por el camino todo-Go de la página:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/cierre/proj
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$HOME/Android/platforms/android-34/android.jar" \
+  --keystore "$HOME/.android/debug.keystore"
+apksigner verify --verbose --min-sdk-version 21 build/app.apk
+zipalign -c -p 4 build/app.apk
+aapt2 dump resources build/app.apk
+```
+
+El apk mide **9861 bytes**, `apksigner` dice v1 y v2 correctos, `zipalign -c -p 4` sale 0 y `aapt2
+dump resources` declara `drawable/icono (file) res/drawable/icono.png type=PNG` y la cadena
+`string/app_name` con `()` «Cierre» y `(es)` «Cierre ES». El dex de 2012 bytes trae el bucle, el
+`switch` y el `try`/`catch` del fuente.
+
+Lo que **no** está hecho: instalarlo y arrancarlo en el teléfono. Eso exige `rish` o `pm install` por
+`sudo`, y es una acción sobre el aparato que se pide al usuario antes de hacerla (memoria del repo:
+`feedback-telefono-por-rish`). Hasta entonces la Fase 5 se queda **abierta**: el hecho 2 del objetivo
+—instala y arranca en un teléfono real— ya se midió en el §55 con el contador, pero no con esta app de
+cierre.
+
