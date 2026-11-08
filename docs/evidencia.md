@@ -5903,6 +5903,35 @@ carga con su tipo del SAM y se moldea con `checkcast` (0xc0) antes de la llamada
 tipo del SAM (`Object` acepta el `Integer` del implementador, que ya viene encajado por `javac`).
 Prueba: `TestElSamGenericoUsaElDescriptorBorrado` y el caso `LamGen` de `banco/lambda.sh`.
 
-Frontera: el borrado a un tipo que no sea `Object` (una variable acotada, `T extends Number`) y el
-`altMetafactory` (serializables, marcadores) siguen fuera; la concatenación dinámica de JDK 9
-también.
+Frontera: el borrado a un tipo que no sea `Object` se mide en el §114; `altMetafactory`
+(serializables, marcadores) sigue fuera, igual que la concatenación dinámica de JDK 9.
+
+## 114. Borrado a una cota (`T extends Number`) y el orden del `annotation_set`
+
+Una interfaz genérica con cota borra a esa cota: `F<T extends Number>` deja el SAM
+`(Ljava/lang/Number;)Ljava/lang/String;` y el tipo instanciado `(Ljava/lang/Integer;)…`; la clase
+sintética implementa el SAM con `Number` y su cuerpo moldea a `Integer` antes de llamar.
+
+```sh
+sh banco/lambda.sh
+```
+
+```text
+  LamBound: jvm rc=0 «42» · aparato rc=0 «42»
+  dexdump verificando: rc 0
+lambda: las siete lambdas se desugraron y corren igual que la JVM
+```
+
+La validación ya no exige que el borrado sea `Object`: acepta cualquier par de tipos de referencia
+en el parámetro y moldea con `checkcast`; los primitivos tienen que coincidir. El constructor y los
+campos no cambian respecto del §113.
+
+**Defecto que destapó esta sonda**: el `annotation_set_item` tiene que ir **ordenado por `type_idx`**
+y este fork escribía las anotaciones en el orden de las reglas. Una clase con `Signature` y
+`EnclosingClass`/`InnerClass` (la interfaz genérica del caso) salía con el conjunto desordenado y
+`dexdump` la rechazaba con `Out-of-order entry types: 4 then 2`. Ahora `armaAnotaciones` ordena cada
+conjunto por `type_idx` antes de escribirlo (`apkc/dexanota.go`). Sin eso, el dex ni siquiera se
+verificaba.
+
+Prueba: `TestElSamConCotaUsaElDescriptorBorrado` (descriptor `Number`, `checkcast` y dex) y el caso
+`LamBound` de `banco/lambda.sh`, que pasa por `dexdump` y por `app_process64`.

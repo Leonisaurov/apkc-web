@@ -155,11 +155,13 @@ func sitioDeLambda(cf classFull, x poolIndex, indice int) (lambdaSitio, implDeLa
 		if paramsSam[i] == paramsInst[i] {
 			continue
 		}
-		if paramsSam[i] != "Ljava/lang/Object;" || !esObjeto(paramsInst[i]) {
-			return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el SAM generico del sitio %q pasa de %s a %s: solo se mide el borrado a Object con un tipo instanciado de referencia", nombre, paramsSam[i], paramsInst[i])
+		// el SAM puede borrar a una cota (`Number`) y el tipo instanciado ser más concreto
+		// (`Integer`); el cuerpo moldea con checkcast. Los primitivos tienen que coincidir.
+		if !esObjeto(paramsSam[i]) || !esObjeto(paramsInst[i]) {
+			return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el SAM generico del sitio %q pasa de %s a %s: solo se mide el borrado entre referencias", nombre, paramsSam[i], paramsInst[i])
 		}
 	}
-	if retSam != retInst && !(retSam == "Ljava/lang/Object;" && esObjeto(retInst)) {
+	if retSam != retInst && !(esObjeto(retSam) && esObjeto(retInst)) {
 		return lambdaSitio{}, implDeLambda{}, fmt.Errorf("el SAM generico del sitio %q devuelve %s y el tipo instanciado %s", nombre, retSam, retInst)
 	}
 	implKind, implOwner, implNombre, implDesc, _ := x.methodHandleDe(bm.args[1])

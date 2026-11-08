@@ -30,6 +30,7 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"sort"
 )
 
 const (
@@ -441,15 +442,21 @@ func (td *dexTables) armaAnotaciones(clases []classFull, de map[string]anotacion
 	p := &planAnotaciones{offClase: map[string]uint32{}}
 	relItems := map[string]uint32{}
 	claveItems := func(l []anotacion) []uint32 {
-		sal := make([]uint32, 0, len(l))
-		for i := range l {
-			k := l[i].clave()
+		// el annotation_set_item va ordenado por type_idx (lo exige el verificador de ART: sin
+		// esto, una clase con Signature y EnclosingClass sale «Out-of-order entry types»)
+		ordenadas := append([]anotacion(nil), l...)
+		sort.SliceStable(ordenadas, func(i, j int) bool {
+			return td.typeIdx[ordenadas[i].tipo] < td.typeIdx[ordenadas[j].tipo]
+		})
+		sal := make([]uint32, 0, len(ordenadas))
+		for i := range ordenadas {
+			k := ordenadas[i].clave()
 			if r, ok := relItems[k]; ok {
 				sal = append(sal, r)
 				continue
 			}
 			rel := uint32(len(p.items))
-			p.items = append(p.items, l[i].bytes(td)...)
+			p.items = append(p.items, ordenadas[i].bytes(td)...)
 			relItems[k] = rel
 			p.nItems++
 			sal = append(sal, rel)
