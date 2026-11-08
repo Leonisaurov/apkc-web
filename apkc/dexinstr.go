@@ -2049,18 +2049,18 @@ func (p *traduce) metodoPrivado(nombre, desc string) bool {
 	return false
 }
 
-// lambda: un `invokedynamic` de lambda sin capturas ya desugrado en lambda.go. El objeto se crea con
-// `new-instance` y se construye con `invoke-direct {v}, <init>:()V`; el valor que deja en la pila es
-// el mismo registro (medido: `d8` escribe `new-instance v0` y detrás el constructor, §109).
+// lambda: un `invokedynamic` de lambda ya desugrado en lambda.go. El objeto se crea con
+// `new-instance`, se pasan las capturas que el sitio tenía en la pila y se construye con
+// `invoke-direct {v, capturas…}, <init>`. El valor que queda es el mismo registro.
 func (p *traduce) lambda(in jvmInstr) {
 	sitio, ok := p.clase.Lambdas[in.pc]
 	if !ok {
 		p.falla(in, "an invokedynamic that the lambda expansion did not cover")
 		return
 	}
-	metodo, ok := p.t.methodIdx[methodKey{owner: sitio.clase, proto: protoKeyOf("()V"), desc: "()V", name: "<init>"}]
+	metodo, ok := p.t.methodIdx[methodKey{owner: sitio.clase, proto: protoKeyOf(sitio.ctorDesc), desc: sitio.ctorDesc, name: "<init>"}]
 	if !ok {
-		p.falla(in, "the constructor of the synthetic lambda class "+sitio.clase+" was never interned")
+		p.falla(in, "the constructor "+sitio.ctorDesc+" of the synthetic lambda class "+sitio.clase+" was never interned")
 		return
 	}
 	r := p.toma(in)
@@ -2068,12 +2068,31 @@ func (p *traduce) lambda(in jvmInstr) {
 	if !p.indice(p.typeIdxDe(sitio.clase, in), in, "the type_id of the synthetic lambda class") {
 		return
 	}
-	p.invoca(opInvocaDirecto, []int{r}, []bool{false}, []bool{true}, metodo, in)
+	// las capturas están en la pila JVM, en el orden del descriptor del sitio
+	valores := make([]int, len(sitio.capturas))
+	for i := len(valores) - 1; i >= 0; i-- {
+		valores[i] = p.pop(in)
+	}
 	if p.err != nil {
 		return
 	}
-	if p.outs < 1 {
-		p.outs = 1
+	regs := []int{r}
+	anchos := []bool{false}
+	refs := []bool{true}
+	for i, cap := range sitio.capturas {
+		regs = append(regs, valores[i])
+		anchos = append(anchos, esAncho(cap))
+		refs = append(refs, esObjeto(cap))
+		if esAncho(cap) {
+			regs = append(regs, valores[i]+1)
+		}
+	}
+	p.invoca(opInvocaDirecto, regs, anchos, refs, metodo, in)
+	if p.err != nil {
+		return
+	}
+	if len(regs) > p.outs {
+		p.outs = len(regs)
 	}
 	p.push(r)
 }

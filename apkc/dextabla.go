@@ -248,7 +248,7 @@ func (t *dexTables) collectCode(cf classFull, m classMethod) error {
 				return fmt.Errorf("an invokedynamic at pc %d that the lambda expansion did not cover", in.pc)
 			}
 			t.internType(sitio.clase)
-			t.internMethod(sitio.clase, "()V", "<init>")
+			t.internMethod(sitio.clase, sitio.ctorDesc, "<init>")
 		}
 	}
 	// los tipos de la exception_table también: el handler los nombra por type_idx (parrafo 71)

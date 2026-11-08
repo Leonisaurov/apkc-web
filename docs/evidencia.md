@@ -5798,11 +5798,53 @@ Lo que se mide y lo que se rechaza:
 | implementador | `REF_invokeStatic` de la propia clase; a un `private static synthetic` se le quita `private`, como hace `d8` |
 | clase sintética | `PUBLIC FINAL SYNTHETIC`, la interfaz SAM, `<init>()V` y el método SAM que llama al implementador |
 | sitio en el llamador | `new-instance` + `invoke-direct {v}, <init>()V`; el valor queda en el mismo registro |
-| capturas (`(LLam;)LLam$F;`), referencias de instancia, `altMetafactory` y concatenación dinámica | se rechazan por nombre |
+| capturas (`(I)`, `(LLam;)`) y `this::m` | se desugran con campos de captura en el §111 |
+| referencias sin receptor (`Tipo::m`), `altMetafactory` y concatenación dinámica | se rechazan por nombre |
 
 Implementado en `apkc/lambda.go` (expansión, validación y clase sintética), `apkc/classreader.go`
 (`BootstrapMethods` y los tags del pool), `apkc/dextabla.go` (internado del sitio),
 `apkc/dexinstr.go` (el `new`/`invoke-direct`) y `apkc/jvmopcode.go` (el ancho 0xba). Pruebas:
-`apkc/lambda_test.go` (fixture de `javac`, estructura de la clase y del dex, y el rechazo de la
-captura) y `banco/lambda.sh` (ejecución en ART). El compilador de fuente de este fork sigue sin
-aceptar lambdas: esto mide el dexer sobre `.class` de `javac`, no la sintaxis.
+`apkc/lambda_test.go` (fixture de `javac`, estructura de la clase y del dex) y `banco/lambda.sh`
+(ejecución en ART; desde el §111 cubre también las capturas y `this::m`). El compilador de fuente de
+este fork sigue sin aceptar lambdas: esto mide el dexer sobre `.class` de `javac`, no la sintaxis.
+
+## 111. Lambdas con capturas: un campo por valor y el receptor de `this::m`
+
+La lambda que usa una local o `this` llega con esos valores como parámetros del descriptor del sitio
+(`(I)LLamLoc$F;`, `(LLamThis;)LLamThis$F;`). La clase sintética los guarda en campos, el constructor
+los recibe y el método SAM los carga antes de los argumentos, igual que hace `d8` con sus `f$0`
+(§109). Se midieron cuatro casos con `javac --release 8` → `apkc dex` → ART:
+
+```sh
+sh banco/lambda.sh
+```
+
+Salida:
+
+```text
+  Lam: jvm rc=0 «42» · aparato rc=0 «42»
+  LamLoc: jvm rc=0 «42» · aparato rc=0 «42»
+  LamThis: jvm rc=0 «42» · aparato rc=0 «42»
+  LamRef: jvm rc=0 «42» · aparato rc=0 «42»
+  dexdump verificando: rc 0
+lambda: las cuatro lambdas se desugraron y corren igual que la JVM
+```
+
+Lo que fija cada caso:
+
+| caso | sitio | sintética | implementador |
+| --- | --- | --- | --- |
+| `x -> x + 1` (static) | `()LLam$F;` | `()V`, sin campos | `REF_invokeStatic lambda$uno$0(I)I` |
+| captura un local `y` | `(I)LLamLoc$F;` | `(I)V`, campo `I` | `REF_invokeStatic lambda$con$0(II)I` (captura primero) |
+| captura `this` | `(LLamThis;)LLamThis$F;` | `(LLamThis;)V`, campo `LLamThis;` | `REF_invokeSpecial lambda$captura$0(I)I`; se le quita `private` y el SAM usa `invoke-virtual` |
+| `this::suma` | `(LLamRef;)LLamRef$F;` | `(LLamRef;)V`, campo `LLamRef;` | `REF_invokeVirtual LamRef.suma(I)I` |
+
+El orden es el del JVM: el receptor de una referencia de instancia es la **primera** captura, las
+demás capturas van en los campos y después los argumentos del SAM. En el llamador, el `invokedynamic`
+se cambia por `new-instance` y `invoke-direct {objeto, capturas…}, <init>`, con las capturas que ya
+estaban en la pila.
+
+Frontera medida: `Tipo::suma` sin receptor deja el objeto como **primer argumento del SAM**, no como
+captura, y se rechaza por nombre (`banco/lambda.sh` no lo incluye); `altMetafactory`, el SAM genérico
+y la concatenación dinámica siguen fuera. Pruebas: `apkc/lambda_test.go` (los cuatro casos y el
+rechazo de la referencia sin receptor) y `banco/lambda.sh`.

@@ -1,7 +1,8 @@
 #!/data/data/com.termux/files/usr/bin/sh
-# Banco de la lambda estática sin capturas (5.22, §110). `javac --release 8` deja el `invokedynamic`
-# y el `lambda$…`; este fork lo desugra a una clase sintética. Se ejecuta el dex en el aparato con
-# `app_process64` y se exige la misma salida que la JVM; no instala nada y no necesita pantalla.
+# Banco de las lambdas desugradas (5.22, §110 y §111). `javac --release 8` deja el `invokedynamic`
+# y el `lambda$…`; este fork lo convierte en una clase sintética con sus campos de captura. Se
+# ejecuta el dex en el aparato con `app_process64` y se exige la misma salida que la JVM para los
+# cuatro casos: estática sin capturas, captura de un local, captura de `this` y `this::m`.
 #
 #   uso: sh banco/lambda.sh
 #        APKC=$PREFIX/tmp/apkc-gate sh banco/lambda.sh
@@ -45,29 +46,52 @@ cat >"$TRABAJO/src/Lam.java" <<'EOF'
 public class Lam {
     interface F { int f(int x); }
     static F uno() { return x -> x + 1; }
-    public static void main(String[] a) {
-        System.out.println(uno().f(41));
-    }
+    public static void main(String[] a) { System.out.println(uno().f(41)); }
 }
 EOF
-"$JDK/bin/javac" --release 8 -g:lines,source -d "$TRABAJO/clases" "$TRABAJO/src/Lam.java" 2>/dev/null
+cat >"$TRABAJO/src/LamLoc.java" <<'EOF'
+public class LamLoc {
+    interface F { int f(int x); }
+    static F con(int y) { return x -> x + y; }
+    public static void main(String[] a) { System.out.println(con(5).f(37)); }
+}
+EOF
+cat >"$TRABAJO/src/LamThis.java" <<'EOF'
+public class LamThis {
+    interface F { int f(int x); }
+    int y;
+    F captura() { return x -> x + y; }
+    public static void main(String[] a) { LamThis o = new LamThis(); o.y = 5; System.out.println(o.captura().f(37)); }
+}
+EOF
+cat >"$TRABAJO/src/LamRef.java" <<'EOF'
+public class LamRef {
+    interface F { int f(int x); }
+    int y;
+    F ref() { return this::suma; }
+    int suma(int x) { return x + y; }
+    public static void main(String[] a) { LamRef o = new LamRef(); o.y = 5; System.out.println(o.ref().f(37)); }
+}
+EOF
+"$JDK/bin/javac" --release 8 -g:lines,source -d "$TRABAJO/clases" "$TRABAJO/src"/*.java 2>/dev/null
 "$APKC" dex -o "$TRABAJO/lam.dex" "$TRABAJO/clases" >"$TRABAJO/dex.log" 2>&1 || {
 	echo "lambda: apkc dex fallo"; tail -3 "$TRABAJO/dex.log"; exit 1; }
-set +e
-jvm_out=$("$JDK/bin/java" -cp "$TRABAJO/clases" Lam 2>&1); jvm=$?
-set -e
-echo "  jvm (javac): rc=$jvm, salida: $jvm_out"
 
 base64 -w0 "$TRABAJO/lam.dex" | enAparato "toybox base64 -d > /data/local/tmp/lam.dex"
-enAparato "export CLASSPATH=/data/local/tmp/lam.dex; /system/bin/app_process64 /data/local/tmp Lam > /data/local/tmp/lam.out 2>&1; echo rc=\$? >> /data/local/tmp/lam.out" >/dev/null 2>&1
-enAparato "toybox base64 /data/local/tmp/lam.out" > "$TRABAJO/out.b64" 2>/dev/null
-sal=$(base64 -d < "$TRABAJO/out.b64" | tr -d '\r')
-rcs=$(echo "$sal" | sed -n 's/^rc=//p' | tail -1)
-txt=$(printf '%s\n' "$sal" | sed '/^rc=/d')
-echo "  aparato: rc=$rcs, salida: $(printf '%s' "$txt" | tr '\n' '|')"
-[ "$rcs" = "$jvm" ] && [ "$txt" = "$jvm_out" ] || { printf '%s\n' "$sal" | sed 's/^/      /'; exit 1; }
+for c in Lam LamLoc LamThis LamRef; do
+	set +e
+	jvm_out=$("$JDK/bin/java" -cp "$TRABAJO/clases" "$c" 2>&1); jvm=$?
+	set -e
+	enAparato "export CLASSPATH=/data/local/tmp/lam.dex; /system/bin/app_process64 /data/local/tmp $c > /data/local/tmp/lam-$c.out 2>&1; echo rc=\$? >> /data/local/tmp/lam-$c.out" >/dev/null 2>&1
+	enAparato "toybox base64 /data/local/tmp/lam-$c.out" > "$TRABAJO/$c.b64" 2>/dev/null
+	sal=$(base64 -d < "$TRABAJO/$c.b64" | tr -d '\r')
+	rcs=$(echo "$sal" | sed -n 's/^rc=//p' | tail -1)
+	txt=$(printf '%s\n' "$sal" | sed '/^rc=/d')
+	echo "  $c: jvm rc=$jvm «$jvm_out» · aparato rc=$rcs «$(printf '%s' "$txt" | tr '\n' '|')»"
+	[ "$rcs" = "$jvm" ] && [ "$txt" = "$jvm_out" ] || { printf '%s\n' "$sal" | sed 's/^/      /'; exit 1; }
+done
 enAparato "$DEXDUMP /data/local/tmp/lam.dex >/dev/null 2>&1; echo \$?" > "$TRABAJO/dv.txt" 2>/dev/null
 dv=$(tr -d '\r' < "$TRABAJO/dv.txt")
 [ "$dv" = "0" ] || { echo "lambda: dexdump rc=$dv"; exit 1; }
 echo "  dexdump verificando: rc 0"
-echo "lambda: la lambda estatica sin capturas se desugro y corre igual que la JVM"
+echo "lambda: las cuatro lambdas se desugraron y corren igual que la JVM"
