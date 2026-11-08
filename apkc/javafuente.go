@@ -71,11 +71,14 @@ func (jacceso) jexprPuede() {}
 // receptor es `this`, que es lo que javac anota como clase actual (parrafo 40: setContentView sale
 // Methodref contra MainActivity, no contra Activity, aunque se declare en Activity).
 type jllamada struct {
-	base   jexpr
-	super  bool
-	nombre string
-	args   []jexpr
-	donde  pos
+	base  jexpr
+	super bool
+	// constructorPropio: `this(...)`, la delegacion a otro constructor de la misma clase (parrafo 91).
+	// `super(...)` usa `super` con nombre `<init>`.
+	constructorPropio bool
+	nombre            string
+	args              []jexpr
+	donde             pos
 }
 
 func (jllamada) jexprPuede() {}
@@ -963,9 +966,9 @@ cuerpo:
 		a.avanzar()
 		return leerMetodo("void")
 	}
-	// un constructor: `Nombre(`
+	// un constructor: `Nombre(`. El nombre lo consume `metodo`, que es quien distingue el `<init>`
+	// por `retorno == c.nombre`; avanzarlo tambien aqui se comia el parentesis (parrafo 91).
 	if a.actual().kind == 'i' && a.actual().valor == sinPaquete(c.nombre) && a.pegaParentesis() {
-		a.avanzar()
 		return leerMetodo(c.nombre)
 	}
 	tipo, err := a.tipo()
@@ -1003,6 +1006,8 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 		esPrivado: esPrivado, esProtegido: esProtegido, linea: linea}
 	if retorno == c.nombre {
 		m.nombre = "<init>"
+		// el descriptor de un constructor vuelve V: el nombre de la clase no es su tipo de vuelta
+		m.retorno = ""
 		a.avanzar() // el nombre, que ya sabemos cual es
 	} else {
 		m.nombre = a.avanzar().valor
@@ -1886,6 +1891,14 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		return jlit{tipoJ: 'n', donde: t.donde}, nil
 	case a.es('k', "this"):
 		a.avanzar()
+		if a.es('p', "(") {
+			// `this(...)`: delegacion a otro constructor de la misma clase (parrafo 91)
+			args, err := a.argumentos()
+			if err != nil {
+				return nil, err
+			}
+			return jllamada{constructorPropio: true, nombre: "<init>", args: args, donde: t.donde}, nil
+		}
 		if a.es('p', ".") && a.i+1 < len(a.toks) && a.toks[a.i+1].kind == 'i' {
 			// `this.x`: acceso al campo propio
 			a.avanzar()
@@ -1895,6 +1908,14 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		return jthis{donde: t.donde}, nil
 	case a.es('k', "super"):
 		a.avanzar()
+		if a.es('p', "(") {
+			// `super(...)`: la llamada al constructor del padre, primera sentencia de un constructor
+			args, err := a.argumentos()
+			if err != nil {
+				return nil, err
+			}
+			return jllamada{super: true, nombre: "<init>", args: args, donde: t.donde}, nil
+		}
 		if !a.es('p', ".") {
 			return nil, fmt.Errorf("linea %d: `super` solo se usa para llamar a un metodo del padre", t.donde.linea)
 		}

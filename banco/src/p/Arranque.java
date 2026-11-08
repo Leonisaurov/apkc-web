@@ -39,6 +39,7 @@ public class Arranque {
         System.out.println(Ver.seisLlama());
         System.out.println(new Ver().seisInstLlama());
         System.out.println(Ver.seisAnchoLlama());
+        System.out.println(new Ver().sumaCtor());
         int t = Ver.total;
         System.exit(t);
     }

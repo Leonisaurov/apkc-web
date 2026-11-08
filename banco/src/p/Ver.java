@@ -7,6 +7,22 @@ package p;
 // compare **texto** además del código de salida, y el que destapó la elección de sobrecarga del §62.
 public class Ver {
     static int total = 5;
+    int campoCtor = 5;
+    int otroCtor;
+
+    // Constructores escritos a mano (párrafo 91): uno delega con `this(3)` y no baja el
+    // inicializador de campo; el otro llama al `super()` implícito y después baja `campoCtor = 5`.
+    public Ver() {
+        this(3);
+    }
+
+    public Ver(int x) {
+        otroCtor = x + 1;
+    }
+
+    public int sumaCtor() {
+        return campoCtor + otroCtor;
+    }
 
     public static void cuenta() {
         total = total + 2;

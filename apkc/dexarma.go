@@ -114,7 +114,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	// declaro d8 en las dos sondas (§58)
 	poner(0x2004, plan.items, 1)
 	// los class_data_item dependen de los code_off absolutos, que ya se pueden saber
-	absCodigo := map[[2]string]uint32{}
+	absCodigo := map[[3]string]uint32{}
 	for k, r := range relCodigo {
 		absCodigo[k] = uint32(base[0x2001]) + r
 	}
@@ -373,11 +373,11 @@ func (td *dexTables) areaListas(clases []classFull) ([]byte, map[string]uint32, 
 // áreaCodigo: un code_item por método con cuerpo, con su posición dentro del área y las palabras del
 // cuerpo traducido (el recuento de objetos del map_list sale de ahí y el área de depuración necesita
 // saber dónde arranca la última instrucción), más la correspondencia de pcs.
-func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint32, map[[2]string]map[int]int, map[[2]string][]uint16, error) {
+func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[3]string]uint32, map[[3]string]map[int]int, map[[3]string][]uint16, error) {
 	buf := []byte{}
-	rels := map[[2]string]uint32{}
-	pcs := map[[2]string]map[int]int{}
-	cuerpos := map[[2]string][]uint16{}
+	rels := map[[3]string]uint32{}
+	pcs := map[[3]string]map[int]int{}
+	cuerpos := map[[3]string][]uint16{}
 	for _, cf := range clases {
 		for _, m := range cf.Methods {
 			if !m.HasCode {
@@ -390,7 +390,10 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint3
 			for uint32(len(buf))%4 != 0 {
 				buf = append(buf, 0)
 			}
-			clave := [2]string{cf.Name, m.Name}
+			// la sobrecarga importa: dos constructores `<init>` con descriptores distintos son dos
+			// code_item, no uno. Sin el descriptor la clave colisionaba y los dos metodos apuntaban
+			// al mismo cuerpo (medido en `Ver` con `Ver()` y `Ver(int)` del parrafo 91).
+			clave := [3]string{cf.Name, m.Name, m.Desc}
 			rels[clave] = uint32(len(buf))
 			pcs[clave] = donde
 			buf = putU16(buf, uint16(ci.registersSize))
@@ -436,7 +439,7 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[2]string]uint3
 // clase siguiente. El fichero de `d8` no lleva relleno: sus ítems miden 17, 24, 12, 12, 12 y 10
 // bytes y el último termina justo donde empieza el primer `encoded_array_item` (2746). Tampoco
 // alinea los arrays: los suyos empiezan en 2746, 2749, 2755 y 2761.
-func (td *dexTables) areaClassData(clases []classFull, absCodigo map[[2]string]uint32) ([]byte, map[string]uint32, []byte, map[string]uint32, int) {
+func (td *dexTables) areaClassData(clases []classFull, absCodigo map[[3]string]uint32) ([]byte, map[string]uint32, []byte, map[string]uint32, int) {
 	buf := []byte{}
 	rels := map[string]uint32{}
 	arrays := []byte{}
@@ -460,7 +463,7 @@ func (td *dexTables) areaClassData(clases []classFull, absCodigo map[[2]string]u
 // deltas nunca son negativos. Los valores NO van pegados al encoded_field: medido sobre el fichero
 // de d8, el campo de R$id son los dos bytes `01 19` y la constante vive en el array que anuncia
 // class_defs.static_values_off (§22).
-func (td *dexTables) classDataDe(cf classFull, absCodigo map[[2]string]uint32) ([]byte, []byte) {
+func (td *dexTables) classDataDe(cf classFull, absCodigo map[[3]string]uint32) ([]byte, []byte) {
 	type par struct {
 		idx int
 		f   classField
@@ -575,7 +578,7 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[2]string]uint32) (
 			prev = idx
 			m := accesoDe[idx]
 			out = putUleb(out, accesoMetodoDex(m))
-			out = putUleb(out, absCodigo[[2]string{cf.Name, m.Name}])
+			out = putUleb(out, absCodigo[[3]string{cf.Name, m.Name, m.Desc}])
 		}
 	}
 	pon(directos)

@@ -2663,6 +2663,22 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 // llamada: los cuatro casos del subconjunto, con el Methodref en el sitio que pone javac (parrafo 40).
 func (e *emisor) llamada(l jllamada) (string, error) {
 	argc := len(l.args)
+	if l.constructorPropio {
+		// `this(...)`: javac escribe `aload_0; argumentos; invokespecial <init>` contra la MISMA
+		// clase (parrafo 91). La delegacion no baja los inicializadores de campo; eso lo hace el
+		// constructor al que se delega.
+		e.cargaDe(0, "L")
+		tipos, err := e.argumentos(l.args)
+		if err != nil {
+			return "", err
+		}
+		cand, err := e.ctx.buscarMetodo(e.interno, "<init>", argc, tipos)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+		}
+		e.invoca(opInvokespec, e.interno, "<init>", cand.desc, argc+1)
+		return "V", nil
+	}
 	if l.super {
 		if e.estatico {
 			return "", fmt.Errorf("linea %d: `super` en un metodo estatico no es Java", l.donde.linea)
@@ -4924,10 +4940,28 @@ func (e *emisor) methodInfo(nombre, desc string, acc int, attrs []byte, conte in
 	return append(b, attrs...)
 }
 
-func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
-	if m.nombre == "<init>" {
-		return nil, fmt.Errorf("un constructor escrito a mano no esta medido: javac baja ahi los inicializadores de los campos")
+// delegacionDeConstructor: la primera sentencia de un constructor es `super(...)` o `this(...)`.
+// Medido en el parrafo 91: en los dos casos javac no baja los inicializadores de campo en ESTE
+// constructor; el que recibe la delegacion es el que los escribe.
+func delegacionDeConstructor(cuerpo []jstmt) (jllamada, bool) {
+	if len(cuerpo) == 0 {
+		return jllamada{}, false
 	}
+	st, ok := cuerpo[0].(jstmtExpr)
+	if !ok {
+		return jllamada{}, false
+	}
+	l, ok := st.e.(jllamada)
+	if !ok {
+		return jllamada{}, false
+	}
+	if l.constructorPropio || (l.super && l.nombre == "<init>") {
+		return l, true
+	}
+	return jllamada{}, false
+}
+
+func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	if len(m.cuerpo) == 0 {
 		return nil, fmt.Errorf("un metodo sin cuerpo (%s) pide ACC_ABSTRACT y ese camino no esta medido", m.nombre)
 	}
@@ -4946,7 +4980,41 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		}
 		e.reserva(p.nombre, d)
 	}
-	for _, s := range m.cuerpo {
+	cuerpo := m.cuerpo
+	if m.nombre == "<init>" {
+		if l, delega := delegacionDeConstructor(m.cuerpo); delega {
+			// la primera sentencia ya es la llamada al padre o al otro constructor. Con `this(...)`
+			// los inicializadores de campo NO se bajan aquí; con `super(...)` sí, después de la
+			// llamada (medido en `Ctor` del parrafo 91: line 2: 5 tras el super de line 8).
+			if err := e.stm(m.cuerpo[0]); err != nil {
+				return nil, err
+			}
+			cuerpo = m.cuerpo[1:]
+			if !l.constructorPropio {
+				for _, f := range e.c.inicializadoresDeInstancia() {
+					if err := e.inicializador(f); err != nil {
+						return nil, err
+					}
+				}
+			}
+		} else {
+			// `super()` implicito: javac lo escribe antes de los inicializadores y le pone la linea
+			// de la firma del constructor (medido en `Simple` del parrafo 91: line 3: 0)
+			dueño, err := e.superDe()
+			if err != nil {
+				return nil, err
+			}
+			e.marcaLinea(m.linea)
+			e.cargaDe(0, "L")
+			e.invoca(opInvokespec, dueño, "<init>", "()V", 1)
+			for _, f := range e.c.inicializadoresDeInstancia() {
+				if err := e.inicializador(f); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	for _, s := range cuerpo {
 		if err := e.stm(s); err != nil {
 			return nil, err
 		}

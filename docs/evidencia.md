@@ -5071,3 +5071,57 @@ Implementado: `invoca` elige 35c o 3rc según las palabras o si un registro no c
 `seisAnchoLlama`; `java p.Arranque` y los cinco caminos dan `21|21|21`, con `dexdump` verificando
 `rc 0` en los cuatro dex.
 
+## 91. Constructores escritos a mano: `super`/`this`, los inicializadores de campo y dos `code_item`
+
+Sonda `Base`/`Ctor` (un `super(x)` explícito, un `this(2)` y un campo con inicializador) y
+`Base2`/`Simple` (el `super()` implícito). Medida con `javac --release 8 -g:lines,source`,
+`javap -c -p -v`, `d8 --debug`, `dexdump` y el banco:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/ctor
+javac --release 8 -g:lines,source sonda/Base.java sonda/Ctor.java
+javap -c -p -v sonda/Ctor.class
+d8 --debug --min-api 28 --output d8 sonda/Base.class sonda/Ctor.class
+/data/data/com.termux/files/usr/tmp/apkc-gate compile \
+  --android-jar /data/data/com.termux/files/home/Android/platforms/android-34/android.jar \
+  -o nuestra sonda/Base.java sonda/Ctor.java
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o nuestro.dex nuestra
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o javac.dex sonda
+cmp nuestro.dex javac.dex
+/apex/com.android.art/bin/dexdump -f nuestro.dex
+cd /data/data/com.termux/files/home/Develop/Go/apkc-web && sh banco/banco.sh
+```
+
+En el `.class`:
+
+| constructor | forma | qué fija |
+| --- | --- | --- |
+| `Ctor()` con `this(2)` | `aload_0; iconst_2; invokespecial <init>(I)V; return` | delegar **no** baja los inicializadores de campo |
+| `Ctor(int)` con `super(x)` | `aload_0; iload_1; invokespecial Base.<init>(I)V; aload_0; iconst_1; putfield a; …` | el `super` va primero y después `a = 1`, en la línea de la declaración del campo |
+| `Simple()` sin llamada | `aload_0; invokespecial Base2.<init>(); aload_0; iconst_1; putfield a; …` | el `super()` implícito lleva la línea de la **firma** del constructor |
+| descriptor | `()V` / `(I)V`; flags `0x0000` | un constructor vuelve `V`, no el nombre de la clase |
+
+Líneas medidas: `Ctor()` → `line 5: 0`, `line 6: 5`; `Ctor(int)` → `line 8: 0` (super), `line 2: 5`
+(inicializador), `line 9: 10`, `line 10: 17`; `Simple()` → `line 3: 0` (super implícito), `line 2: 4`,
+`line 4: 9`, `line 5: 14`.
+
+En el dex: `invokespecial` baja a `invoke-direct` 0x70 y cada inicializador es un `iput` con el
+`putfield` del `.class`. Nuestro dex sobre nuestras clases y sobre las de javac es **860 bytes** y `cmp`
+mudo; `d8 --debug` da **968 bytes** sobre cualquiera de las dos y los dos ficheros de `d8` son
+idénticos. `dexdump -f` verifica con `rc 0`.
+
+**El defecto que destapó el banco**: `areaCodigo` y `areaDebug` guardaban sus mapas por
+`[clase, nombre]`, sin el descriptor. Con dos `<init>` distintos, los dos métodos apuntaban al mismo
+`code_item` (los dos salían con `code=0x9c8`), y `dexdump` cortaba con
+`Non-zero padding 3 before section of type 8195 at offset 0x11c8` y ART con
+`No pending exception expected: java.lang.ClassNotFoundException: p.Arranque`. El doble oráculo no lo
+veía porque las clases de javac colisionaban igual; lo destapó ejecutar el dex en el aparato. La clave
+pasa a `[clase, nombre, descriptor]` (`apkc/dexarma.go` y `apkc/dexdebug.go`) y hay una prueba que
+exige un `code_item` por método con cuerpo (`TestLosConstructoresSobrecargadosTienenCodeItemPropio`).
+
+Implementado: el parser lee `super(...)` y `this(...)` (`parrafo 91`), `metodoDeClassFile` deja de
+rechazar `<init>` y escribe la delegación, el `super()` implícito y los inicializadores en el orden de
+javac; `metodo` deja el retorno vacío en un constructor y ya no consume dos veces el nombre. El banco
+añade a `Ver` los dos constructores y `sumaCtor()`: `new Ver().sumaCtor()` da **9** por los cinco
+caminos, porque `Ver()` delega en `Ver(3)` (`campoCtor = 5`, `otroCtor = 4`).
+

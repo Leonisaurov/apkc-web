@@ -146,10 +146,10 @@ func (td *dexTables) itemDebug(m classMethod, pcs map[int]int, insns []uint16) [
 // areaDebug: los items de todos los métodos con cuerpo, deduplicados, con su posición relativa y
 // cuantos distintos hay (el `map_list` declara ese recuento, no el de métodos). `cuerpos` son las
 // palabras de cada cuerpo, por clase y nombre: hacen falta para saber dónde está la última instrucción.
-func (td *dexTables) areaDebug(clases []classFull, pcs map[[2]string]map[int]int,
-	cuerpos map[[2]string][]uint16) ([]byte, map[[2]string]uint32, int) {
+func (td *dexTables) areaDebug(clases []classFull, pcs map[[3]string]map[int]int,
+	cuerpos map[[3]string][]uint16) ([]byte, map[[3]string]uint32, int) {
 	buf := []byte{}
-	rels := map[[2]string]uint32{}
+	rels := map[[3]string]uint32{}
 	vistos := map[string]uint32{}
 	cuantos := 0
 	for _, cf := range clases {
@@ -157,7 +157,7 @@ func (td *dexTables) areaDebug(clases []classFull, pcs map[[2]string]map[int]int
 			if !m.HasCode {
 				continue
 			}
-			clave := [2]string{cf.Name, m.Name}
+			clave := [3]string{cf.Name, m.Name, m.Desc}
 			item := td.itemDebug(m, pcs[clave], cuerpos[clave])
 			if len(item) == 0 {
 				continue
