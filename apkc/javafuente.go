@@ -310,6 +310,7 @@ type jcampo struct {
 	esPublico   bool
 	esPrivado   bool
 	esProtegido bool
+	esSintetico bool // val$x de una captura de anonima
 	valor       jexpr
 	donde       pos
 }
@@ -324,6 +325,8 @@ type jmetodo struct {
 	esPrivado   bool
 	esProtegido bool
 	esFinal     bool
+	// locales: parametros y locales declarados, para resolver una captura de una anonima (5.14).
+	locales map[string]string
 	// abstracto: el metodo no tiene cuerpo; en una interface es implicito y en una clase viene del
 	// modificador `abstract` (parrafo 92).
 	abstracto bool
@@ -361,6 +364,14 @@ type jclas struct {
 	anonima        bool
 	encierre       *jclas
 	metodoEncierre *jmetodo
+	// capturas: las locales/parámetros effectively-final que la anonima usa y que javac baja a
+	// campos `val$x` y parámetros del constructor (5.14).
+	capturas []captura
+}
+
+type captura struct {
+	nombre string
+	tipo   string
 }
 
 // archivoJava es un fuente entero: el paquete, los imports y la clase principal con sus anidadas.
@@ -1077,6 +1088,10 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 	if err := a.comerSimbolo(")"); err != nil {
 		return m, err
 	}
+	m.locales = map[string]string{}
+	for _, p := range m.params {
+		m.locales[p.nombre] = p.tipo
+	}
 	if a.es('k', "throws") {
 		// `throws A, B`: cada nombre va al atributo Exceptions del method_info (parrafo 92). Se guarda
 		// el nombre tal como lo escribe el fuente; el emisor lo resuelve contra el fuente y el jar.
@@ -1548,6 +1563,12 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 				return nil, false, fmt.Errorf("linea %d: la declaracion no tiene nombre", a.actual().donde.linea)
 			}
 			nombre := a.avanzar().valor
+			if a.metodoActual != nil {
+				if a.metodoActual.locales == nil {
+					a.metodoActual.locales = map[string]string{}
+				}
+				a.metodoActual.locales[nombre] = tipo
+			}
 			d := jdecl{tipo: tipo, nombre: nombre, donde: pos{linea}, final: final}
 			if a.es('p', "=") {
 				a.avanzar()
@@ -2053,6 +2074,11 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 	if t.kind == 'i' {
 		a.avanzar()
 		nombre := t.valor
+		if !a.es('p', ".") && a.registraCaptura(nombre) {
+			// una local/parámetro effectively-final del método que crea la anónima: javac la baja a
+			// `val$nombre` y el emisor la lee como `this.val$nombre` (5.14)
+			return jacceso{base: jthis{donde: t.donde}, nombre: "val$" + nombre, donde: t.donde}, nil
+		}
 		if a.es('p', ".") {
 			// R.layout.main: se lee como acceso y el emisor decide si es una constante inlinable.
 			// MainActivity.this: la captura del exterior, que javac baja a un campo this$0.
@@ -2087,6 +2113,40 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 	return nil, fmt.Errorf("linea %d: %q no es una expresion que este parser reconozca", t.donde.linea, t.valor)
 }
 
+// registraCaptura: si `nombre` es una local/parámetro del método que crea la anónima y no una
+// local/parámetro/campo de la propia anónima, la añade a `capturas` y a los campos `val$nombre`.
+func (a *analizadorJava) registraCaptura(nombre string) bool {
+	c := a.claseActual
+	if c == nil || !c.anonima || c.metodoEncierre == nil {
+		return false
+	}
+	if a.metodoActual != nil {
+		if _, ok := a.metodoActual.locales[nombre]; ok {
+			return false
+		}
+	}
+	for _, f := range c.campos {
+		if f.nombre == nombre {
+			return false
+		}
+	}
+	tipo, ok := c.metodoEncierre.locales[nombre]
+	if !ok {
+		return false
+	}
+	for _, cap := range c.capturas {
+		if cap.nombre == nombre {
+			return true
+		}
+	}
+	c.capturas = append(c.capturas, captura{nombre: nombre, tipo: tipo})
+	c.campos = append(c.campos, jcampo{
+		nombre: "val$" + nombre, tipo: tipo, esFinal: true, esSintetico: true,
+		donde: pos{c.linea},
+	})
+	return true
+}
+
 // claseAnonima lee el cuerpo de un `new Interface() { ... }`. Lo que no sea implementar metodos no esta
 // medido: javac le pone el campo this$0 y el constructor con la captura, y eso se comprueba aparte.
 func (a *analizadorJava) claseAnonima(nombre string) (*jclas, error) {
@@ -2114,6 +2174,11 @@ func (a *analizadorJava) claseAnonima(nombre string) (*jclas, error) {
 	if err := a.comerSimbolo("{"); err != nil {
 		return nil, err
 	}
+	// dentro de la anonima `a.claseActual` es la anonima: sin esto `registraCaptura` miraba la clase
+	// exterior y no veia las locales del metodo que la crea (5.14)
+	exteriorActual := a.claseActual
+	a.claseActual = c
+	defer func() { a.claseActual = exteriorActual }()
 	for !a.es('p', "}") {
 		linea := a.actual().donde.linea
 		miembro, err := a.miembroDeClase(c, linea)

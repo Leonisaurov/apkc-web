@@ -99,6 +99,10 @@ type classField struct {
 	ConstInt  int32
 	ConstLong int64
 	ConstStr  string
+
+	// Signature es el atributo del campo para los genéricos; d8 lo copia troceado en
+	// `dalvik.annotation.Signature` (parrafo 101).
+	Signature string
 }
 
 type classMethod struct {
@@ -166,8 +170,12 @@ func readClassFull(data []byte) (classFull, error) {
 		f.Name = p.utf[c.u2()]
 		f.Desc = p.utf[c.u2()]
 		for _, a := range c.attributeTable(p) {
-			if a.name == "ConstantValue" {
+			switch a.name {
+			case "ConstantValue":
 				f.readConstant(x, a.body)
+			case "Signature":
+				r := &cursor{b: a.body}
+				f.Signature = p.utf[r.u2()]
 			}
 		}
 		cf.Fields = append(cf.Fields, f)

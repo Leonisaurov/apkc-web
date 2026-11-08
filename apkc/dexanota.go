@@ -38,6 +38,7 @@ const (
 	anotacionEnclosingClass  = "Ldalvik/annotation/EnclosingClass;"
 	anotacionMemberClasses   = "Ldalvik/annotation/MemberClasses;"
 	anotacionMethodParams    = "Ldalvik/annotation/MethodParameters;"
+	anotacionSignature       = "Ldalvik/annotation/Signature;"
 
 	// Las visibilidades del formato son 0x00 de construccion, 0x01 de runtime y 0x02 de sistema; las cinco
 	// anotaciones de Ldalvik/annotation/* que se emiten salen 0x02 en las dos sondas medidas.
@@ -203,7 +204,16 @@ func anchuraIndice(n uint32) uint32 {
 // hay que internarlo.
 type anotacionesDe struct {
 	clase   []anotacion
+	campos  []anotacionesCampo
 	metodos []anotacionesMiembro
+}
+
+// anotacionesCampo: las de un campo; el field_id se resuelve al escribir el directorio.
+type anotacionesCampo struct {
+	owner  string
+	desc   string
+	nombre string
+	items  []anotacion
 }
 
 // anotacionesMiembro: las de un metodo. El indice de method_ids se resuelve al escribir las areas, que
@@ -215,8 +225,63 @@ type anotacionesMiembro struct {
 	items  []anotacion
 }
 
+// firmaEnTrozos: la troceadura de una firma genérica que hace d8 en el arreglo de cadenas de
+// `Signature`. Cada descriptor de clase `L…;` (o `L…<` con argumentos) es un trozo; lo que queda
+// entre descriptores (`<T::`, `>`, `()`, `>;`) va en su propio trozo. Medido en el parrafo 101:
+// `Ljava/util/Map<Ljava/lang/String;Ljava/lang/Integer;>;` sale
+// ["()" "Ljava/util/Map<" "Ljava/lang/String;" "Ljava/lang/Integer;" ">;"].
+func firmaEnTrozos(firma string) []string {
+	out := []string{}
+	inicio := 0
+	for i := 0; i < len(firma); {
+		if firma[i] != 'L' {
+			i++
+			continue
+		}
+		if i > inicio {
+			out = append(out, firma[inicio:i])
+		}
+		j := i
+		for j < len(firma) && firma[j] != ';' && firma[j] != '<' {
+			j++
+		}
+		if j < len(firma) {
+			j++ // incluye `;` o `<`
+		}
+		out = append(out, firma[i:j])
+		inicio = j
+		i = j
+	}
+	if inicio < len(firma) {
+		out = append(out, firma[inicio:])
+	}
+	return out
+}
+
+func anotacionDeFirma(firma string) anotacion {
+	partes := firmaEnTrozos(firma)
+	valores := make([]valorAnotacion, 0, len(partes))
+	for _, p := range partes {
+		valores = append(valores, valorCadena(p))
+	}
+	return anotacion{tipo: anotacionSignature, elementos: []par{
+		{elementoValue, valorArreglo(valores...)},
+	}}
+}
+
 func reglasDe(cf classFull) anotacionesDe {
 	sal := anotacionesDe{}
+	if cf.Signature != "" {
+		sal.clase = append(sal.clase, anotacionDeFirma(cf.Signature))
+	}
+	for _, f := range cf.Fields {
+		if f.Signature != "" {
+			sal.campos = append(sal.campos, anotacionesCampo{
+				owner: cf.Name, desc: f.Desc, nombre: f.Name,
+				items: []anotacion{anotacionDeFirma(f.Signature)},
+			})
+		}
+	}
 	var propia *classInner
 	miembros := []classInner{}
 	for i := range cf.Inners {
@@ -267,24 +332,29 @@ func reglasDe(cf classFull) anotacionesDe {
 		}})
 	}
 	for _, m := range cf.Methods {
-		if !m.Parameters || len(m.Parametros) == 0 {
-			continue
-		}
-		flags := make([]valorAnotacion, 0, len(m.Parametros))
-		nombres := make([]valorAnotacion, 0, len(m.Parametros))
-		for _, p := range m.Parametros {
-			flags = append(flags, valorEntero(int64(p.access)))
-			if p.nombre == "" {
-				nombres = append(nombres, valorNulo())
-				continue
+		items := []anotacion{}
+		if m.Parameters && len(m.Parametros) > 0 {
+			flags := make([]valorAnotacion, 0, len(m.Parametros))
+			nombres := make([]valorAnotacion, 0, len(m.Parametros))
+			for _, p := range m.Parametros {
+				flags = append(flags, valorEntero(int64(p.access)))
+				if p.nombre == "" {
+					nombres = append(nombres, valorNulo())
+					continue
+				}
+				nombres = append(nombres, valorCadena(p.nombre))
 			}
-			nombres = append(nombres, valorCadena(p.nombre))
-		}
-		sal.metodos = append(sal.metodos, anotacionesMiembro{owner: cf.Name, desc: m.Desc, nombre: m.Name,
-			items: []anotacion{{tipo: anotacionMethodParams, elementos: []par{
+			items = append(items, anotacion{tipo: anotacionMethodParams, elementos: []par{
 				{elementoAccessFlags, valorArreglo(flags...)},
 				{elementoNames, valorArreglo(nombres...)},
-			}}}})
+			}})
+		}
+		if m.Signature != "" {
+			items = append(items, anotacionDeFirma(m.Signature))
+		}
+		if len(items) > 0 {
+			sal.metodos = append(sal.metodos, anotacionesMiembro{owner: cf.Name, desc: m.Desc, nombre: m.Name, items: items})
+		}
 	}
 	return sal
 }
@@ -294,7 +364,7 @@ func reglasDe(cf classFull) anotacionesDe {
 func reglasDeTodas(clases []classFull) map[string]anotacionesDe {
 	sal := map[string]anotacionesDe{}
 	for _, cf := range clases {
-		if a := reglasDe(cf); len(a.clase) > 0 || len(a.metodos) > 0 {
+		if a := reglasDe(cf); len(a.clase) > 0 || len(a.campos) > 0 || len(a.metodos) > 0 {
 			sal[cf.Name] = a
 		}
 	}
@@ -309,6 +379,9 @@ func (t *dexTables) internAnotaciones(de map[string]anotacionesDe) {
 	}
 	for _, a := range de {
 		listas := [][]anotacion{a.clase}
+		for _, f := range a.campos {
+			listas = append(listas, f.items)
+		}
 		for _, m := range a.metodos {
 			listas = append(listas, m.items)
 		}
@@ -409,9 +482,16 @@ func (td *dexTables) armaAnotaciones(clases []classFull, de map[string]anotacion
 		if hayClase {
 			p.parches = append(p.parches, parcheAnot{area: 0x2006, en: len(p.dirs) - 4, destino: 0x1003, rel: relClase})
 		}
-		p.dirs = putU32(p.dirs, 0)                      // fields_size: no anotamos campos
+		p.dirs = putU32(p.dirs, uint32(len(a.campos)))  // fields_size
 		p.dirs = putU32(p.dirs, uint32(len(a.metodos))) // annotated_methods_size
 		p.dirs = putU32(p.dirs, 0)                      // annotated_static_fields_size
+		for _, f := range a.campos {
+			rel := setDe(claveItems(f.items))
+			k := fieldKey{owner: f.owner, typeOf: f.desc, name: f.nombre}
+			p.dirs = putU32(p.dirs, uint32(td.fieldIdx[k]))
+			p.dirs = putU32(p.dirs, 0)
+			p.parches = append(p.parches, parcheAnot{area: 0x2006, en: len(p.dirs) - 4, destino: 0x1003, rel: rel})
+		}
 		for _, m := range a.metodos {
 			rel := setDe(claveItems(m.items))
 			k := methodKey{owner: m.owner, proto: protoKeyOf(m.desc), desc: m.desc, name: m.nombre}

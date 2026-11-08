@@ -1179,7 +1179,9 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 				if f.esFinal {
 					acc |= accFinal
 				}
-				cr := campoResuelto{desc: d, acceso: acc, dueño: dueño, constante: f.esFinal}
+				// solo un `static final` es constante de compilación: un `val$x` final de instancia se
+				// lee con `getfield` y no se dobla (5.14)
+				cr := campoResuelto{desc: d, acceso: acc, dueño: dueño, constante: f.esFinal && f.esEstatico}
 				if cr.constante {
 					lit, esLit := f.valor.(jlit)
 					if !esLit {
@@ -2883,6 +2885,13 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		if !e.estatico {
 			e.cargaDe(0, "L")
 		}
+		for _, cap := range n.cuerpo.capturas {
+			lv, ok := e.locales[cap.nombre]
+			if !ok {
+				return "", fmt.Errorf("linea %d: la captura %s de la anonima no es una local viva", n.donde.linea, cap.nombre)
+			}
+			e.cargaDe(lv.indice, lv.desc)
+		}
 		if _, err := e.argumentos(n.args); err != nil {
 			return "", err
 		}
@@ -2890,6 +2899,13 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		sb.WriteString("(")
 		if !e.estatico {
 			sb.WriteString("L" + e.interno + ";")
+		}
+		for _, cap := range n.cuerpo.capturas {
+			d, err := e.ctx.descriptorDe(cap.tipo)
+			if err != nil {
+				return "", err
+			}
+			sb.WriteString(d)
 		}
 		for _, arg := range n.args {
 			d, err := e.tipoEstimado(arg)
@@ -2902,7 +2918,7 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		// un descriptor de metodo lleva siempre la vuelta: sin la V del constructor el dexer internaria un
 		// tipo que no existe
 		sb.WriteString("V")
-		enPila := len(n.args) + 1
+		enPila := 1 + len(n.cuerpo.capturas) + len(n.args)
 		if !e.estatico {
 			enPila++
 		}
@@ -4579,14 +4595,29 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 
 	campos := []byte{}
 	nCampos := 0
-	if c.anonima && !(c.metodoEncierre != nil && c.metodoEncierre.esEstatico) {
-		// javac abre la anonima con su campo de captura, antes de lo que el fuente escriba (parrafo 42:
-		// `final com.hola.apkcstudio.MainActivity this$0;` con flags 0x1010, ACC_FINAL y ACC_SYNTHETIC).
-		// Una anonima creada en un metodo `static` no captura `this` y no lleva este campo (5.14).
-		campos = append(campos, e.campoCaptura()...)
-		nCampos++
+	if c.anonima {
+		// javac pone primero los `val$x` de las locales capturadas y después el `this$0` del exterior
+		// (medido en `Captura3$1`, parrafo 100). Una anónima de un método static no tiene this$0.
+		for _, f := range c.campos {
+			if !strings.HasPrefix(f.nombre, "val$") {
+				continue
+			}
+			b, err := e.campoDeClassFile(f)
+			if err != nil {
+				return nil, fmt.Errorf("linea %d: %w", f.donde.linea, err)
+			}
+			campos = append(campos, b...)
+			nCampos++
+		}
+		if !(c.metodoEncierre != nil && c.metodoEncierre.esEstatico) {
+			campos = append(campos, e.campoCaptura()...)
+			nCampos++
+		}
 	}
 	for _, f := range c.campos {
+		if c.anonima && strings.HasPrefix(f.nombre, "val$") {
+			continue
+		}
 		b, err := e.campoDeClassFile(f)
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", f.donde.linea, err)
@@ -4765,25 +4796,51 @@ func (e *emisor) encierreInterno() string {
 // de subir al padre y anade el atributo MethodParameters marcando el parametro como `final mandated`
 // (0x8010), todo medido en el parrafo 42 sobre MainActivity$1.
 func (e *emisor) initCaptura() ([]byte, error) {
-	// Una anonima en un metodo `static` no captura el exterior: el constructor es `()V`, sin
-	// `this$0` y sin MethodParameters (5.14). La captura de locales effectively-final sigue fuera.
+	// Una anonima captura el exterior (`this$0`, si el metodo no es static) y las locales
+	// effectively-final (`val$x`). Javac escribe primero las asignaciones de captura y despues el
+	// `super()`, y para capturas de un metodo static NO escribe `MethodParameters` (parrafo 100).
 	estatica := e.c.metodoEncierre != nil && e.c.metodoEncierre.esEstatico
-	desc := "()V"
+	desc := "("
 	externo := ""
 	if !estatica {
 		externo = "L" + e.encierreInterno() + ";"
-		desc = "(" + externo + ")V"
+		desc += externo
 	}
+	descs := make([]string, len(e.c.capturas))
+	for i, cap := range e.c.capturas {
+		d, err := e.ctx.descriptorDe(cap.tipo)
+		if err != nil {
+			return nil, err
+		}
+		descs[i] = d
+		desc += d
+	}
+	desc += ")V"
 	e.preparaMetodo(desc, false)
 	e.reserva("", "L")
 	if !estatica {
 		e.reserva("", externo)
+	}
+	for _, d := range descs {
+		e.reserva("", d)
 	}
 	e.marcaLinea(e.c.linea)
 	if !estatica {
 		e.cargaDe(0, "L")
 		e.cargaDe(1, externo)
 		idx := e.pool.campo(e.interno, "this$0", externo)
+		e.emite(opPutfield, byte(idx>>8), byte(idx))
+		e.baja(2)
+	}
+	capturaBase := 1
+	if !estatica {
+		capturaBase++
+	}
+	for i, cap := range e.c.capturas {
+		d := descs[i]
+		e.cargaDe(0, "L")
+		e.cargaDe(capturaBase+i, d)
+		idx := e.pool.campo(e.interno, "val$"+cap.nombre, d)
 		e.emite(opPutfield, byte(idx>>8), byte(idx))
 		e.baja(2)
 	}
@@ -4797,10 +4854,15 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	attrs := attrInfo(e.pool, "Code", codigo)
 	conte := 1
 	if !estatica {
-		// MethodParameters: conteo u1, y por cada uno nombre u2 y flags u2. El de la captura no tiene nombre.
-		mp := []byte{1}
+		// MethodParameters: el `this$0` sale `final mandated` (0x8010) y cada `val$x`
+		// `final synthetic` (0x1010); medido en `Captura3$1` (parrafo 100).
+		mp := []byte{byte(1 + len(e.c.capturas))}
 		mp = append(mp, u2be(0)...)
 		mp = append(mp, u2be(uint16(accFinal|accMandated))...)
+		for range e.c.capturas {
+			mp = append(mp, u2be(0)...)
+			mp = append(mp, u2be(uint16(accFinal|accSynthetic))...)
+		}
 		attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
 		conte = 2
 	}
@@ -4845,6 +4907,9 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 	}
 	if esFinal {
 		acc |= accFinal
+	}
+	if f.esSintetico {
+		acc |= accSynthetic
 	}
 	desc, err := e.ctx.descriptorDe(f.tipo)
 	if err != nil {

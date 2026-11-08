@@ -5428,6 +5428,69 @@ tools/entorno.sh -- sh -c 'cd apkc && go test -count=1 -run "AnonimaEnStatic" .'
 campo `this$0` y con `EnclosingMethod` apuntando a `Captura.uno`. Nuestra clase y su dex salen byte a
 byte los de javac; los tests comparan el `Code` de `<init>`/`run`, las filas de línea y el dex.
 
-La otra mitad de 5.14 —capturar un parámetro o una local effectively-final (`val$x`)— sigue
-rechazada por nombre: el cuerpo de la anónima no resuelve el nombre `x` todavía. No se da por cerrada.
+## 100. La captura de locales effectively-final: `val$x`, el ctor y `MethodParameters`
+
+La segunda mitad de 5.14: una anónima captura un parámetro/local del método que la crea. Se midieron
+los dos casos, la captura en un método `static` y la que además lleva el `this$0` del exterior:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/cap2 && javac --release 8 -g:lines,source Captura.java
+javap -c -p -v 'Captura$1.class'
+cd /data/data/com.termux/files/usr/tmp/cap3/javac && javac --release 8 -g:lines,source Captura3.java
+javap -c -p -v 'Captura3$1.class'
+cd /data/data/com.termux/files/home/Develop/Go/apkc-web
+tools/entorno.sh -- sh -c 'cd apkc && go test -count=1 -run "Captura" .'
+```
+
+| caso | constructor | campo y `MethodParameters` |
+| --- | --- | --- |
+| `Captura.dos(int x)` (static) | **`(I)V`**; `aload_0; iload_1; putfield val$x; aload_0; invokespecial Object.<init>; return` | `val$x` final synthetic (0x1010); **sin** `MethodParameters` |
+| `Captura3.r(int x)` (instancia) | **`(LCaptura3;I)V`**; asigna `this$0` y `val$x` antes del `super` | campos en orden `val$x` y después `this$0`; `MethodParameters` con dos filas: el exterior `final mandated` (0x8010) y `val$x` `final synthetic` (0x1010) |
+
+La referencia `x` dentro de `run` sale `aload_0; getfield val$x` (y `x + y` añade el `getfield` del
+campo del exterior). Nuestras clases y sus dex salen byte a byte los de javac en los dos casos; las
+pruebas comparan campos, `Code`, filas de línea y dex.
+
+Implementado: el parser registra las locales del método (`jmetodo.locales`), al entrar en la anónima
+resuelve un nombre contra ellas y lo convierte en `this.val$nombre`, añade el campo `val$…` y guarda
+la captura; el emisor pone los campos en el orden de javac, el constructor con sus parámetros y
+`MethodParameters`, y `new` pasa las capturas antes de los argumentos (`apkc/javafuente.go`,
+`apkc/javaemisor.go`). Frontera: una anónima dentro de otra sigue rechazada por nombre.
+
+## 101. `Signature` genérica en el dex: el troceado de `d8`
+
+El dexer copia el atributo `Signature` del `.class` a la anotación de sistema
+`Ldalvik/annotation/Signature;`, con la firma troceada en un arreglo de cadenas. Medido en una clase
+con firma de clase, de campo y de método:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/gen
+javac --release 8 -g:lines,source Gen.java
+d8 --debug --min-api 28 --output d8 Gen.class
+apex/com.android.art/bin/dexdump -a d8/classes.dex
+/data/data/com.termux/files/usr/tmp/apkc-gate dex -o nuestro.dex .
+/apex/com.android.art/bin/dexdump -a nuestro.dex
+```
+
+`dexdump -a` del fichero de este fork, igual que el de `d8`:
+
+```text
+Annotations on class
+  VISIBILITY_SYSTEM Ldalvik/annotation/Signature; value={ "<T::" "Ljava/lang/CharSequence;" ">" "Ljava/lang/Object;" }
+Annotations on field #0 'xs'
+  VISIBILITY_SYSTEM Ldalvik/annotation/Signature; value={ "Ljava/util/List<" "Ljava/lang/String;" ">;" }
+Annotations on method #1 'id'
+  VISIBILITY_SYSTEM Ldalvik/annotation/Signature; value={ "<R:" "Ljava/lang/Object;" ">(TR;)TR;" }
+```
+
+La regla de troceado, deducida de los tres casos y de
+`()Ljava/util/Map<Ljava/lang/String;Ljava/lang/Integer;>;`:
+cada descriptor de clase `L…;` es un trozo; si el descriptor va seguido de `<`, el trozo termina en
+`<`; todo lo que queda entre descriptores (`<T::`, `>`, `()`, `>;`) es un trozo. El arreglo se añade
+como `value` de la anotación de clase, campo o método.
+
+Implementado: el lector guarda `Signature` de clase, campo y método (`apkc/classreader.go`);
+`firmaEnTrozos`/`anotacionDeFirma` y las listas de campos anotados en `apkc/dexanota.go`; el
+directorio de anotaciones escribe `fields_size` y los `field_idx` además de clases y métodos.
+Prueba: `apkc/dexanota_firma_test.go` (los cuatro troceados y las tres reglas).
 
