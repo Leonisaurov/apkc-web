@@ -69,81 +69,107 @@ name, because those need a second configuration or a file copy, and neither is m
 
 // tiposDeResQueSeEnlazan: las dos carpetas cuyos ficheros se tradacen a modelos. Los demas nombres de
 // carpeta son recursos que este enlazador no sabe escribir.
-var tiposDeResQueSeEnlazan = map[string]bool{"values": true, "layout": true}
+var tiposDeResQueSeEnlazan = map[string]bool{"values": true, "layout": true, "drawable": true, "mipmap": true}
+
+// tipoDeRecurso: la carpeta de res/ que da el tipo, sin calificador. Un nombre con guion todavía no
+// se acepta (5.17), así que basta el primer segmento.
+func tipoDeRecurso(ruta string) string {
+	partes := strings.Split(filepath.ToSlash(ruta), "/")
+	if len(partes) >= 2 && partes[0] == "res" {
+		return partes[1]
+	}
+	return ""
+}
 
 // fuentesDelProyecto recoge el arbol de recursos: los values, los layouts y el manifiesto, todos en
 // texto. Rechaza lo que no se pueda enlazar, antes de escribir nada.
-func fuentesDelProyecto(raiz string) (valores, layouts []fuenteXML, manifiesto fuenteXML, err error) {
+func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML, err error) {
 	manifiesto = fuenteXML{nombre: "AndroidManifest.xml"}
 	manifiesto.contenido, err = os.ReadFile(filepath.Join(raiz, "AndroidManifest.xml"))
 	if err != nil {
-		return nil, nil, manifiesto, fmt.Errorf("el proyecto no tiene AndroidManifest.xml: %w", err)
+		return nil, nil, nil, manifiesto, fmt.Errorf("el proyecto no tiene AndroidManifest.xml: %w", err)
 	}
 	if strings.Contains(string(manifiesto.contenido), "<permission") {
-		return nil, nil, manifiesto, fmt.Errorf("el manifiesto declara <permission>: aapt2 escribe ademas un Manifest.java y este enlace no lo escribe")
+		return nil, nil, nil, manifiesto, fmt.Errorf("el manifiesto declara <permission>: aapt2 escribe ademas un Manifest.java y este enlace no lo escribe")
 	}
 
 	res := filepath.Join(raiz, "res")
 	entradas, err := os.ReadDir(res)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return valores, layouts, manifiesto, nil // un proyecto sin res/ no tiene recursos que enlazar
+			return valores, layouts, ficheros, manifiesto, nil // un proyecto sin res/ no tiene recursos que enlazar
 		}
-		return nil, nil, manifiesto, err
+		return nil, nil, nil, manifiesto, err
 	}
 	for _, e := range entradas {
 		if !e.IsDir() {
-			return nil, nil, manifiesto, fmt.Errorf("res/%s no es una carpeta de recursos", e.Name())
+			return nil, nil, nil, manifiesto, fmt.Errorf("res/%s no es una carpeta de recursos", e.Name())
 		}
-		if !tiposDeResQueSeEnlazan[e.Name()] {
-			// un nombre con calificador (layout-es, drawable-v21, values-land) es una SEGUNDA
-			// configuracion, y este enlace emite una sola: lo medido en el parrafo 28 dice que
-			// reproducir el reparto por configuracion exige la tabla atributo-a-API del framework
-			return nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe la carpeta values y la carpeta layout, sin calificador. Un nombre con guion es una configuracion anadida (idioma, densidad, version de API) y aqui se emite una unica configuracion base (parrafo 28); otro tipo de recurso (drawable, mipmap, raw, anim, font) pide copiar ficheros y aun no esta medido", e.Name())
+		tipo, config := e.Name(), ""
+		if !tiposDeResQueSeEnlazan[tipo] {
+			// `values-es`: una segunda configuracion por idioma, la unica que se midio (parrafo 94).
+			// Un calificador de layout/densidad/API sigue fuera.
+			if strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+2 {
+				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
+			} else {
+				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, drawable y mipmap. Un calificador de layout, densidad o version de API es otra configuracion que no esta medida (parrafo 28); otro tipo de recurso (raw, anim, font) tampoco", e.Name())
+			}
 		}
 		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
 		if err != nil {
-			return nil, nil, manifiesto, err
+			return nil, nil, nil, manifiesto, err
 		}
 		for _, f := range nom {
 			if f.IsDir() {
-				return nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
-			}
-			if !strings.HasSuffix(f.Name(), ".xml") {
-				return nil, nil, manifiesto, fmt.Errorf("res/%s/%s: un recurso que no es .xml no se puede enlazar aqui", e.Name(), f.Name())
+				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
 			}
 			ruta := filepath.Join("res", e.Name(), f.Name())
 			contenido, err := os.ReadFile(filepath.Join(res, e.Name(), f.Name()))
 			if err != nil {
-				return nil, nil, manifiesto, err
+				return nil, nil, nil, manifiesto, err
 			}
-			fuente := fuenteXML{nombre: filepath.ToSlash(ruta), contenido: contenido}
-			if e.Name() == "values" {
+			fuente := fuenteXML{nombre: filepath.ToSlash(ruta), contenido: contenido, config: config}
+			switch tipo {
+			case "values":
+				if !strings.HasSuffix(f.Name(), ".xml") {
+					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: values solo admite .xml", e.Name(), f.Name())
+				}
 				valores = append(valores, fuente)
-				continue
+			case "layout":
+				if !strings.HasSuffix(f.Name(), ".xml") {
+					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: layout solo admite .xml", e.Name(), f.Name())
+				}
+				layouts = append(layouts, fuente)
+			default:
+				// drawable/mipmap: un PNG (o cualquier binario) viaja tal cual y su entrada es un
+				// Res_value de tipo cadena con la ruta (parrafo 93). Un XML dibujable (vector,
+				// shape) es otro formato y se rechaza por nombre.
+				if strings.HasSuffix(f.Name(), ".xml") {
+					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: un drawable XML (vector/shape) no esta medido", e.Name(), f.Name())
+				}
+				ficheros = append(ficheros, fuente)
 			}
-			layouts = append(layouts, fuente)
 		}
 	}
-	return valores, layouts, manifiesto, nil
+	return valores, layouts, ficheros, manifiesto, nil
 }
 
 // enlazarConGo es el sustituto de `aapt2 compile` y `aapt2 link` juntos. Escribe los productos en el
 // arbol del proyecto y dice si la R cambio, que es lo que necesita el paso incremental para saber si
 // hay que volver a pasar javac.
 func enlazarConGo(raiz, androidJar string, opts opcionesDeEnlace) (bool, error) {
-	valores, layouts, manifiesto, err := fuentesDelProyecto(raiz)
+	valores, layouts, ficheros, manifiesto, err := fuentesDelProyecto(raiz)
 	if err != nil {
 		return false, err
 	}
-	if len(valores) == 0 && len(layouts) == 0 {
-		return false, fmt.Errorf("el proyecto no tiene recursos que enlazar (ni res/values ni res/layout)")
+	if len(valores) == 0 && len(layouts) == 0 && len(ficheros) == 0 {
+		return false, fmt.Errorf("el proyecto no tiene recursos que enlazar (ni values, ni layout, ni drawable)")
 	}
 	m, err := marcoDelAndroidJar(androidJar)
 	if err != nil {
 		return false, fmt.Errorf("la tabla de ids del framework: %w", err)
 	}
-	enlazado, err := enlazarProyecto(valores, layouts, manifiesto, m, opts)
+	enlazado, err := enlazarProyecto(valores, layouts, ficheros, manifiesto, m, opts)
 	if err != nil {
 		return false, err
 	}
@@ -178,6 +204,12 @@ func enlazarConGo(raiz, androidJar string, opts opcionesDeEnlace) (bool, error) 
 			ruta      string
 			contenido []byte
 		}{filepath.Join(raiz, "build", filepath.FromSlash(nombre)), bin})
+	}
+	for nombre, contenido := range enlazado.ficheros {
+		escrituras = append(escrituras, struct {
+			ruta      string
+			contenido []byte
+		}{filepath.Join(raiz, "build", filepath.FromSlash(nombre)), contenido})
 	}
 	for _, e := range escrituras {
 		if err := os.MkdirAll(filepath.Dir(e.ruta), 0o755); err != nil {

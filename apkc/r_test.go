@@ -55,11 +55,11 @@ func TestRDesfiguraNombresYOrdena(t *testing.T) {
 		nombresTipo:   []string{"attr", "bool", "color", "id", "layout", "string"},
 		claves:        []string{"normal", "con-guion.y.punto", "str_simple"},
 		tipos: []tipoEscribir{
-			{id: 6, specFlags: []uint32{0}, entradas: []entradaEscribir{
+			{id: 6, specFlags: []uint32{0}, bloques: []bloqueEscribir{{entradas: []entradaEscribir{
 				{clave: 1, valor: valorEscribir{tipo: tipoCadena}},
 				{clave: 0, valor: valorEscribir{tipo: tipoCadena}},
 				{clave: 2, valor: valorEscribir{tipo: tipoCadena}},
-			}},
+			}}}},
 		},
 	}
 	salida, err := rDeTabla(tabla)
@@ -82,7 +82,7 @@ func TestRRechaza(t *testing.T) {
 	base := tablaDelStudio()
 
 	malo := tablaDelStudio()
-	malo.tipos[2].entradas[0].clave = len(malo.claves)
+	malo.tipos[2].bloques[0].entradas[0].clave = len(malo.claves)
 	if _, err := rDeTabla(malo); err == nil {
 		t.Error("una entrada con clave inexistente fue aceptada")
 	}
@@ -99,9 +99,9 @@ func TestRRechaza(t *testing.T) {
 		idPaquete: 0x7f, nombrePaquete: "p",
 		nombresTipo: []string{"string"},
 		claves:      []string{"b", "a"},
-		tipos: []tipoEscribir{{id: 1, entradas: []entradaEscribir{
+		tipos: []tipoEscribir{{id: 1, bloques: []bloqueEscribir{{entradas: []entradaEscribir{
 			{clave: 0}, {clave: 1},
-		}}},
+		}}}}},
 	}
 	// la primera entrada nombra "b" y la segunda "a": al reves del orden con que aapt2 emite, que es
 	// el que decide los ids
@@ -114,9 +114,9 @@ func TestRRechaza(t *testing.T) {
 		idPaquete: 0x7f, nombrePaquete: "p",
 		nombresTipo: []string{"string"},
 		claves:      []string{"con-guion", "con_guion"},
-		tipos: []tipoEscribir{{id: 1, entradas: []entradaEscribir{
+		tipos: []tipoEscribir{{id: 1, bloques: []bloqueEscribir{{entradas: []entradaEscribir{
 			{clave: 0}, {clave: 1},
-		}}},
+		}}}}},
 	}
 	if _, err := rDeTabla(malo); err == nil {
 		t.Error("dos nombres que chocan al desfigurarlos fueron aceptados")

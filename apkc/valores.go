@@ -25,12 +25,16 @@ import (
 type fuenteXML struct {
 	nombre    string
 	contenido []byte
+	// config es el calificador de una segunda configuracion, hoy solo el idioma de `values-es`
+	// (parrafo 94). Vacío es la configuracion base.
+	config string
 }
 
 // recursoEntabla es una entrada de la tabla antes de ordenar: su tipo, su clave y el valor ya resuelto
 // (o los registros, si es compleja).
 type recursoEntabla struct {
 	tipo     string
+	config   string
 	clave    string
 	valor    valorEscribir
 	texto    string // el texto del valor, que es lo que va al pool global cuando el valor es cadena
@@ -43,7 +47,25 @@ type recursoEntabla struct {
 // uno, entradas de cada tipo por nombre, claves en el orden de emision y pool global ASCII con las
 // rutas de los layouts y los textos de las cadenas. Las banderas salen de la regla medida en el
 // parrafo 29: 0x0004 en el tipo id, 0x0001 en un valor complejo, 0 en el resto.
-func tablaDeRecursos(recursos []recursoEntabla, layouts []fuenteXML, paquete string) (*tablaEscribir, error) {
+func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, paquete string) (*tablaEscribir, error) {
+	// aapt2 descarta una clave que solo existe en una configuracion secundaria: avisa
+	// «removing resource … without required default value» y no entra ni en la tabla ni en el pool
+	// (medido en el parrafo 94). La base define el conjunto de claves de cada tipo.
+	base := map[string]bool{}
+	for _, r := range recursos {
+		if r.config == "" {
+			base[r.tipo+"\x00"+r.clave] = true
+		}
+	}
+	filtrados := recursos[:0]
+	for _, r := range recursos {
+		if r.config != "" && !base[r.tipo+"\x00"+r.clave] {
+			continue
+		}
+		filtrados = append(filtrados, r)
+	}
+	recursos = filtrados
+
 	nombresTipos := map[string]bool{}
 	for _, r := range recursos {
 		nombresTipos[r.tipo] = true
@@ -51,22 +73,47 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts []fuenteXML, paquete str
 	if len(layouts) > 0 {
 		nombresTipos["layout"] = true
 	}
+	for _, f := range ficheros {
+		nombresTipos[tipoDeRecurso(f.nombre)] = true
+	}
 	tipos := []string{}
 	for n := range nombresTipos {
 		tipos = append(tipos, n)
 	}
 	sort.Strings(tipos)
 
+	// El pool global de aapt2 va por configuraciones: primero la base, ordenada por texto, y después
+	// cada idioma, también ordenado por texto. Medido en el parrafo 94: `Icono`, `Uno` (base) y
+	// `Icono ES` (es); con `Dos`/`Uno` la base sale `Dos`, `Uno`.
 	global := []string{}
 	for _, f := range layouts {
 		global = append(global, f.nombre)
 	}
+	for _, f := range ficheros {
+		global = append(global, f.nombre)
+	}
 	for _, r := range recursos {
-		if r.valor.tipo == tipoCadena && r.texto != "" {
+		if r.config == "" && r.valor.tipo == tipoCadena && r.texto != "" {
 			global = append(global, r.texto)
 		}
 	}
 	sort.Strings(global)
+	configsGlobal := map[string][]string{}
+	for _, r := range recursos {
+		if r.config != "" && r.valor.tipo == tipoCadena && r.texto != "" {
+			configsGlobal[r.config] = append(configsGlobal[r.config], r.texto)
+		}
+	}
+	nombresConfig := make([]string, 0, len(configsGlobal))
+	for cfg := range configsGlobal {
+		nombresConfig = append(nombresConfig, cfg)
+	}
+	sort.Strings(nombresConfig)
+	for _, cfg := range nombresConfig {
+		textos := configsGlobal[cfg]
+		sort.Strings(textos)
+		global = append(global, textos...)
+	}
 	global = sinRepetidos(global)
 	indiceGlobal := map[string]int{}
 	for i, s := range global {
@@ -94,38 +141,83 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts []fuenteXML, paquete str
 			}
 		}
 		sort.SliceStable(entradas, func(a, b int) bool { return entradas[a].clave < entradas[b].clave })
-		escritas := []entradaEscribir{}
+		// las claves del tipo son la union de las configuraciones; cada bloque lleva una entrada por
+		// clave, con `falta` cuando esa configuracion no la declara (medido en `values-es`, parrafo 94)
+		conjunto := map[string]bool{}
 		for _, r := range entradas {
-			if _, ok := indiceClave[r.clave]; !ok {
-				indiceClave[r.clave] = len(claves)
-				claves = append(claves, r.clave)
-			}
-			e := entradaEscribir{clave: indiceClave[r.clave], compleja: r.compleja, padre: r.padre, registros: r.items}
-			switch {
-			case r.compleja:
-				e.flags = 0x0001
-			case nombreTipo == "id":
-				e.flags = 0x0004
-				e.valor = r.valor
-			case r.valor.tipo == tipoCadena:
-				indice, ok := indiceGlobal[r.texto]
-				if !ok {
-					return nil, fmt.Errorf("la cadena de %s/%s no esta en el pool global", r.tipo, r.clave)
-				}
-				e.flags = 0
-				e.valor = valorEscribir{tipo: tipoCadena, datos: uint32(indice)}
-			default:
-				e.valor = r.valor
-			}
-			escritas = append(escritas, e)
+			conjunto[r.clave] = true
 		}
-		if len(escritas) == 0 {
+		clavesTipo := make([]string, 0, len(conjunto))
+		for k := range conjunto {
+			clavesTipo = append(clavesTipo, k)
+		}
+		sort.Strings(clavesTipo)
+		for _, k := range clavesTipo {
+			if _, ok := indiceClave[k]; !ok {
+				indiceClave[k] = len(claves)
+				claves = append(claves, k)
+			}
+		}
+		porConfigYClave := map[string]recursoEntabla{}
+		configs := []string{""}
+		vistas := map[string]bool{"": true}
+		for _, r := range entradas {
+			porConfigYClave[r.config+"\x00"+r.clave] = r
+			if !vistas[r.config] {
+				vistas[r.config] = true
+				configs = append(configs, r.config)
+			}
+		}
+		sort.Strings(configs[1:])
+		bloques := []bloqueEscribir{}
+		for _, cfg := range configs {
+			bloque := bloqueEscribir{config: cfg, entradas: make([]entradaEscribir, 0, len(clavesTipo))}
+			for _, clave := range clavesTipo {
+				r, ok := porConfigYClave[cfg+"\x00"+clave]
+				if !ok {
+					bloque.entradas = append(bloque.entradas, entradaEscribir{clave: indiceClave[clave], falta: true})
+					continue
+				}
+				e := entradaEscribir{clave: indiceClave[clave], compleja: r.compleja, padre: r.padre, registros: r.items}
+				switch {
+				case r.compleja:
+					e.flags = 0x0001
+				case nombreTipo == "id":
+					e.flags = 0x0004
+					e.valor = r.valor
+				case r.valor.tipo == tipoCadena:
+					indice, ok := indiceGlobal[r.texto]
+					if !ok {
+						return nil, fmt.Errorf("la cadena de %s/%s no esta en el pool global", r.tipo, r.clave)
+					}
+					e.flags = 0
+					e.valor = valorEscribir{tipo: tipoCadena, datos: uint32(indice)}
+				default:
+					e.valor = r.valor
+				}
+				bloque.entradas = append(bloque.entradas, e)
+			}
+			if len(bloque.entradas) > 0 {
+				bloques = append(bloques, bloque)
+			}
+		}
+		if len(bloques) == 0 {
 			continue
+		}
+		// la bandera del spec por clave dice en qué configuraciones aparece: aapt2 pone 0x0004
+		// (locale) en `app_name` porque está en values y en values-es, y 0 en `otro` (parrafo 94)
+		specFlags := make([]uint32, len(clavesTipo))
+		for j, clave := range clavesTipo {
+			for _, cfg := range configs[1:] {
+				if _, ok := porConfigYClave[cfg+"\x00"+clave]; ok {
+					specFlags[j] |= 0x0004
+				}
+			}
 		}
 		escritos = append(escritos, tipoEscribir{
 			id:        byte(i + 1),
-			specFlags: make([]uint32, len(escritas)),
-			entradas:  escritas,
+			specFlags: specFlags,
+			bloques:   bloques,
 		})
 	}
 	return &tablaEscribir{

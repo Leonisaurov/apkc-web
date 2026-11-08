@@ -47,7 +47,10 @@ func rDeTabla(t tablaEscribir) (string, error) {
 		sb.WriteString("  public static final class " + nombre + " {\n")
 		previa := ""
 		usados := map[string]string{}
-		for j, e := range ti.entradas {
+		if len(ti.bloques) == 0 {
+			return "", fmt.Errorf("el tipo %d no tiene configuraciones", ti.id)
+		}
+		for j, e := range ti.bloques[0].entradas {
 			if e.clave < 0 || e.clave >= len(t.claves) {
 				return "", fmt.Errorf("la entrada %d del tipo %s nombra la clave %d y hay %d", j, nombre, e.clave, len(t.claves))
 			}

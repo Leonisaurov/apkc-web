@@ -31,21 +31,21 @@ func tablaDelStudio() tablaEscribir {
 			{
 				id:        1,
 				specFlags: []uint32{0},
-				entradas: []entradaEscribir{
+				bloques: []bloqueEscribir{{entradas: []entradaEscribir{
 					{clave: 0, flags: 0x0004, valor: valorEscribir{tipo: 0x12, datos: 0}},
-				},
+				}}},
 			},
 			{
 				id:        2,
 				specFlags: []uint32{0},
-				entradas: []entradaEscribir{
+				bloques: []bloqueEscribir{{entradas: []entradaEscribir{
 					{clave: 1, valor: valorEscribir{tipo: 0x03, datos: 0}},
-				},
+				}}},
 			},
 			{
 				id:        3,
 				specFlags: []uint32{0},
-				entradas: []entradaEscribir{
+				bloques: []bloqueEscribir{{entradas: []entradaEscribir{
 					{
 						clave:    2,
 						flags:    0x0001,
@@ -61,7 +61,7 @@ func tablaDelStudio() tablaEscribir {
 							{nombre: 0x010104e0, valor: valorEscribir{tipo: 0x12, datos: 0xffffffff}},
 						},
 					},
-				},
+				}}},
 			},
 		},
 	}
@@ -173,7 +173,7 @@ func TestEscribeTablaRechaza(t *testing.T) {
 	base := tablaDelStudio()
 
 	malo := tablaDelStudio()
-	malo.tipos[0].entradas[0].clave = len(malo.claves)
+	malo.tipos[0].bloques[0].entradas[0].clave = len(malo.claves)
 	if _, err := escribeTablaRecursos(malo); err == nil {
 		t.Error("una entrada que nombra una clave inexistente fue aceptada")
 	}
@@ -191,7 +191,7 @@ func TestEscribeTablaRechaza(t *testing.T) {
 	}
 
 	malo = tablaDelStudio()
-	malo.tipos[2].entradas[0].registros[0].nombre = 0x7f010000
+	malo.tipos[2].bloques[0].entradas[0].registros[0].nombre = 0x7f010000
 	if _, err := escribeTablaRecursos(malo); err == nil {
 		t.Error("un registro con un nombre que no es un id del framework fue aceptado")
 	}

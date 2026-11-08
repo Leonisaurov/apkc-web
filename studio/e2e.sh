@@ -312,5 +312,68 @@ PY
   cotejo bloque-alterado "$alterado" no
 fi
 
+# 5. el icono de res/drawable (5.16): el PNG viaja literal, su entrada de la tabla es un archivo y
+#    aapt2, que es quien lee la tabla, lo declara. Es el requisito de cierre «un icono en res/drawable».
+prueba_icono() {
+  carpeta=$TMP/studio-e2e-icono
+  rm -rf "$carpeta"; mkdir -p "$carpeta/res/drawable" "$carpeta/res/mipmap" "$carpeta/res/values" "$carpeta/res/values-es" "$carpeta/res/layout" "$carpeta/src/com/icono"
+  cat >"$carpeta/AndroidManifest.xml" <<'XML'
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.icono">
+  <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="33"/>
+  <application android:label="@string/app_name" android:icon="@drawable/icono" android:roundIcon="@mipmap/ic_launcher">
+    <activity android:name=".MainActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN"/>
+        <category android:name="android.intent.category.LAUNCHER"/>
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>
+XML
+  cat >"$carpeta/res/values/strings.xml" <<'XML'
+<resources><string name="app_name">Icono</string></resources>
+XML
+  cat >"$carpeta/res/values-es/strings.xml" <<'XML'
+<resources><string name="app_name">Icono ES</string></resources>
+XML
+  cat >"$carpeta/res/layout/main.xml" <<'XML'
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent"/>
+XML
+  cat >"$carpeta/src/com/icono/MainActivity.java" <<'JAVA'
+package com.icono;
+import android.app.Activity;
+import android.os.Bundle;
+public class MainActivity extends Activity {
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        setContentView(R.layout.main);
+    }
+}
+JAVA
+  printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' |
+    base64 -d >"$carpeta/res/drawable/icono.png"
+  cp "$carpeta/res/drawable/icono.png" "$carpeta/res/mipmap/ic_launcher.png"
+  if ! ( cd "$carpeta" && "$APKC" build --linker go --compiler go --signer go \
+      --android-jar "$ANDROID_JAR" --keystore "${KS_EJEMPLO:-$HOME/.android/debug.keystore}" ) \
+      >"$TMP/studio-icono-build.log" 2>&1; then
+    falla "el icono no compila"; tail -8 "$TMP/studio-icono-build.log"; return
+  fi
+  apk=$carpeta/build/app.apk
+  "$BUILD_TOOLS/aapt2" dump resources "$apk" >"$TMP/studio-icono-dump.log" 2>&1 ||
+    falla "aapt2 no lee la tabla del icono"
+  grep -q 'drawable/icono' "$TMP/studio-icono-dump.log" || falla "la tabla no declara drawable/icono"
+  grep -q 'res/drawable/icono.png type=PNG' "$TMP/studio-icono-dump.log" || falla "aapt2 no ve el PNG como archivo"
+  grep -q 'mipmap/ic_launcher' "$TMP/studio-icono-dump.log" || falla "la tabla no declara mipmap/ic_launcher"
+  grep -q 'res/mipmap/ic_launcher.png type=PNG' "$TMP/studio-icono-dump.log" || falla "aapt2 no ve el mipmap como archivo"
+  grep -q '(es) "Icono ES"' "$TMP/studio-icono-dump.log" || falla "aapt2 no ve la cadena de values-es"
+  unzip -p "$apk" res/drawable/icono.png | cmp - "$carpeta/res/drawable/icono.png" ||
+    falla "el PNG del apk no es el del proyecto"
+  "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$apk" >"$TMP/studio-icono-verify.log" 2>&1 ||
+    falla "apksigner no verifica el apk con icono"
+  "$BUILD_TOOLS/zipalign" -c -p 4 "$apk" >/dev/null 2>&1 || falla "zipalign rechaza el apk con icono"
+  avisa "icono: apk de $(wc -c <"$apk" | tr -d ' ') bytes, aapt2 declara drawable/icono y el PNG viaja literal"
+}
+prueba_icono
+
 if [ "$FALLOS" -gt 0 ]; then echo "e2e: $FALLOS problemas"; exit 1; fi
 echo "e2e: todo en orden"

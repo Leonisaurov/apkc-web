@@ -36,12 +36,15 @@ func TestFuentesDelProyectoRecogeValuesYLayouts(t *testing.T) {
 		"res/values/otros.xml":   valuesMinimo,
 		"res/layout/main.xml":    `<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"/>`,
 	})
-	valores, layouts, manifiesto, err := fuentesDelProyecto(dir)
+	valores, layouts, ficheros, manifiesto, err := fuentesDelProyecto(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(valores) != 2 || len(layouts) != 1 {
 		t.Fatalf("salieron %d values y %d layouts, se esperaban 2 y 1", len(valores), len(layouts))
+	}
+	if len(ficheros) != 0 {
+		t.Fatalf("salieron %d ficheros binarios en un proyecto sin drawables", len(ficheros))
 	}
 	if valores[0].nombre != "res/values/cadenas.xml" || valores[1].nombre != "res/values/otros.xml" {
 		t.Errorf("los valores salen %q y %q", valores[0].nombre, valores[1].nombre)
@@ -61,9 +64,9 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 		quierenPiensa string
 	}{
 		{
-			"un drawable, que pide copiar ficheros y poner entradas con referencia de fichero",
-			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/drawable/icono.png": "no es png de verdad"},
-			"drawable",
+			"un drawable XML (vector/shape), que no es un binario que se copie",
+			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/drawable/vector.xml": `<shape/>`},
+			"drawable XML",
 		},
 		{
 			"una carpeta de densidad, que es una segunda configuracion y aqui se emite una sola",
@@ -73,7 +76,7 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 		{
 			"un recurso que no es xml dentro de layout",
 			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/layout/nota.txt": "hola"},
-			"no es .xml",
+			"layout solo admite .xml",
 		},
 		{
 			"un manifiesto con permission, que aapt2 acompana de un Manifest.java",
@@ -95,7 +98,7 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 		},
 	}
 	for _, c := range casos {
-		_, _, _, err := fuentesDelProyecto(proyecto(t, c.archivos))
+		_, _, _, _, err := fuentesDelProyecto(proyecto(t, c.archivos))
 		if err == nil {
 			t.Errorf("%s: fue aceptado", c.nombre)
 			continue

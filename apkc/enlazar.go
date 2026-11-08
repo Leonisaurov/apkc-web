@@ -57,7 +57,12 @@ func idsDelPaquete(t tablaEscribir) (map[string]uint32, error) {
 			return nil, fmt.Errorf("el tipo %d no tiene nombre", ti.id)
 		}
 		nombreTipo := t.nombresTipo[int(ti.id)-1]
-		for j, e := range ti.entradas {
+		// las claves son las de la union de configuraciones; el bloque base tiene una entrada por
+		// clave, con `falta` cuando solo existe en `values-es` (parrafo 94)
+		if len(ti.bloques) == 0 {
+			return nil, fmt.Errorf("el tipo %d no tiene configuraciones", ti.id)
+		}
+		for j, e := range ti.bloques[0].entradas {
 			if e.clave >= len(t.claves) {
 				return nil, fmt.Errorf("la entrada %d del tipo %s nombra la clave %d y hay %d", j, nombreTipo, e.clave, len(t.claves))
 			}
@@ -221,17 +226,34 @@ type proyectoEnlazado struct {
 	tabla      tablaEscribir
 	manifiesto documentoAXML
 	layouts    map[string]documentoAXML
-	r          string
+	// ficheros son los recursos binarios (drawable/mipmap): viajan tal cual al apk y su entrada de la
+	// tabla es una cadena con la ruta (parrafo 93).
+	ficheros map[string][]byte
+	r        string
 }
 
 // enlazarProyecto hace las dos pasadas. `valores` son los res/values/*.xml, `layouts` los
 // res/layout/*.xml y `manifiesto` el AndroidManifest.xml, todos en texto.
-func enlazarProyecto(valores, layouts []fuenteXML, manifiesto fuenteXML, m *marcoRecursos, opts opcionesDeEnlace) (*proyectoEnlazado, error) {
+func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML, m *marcoRecursos, opts opcionesDeEnlace) (*proyectoEnlazado, error) {
 	recursos := []recursoEntabla{}
+	for _, f := range ficheros {
+		// el archivo no se parsea: su entrada es la ruta dentro del apk, tipo cadena, y el fichero
+		// viaja literal. Medido con `aapt2 dump resources` en el parrafo 93: `drawable/icono`
+		// `(file) res/drawable/icono.png type=PNG`.
+		recursos = append(recursos, recursoEntabla{
+			tipo:  tipoDeRecurso(f.nombre),
+			clave: claveDeLayout(f.nombre),
+			valor: valorEscribir{tipo: tipoCadena},
+			texto: f.nombre,
+		})
+	}
 	for _, f := range valores {
 		nuevos, err := recursosDeValores(f, m)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.nombre, err)
+		}
+		for i := range nuevos {
+			nuevos[i].config = f.config
 		}
 		recursos = append(recursos, nuevos...)
 	}
@@ -255,7 +277,7 @@ func enlazarProyecto(valores, layouts []fuenteXML, manifiesto fuenteXML, m *marc
 	if err != nil {
 		return nil, err
 	}
-	tabla, err := tablaDeRecursos(recursos, layouts, paquete)
+	tabla, err := tablaDeRecursos(recursos, layouts, ficheros, paquete)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +286,10 @@ func enlazarProyecto(valores, layouts []fuenteXML, manifiesto fuenteXML, m *marc
 		return nil, err
 	}
 
-	salida := &proyectoEnlazado{tabla: *tabla, layouts: map[string]documentoAXML{}}
+	salida := &proyectoEnlazado{tabla: *tabla, layouts: map[string]documentoAXML{}, ficheros: map[string][]byte{}}
+	for _, f := range ficheros {
+		salida.ficheros[f.nombre] = f.contenido
+	}
 	extras, err := atributosQueElEnlaceAnade(opts, m)
 	if err != nil {
 		return nil, err

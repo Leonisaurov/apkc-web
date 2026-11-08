@@ -5179,3 +5179,84 @@ y marca `abstracto` en el `;` o en la interface (`apkc/javafuente.go`); el emiso
 `Ver.usa(new Ver())` devuelve **6** y `Ver.conThrows()` **5** por los cinco caminos; `Arranque.main`
 declara `throws IOException` y también pasa por nuestro compilador.
 
+## 93. Recursos binarios: `res/drawable` y `mipmap` con PNG, `roundIcon`
+
+El enlace acepta un PNG (o cualquier binario) en `res/drawable` y `res/mipmap`: el fichero viaja
+literal al apk y su entrada de la tabla es un `Res_value` de tipo cadena con la ruta. Medido con
+`aapt2 dump resources` y el empaquetado de la página:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/icono/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o app.apk --manifest AndroidManifest.xml -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+aapt2 dump resources app.apk
+unzip -l app.apk
+unzip -p app.apk res/drawable/icono.png | sha256sum
+sha256sum res/drawable/icono.png
+# y el mismo proyecto por nuestro enlace, sin aapt2 ni zipalign:
+apkc build --linker go --compiler go --signer go --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+aapt2 dump resources build/app.apk
+```
+
+`aapt2 dump resources` del paquete que escribe este fork:
+
+```text
+type drawable id=01 entryCount=1
+  resource 0x7f010000 drawable/icono
+    () (file) res/drawable/icono.png type=PNG
+type mipmap id=02 entryCount=1
+  resource 0x7f020000 mipmap/ic_launcher
+    () (file) res/mipmap/ic_launcher.png type=PNG
+type layout id=03 entryCount=1
+...
+```
+
+El PNG del zip y el del proyecto tienen el mismo `sha256sum`; `roundIcon="@mipmap/ic_launcher"` es un
+atributo del manifiesto y no necesita nada especial. El `resources.arsc` de este fork mide 928 bytes y
+el de `aapt2` 1060 en el mismo proyecto: la diferencia es la segunda configuración `layout-v1` que
+`aapt2` añade a los layouts y este enlace sigue emitiendo una sola (diferencia ya escrita en el §28).
+La entrada `drawable` y la `mipmap` son las mismas en los dos.
+
+`studio/e2e.sh` lo comprueba de punta a punta: crea un proyecto con `res/drawable/icono.png`,
+`res/mipmap/ic_launcher.png`, `values-es` y `roundIcon`, compila con `--linker go --compiler go`, y
+exige que `aapt2 dump resources` declare las dos entradas y el PNG viaje literal; `apksigner` y
+`zipalign -c -p 4` aprueban el apk (`icono: apk de 10185 bytes`).
+
+## 94. `values-es`: language, `spec_map`, offset ausente y orden del pool
+
+Dos sondas de dos idiomas, comparadas **byte a byte** con el `resources.arsc` de `aapt2`:
+
+```sh
+cd /data/data/com.termux/files/usr/tmp/idioma2/proj
+aapt2 compile --dir res -o compiled.zip
+aapt2 link -o aapt2.apk --manifest AndroidManifest.xml -I "$HOME/Android/platforms/android-34/android.jar" compiled.zip
+unzip -p aapt2.apk resources.arsc > aapt2.arsc
+apkc build --linker go --compiler go --signer go --android-jar "$HOME/Android/platforms/android-34/android.jar" --keystore "$HOME/.android/debug.keystore"
+unzip -p build/app.apk resources.arsc > nuestro.arsc
+cmp aapt2.arsc nuestro.arsc
+# idioma3: la misma comparación con una clave que solo existe en values-es
+```
+
+Las dos salen **idénticas**: 728 bytes en `idioma2` (base `app_name`, `otro`; es `app_name`) y 716 en
+`idioma3` (base `s1`, `s2`; es `s1`, `s3`). Lo que fija el fichero:
+
+| pieza | valor |
+| --- | --- |
+| `ResTable_config` de `es` | tamaño 64 y `language[0]='e'`, `language[1]='s'` en los offsets +8 y +9 |
+| bloque base | tamaño 64 y el resto a cero |
+| `spec_map` | **0x0004** (locale) en la clave que tiene `es`; 0 en la que no |
+| clave ausente en `es` | offset **0xffffffff** en el bloque `es`, con `entryCount` igual al de la base |
+| clave solo en `es` | `aapt2` la **elimina** (`removing resource … without required default value`) y no entra ni en la tabla ni en el pool |
+| orden del pool global | la base ordenada por texto y después cada idioma ordenado por texto (`Icono`, `Uno`, `Icono ES`; `Dos`, `Uno`, `Uno ES`) |
+
+Implementado: `fuentesDelProyecto` acepta `values-xx` de dos letras y guarda el calificador en
+`fuenteXML.config`; `tablaDeRecursos` agrupa por tipo y configuración, calcula el `spec_map` 0x0004,
+escribe el offset ausente y descarta las claves sin base; `escribeBloqueTipo`/`configDe` escriben la
+configuración y el escritor admite varios bloques por tipo (`apkc/linker.go`, `apkc/valores.go`,
+`apkc/arscwriter.go`). Prueba: `apkc/valores_es_test.go` compara el arsc de 728 bytes con el fixture
+de `aapt2`; la segunda sonda de 716 bytes se midió igual y se comprueba en `studio/e2e.sh`.
+
+**Frontera escrita**: `values-xx` es el único calificador implementado. `layout-land`,
+`drawable-hdpi` y `values-<región>` piden las máscaras de orientación/densidad/país, que no están
+medidas; se rechazan por nombre. El criterio de cierre «dos idiomas en `res/values`» sí queda cubierto.
+

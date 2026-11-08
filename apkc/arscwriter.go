@@ -19,6 +19,7 @@ package main
 // en los ids, las cadenas ni los valores.
 
 import (
+	"encoding/binary"
 	"fmt"
 	"unicode/utf16"
 )
@@ -50,15 +51,25 @@ type entradaEscribir struct {
 	compleja  bool
 	padre     uint32
 	registros []registroEscribir
+	// falta: la clave no existe en esta configuracion. El offset del entriesStart se escribe
+	// 0xffffffff y no hay bytes de entrada (parrafo 94: `values-es` con una clave que la base tiene).
+	falta bool
 }
 
-// tipoEscribir es un id de tipo con sus entradas. El id es el lugar que ocupa en nombresTipo mas
-// uno: aapt2 numera los tipos por orden alfabetico de nombre y los emite en ese orden (medido en las
-// tres variantes del parrafo 29: attr, bool, color, id, layout, string, style con ids 1..7).
+// bloqueEscribir es una ResTable_type de una configuracion. `config` es el calificador medido (hoy
+// solo el idioma de `values-es`); vacío es la base.
+type bloqueEscribir struct {
+	config   string
+	entradas []entradaEscribir
+}
+
+// tipoEscribir es un id de tipo con sus configuraciones. El id es el lugar que ocupa en nombresTipo
+// mas uno: aapt2 numera los tipos por orden alfabetico de nombre y los emite en ese orden (medido en
+// las tres variantes del parrafo 29: attr, bool, color, id, layout, string, style con ids 1..7).
 type tipoEscribir struct {
 	id        byte
 	specFlags []uint32
-	entradas  []entradaEscribir
+	bloques   []bloqueEscribir
 }
 
 // tablaEscribir es el resources.arsc completo. Cada pool se escribe en el modo que se pida (medido
@@ -94,19 +105,27 @@ func escribeTablaRecursos(t tablaEscribir) ([]byte, error) {
 		if int(ti.id) != i+1 {
 			return nil, fmt.Errorf("el tipo #%d declara id %d: aapt2 numera los tipos por su lugar en la tabla de nombres", i, ti.id)
 		}
-		if len(ti.specFlags) != len(ti.entradas) {
-			return nil, fmt.Errorf("el spec del tipo %d da %d banderas para %d entradas", ti.id, len(ti.specFlags), len(ti.entradas))
+		if len(ti.bloques) == 0 {
+			return nil, fmt.Errorf("el tipo %d no tiene ninguna configuracion", ti.id)
 		}
-		for j, e := range ti.entradas {
-			if e.clave < 0 || e.clave >= len(t.claves) {
-				return nil, fmt.Errorf("la entrada %d del tipo %d nombra la clave %d y hay %d", j, ti.id, e.clave, len(t.claves))
+		for _, bloque := range ti.bloques {
+			if len(ti.specFlags) != len(bloque.entradas) {
+				return nil, fmt.Errorf("el spec del tipo %d da %d banderas para %d entradas", ti.id, len(ti.specFlags), len(bloque.entradas))
 			}
-			if !e.compleja {
-				continue
-			}
-			for k, r := range e.registros {
-				if r.nombre&0xff000000 != 0x01000000 {
-					return nil, fmt.Errorf("registro %d de la entrada %d del tipo %d: nombre %#08x, y la unica forma medida es un id del framework (0x01……)", k, j, ti.id, r.nombre)
+			for j, e := range bloque.entradas {
+				if e.falta {
+					continue
+				}
+				if e.clave < 0 || e.clave >= len(t.claves) {
+					return nil, fmt.Errorf("la entrada %d del tipo %d nombra la clave %d y hay %d", j, ti.id, e.clave, len(t.claves))
+				}
+				if !e.compleja {
+					continue
+				}
+				for k, r := range e.registros {
+					if r.nombre&0xff000000 != 0x01000000 {
+						return nil, fmt.Errorf("registro %d de la entrada %d del tipo %d: nombre %#08x, y la unica forma medida es un id del framework (0x01……)", k, j, ti.id, r.nombre)
+					}
 				}
 			}
 		}
@@ -119,7 +138,9 @@ func escribeTablaRecursos(t tablaEscribir) ([]byte, error) {
 	interior := []byte{}
 	for _, ti := range t.tipos {
 		interior = append(interior, escribeSpec(ti)...)
-		interior = append(interior, escribeBloqueTipo(ti)...)
+		for _, bloque := range ti.bloques {
+			interior = append(interior, escribeBloqueTipo(ti, bloque)...)
+		}
 	}
 
 	const cabeceraPaquete = 288
@@ -163,10 +184,14 @@ func trozoCabecera(tipo uint16, hs, size int) []byte {
 // llamante porque no son visibles: aapt2 escribe 0x00000400 cuando parte un estilo por API y
 // 0x40000000 cuando la entrada se declaro con <public> (parrafo 29).
 func escribeSpec(ti tipoEscribir) []byte {
-	b := trozoCabecera(trozoSpec, 16, 16+4*len(ti.entradas))
+	n := 0
+	if len(ti.bloques) > 0 {
+		n = len(ti.bloques[0].entradas)
+	}
+	b := trozoCabecera(trozoSpec, 16, 16+4*n)
 	b = append(b, ti.id, 0)
-	b = putU16(b, 1) // numero de configuraciones que siguen
-	b = putU32(b, uint32(len(ti.entradas)))
+	b = putU16(b, uint16(len(ti.bloques))) // numero de configuraciones que siguen
+	b = putU32(b, uint32(n))
 	for _, f := range ti.specFlags {
 		b = putU32(b, f)
 	}
@@ -176,29 +201,47 @@ func escribeSpec(ti tipoEscribir) []byte {
 // escribeBloqueTipo: RES_TABLE_TYPE con la configuracion base. La configuracion son 64 bytes cuyo
 // unico campo no nulo, medido, es el primero: su propio tamano (64). El bloque -v23 del AppTheme
 // pone ademas 23 en el u32 de +24, que es la version de API de la configuracion.
-func escribeBloqueTipo(ti tipoEscribir) []byte {
+func escribeBloqueTipo(ti tipoEscribir, bloque bloqueEscribir) []byte {
 	const cabecera = 84 // 20 de campos + 64 de configuracion
 	entradas := []byte{}
 	offsets := []uint32{}
-	for _, e := range ti.entradas {
+	for _, e := range bloque.entradas {
+		if e.falta {
+			offsets = append(offsets, 0xffffffff)
+			continue
+		}
 		offsets = append(offsets, uint32(len(entradas)))
 		entradas = apilaEntrada(entradas, e)
 	}
-	entriesStart := cabecera + 4*len(ti.entradas)
+	entriesStart := cabecera + 4*len(bloque.entradas)
 
 	b := trozoCabecera(trozoTipo, cabecera, entriesStart+len(entradas))
 	b = append(b, ti.id, 0)
 	b = putU16(b, 0) // reservado: 0 en todo lo medido
-	b = putU32(b, uint32(len(ti.entradas)))
+	b = putU32(b, uint32(len(bloque.entradas)))
 	b = putU32(b, uint32(entriesStart))
-	b = putU32(b, 64) // ResTable_config::size
-	for i := 0; i < 15; i++ {
-		b = putU32(b, 0)
-	}
+	b = append(b, configDe(bloque.config)...)
 	for _, o := range offsets {
 		b = putU32(b, o)
 	}
 	return append(b, entradas...)
+}
+
+// configDe: los 64 bytes de ResTable_config que midió el aapt2 del aparato. La base solo declara su
+// tamaño (64). `values-es` escribe 'e' y 's' en language[0] y language[1] (offset +8 y +9); el resto
+// queda a cero. Medido en el volcado del parrafo 94.
+func configDe(lengua string) []byte {
+	b := make([]byte, 64)
+	binary.LittleEndian.PutUint32(b, 64)
+	if lengua != "" {
+		if len(lengua) != 2 {
+			// el parser solo deja `values-xx` de dos letras; una región (`es-rMX`) pide country y
+			// otra máscara que no está medida
+			return b
+		}
+		b[8], b[9] = lengua[0], lengua[1]
+	}
+	return b
 }
 
 // apilaEntrada escribe una entrada y lo que lleva detras: el Res_value de ocho bytes si es simple,

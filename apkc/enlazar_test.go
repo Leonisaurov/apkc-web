@@ -55,7 +55,7 @@ func fuentesDelStudio(t *testing.T) (valores, layouts []fuenteXML, manifiesto fu
 
 func TestEnlazarElProyectoDesdeTexto(t *testing.T) {
 	valores, layouts, manifiesto := fuentesDelStudio(t)
-	salida, err := enlazarProyecto(valores, layouts, manifiesto, marcoDelEnlace(),
+	salida, err := enlazarProyecto(valores, layouts, nil, manifiesto, marcoDelEnlace(),
 		opcionesDeEnlace{compileSdkVersion: 34, compileSdkCodename: "14"})
 	if err != nil {
 		t.Fatalf("el enlace no salio: %v", err)
@@ -176,13 +176,13 @@ func TestEnlazarRechaza(t *testing.T) {
 		},
 	}
 	for _, c := range casos {
-		if _, err := enlazarProyecto(c.valores, c.layouts, c.manifiesto, m, opts); err == nil {
+		if _, err := enlazarProyecto(c.valores, c.layouts, nil, c.manifiesto, m, opts); err == nil {
 			t.Errorf("%s: el enlace lo acepto", c.nombre)
 		}
 	}
 
 	// el camino bueno, de control: que los cinco rechazos no son un error que rechace todo
-	if _, err := enlazarProyecto(valores, layouts, manifiesto, m, opts); err != nil {
+	if _, err := enlazarProyecto(valores, layouts, nil, manifiesto, m, opts); err != nil {
 		t.Errorf("el proyecto valido fue rechazado: %v", err)
 	}
 }

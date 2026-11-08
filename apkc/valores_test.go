@@ -92,7 +92,7 @@ func TestValoresDelStudioDanLaMismaTabla(t *testing.T) {
 	recursos = append(recursos, recursoEntabla{tipo: "id", clave: "pulsar", valor: valorEscribir{tipo: tipoBooleano}})
 
 	layouts := []fuenteXML{{nombre: "res/layout/main.xml"}}
-	tabla, err := tablaDeRecursos(recursos, layouts, "com.hola.apkcstudio")
+	tabla, err := tablaDeRecursos(recursos, layouts, nil, "com.hola.apkcstudio")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,12 +114,12 @@ func TestValoresDelStudioDanLaMismaTabla(t *testing.T) {
 		q := querida.tipos[i]
 		o := tabla.tipos[i]
 		nombreTipo := querida.nombresTipo[int(q.id)-1]
-		if o.id != q.id || len(o.entradas) != len(q.entradas) {
-			t.Errorf("tipo #%d: id %d con %d entradas, querido id %d con %d", i, o.id, len(o.entradas), q.id, len(q.entradas))
+		if o.id != q.id || len(o.bloques) != len(q.bloques) || len(o.bloques[0].entradas) != len(q.bloques[0].entradas) {
+			t.Errorf("tipo #%d: id %d con %d configuraciones/%d entradas, querido id %d con %d/%d", i, o.id, len(o.bloques), len(o.bloques[0].entradas), q.id, len(q.bloques), len(q.bloques[0].entradas))
 			continue
 		}
-		for j := range q.entradas {
-			qe, oe := q.entradas[j], o.entradas[j]
+		for j := range q.bloques[0].entradas {
+			qe, oe := q.bloques[0].entradas[j], o.bloques[0].entradas[j]
 			if qe.clave != oe.clave || qe.flags != oe.flags || qe.compleja != oe.compleja {
 				t.Errorf("%s entrada #%d: clave %d flags %#04x compleja %v, queridas %d %#04x %v",
 					nombreTipo, j, oe.clave, oe.flags, oe.compleja, qe.clave, qe.flags, qe.compleja)
