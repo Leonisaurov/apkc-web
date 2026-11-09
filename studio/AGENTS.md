@@ -83,6 +83,11 @@ define `hospedador` antes de que `vistas.js` cree el proyecto. No pongas `"type"
 - **La barra del fichero es deliberada:** `#guardar-fichero` es la acción primaria y
   `#menu-editor` (un `<details>`) agrupa Nuevo, Subir, Descargar, Renombrar y Borrar. No vuelvas
   a sacar esos botones sueltos a la barra.
+- **Pestañas con carga diferida.** `DOCUMENTOS` guarda `{ruta, texto, sucio}`; una pestaña limpia
+  inactiva tiene `texto = null` y se relee de OPFS al activarla. `PERSISTENCIA`
+  (`apkc-studio/editor-v1`) guarda rutas y `ARBOL.abiertos`, nunca contenido. La activa se
+  restaura al cargar, las demás al pulsarlas; `activacion` evita que una lectura lenta pise otra
+  pestaña.
 - **Nada fuera del origen.** Sin CDN, fuentes, telemetría ni runtimes de terceros. El favicon es
   un `data:` y el informe se descarga como `blob:`.
 - **`apkc build` clásico no corre en wasm.** `js` no tiene `fork/exec`; el botón «Probar el build

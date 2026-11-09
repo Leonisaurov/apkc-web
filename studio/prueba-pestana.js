@@ -202,7 +202,12 @@ async function conductor() {
 
   // 3. el editor escribe en el mismo árbol (guardar -> OPFS -> releer)
   const editado = await evaluar(`(async () => {
-    estadoPestana.ruta = "/proyecto/src/com/myapp/Editado.java";
+    const ruta = "/proyecto/src/com/myapp/Editado.java";
+    // la prueba crea el buffer como lo haría «Nuevo fichero»: una pestaña propia
+    DOCUMENTOS.lista.push({ ruta, texto: "", sucio: false, cursor: null, scroll: null });
+    DOCUMENTOS.activa = ruta;
+    estadoPestana.ruta = ruta;
+    revelarRuta(ruta);
     EDITOR.poner("package com.myapp;\\n// probado desde la prueba de pestaña\\npublic class Editado {}\\n");
     await guardar();
     const texto = await hospedador.texto("/proyecto/src/com/myapp/Editado.java");

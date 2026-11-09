@@ -66,6 +66,14 @@ const hospedador = (() => {
 
 const estadoPestana = { ruta: null, nodo: null };
 
+// Varias pestañas, como un editor de verdad: solo el documento activo vive en el textarea.
+// Los limpios se descartan de memoria al cambiar y se releen de OPFS al volver; los sucios
+// conservan su texto hasta que se guarden o se cierren.
+const DOCUMENTOS = { lista: [], activa: null };
+const PERSISTENCIA = "apkc-studio/editor-v1";
+// una activación lenta no puede pisar a la pestaña que se pulsó después
+let activacion = 0;
+
 // Mientras una edición programática usa execCommand, el evento input que dispara no debe
 // volver a pintar: la propia edición pinta una sola vez al terminar.
 let silencioInput = 0;
@@ -503,6 +511,273 @@ async function subirSeleccion(entrada) {
   }
 }
 
+// --- documentos abiertos -------------------------------------------------------------------
+function documentoActivo() {
+  return DOCUMENTOS.lista.find((doc) => doc.ruta === DOCUMENTOS.activa) || null;
+}
+
+function documentoDe(ruta) {
+  return DOCUMENTOS.lista.find((doc) => doc.ruta === ruta) || null;
+}
+
+function hayDocumentosSucios() {
+  return DOCUMENTOS.lista.some((doc) => doc.sucio) ||
+    (!!estadoPestana.sucio && !documentoActivo());
+}
+
+function leerPersistencia() {
+  try {
+    const dato = JSON.parse(localStorage.getItem(PERSISTENCIA) || "{}");
+    return dato && typeof dato === "object" ? dato : {};
+  } catch (e) { return {}; }
+}
+
+// Solo rutas y estado de vista: el contenido sucio no se persiste. Al recargar, las pestañas
+// vuelven, pero solo se lee de OPFS la activa; las demás se cargan al pulsarlas.
+function guardarPersistencia() {
+  try {
+    localStorage.setItem(PERSISTENCIA, JSON.stringify({
+      tabs: DOCUMENTOS.lista.map((doc) => doc.ruta),
+      activa: DOCUMENTOS.activa,
+      abiertos: [...ARBOL.abiertos],
+    }));
+  } catch (e) { /* sin persistencia, la página sigue */ }
+}
+
+function falloDocumento(e) {
+  nota("fallo: " + (e && e.message ? e.message : e));
+  console.error(e);
+}
+
+function renderPestanas() {
+  const caja = document.getElementById("pestanas-archivo");
+  if (!caja) return;
+  caja.textContent = "";
+  if (!DOCUMENTOS.lista.length) {
+    const tab = document.createElement("div");
+    tab.className = "editor-tab activa";
+    const icono = document.createElement("span");
+    icono.className = "editor-tab-icono";
+    icono.setAttribute("aria-hidden", "true");
+    const nombre = document.createElement("span");
+    nombre.id = "fichero-abierto";
+    nombre.textContent = "Sin fichero";
+    const marca = document.createElement("span");
+    marca.id = "marca-sucio";
+    marca.className = "marca-sucio";
+    marca.hidden = true;
+    marca.setAttribute("aria-label", "cambios sin guardar");
+    marca.textContent = "●";
+    tab.append(icono, nombre, marca);
+    caja.appendChild(tab);
+    return;
+  }
+  for (const doc of DOCUMENTOS.lista) {
+    const activa = doc.ruta === DOCUMENTOS.activa;
+    const tab = document.createElement("div");
+    tab.className = "editor-tab" + (activa ? " activa" : "");
+    tab.dataset.ruta = doc.ruta;
+    tab.title = doc.ruta;
+    tab.setAttribute("role", "tab");
+    tab.setAttribute("aria-selected", String(activa));
+
+    const icono = document.createElement("span");
+    icono.className = "editor-tab-icono";
+    icono.setAttribute("aria-hidden", "true");
+    const nombre = document.createElement("span");
+    if (activa) nombre.id = "fichero-abierto";
+    else nombre.className = "editor-tab-nombre";
+    nombre.textContent = relativa(doc.ruta);
+    const marca = document.createElement("span");
+    marca.className = "marca-sucio";
+    if (activa) marca.id = "marca-sucio";
+    marca.hidden = !doc.sucio;
+    marca.setAttribute("aria-label", "cambios sin guardar");
+    marca.textContent = "●";
+    const cerrar = document.createElement("button");
+    cerrar.type = "button";
+    cerrar.className = "editor-tab-cerrar";
+    cerrar.title = "Cerrar " + relativa(doc.ruta);
+    cerrar.setAttribute("aria-label", cerrar.title);
+    cerrar.textContent = "×";
+    cerrar.addEventListener("click", (e) => {
+      e.stopPropagation();
+      cerrarDocumento(doc.ruta).catch(falloDocumento);
+    });
+
+    tab.append(icono, nombre, marca, cerrar);
+    tab.addEventListener("click", () => { abrir(doc.ruta).catch(falloDocumento); });
+    tab.addEventListener("auxclick", (e) => {
+      if (e.button !== 1) return;
+      e.preventDefault();
+      cerrarDocumento(doc.ruta).catch(falloDocumento);
+    });
+    caja.appendChild(tab);
+  }
+  const activa = caja.querySelector(".editor-tab.activa");
+  if (activa && typeof activa.scrollIntoView === "function") {
+    activa.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+}
+
+function pintarMarcaSucio() {
+  const doc = documentoActivo();
+  const marca = document.getElementById("marca-sucio");
+  if (marca) marca.hidden = !(doc && doc.sucio);
+}
+
+function guardarEnMemoria() {
+  const doc = documentoActivo();
+  if (!doc) return;
+  const area = document.getElementById("codigo");
+  doc.texto = EDITOR.texto();
+  if (area) {
+    doc.cursor = [area.selectionStart, area.selectionEnd];
+    doc.scroll = [area.scrollTop, area.scrollLeft];
+  }
+  // un documento limpio se puede releer de OPFS: no hace falta retener su texto
+  if (!doc.sucio) doc.texto = null;
+}
+
+function limpiarSinDocumento() {
+  DOCUMENTOS.activa = null;
+  estadoPestana.ruta = null;
+  estadoPestana.sucio = false;
+  EDITOR.poner("");
+  renderPestanas();
+  actualizarAccionesFichero();
+  guardarPersistencia();
+}
+
+function quitarDocumento(doc) {
+  const i = DOCUMENTOS.lista.indexOf(doc);
+  if (i >= 0) DOCUMENTOS.lista.splice(i, 1);
+  if (DOCUMENTOS.activa !== doc.ruta) {
+    renderPestanas();
+    guardarPersistencia();
+    return false;
+  }
+  DOCUMENTOS.activa = null;
+  estadoPestana.ruta = null;
+  renderPestanas();
+  const vecino = DOCUMENTOS.lista[Math.min(i, DOCUMENTOS.lista.length - 1)];
+  if (vecino) return activarDocumento(vecino.ruta);
+  limpiarSinDocumento();
+  return false;
+}
+
+async function activarDocumento(ruta) {
+  const doc = documentoDe(ruta);
+  if (!doc) return false;
+  if (DOCUMENTOS.activa === ruta) { renderPestanas(); return true; }
+  const turno = ++activacion;
+  guardarEnMemoria();
+  DOCUMENTOS.activa = ruta;
+  estadoPestana.ruta = ruta;
+  revelarRuta(ruta);
+
+  if (doc.texto === null) {
+    let bytes;
+    try {
+      bytes = await conCarga("Abriendo " + relativa(ruta) + "…", () => hospedador.bytes(ruta));
+    } catch (e) {
+      if (turno !== activacion) return false;
+      nota("no se pudo abrir " + ruta + ": " + (e && e.message ? e.message : e));
+      return quitarDocumento(doc);
+    }
+    if (turno !== activacion) return false;
+    if (!bytes) {
+      nota("no existe " + ruta);
+      return quitarDocumento(doc);
+    }
+    if (bytes.includes(0)) {
+      nota(ruta + " parece un binario; el editor solo abre texto");
+      return quitarDocumento(doc);
+    }
+    doc.texto = new TextDecoder().decode(bytes);
+  }
+
+  // EDITOR.poner marca limpio; el estado sucio de la pestaña hay que restaurarlo después
+  const sucio = doc.sucio;
+  EDITOR.poner(doc.texto);
+  const area = document.getElementById("codigo");
+  if (area && doc.cursor) area.setSelectionRange(doc.cursor[0], doc.cursor[1]);
+  if (area && doc.scroll) {
+    area.scrollTop = doc.scroll[0];
+    area.scrollLeft = doc.scroll[1];
+    EDITOR.sincronizar();
+  }
+  marcarSucio(sucio);
+  renderPestanas();
+  actualizarAccionesFichero();
+  await refrescarArbol();
+  guardarPersistencia();
+  return true;
+}
+
+async function cerrarDocumento(ruta) {
+  const doc = documentoDe(ruta);
+  if (!doc) return;
+  if (doc.ruta === DOCUMENTOS.activa) guardarEnMemoria();
+  if (doc.sucio && !confirmarDescartes()) return;
+  const i = DOCUMENTOS.lista.indexOf(doc);
+  DOCUMENTOS.lista.splice(i, 1);
+  if (DOCUMENTOS.activa === ruta) {
+    DOCUMENTOS.activa = null;
+    estadoPestana.ruta = null;
+    const vecino = DOCUMENTOS.lista[Math.min(i, DOCUMENTOS.lista.length - 1)];
+    if (vecino) await activarDocumento(vecino.ruta);
+    else limpiarSinDocumento();
+  } else {
+    renderPestanas();
+    guardarPersistencia();
+  }
+}
+
+function remapearDocumentos(origen, destino) {
+  for (const doc of DOCUMENTOS.lista) {
+    if (doc.ruta === origen) doc.ruta = destino;
+    else if (doc.ruta.startsWith(origen + "/")) doc.ruta = destino + doc.ruta.slice(origen.length);
+  }
+  if (DOCUMENTOS.activa === origen) DOCUMENTOS.activa = destino;
+  else if (DOCUMENTOS.activa && DOCUMENTOS.activa.startsWith(origen + "/")) {
+    DOCUMENTOS.activa = destino + DOCUMENTOS.activa.slice(origen.length);
+  }
+  estadoPestana.ruta = DOCUMENTOS.activa;
+  renderPestanas();
+  actualizarAccionesFichero();
+  guardarPersistencia();
+}
+
+async function quitarDocumentosBajo(ruta) {
+  const indiceActiva = DOCUMENTOS.lista.findIndex((doc) => doc.ruta === DOCUMENTOS.activa);
+  DOCUMENTOS.lista = DOCUMENTOS.lista.filter((doc) =>
+    !(doc.ruta === ruta || doc.ruta.startsWith(ruta + "/")));
+  if (!DOCUMENTOS.lista.some((doc) => doc.ruta === DOCUMENTOS.activa)) {
+    DOCUMENTOS.activa = null;
+    estadoPestana.ruta = null;
+    const vecino = DOCUMENTOS.lista[Math.min(indiceActiva, DOCUMENTOS.lista.length - 1)];
+    if (vecino) await activarDocumento(vecino.ruta);
+    else limpiarSinDocumento();
+  } else {
+    renderPestanas();
+    guardarPersistencia();
+  }
+}
+
+// crear un proyecto borra /proyecto: las pestañas viejas no pueden quedar apuntando a la nada
+function limpiarEstadoEditor() {
+  DOCUMENTOS.lista = [];
+  DOCUMENTOS.activa = null;
+  estadoPestana.ruta = null;
+  estadoPestana.sucio = false;
+  ARBOL.abiertos.clear();
+  EDITOR.poner("");
+  renderPestanas();
+  actualizarAccionesFichero();
+  guardarPersistencia();
+}
+
 function cerrarMenuArchivo() {
   const menu = document.getElementById("menu-archivo");
   if (menu) menu.hidden = true;
@@ -616,15 +891,7 @@ async function renombrarRuta(ruta) {
   const destino = base + "/" + nuevo;
   const r = await hospedador.renombrar(ruta, destino);
   if (r.tipo === "error") { nota("no se pudo renombrar: " + r.error); return; }
-  if (estadoPestana.ruta === ruta) {
-    estadoPestana.ruta = destino;
-    const abierto = document.getElementById("fichero-abierto");
-    if (abierto) { abierto.textContent = relativa(destino); abierto.title = destino; }
-  } else if (estadoPestana.ruta && estadoPestana.ruta.startsWith(ruta + "/")) {
-    estadoPestana.ruta = destino + estadoPestana.ruta.slice(ruta.length);
-    const abierto = document.getElementById("fichero-abierto");
-    if (abierto) { abierto.textContent = relativa(estadoPestana.ruta); abierto.title = estadoPestana.ruta; }
-  }
+  remapearDocumentos(ruta, destino);
   remapearAbiertos(ruta, destino);
   revelarRuta(estadoPestana.ruta);
   actualizarAccionesFichero();
@@ -636,13 +903,10 @@ async function borrarRuta(ruta) {
   if (!window.confirm("¿Borrar " + relativa(ruta) + "?")) return;
   const r = await hospedador.limpiar(ruta);
   if (r.tipo === "error") { nota("no se pudo borrar: " + r.error); return; }
-  if (estadoPestana.ruta && (estadoPestana.ruta === ruta || estadoPestana.ruta.startsWith(ruta + "/"))) {
-    estadoPestana.ruta = null;
-    EDITOR.poner("");
-    const abierto = document.getElementById("fichero-abierto");
-    if (abierto) { abierto.textContent = "Sin fichero"; abierto.removeAttribute("title"); }
-    actualizarAccionesFichero();
+  for (const abierta of [...ARBOL.abiertos]) {
+    if (abierta === ruta || abierta.startsWith(ruta + "/")) ARBOL.abiertos.delete(abierta);
   }
+  await quitarDocumentosBajo(ruta);
   await refrescarArbol();
   nota("borrado " + relativa(ruta));
 }
@@ -670,6 +934,7 @@ function remapearAbiertos(origen, destino) {
 
 function plegarTodo() {
   ARBOL.abiertos.clear();
+  guardarPersistencia();
   refrescarArbol();
 }
 
@@ -679,6 +944,7 @@ async function desplegarTodo() {
   for (const nodo of r.nodos || []) {
     if (nodo.dir && nodo.ruta.startsWith(PROYECTO + "/")) ARBOL.abiertos.add(nodo.ruta);
   }
+  guardarPersistencia();
   await refrescarArbol();
 }
 
@@ -714,17 +980,9 @@ async function moverRuta(origen, carpeta) {
   }
   const r = await hospedador.renombrar(origen, destino);
   if (r.tipo === "error") { nota("no se pudo mover: " + r.error); return; }
-  if (estadoPestana.ruta === origen) estadoPestana.ruta = destino;
-  else if (estadoPestana.ruta && estadoPestana.ruta.startsWith(origen + "/")) {
-    estadoPestana.ruta = destino + estadoPestana.ruta.slice(origen.length);
-  }
+  remapearDocumentos(origen, destino);
   remapearAbiertos(origen, destino);
   revelarRuta(estadoPestana.ruta);
-  const abierto = document.getElementById("fichero-abierto");
-  if (abierto && estadoPestana.ruta) {
-    abierto.textContent = relativa(estadoPestana.ruta);
-    abierto.title = estadoPestana.ruta;
-  }
   actualizarAccionesFichero();
   await refrescarArbol();
   nota("movido a " + relativa(destino));
@@ -819,6 +1077,7 @@ async function refrescarArbol() {
           if (fila.dataset.menuLargo) { delete fila.dataset.menuLargo; return; }
           if (ARBOL.abiertos.has(n.ruta)) ARBOL.abiertos.delete(n.ruta);
           else ARBOL.abiertos.add(n.ruta);
+          guardarPersistencia();
           refrescarArbol();
         };
       } else {
@@ -853,43 +1112,31 @@ async function refrescarArbol() {
   }
 }
 
+// Abrir ya no descarta nada: cada fichero tiene su pestaña y su texto vive en ella. El contenido
+// de una pestaña limpia no se lee hasta que se activa, así restaurar diez ficheros no lee diez.
 async function abrir(ruta, yaConfirmado) {
-  if (!yaConfirmado && estaSucio() && !(await confirmarDescartes())) return false;
-  let texto;
-  try {
-    const bytes = await conCarga("Abriendo " + relativa(ruta) + "…", () => hospedador.bytes(ruta));
-    if (!bytes) { nota("no existe " + ruta); return false; }
-    // un PNG del árbol no se abre como si fuera fuente: guardarlo después lo corrompería
-    if (bytes.includes(0)) { nota(ruta + " parece un binario; el editor solo abre texto"); return false; }
-    texto = new TextDecoder().decode(bytes);
-  } catch (e) {
-    nota("no se pudo abrir " + ruta + ": " + (e && e.message ? e.message : e));
-    return false;
-  }
-  estadoPestana.ruta = ruta;
-  revelarRuta(ruta);
-  EDITOR.poner(texto);
-  const nombre = document.getElementById("fichero-abierto");
-  if (nombre) {
-    nombre.textContent = relativa(ruta) || ruta;
-    nombre.title = ruta;
-  }
-  actualizarAccionesFichero();
-  await refrescarArbol();
-  return true;
+  if (!ruta) return false;
+  if (documentoDe(ruta)) return activarDocumento(ruta);
+  DOCUMENTOS.lista.push({ ruta, texto: null, sucio: false, cursor: null, scroll: null });
+  renderPestanas();
+  return activarDocumento(ruta);
 }
 
 function marcarSucio(v) {
-  estadoPestana.sucio = v;
-  const marca = document.getElementById("marca-sucio");
-  if (marca) marca.hidden = !v;
+  const doc = documentoActivo();
+  if (doc) doc.sucio = !!v;
+  estadoPestana.sucio = !!v;
+  pintarMarcaSucio();
 }
-function estaSucio() { return !!estadoPestana.sucio; }
+function estaSucio() {
+  const doc = documentoActivo();
+  return doc ? !!doc.sucio : !!estadoPestana.sucio;
+}
 
 // Las acciones del menú Archivo que necesitan un fichero abierto se deshabilitan en vez de
 // contestar «abre uno primero» cuando no lo hay.
 function actualizarAccionesFichero() {
-  const hay = !!estadoPestana.ruta;
+  const hay = !!documentoActivo() || !!estadoPestana.ruta;
   for (const id of ["renombrar-fichero", "borrar-fichero"]) {
     const boton = document.getElementById(id);
     if (boton) boton.disabled = !hay;
@@ -900,38 +1147,45 @@ function actualizarAccionesFichero() {
 function confirmarDescartes() { return window.confirm("Hay cambios sin guardar. ¿Descartarlos?"); }
 
 async function guardar() {
-  let recien = false;
-  if (!estadoPestana.ruta) {
-    const nombre = await nuevoNombre();
-    if (!nombre) return false;
-    estadoPestana.ruta = nombre;
-    recien = true;
+  let doc = documentoActivo();
+  if (!doc) {
+    // compatibilidad con quien fija estadoPestana.ruta a mano (las pruebas lo hacen) y con el
+    // primer guardado de un buffer sin nombre
+    const ruta = estadoPestana.ruta || await nuevoNombre();
+    if (!ruta) return false;
+    const previo = await hospedador.leer(ruta);
+    if (previo && previo.bytes && !window.confirm("Ya existe " + relativa(ruta) + ". ¿Reemplazarlo?")) return false;
+    doc = { ruta, texto: EDITOR.texto(), sucio: true, cursor: null, scroll: null };
+    DOCUMENTOS.lista.push(doc);
+    DOCUMENTOS.activa = ruta;
+    estadoPestana.ruta = ruta;
+    revelarRuta(ruta);
+    renderPestanas();
   }
-  if (recien) {
-    const previo = await hospedador.bytes(estadoPestana.ruta);
-    if (previo !== null && !window.confirm("Ya existe " + relativa(estadoPestana.ruta) + ". ¿Reemplazarlo?")) {
-      estadoPestana.ruta = null;
-      return false;
-    }
-  }
+  const ruta = doc.ruta;
   const guardado = EDITOR.texto();
   try {
-    await hospedador.escribir(estadoPestana.ruta, new TextEncoder().encode(guardado));
+    await hospedador.escribir(ruta, new TextEncoder().encode(guardado));
   } catch (e) {
-    nota("no se pudo guardar " + estadoPestana.ruta + ": " + (e && e.message ? e.message : e));
+    nota("no se pudo guardar " + ruta + ": " + (e && e.message ? e.message : e));
     return false;
   }
-  // si se siguió escribiendo mientras el worker guardaba, el fichero tiene lo viejo y el
-  // documento sigue sucio; marcarlo limpio perdería esos cambios al cerrar la pestaña
-  if (EDITOR.texto() === guardado) marcarSucio(false);
-  const abierto = document.getElementById("fichero-abierto");
-  if (abierto) {
-    abierto.textContent = relativa(estadoPestana.ruta);
-    abierto.title = estadoPestana.ruta;
+  // si se siguió escribiendo o se cambió de pestaña mientras el worker guardaba, el documento
+  // solo queda limpio si el texto en memoria sigue siendo el que se escribió
+  const actual = documentoDe(ruta);
+  if (actual) {
+    const texto = DOCUMENTOS.activa === ruta ? EDITOR.texto() : actual.texto;
+    if (texto === guardado) {
+      actual.sucio = false;
+      if (DOCUMENTOS.activa === ruta) actual.texto = null;
+    }
+    if (DOCUMENTOS.activa === ruta) marcarSucio(!!actual.sucio);
   }
+  renderPestanas();
   actualizarAccionesFichero();
-  nota("guardado en " + estadoPestana.ruta);
+  nota("guardado en " + ruta);
   await refrescarArbol();
+  guardarPersistencia();
   return true;
 }
 
@@ -972,7 +1226,6 @@ async function nuevoNombre(carpeta) {
 // pide siempre, pero el valor por defecto cambia: MainActivity.java en el package del formulario,
 // o nuevo.txt dentro de la carpeta sobre la que se pulsó.
 async function nuevoFichero(carpeta) {
-  if (estaSucio() && !(await confirmarDescartes())) return;
   const nombre = await nuevoNombre(carpeta);
   if (!nombre) return;
   const previo = await hospedador.leer(nombre);
@@ -985,19 +1238,11 @@ async function nuevoFichero(carpeta) {
     nota("no se pudo crear " + relativa(nombre) + ": " + (e && e.message ? e.message : e));
     return;
   }
-  estadoPestana.ruta = nombre;
-  revelarRuta(nombre);
-  EDITOR.poner("");
-  const abierto = document.getElementById("fichero-abierto");
-  if (abierto) {
-    abierto.textContent = relativa(nombre);
-    abierto.title = nombre;
-  }
-  actualizarAccionesFichero();
+  await abrir(nombre);
   const codigo = document.getElementById("codigo");
   if (codigo) codigo.focus();
-  await refrescarArbol();
   nota("creado " + relativa(nombre));
+  guardarPersistencia();
 }
 
 // --- el panel inferior -------------------------------------------------------------------
@@ -1611,28 +1856,53 @@ async function iniciarPestana() {
   try {
     const r = await hospedador.arbol();
     listo = true;
+    const nodos = r.nodos || [];
+    const guardado = leerPersistencia();
     const aislacion = document.getElementById("aislacion");
     if (aislacion) aislacion.textContent = r.aislada ? "sí" : "no (hay que servir por http con COOP/COEP)";
+
+    // restaurar árbol y pestañas antes de pintar; las pestañas se crean vacías y solo la activa
+    // se lee de OPFS
+    for (const ruta of guardado.abiertos || []) {
+      if (nodos.some((n) => n.dir && n.ruta === ruta)) ARBOL.abiertos.add(ruta);
+    }
+    const rutas = [...new Set((guardado.tabs || []).filter((ruta) =>
+      nodos.some((n) => !n.dir && n.ruta === ruta)))];
+    DOCUMENTOS.lista = rutas.map((ruta) => ({ ruta, texto: null, sucio: false, cursor: null, scroll: null }));
+    DOCUMENTOS.activa = null;
+    renderPestanas();
     await refrescarArbol();
-    const manifest = (r.nodos || []).find((n) => n.ruta === PROYECTO + "/AndroidManifest.xml");
-    if (manifest) {
+
+    const manifest = nodos.find((n) => n.ruta === PROYECTO + "/AndroidManifest.xml");
+    const activa = rutas.includes(guardado.activa) ? guardado.activa : rutas[0];
+    if (activa) {
+      await activarDocumento(activa);
+      const editor = document.querySelector('[data-vista="pestana"]');
+      if (editor) editor.click();
+    } else if (manifest) {
       await abrir(PROYECTO + "/AndroidManifest.xml");
       // si ya había proyecto en OPFS, se entra directamente al editor en vez de dejar a la
       // persona en Inicio mirando una pantalla que ya no le toca
       const editor = document.querySelector('[data-vista="pestana"]');
       if (editor) editor.click();
     } else {
-      EDITOR.poner("");
-      const abierto = document.getElementById("fichero-abierto");
-      if (abierto) abierto.textContent = "Sin fichero";
+      limpiarSinDocumento();
       const codigo = document.getElementById("codigo");
       if (codigo) codigo.placeholder = "Abre un fichero del explorador o crea un proyecto en Inicio.";
     }
   } catch (e) {
     const aislacion = document.getElementById("aislacion");
     if (aislacion) aislacion.textContent = "no disponible";
-    const abierto = document.getElementById("fichero-abierto");
-    if (abierto) abierto.textContent = "Sin fichero";
+    // no borrar la persistencia por un fallo transitorio: el proyecto puede volver al recargar
+    DOCUMENTOS.lista = [];
+    DOCUMENTOS.activa = null;
+    estadoPestana.ruta = null;
+    estadoPestana.sucio = false;
+    EDITOR.poner("");
+    renderPestanas();
+    actualizarAccionesFichero();
+    const codigo = document.getElementById("codigo");
+    if (codigo) codigo.placeholder = "Abre un fichero del explorador o crea un proyecto en Inicio.";
     nota("sin OPFS: " + (e && e.message ? e.message : e));
   }
 }
@@ -1789,7 +2059,7 @@ if (typeof document !== "undefined") {
       else if (e.key === "`" || e.code === "Backquote") { e.preventDefault(); alternarPanel(); }
     });
     window.addEventListener("beforeunload", (e) => {
-      if (!estaSucio()) return;
+      if (!hayDocumentosSucios()) return;
       e.preventDefault();
       e.returnValue = "";
     });

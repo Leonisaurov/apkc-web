@@ -77,6 +77,8 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
    aquí** o **Subir carpeta aquí**, conservando subdirectorios. Para mover, arrastra una fila a
    otra carpeta (ratón o lápiz) o usa **Mover a…** en el menú de mantener pulsado.
 4. Edita en el área de código:
+   - Cada fichero abierto queda en una **pestaña**; cambia con un clic y ciérrala con `×`. Las
+     pestañas, la activa y las carpetas abiertas se recuerdan al recargar.
    - `Ctrl+S` o **Guardar** salva el fichero.
    - **Archivo** agrupa Nuevo, Subir archivos, Descargar, Renombrar y Borrar.
    - `Tab` / `Shift+Tab` sangran / desangran.

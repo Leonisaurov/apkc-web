@@ -200,6 +200,74 @@ async function target() {
     movimiento.abierto === "res/nota.txt" && movimiento.rutas.includes("/proyecto/res/nota.txt"),
     JSON.stringify({ abierto: movimiento.abierto, rutas: movimiento.rutas }).slice(0, 220));
 
+  // varias pestañas: abrir otro fichero no cierra el anterior, y al volver se relee de OPFS
+  const pestanas = await evaluar(`(async () => {
+    await abrir("/proyecto/res/layout/main.xml");
+    const tres = document.querySelectorAll("#pestanas-archivo .editor-tab").length;
+    const enMain = document.getElementById("fichero-abierto").textContent;
+    await abrir("/proyecto/AndroidManifest.xml");
+    const enManifiesto = document.getElementById("fichero-abierto").textContent;
+    await abrir("/proyecto/res/nota.txt");
+    const principal = DOCUMENTOS.lista.find((d) => d.ruta === "/proyecto/res/layout/main.xml");
+    return {
+      tres, enMain, enManifiesto,
+      activo: document.getElementById("fichero-abierto").textContent,
+      mainSinCargar: principal ? principal.texto === null : "sin documento",
+      rutas: [...document.querySelectorAll("#pestanas-archivo .editor-tab")].map((t) => t.dataset.ruta || ""),
+    };
+  })()`);
+  comprueba("abrir varios ficheros crea varias pestañas",
+    pestanas.tres === 3 && pestanas.rutas.includes("/proyecto/res/layout/main.xml"),
+    JSON.stringify(pestanas).slice(0, 260));
+  comprueba("cambiar de pestaña activa el fichero correcto",
+    pestanas.enMain === "res/layout/main.xml" && pestanas.enManifiesto === "AndroidManifest.xml" &&
+    pestanas.activo === "res/nota.txt",
+    JSON.stringify(pestanas).slice(0, 260));
+  comprueba("una pestaña limpia inactiva se descarga de memoria",
+    pestanas.mainSinCargar === true, String(pestanas.mainSinCargar));
+
+  // recargar: vuelven las pestañas y las carpetas abiertas, pero solo se lee la activa
+  // se deja un estado distinguible: src abierta y res/layout cerrada, con la activa en res/
+  await evaluar(`(() => {
+    ARBOL.abiertos.clear();
+    ARBOL.abiertos.add("/proyecto/src");
+    guardarPersistencia();
+    return true;
+  })()`);
+  await exec("Page.enable");
+  await exec("Page.navigate", { url: URL_PAGINA });
+  for (let i = 0; i < 80; i++) {
+    try {
+      if (await evaluar("typeof abrir === 'function' && !!document.getElementById('pestanas-archivo')")) break;
+    } catch (e) { /* aún carga */ }
+    await esperar(150);
+  }
+  const trasRecarga = await evaluar(`(async () => {
+    for (let i = 0; i < 80; i++) {
+      if (DOCUMENTOS.lista.length >= 3 && document.getElementById("codigo").value) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    const main = DOCUMENTOS.lista.find((d) => d.ruta === "/proyecto/res/layout/main.xml");
+    return {
+      pestanas: document.querySelectorAll("#pestanas-archivo .editor-tab").length,
+      activo: document.getElementById("fichero-abierto").textContent,
+      codigo: document.getElementById("codigo").value,
+      mainSinCargar: main ? main.texto === null : "sin documento",
+      resAbierta: ARBOL.abiertos.has("/proyecto/res"),
+      srcAbierta: ARBOL.abiertos.has("/proyecto/src"),
+      layoutCerrada: !ARBOL.abiertos.has("/proyecto/res/layout"),
+    };
+  })()`);
+  comprueba("al recargar vuelven las pestañas y la activa",
+    trasRecarga.pestanas === 3 && trasRecarga.activo === "res/nota.txt" &&
+    trasRecarga.codigo === "hola desde el dispositivo\n",
+    JSON.stringify(trasRecarga).slice(0, 260));
+  comprueba("al recargar se restaura el árbol y la carga sigue siendo diferida",
+    trasRecarga.resAbierta === true && trasRecarga.srcAbierta === true &&
+    trasRecarga.layoutCerrada === true && trasRecarga.mainSinCargar === true,
+    JSON.stringify({ res: trasRecarga.resAbierta, src: trasRecarga.srcAbierta,
+      layout: trasRecarga.layoutCerrada, main: trasRecarga.mainSinCargar }));
+
   ws.close();
   apagar();
   console.log(fallos ? "crear: " + fallos + " problemas" : "crear: todo en orden (" + hechos + " comprobaciones)");

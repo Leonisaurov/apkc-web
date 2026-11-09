@@ -564,20 +564,54 @@ pre {
   border-bottom: 1px solid #1b1b1b;
   padding-right: 8px;
 }
+.pestanas-archivo {
+  display: flex;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  flex: 0 1 auto;
+}
 .editor-tab {
   display: flex;
   align-items: center;
   gap: 7px;
+  flex: 0 0 auto;
   min-width: 0;
-  max-width: 52ch;
-  padding: 0 14px;
-  background: var(--fondo);
+  max-width: 28ch;
+  padding: 0 10px 0 14px;
+  background: var(--fondo2);
   border-right: 1px solid #1b1b1b;
-  border-top: 1px solid var(--acento);
-  color: #fff;
+  border-top: 1px solid transparent;
+  color: #b5b5b5;
   font-size: 12px;
   white-space: nowrap;
+  cursor: pointer;
 }
+.editor-tab:hover { background: #2a2a2a; }
+.editor-tab.activa {
+  background: var(--fondo);
+  border-top-color: var(--acento);
+  color: #fff;
+}
+.editor-tab.activa:hover { background: var(--fondo); }
+.editor-tab-nombre { overflow: hidden; text-overflow: ellipsis; }
+.editor-tab-cerrar {
+  flex: none;
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: #9d9d9d;
+  font-size: 14px;
+  line-height: 1;
+  opacity: .55;
+}
+.editor-tab:hover .editor-tab-cerrar,
+.editor-tab.activa .editor-tab-cerrar { opacity: 1; }
+.editor-tab-cerrar:hover { background: #4a4a4a; color: #fff; }
 .editor-tab-icono {
   flex: none;
   width: 10px;
@@ -603,6 +637,7 @@ pre {
 .editor-tabs .boton-enlace { align-self: center; height: 26px; padding: 0 10px; line-height: 24px; }
 .editor-tabs button.primario { background: var(--acento); }
 .editor-tabs button.primario:hover { background: var(--acento2); }
+.editor-tabs .editor-tab-cerrar { height: 17px; padding: 0; }
 .editor-tabs button svg {
   width: 14px;
   height: 14px;

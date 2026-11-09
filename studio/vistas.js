@@ -74,8 +74,11 @@
 
   async function sembrar() {
     if (!form) return;
-    // crear borra /proyecto entero: si el editor tiene cambios sin guardar, primero se pregunta
-    if (typeof estaSucio === "function" && estaSucio() && !confirmarDescartes()) {
+    // crear borra /proyecto entero: si alguna pestaña tiene cambios sin guardar, primero se pregunta
+    const sucio = typeof hayDocumentosSucios === "function"
+      ? hayDocumentosSucios()
+      : (typeof estaSucio === "function" && estaSucio());
+    if (sucio && !confirmarDescartes()) {
       return "no se creó: hay cambios sin guardar en el editor";
     }
     const datos = new FormData(form);
@@ -117,6 +120,8 @@
 
     // se borra el proyecto anterior: un /proyecto viejo se traga el create siguiente
     await hospedador.limpiar(PROYECTO);
+    // y las pestañas y el árbol anterior no pueden quedar apuntando a ficheros que ya no existen
+    if (typeof limpiarEstadoEditor === "function") limpiarEstadoEditor();
     for (const [ruta, contenido] of Object.entries(p.files)) {
       await hospedador.escribir(PROYECTO + "/" + ruta, texto(contenido));
     }

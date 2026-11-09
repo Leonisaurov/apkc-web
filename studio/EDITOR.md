@@ -146,6 +146,27 @@ La fila superior del editor separa la acción principal de las de mantenimiento:
 - `#descargar-fichero` sigue oculto hasta que hay un fichero abierto; descarga el buffer del
   editor (aunque tenga cambios sin guardar), no solo lo último guardado.
 
+## Pestañas y persistencia
+
+El editor ya no tiene un solo documento. `DOCUMENTOS = { lista, activa }` guarda por pestaña
+`{ ruta, texto, sucio, cursor, scroll }`:
+
+- `abrir(ruta)` añade la pestaña si no existe y activa; si ya existe, solo cambia a ella. Cambiar
+  de pestaña **no descarta** cambios: cada una conserva lo suyo.
+- `activarDocumento()` guarda el texto de la pestaña anterior si está sucia, suelta el de una
+  limpia (`texto = null`) y, si hace falta, lee OPFS en ese momento. Así restaurar diez ficheros
+  solo lee el que se ve; los demás se cargan al pulsarlos.
+- `#pestanas-archivo` se repinta en `renderPestanas()`. La pestaña activa lleva los ids
+  `#fichero-abierto` y `#marca-sucio`; las demás usan `.editor-tab-nombre` y `.marca-sucio`. El
+  botón `×` cierra (con confirmación solo si hay cambios) y, si era la activa, abre la vecina.
+- `PERSISTENCIA = "apkc-studio/editor-v1"` guarda en `localStorage` las rutas de las pestañas, la
+  activa y `ARBOL.abiertos`. **No guarda contenido**: al recargar, un fichero sucio se relee de
+  OPFS y `beforeunload` avisa antes.
+- `guardarEnMemoria()` conserva texto sucio, cursor y scroll por pestaña; una pestaña limpia se
+  puede reconstruir desde OPFS y no ocupa memoria.
+- `activacion` es un contador de turno: si una lectura lenta termina después de que se pulse otra
+  pestaña, no pisa el editor.
+
 ## El editor de codigo
 
 La pieza central son tres capas superpuestas:
@@ -323,7 +344,7 @@ En `@media (max-width: 760px)`:
 | --- | --- |
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`) y el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage y el diagnóstico sobre una salida real |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, el árbol cerrado con sus botones, subir un archivo del dispositivo y moverlo de carpeta |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas y la persistencia (pestañas, activa y carpetas) tras recargar |
 | `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 50 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
@@ -341,8 +362,7 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
 
 ## Limites conocidos
 
-- **Una sola pestaña de fichero.** No hay varias pestanas de documentos ni un historial de
-  editores.
+- **Sin dividir el editor.** Hay varias pestañas, pero no dos grupos ni ventanas.
 - **Sin buscar ni reemplazar.** `Ctrl+F` es el del navegador, no el del editor.
 - **Sin cortar y pegar ni arrastrar en táctil.** Con ratón o lápiz hay arrastrar y soltar entre
   carpetas; en táctil, el menú de la fila ofrece **Mover a…**. Tampoco hay arrastrar y soltar para
@@ -355,8 +375,10 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
 - **No edita binarios.** El contenido se decodifica como UTF-8; un PNG del arbol no se abre en el
   editor.
 - **La consola no es redimensionable con el raton.** Su alto lo fija el CSS (34vh, 42vh en movil).
-- **El estado de scroll del arbol se conserva, el del editor no** entre ficheros: `EDITOR.poner`
-  vuelve a 0,0 a proposito.
+- **El contenido sucio no se persiste.** Al recargar vuelven las pestañas y la activa, pero un
+  fichero con cambios sin guardar se relee de OPFS; `beforeunload` avisa antes de perderlos.
+- **El cursor y el scroll se guardan por pestaña** mientras la sesión vive; el árbol guarda sus
+  carpetas abiertas en `localStorage`.
 
 Estas fronteras son las de la pagina, no las de `apkc`. Lo que el subconjunto Java acepta o
 rechaza esta en el inventario de la Fase 5 de `docs/plan.md`.

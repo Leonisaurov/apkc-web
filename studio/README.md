@@ -170,7 +170,10 @@ solo se piden nombre, package y, si quieres, un icono PNG; al crear, el proyecto
 OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor tiene números
 de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y una
 consola inferior con Salida, Compilar y Firmar (cerrada hasta que hace falta; ``Ctrl + ` `` la
-abre). La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
+abre). Cada fichero abierto es una **pestaña**; cambiar de pestaña no pierde cambios y al recargar
+vuelven las pestañas, la activa y las carpetas abiertas del árbol. El contenido se lee de OPFS
+solo para la pestaña que se ve: las demás se cargan al pulsarlas. La barra del fichero deja
+**Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
 subir, descargar, renombrar, borrar). El árbol arranca **cerrado** y la cabecera del explorador
 tiene botones para contraerlo o desplegarlo entero. El botón de subir escribe en la carpeta del
 fichero abierto; el menú de una carpeta permite subir ahí o una carpeta entera, conservando sus
