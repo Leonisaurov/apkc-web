@@ -1,8 +1,8 @@
 # apkc studio
 
 Una página para crear proyectos de [apkc](../apkc) en el navegador y medir dónde se atasca
-quien los usa. Sin dependencias ni build: Inicio y el diagnóstico abren con `file://`; el Editor
-y `apkc.wasm` necesitan `http(s)` con COOP/COEP, que es lo que pone `servidor.js` o `_headers`.
+quien los usa. Sin dependencias ni build: se sirve por `http(s)` con `servidor.js` o un host
+estático con COOP/COEP. Los ES modules no cargan por `file://`; allí solo se muestra un aviso.
 
 Qué hace, en el orden en que duele:
 
@@ -36,7 +36,7 @@ de las tareas, no para instalar nada.
 
 `index.html` tiene una sección que **sí ejecuta apkc en el navegador**, con los ficheros detrás de
 OPFS y el worker como hospedador. No hay backend: `servidor.js` solo sirve estáticos con las
-cabeceras COOP/COEP que OPFS exige (por `file://` no arranca ni el worker de módulo).
+cabeceras COOP/COEP que OPFS exige (por `file://` no cargan los módulos).
 
 ```sh
 sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
@@ -96,7 +96,8 @@ Qué hace de verdad, y qué no:
 | Fichero | Qué es |
 | --- | --- |
 | `servidor.js` | estáticos + COOP/COEP, sirve `/apkc.wasm` (de `APKC_WASM`), `/wasm_exec.js` (del `GOROOT`), `/android-jar` y `/android-jar-info` (del `ANDROID_JAR` o del SDK local que detecta solo); ningún binario versionado |
-| `app.js` | modelo puro del proyecto: plantillas, `buildProject`, `makeZip`, reglas y análisis de salida; sin DOM y con `module.exports` para node |
+| `main.js` | entrada ESM del sitio; importa el editor, las vistas y el diagnóstico |
+| `app.js` | modelo puro del proyecto: plantillas, `buildProject`, `makeZip`, reglas y análisis de salida; sin DOM, con `export` para el navegador y node |
 | `vistas.js` | qué vista se ve, reflejo del formulario y creación del proyecto en OPFS |
 | `diagnostico.js` | el panel de diagnóstico de Inicio: pinta las reglas de `app.js` y ofrece el informe |
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |

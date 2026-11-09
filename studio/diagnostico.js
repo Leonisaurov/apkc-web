@@ -1,6 +1,8 @@
 // El panel de diagnóstico de Inicio: pega la salida de apkc y la convierte en qué pasó y qué
 // hacer. Las reglas viven en app.js (puras y probadas contra salidas reales en prueba.js); aquí
 // solo se pinta. El texto pegado no sale del navegador: los contadores quedan en localStorage.
+import { analyze, informe, registrar } from "./app.js";
+
 (() => {
   const caja = document.getElementById("detalle-diagnostico");
   if (!caja) return;

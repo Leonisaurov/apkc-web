@@ -7,7 +7,7 @@
 // - Podar elimina hojas antiguas, nunca la raíz ni los ancestros del nodo actual.
 //
 // Es un script clásico para no romper el orden actual del sitio; exporta lo puro para node.
-const Historial = (() => {
+export const Historial = (() => {
   const VERSION = 1;
   const MAX_NODOS = 240;
   const MAX_BYTES = 4 * 1024 * 1024;
@@ -338,4 +338,4 @@ const Historial = (() => {
   };
 })();
 
-if (typeof module !== "undefined") module.exports = Historial;
+if (typeof window !== "undefined") window.Historial = Historial;

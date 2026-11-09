@@ -1,14 +1,36 @@
 // prueba en navegador real (chromium headless, por CDP sin dependencias): lo que node no puede
-// ejercitar —el DOM, los manejadores de click, el localStorage del origen file://— que es justo
-// donde una pagina de este tipo se cae. La pestaña (OPFS) se prueba aparte, por http.
+// ejercitar —el DOM, los manejadores de click, el localStorage— que es justo donde una pagina de
+// este tipo se cae. Se sirve por http sin COOP/COEP para comprobar el aviso de «sin OPFS»; la
+// pestaña completa se prueba aparte con servidor.js.
 //
-// uso: node prueba-navegador.js   (lanza chromium, conduce la pagina y la apaga)
-const { spawn } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+// uso: node prueba-navegador.js   (lanza el servidor, conduce la pagina y apaga todo)
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import http from "node:http";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PUERTO = process.env.STUDIO_PORT || "9333";
-const URL_PAGINA = "file://" + path.join(__dirname, "index.html");
+const HTTP_PORT = Number(process.env.STUDIO_NAV_PORT || 8789);
+const URL_PAGINA = "http://127.0.0.1:" + HTTP_PORT + "/index.html";
+
+const MIME = {
+  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
+  ".png": "image/png", ".svg": "image/svg+xml",
+};
+const servidor = http.createServer((peticion, respuesta) => {
+  const ruta = decodeURIComponent((peticion.url || "/").split("?")[0]);
+  const fichero = path.normalize(path.join(__dirname, ruta === "/" ? "index.html" : ruta));
+  if (!fichero.startsWith(__dirname + path.sep) || !fs.existsSync(fichero) || fs.statSync(fichero).isDirectory()) {
+    respuesta.writeHead(404); return void respuesta.end("no existe\n");
+  }
+  respuesta.writeHead(200, { "Content-Type": MIME[path.extname(fichero)] || "application/octet-stream" });
+  respuesta.end(fs.readFileSync(fichero));
+});
+servidor.listen(HTTP_PORT, "127.0.0.1");
 
 // perfil propio y limpio: chromium deja un SingletonLock cuando muere con SIGKILL, y el
 // siguiente arranque con el perfil de ~ no subre el debugger — el fallo parece de la pagina
@@ -30,7 +52,7 @@ async function target() {
   for (let i = 0; i < 60; i++) {
     try {
       const lista = await (await fetch("http://127.0.0.1:" + PUERTO + "/json/list")).json();
-      const p = lista.find((t) => t.type === "page" && t.url.startsWith("file://"));
+      const p = lista.find((t) => t.type === "page" && t.url.startsWith("http://127.0.0.1:" + HTTP_PORT));
       if (p) return p;
     } catch (e) { /* aun no escucha */ }
     await esperar(500);
@@ -62,7 +84,7 @@ const conductor = `(async () => {
   document.querySelector('.pestana-vista[data-vista="crear"]').click();
   r.vueltaInicio = document.getElementById("crear").classList.contains("activa");
 
-  // en file:// no hay OPFS: el botón tiene que decirlo, no quedarse colgado
+  // sin COOP/COEP no hay OPFS sincrónico: el botón tiene que decirlo, no quedarse colgado
   document.getElementById("crear-proyecto").click();
   await new Promise((ok) => setTimeout(ok, 1200));
   r.avisoCrear = document.getElementById("estado-crear").textContent;
@@ -146,9 +168,9 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
     comprueba(v.estadoBarra === "Editor", "la barra de estado no dijo Editor: " + v.estadoBarra);
     comprueba(v.vueltaInicio, "no se pudo volver a Inicio");
     comprueba(v.icono, "falta el campo del icono");
-    comprueba(/OPFS|no se pudo crear/.test(String(v.avisoCrear)), "file:// no avisó de que no hay OPFS: " + v.avisoCrear);
+    comprueba(/OPFS|no se pudo crear/.test(String(v.avisoCrear)), "sin COOP/COEP no avisó de que no hay OPFS: " + v.avisoCrear);
     comprueba(v.sinUndefined, "quedó un 'undefined' visible en la página");
-    comprueba(v.localStorage === "funciona", "localStorage en file://: " + v.localStorage);
+    comprueba(v.localStorage === "funciona", "localStorage en http: " + v.localStorage);
     comprueba(v.diagnosticoVisible && /herramienta-no-arranca/.test(String(v.diagnostico)),
       "el diagnóstico no explicó el muro de aapt2: " + String(v.diagnostico).slice(0, 160));
     comprueba(/navegador no puede hablar con un proceso/.test(String(v.diagnostico)),
@@ -163,10 +185,12 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
   }
   ws.close();
   navegador.kill("SIGKILL");
+  servidor.close();
   console.log(fallos ? "navegador: " + fallos + " problemas" : "navegador: todo en orden");
   process.exit(fallos ? 1 : 0);
 })().catch((e) => {
   console.log("  FALLO: " + e.message);
   navegador.kill("SIGKILL");
+  servidor.close();
   process.exit(1);
 });

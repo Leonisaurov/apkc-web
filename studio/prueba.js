@@ -1,8 +1,14 @@
 // prueba de humo con node: genera el zip con el mismo código que la página y lo escribe en
 // disco; después python zipfile y zipcheck.py del harness tienen que estar de acuerdo.
-const fs = require("fs");
-const path = require("path");
-const a = require(path.join(__dirname, "app.js"));
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildProject, makeZip, analyze, RULES } from "./app.js";
+import * as pestanaMod from "./pestana.js";
+import { Historial } from "./historial.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const a = { buildProject, makeZip, analyze, RULES };
 
 const estado = {
   name: "Hola apkc", package: "com.hola.apkcstudio", minsdk: "21", targetsdk: "33",
@@ -111,7 +117,6 @@ for (const m of html.matchAll(/<input[^>]*name="([^"]+)"/g))
 
 // 7. el resaltador del editor es puro y se puede probar sin DOM; si se rompe, el código se
 // queda sin color o, peor, el HTML del resaltado se come el texto
-const pestanaMod = require(path.join(__dirname, "pestana.js"));
 const java = pestanaMod.resaltar("package x;\n// hola\npublic class X {}\n", "java");
 if (!/<span class="palabra">package<\/span>/.test(java)) mal("el resaltador no pinta package");
 if (!/<span class="comentario">\/\/ hola<\/span>/.test(java)) mal("el resaltador no pinta el comentario");
@@ -136,7 +141,7 @@ if (/\u001b/.test(color)) mal("consolaHtml deja códigos de escape en la consola
 if (!/&lt;b&gt;/.test(pestanaMod.consolaHtml("<b>"))) mal("consolaHtml no escapa el HTML");
 
 // 8. el árbol de deshacer: ramas, reconstrucción y poda sin tocar la rama actual
-const historial = require(path.join(__dirname, "historial.js"));
+const historial = Historial;
 const h = historial.crear("/proyecto/A.java", "uno");
 historial.agregar(h, "uno\ndos");
 historial.agregar(h, "uno\ndos\ntres");

@@ -46,19 +46,24 @@ dar el editor por probado, comprueba en la salida `pestaña: N comprobaciones` y
 
 | Fichero | Papel |
 | --- | --- |
-| `app.js` | **modelo puro**: plantillas, `buildProject`, `makeZip`, `RULES`, `analyze`, `informe`. Sin DOM; `module.exports` para node. |
-| `pestana.js` | editor, árbol de OPFS, comandos y el puente `hospedador`; exporta las funciones puras para node. |
+| `main.js` | entrada ESM: importa `pestana.js`, `vistas.js` y `diagnostico.js`. |
+| `app.js` | **modelo puro**: plantillas, `buildProject`, `makeZip`, `RULES`, `analyze`, `informe`. Sin DOM; `export` para el navegador y para node. |
+| `pestana.js` | editor, pestañas, árbol de OPFS, comandos y el puente `hospedador`; `export` de lo que consumen `vistas.js`, `main.js` y las pruebas. |
+| `historial.js` | undo tree por documento: deltas, checkpoints, poda, IndexedDB por ventana. |
+| `temas.js` | temas de interfaz y terminal; cambia `data-tema` y variables CSS. Se carga como módulo en el `<head>`. |
 | `vistas.js` | cambio de vista, reflejo nombre/package y creación del proyecto desde el formulario. |
 | `diagnostico.js` | panel de Inicio que pinta `analyze()`; solo DOM, sin reglas propias. |
 | `hospedador.js` | worker de módulo: `fs`/`path`/`process` para Go y una cola de un comando por vez. |
 | `fs-fragmento.js` | `fs` con forma de Node sobre OPFS (lo importa el worker, no la página). |
-| `servidor.js` | servidor de desarrollo: estáticos + COOP/COEP + `/apkc.wasm` + `/wasm_exec.js` + `/android.jar`. |
+| `servidor.js` | servidor de desarrollo ESM: estáticos + COOP/COEP + `/apkc.wasm` + `/wasm_exec.js` + `/android.jar`. |
 | `_headers` | COOP/COEP para hosts estáticos que las respetan (Netlify, Cloudflare Pages). |
 
-Los cuatro scripts de la página son **clásicos, no módulos**, y el orden de `index.html` es
-contrato: `app.js` define los globales que usan `vistas.js` y `diagnostico.js`, y `pestana.js`
-define `hospedador` antes de que `vistas.js` cree el proyecto. No pongas `"type": "module"` en
-`package.json` ni conviertas `app.js`/`pestana.js` a `export`: los tests los cargan con `require`.
+Todo el sitio son **ES modules** y `package.json` declara `"type": "module"`: no hay bundler ni
+orden de `<script>` que mantener. `index.html` carga `temas.js` en el `<head>` (para aplicar el
+tema antes de pintar) y `main.js` al final; `main.js` importa el resto. Los scripts de node
+(`prueba*.js`, `servidor.js`) son ESM: usan `import` y `import.meta.url`, no `require`.
+`window` conserva un puente con nombres antiguos solo para las pruebas CDP; el código nuevo usa
+los imports y no debe depender de ese puente.
 
 `hospedador.js` pide `/wasm_exec.js` y `/apkc.wasm` con ruta **absoluta al origen**. Publica
 `studio/` como raíz del sitio, no bajo `/studio/`, o cambia esas dos rutas a la vez.
@@ -114,8 +119,8 @@ define `hospedador` antes de que `vistas.js` cree el proyecto. No pongas `"type"
   `$(go env GOROOT)/lib/wasm/`; en un host estático hay que copiarlo junto a `index.html`.
 - Un binario de Go en wasm **no se reutiliza**: `hospedador.js` guarda los bytes y crea una
   instancia por comando. Un comando por vez, en cola; no hay tuberías.
-- `file://` solo sirve para Inicio y el diagnóstico. El Editor, OPFS y `apkc.wasm` exigen
-  `servidor.js` o un host con COOP/COEP.
+- Los ES modules no cargan por `file://`: la página muestra un aviso. Todo (Inicio, Editor,
+  OPFS y `apkc.wasm`) exige `servidor.js` o un host con COOP/COEP.
 
 ## Publicar
 

@@ -2,6 +2,12 @@
 // generado en OPFS y abre sus ficheros. La lógica de apkc.wasm y del editor sigue en pestana.js;
 // aquí solo se decide qué se ve y se siembra el árbol con buildProject.
 
+import { buildProject } from "./app.js";
+import {
+  PROYECTO, hospedador, abrir, refrescarArbol, estaSucio,
+  hayDocumentosSucios, confirmarDescartes, limpiarEstadoEditor,
+} from "./pestana.js";
+
 (() => {
   const NOMBRES = { crear: "Inicio", pestana: "Editor" };
 
@@ -120,21 +126,29 @@
     }
 
     // se borra el proyecto anterior: un /proyecto viejo se traga el create siguiente
-    await hospedador.limpiar(PROYECTO);
+    const limpieza = await hospedador.limpiar(PROYECTO);
+    if (limpieza && limpieza.tipo === "error") throw new Error(limpieza.error);
     // y las pestañas y el árbol anterior no pueden quedar apuntando a ficheros que ya no existen
     if (typeof limpiarEstadoEditor === "function") limpiarEstadoEditor();
     for (const [ruta, contenido] of Object.entries(p.files)) {
-      await hospedador.escribir(PROYECTO + "/" + ruta, texto(contenido));
+      const escrito = await hospedador.escribir(PROYECTO + "/" + ruta, texto(contenido));
+      if (escrito && escrito.tipo === "error") throw new Error(escrito.error);
     }
     for (const d of p.dirs) {
       // un fichero vacío y su borrado dejan el directorio creado, también en OPFS
-      await hospedador.escribir(PROYECTO + "/" + d + "/.keep", new Uint8Array(0));
+      const creado = await hospedador.escribir(PROYECTO + "/" + d + "/.keep", new Uint8Array(0));
+      if (creado && creado.tipo === "error") throw new Error(creado.error);
       await hospedador.limpiar(PROYECTO + "/" + d + "/.keep");
     }
-    if (png) await hospedador.escribir(PROYECTO + "/res/drawable/icono.png", png);
+    if (png) {
+      const iconoEscrito = await hospedador.escribir(PROYECTO + "/res/drawable/icono.png", png);
+      if (iconoEscrito && iconoEscrito.tipo === "error") throw new Error(iconoEscrito.error);
+    }
 
     await refrescarArbol();
-    await abrir(PROYECTO + "/AndroidManifest.xml", true);
+    if (!(await abrir(PROYECTO + "/AndroidManifest.xml", true))) {
+      throw new Error("el proyecto se escribió pero no se pudo abrir el manifiesto");
+    }
     mostrar("pestana");
     try { history.replaceState(null, "", "#pestana"); } catch (e) { /* */ }
     return "proyecto creado; abre un fichero del árbol y edítalo";

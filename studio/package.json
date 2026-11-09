@@ -2,6 +2,7 @@
   "name": "apkc-studio",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "description": "Crea, edita, compila y firma apps Android en el navegador, sin Gradle y sin backend.",
   "scripts": {
     "start": "node servidor.js",

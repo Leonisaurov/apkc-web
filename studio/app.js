@@ -421,4 +421,10 @@ function informe() {
   return md;
 }
 
-if (typeof module !== "undefined") module.exports = { buildProject, makeZip, analyze, crc32, RULES, loadLog, informe };
+export { buildProject, makeZip, analyze, crc32, RULES, loadLog, saveLog, registrar, informe };
+
+// Puente para las pruebas de navegador que ya existen y para la consola de desarrollo.
+// La página importa este módulo; no hay dependencia de estos globales en el código nuevo.
+if (typeof window !== "undefined") {
+  Object.assign(window, { buildProject, makeZip, analyze, crc32, RULES, loadLog, saveLog, registrar, informe });
+}

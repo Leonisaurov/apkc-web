@@ -129,8 +129,8 @@ tools/entorno.sh -- sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" n
 - **El servidor no arranca**: falta `APKC_WASM` o el binario no existe. Repite el paso 2.
 - **El puerto 8787 está ocupado**: usa otro, por ejemplo `node servidor.js 8790`, y abre
   `http://127.0.0.1:8790/`.
-- **No hay OPFS / el worker no arranca**: abre la página por `http://` con `servidor.js`, no por
-  `file://`.
+- **No hay OPFS / el worker no arranca / la página está muda**: los ES modules no cargan por
+  `file://`; abre la página por `http://` con `servidor.js`.
 - **Compilar pide el `android.jar`**: elígelo en **Consola → Compilar**; se guarda en OPFS y
   sobrevive a recargar.
 - **`am` falla al abrir Brave**: usa `termux-open-url` o el `am start` del paso 3. No uses

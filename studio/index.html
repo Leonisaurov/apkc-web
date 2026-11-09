@@ -7,7 +7,18 @@
 <meta name="description" content="Crea, edita, compila y firma apps Android en el navegador. Sin Gradle, sin backend y sin dependencias.">
 <meta name="theme-color" content="#1e1e1e">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23007acc'/%3E%3Cpath d='M9 23V9h7a5 5 0 0 1 0 10h-3v4z' fill='%23fff'/%3E%3C/svg%3E">
-<script src="temas.js"></script>
+<script type="module" src="temas.js"></script>
+<script>
+  // Los ES modules no se cargan desde file://; se avisa en vez de dejar una página muda.
+  if (location.protocol === "file:") {
+    document.addEventListener("DOMContentLoaded", function () {
+      var aviso = document.createElement("p");
+      aviso.className = "sin-js";
+      aviso.textContent = "Los ES modules necesitan http: ejecuta servidor.js o publica la carpeta en un host estático.";
+      document.body.prepend(aviso);
+    });
+  }
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-vista="crear">
@@ -333,10 +344,6 @@
   <div class="cargando-caja"><span class="cargando-rueda" aria-hidden="true"></span><span id="cargando-texto">Cargando…</span></div>
 </div>
 
-<script src="app.js"></script>
-<script src="historial.js"></script>
-<script src="pestana.js"></script>
-<script src="vistas.js"></script>
-<script src="diagnostico.js"></script>
+<script type="module" src="main.js"></script>
 </body>
 </html>

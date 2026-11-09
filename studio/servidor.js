@@ -13,12 +13,13 @@
 //   /wasm_exec.js     el del GOROOT de quien corre: no se versiona (regla 2 del repo)
 //   /android-jar      el android.jar del SDK local, si está instalado; no se versiona
 //   /android-jar-info JSON con versión y tamaño del jar que encuentra (para la pestaña)
-const http = require("http");
-const fs = require("fs");
-const path = require("path");
-const { execSync } = require("child_process");
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
-const AQUI = __dirname;
+const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const PUERTO = Number(process.argv[2] || process.env.STUDIO_SERVIDOR_PORT || 8787);
 const WASM = process.env.APKC_WASM || "";
 let GOROOT = process.env.GOROOT || "";

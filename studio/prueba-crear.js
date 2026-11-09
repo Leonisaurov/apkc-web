@@ -3,9 +3,12 @@
 // icono viaje a res/drawable. Es lo que la prueba de file:// no puede hacer (no hay OPFS).
 //
 // uso: APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm node prueba-crear.js
-const { spawn } = require("child_process");
-const fs = require("fs");
-const path = require("path");
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const TMP = process.env.PREFIX ? process.env.PREFIX + "/tmp" : "/tmp";
 const WASM = process.env.APKC_WASM || "";

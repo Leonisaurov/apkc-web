@@ -1,3 +1,5 @@
+import { Historial } from "./historial.js";
+
 // La pestaña que hace: editor de fuente + un arbol en OPFS + los comandos de apkc.wasm.
 //
 // Todo lo que se escribe aquí se queda en el almacenamiento del propio navegador: no hay
@@ -2328,6 +2330,62 @@ if (typeof document !== "undefined") {
   });
 }
 
-if (typeof module !== "undefined") {
-  module.exports = { resaltar, esXml, textoHtml, consolaHtml, jarDeSeleccion, extraerJarDeZip };
+export {
+  PROYECTO, hospedador, estadoPestana, DOCUMENTOS, VENTANA, ARBOL,
+  EDITOR, CONSOLA, abrir, guardar, correr, compilarDelTodo, compilarDebug,
+  mostrarPanel, alternarPanel, marcarSucio, deshacer, rehacer,
+  refrescarArbol, estaSucio, hayDocumentosSucios, confirmarDescartes,
+  limpiarEstadoEditor, ponerJarDeUrl, usarJarElegido, cerrarMenuArchivo,
+  pedirSubida, subirSeleccion, renderHistorial, restaurarNodoHistorial,
+  limpiarHistorial, resaltar, esXml, textoHtml, consolaHtml,
+  jarDeSeleccion, extraerJarDeZip, sincronizarApi, moverRuta, revelarRuta,
+  verificarLoCompilado, inspeccionarKeystore, crearLinaje, guardarPersistencia,
+  documentoActivo, documentoDe, volcarHistorial, programarHistorial,
+  aplicarNodoHistorial, historialDe, conCarga, mostrarCarga, ocultarCarga,
+  pintarConsola, KEYSTORES, DEBUG_KEY, RUTA_JAR, RUTA_LINAJE, RUTA_VIEJO,
+  firmar, intentarCompilar, asegurarDebugKeystore, compilarCon, nuevoFichero,
+  renombrarRuta, borrarRuta, abrirMenuArchivo, decirEstadoJar,
+  consultarJarDelSdk, traerJarDelSdk, asegurarJarDelProyecto,
+};
+
+// Puente de compatibilidad para las pruebas de navegador y la consola de desarrollo.
+// El código de la página importa los símbolos; estos globales no son la fuente de verdad.
+if (typeof window !== "undefined") {
+  Object.assign(window, {
+    PROYECTO, hospedador, estadoPestana, DOCUMENTOS, VENTANA, ARBOL,
+    EDITOR, CONSOLA, abrir, guardar, correr, compilarDelTodo, compilarDebug,
+    mostrarPanel, alternarPanel, marcarSucio, deshacer, rehacer,
+    refrescarArbol, estaSucio, hayDocumentosSucios, confirmarDescartes,
+    limpiarEstadoEditor, ponerJarDeUrl, usarJarElegido, cerrarMenuArchivo,
+    pedirSubida, subirSeleccion, renderHistorial, restaurarNodoHistorial,
+    limpiarHistorial, resaltar, esXml, textoHtml, consolaHtml,
+    jarDeSeleccion, extraerJarDeZip, sincronizarApi, Historial, moverRuta,
+    revelarRuta, verificarLoCompilado, inspeccionarKeystore, crearLinaje,
+    guardarPersistencia, documentoActivo, documentoDe, volcarHistorial,
+    programarHistorial, aplicarNodoHistorial, historialDe, conCarga,
+    mostrarCarga, ocultarCarga, pintarConsola, KEYSTORES, DEBUG_KEY,
+    RUTA_JAR, RUTA_LINAJE, RUTA_VIEJO, firmar, intentarCompilar,
+    asegurarDebugKeystore, compilarCon, nuevoFichero, renombrarRuta,
+    borrarRuta, abrirMenuArchivo, decirEstadoJar, consultarJarDelSdk,
+    traerJarDelSdk, asegurarJarDelProyecto,
+  });
+  // Superficie completa para las pruebas CDP, que evalúan los nombres antiguos. No se usa desde
+  // el código de la página; los imports son la vía normal.
+  Object.assign(window, {
+    actualizarCursor, relativa, carpetaDe, carpetaActual, nombreDeSubida,
+    pedirSubida, subirSeleccion, hayDocumentosSucios, leerPersistencia,
+    falloDocumento, renderPestanas, pintarMarcaSucio, guardarEnMemoria,
+    historialDe, asegurarHistorial, volcarHistorial, programarHistorial,
+    aplicarNodoHistorial, restaurarNodoHistorial, limpiarHistorial,
+    renderHistorial, limpiarSinDocumento, quitarDocumento, activarDocumento,
+    cerrarDocumento, remapearDocumentos, quitarDocumentosBajo,
+    limpiarEstadoEditor, conectarMenu, remapearAbiertos, plegarTodo,
+    desplegarTodo, pedirCarpetaDestino, actualizarAccionesFichero,
+    paqueteDelFormulario, normalizarRuta, nuevoNombre, cerrarPanel,
+    ejecutarUltimo, nota, descargarRuta, ponerBlob, descargar,
+    ofrecerDescarga, estadoKeystore, guardarKeystoreElegido,
+    inspeccionarKeystore, prepararKeystore, olvidarKeystore, estadoLinaje,
+    olvidarLinaje, iniciarPestana, PERSISTENCIA, SUBIDA, API_NOMBRES,
+    API_PREF, JAR_SDK, RUTA_KEYSTORE, ARRASTRABLE,
+  });
 }
