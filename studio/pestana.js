@@ -49,6 +49,7 @@ const hospedador = (() => {
     escribir: async (ruta, datos) => { await bajarRaiz(); return pedir({ tipo: "montar", ruta, datos }); },
     ejecutar: async (argv) => { await bajarRaiz(); return pedir({ tipo: "ejecutar", argv }); },
     limpiar: async (ruta) => { await bajarRaiz(); return pedir({ tipo: "limpiar", ruta }); },
+    refrescar: async (ruta) => { await bajarRaiz(); return pedir({ tipo: "refrescar", ruta }); },
     renombrar: async (de, a) => { await bajarRaiz(); return pedir({ tipo: "renombrar", de, a }); },
     cwd: async (ruta) => { await bajarRaiz(); return pedir({ tipo: "cwd", ruta }); },
     sondear: async () => { await bajarRaiz(); return pedir({ tipo: "sondeo" }); },
@@ -524,15 +525,18 @@ async function subirSeleccion(entrada) {
       donde + ". ¿Reemplazarlos?")) return;
 
   try {
-    await conCarga("Subiendo " + archivos.length + " archivo(s)…", async () => {
+    await conCarga("Subiendo " + archivos.length + " archivo(s)…", () => conBloqueo(async () => {
       for (let i = 0; i < archivos.length; i++) {
         const datos = new Uint8Array(await archivos[i].arrayBuffer());
-        await hospedador.escribir(rutas[i], datos);
+        const escrito = await hospedador.escribir(rutas[i], datos);
+        if (escrito && escrito.tipo === "error") throw new Error(escrito.error);
+        try { localStorage.setItem(claveRevision(rutas[i]), nuevaRevision()); } catch (e) { /* sin revisión */ }
       }
-    });
+    }));
   } finally {
     SUBIDA.destino = null;
   }
+  publicar({ tipo: "mutacion", accion: "subir", rutas });
   await refrescarArbol();
   nota(archivos.length + (archivos.length === 1 ? " archivo subido a " : " archivos subidos a ") + donde);
   // con un solo fichero de texto, dejarlo abierto ahorra el paso de buscarlo en el árbol
@@ -587,9 +591,156 @@ function guardarPersistencia() {
   } catch (e) { /* sin persistencia, la página sigue */ }
 }
 
+// --- coordinación entre ventanas del mismo origen -----------------------------------------
+const REV_PREF = "apkc-studio/rev/";
+const canal = typeof window !== "undefined" && typeof BroadcastChannel === "function"
+  ? new BroadcastChannel("apkc-studio")
+  : null;
+
+async function conBloqueo(tarea) {
+  if (typeof navigator !== "undefined" && navigator.locks &&
+      typeof navigator.locks.request === "function") {
+    return navigator.locks.request("apkc-studio:/proyecto", { mode: "exclusive" }, tarea);
+  }
+  return tarea();
+}
+
+function claveRevision(ruta) {
+  return REV_PREF + encodeURIComponent(ruta);
+}
+function revisionActual(ruta) {
+  try { return localStorage.getItem(claveRevision(ruta)); } catch (e) { return null; }
+}
+function nuevaRevision() {
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
+}
+function publicar(mensaje) {
+  if (!canal) return;
+  try { canal.postMessage({ ...mensaje, origen: VENTANA }); } catch (e) { /* sin canal */ }
+}
+
+async function recargarDocumentoRemoto(doc, revision) {
+  try {
+    await hospedador.refrescar(doc.ruta);
+    const bytes = await hospedador.bytes(doc.ruta);
+    if (!bytes) return;
+    const texto = new TextDecoder().decode(bytes);
+    doc.revision = revision || revisionActual(doc.ruta);
+    if (DOCUMENTOS.activa === doc.ruta) {
+      if (doc.sucio) {
+        doc.conflicto = "guardado";
+        nota("otra ventana guardó " + relativa(doc.ruta) + "; guarda para sobrescribir o recarga");
+        return;
+      }
+      EDITOR.poner(texto);
+      doc.texto = texto;
+      doc.sucio = false;
+      marcarSucio(false);
+      await asegurarHistorial(doc, texto);
+      renderHistorial();
+      actualizarAccionesFichero();
+      nota("otra ventana guardó " + relativa(doc.ruta) + "; recargado");
+    } else if (!doc.sucio) {
+      doc.texto = null;
+    } else {
+      doc.conflicto = "guardado";
+    }
+  } catch (e) {
+    nota("no se pudo recargar " + relativa(doc.ruta) + ": " + (e && e.message ? e.message : e));
+  }
+}
+
+async function aplicarBorradoRemoto(ruta) {
+  const conservar = [];
+  for (const doc of DOCUMENTOS.lista) {
+    if (!(doc.ruta === ruta || doc.ruta.startsWith(ruta + "/"))) {
+      conservar.push(doc);
+      continue;
+    }
+    if (doc.sucio) {
+      doc.remotoEliminado = true;
+      conservar.push(doc);
+    } else {
+      Historial.borrar(VENTANA, doc.ruta).catch(() => {});
+    }
+  }
+  DOCUMENTOS.lista = conservar;
+  if (!DOCUMENTOS.lista.some((doc) => doc.ruta === DOCUMENTOS.activa)) {
+    DOCUMENTOS.activa = null;
+    estadoPestana.ruta = null;
+    const vecino = DOCUMENTOS.lista[0];
+    if (vecino) await activarDocumento(vecino.ruta);
+    else limpiarSinDocumento();
+  } else {
+    renderPestanas();
+    renderHistorial();
+    actualizarAccionesFichero();
+    guardarPersistencia();
+  }
+  nota("otra ventana borró " + relativa(ruta));
+}
+
+async function recibirRemoto(msg) {
+  if (!msg || msg.origen === VENTANA) return;
+  if (msg.tipo === "guardado") {
+    const doc = documentoDe(msg.ruta);
+    if (doc) {
+      doc.revision = msg.revision || revisionActual(msg.ruta);
+      if (doc.sucio) {
+        doc.conflicto = "guardado";
+        nota("otra ventana guardó " + relativa(msg.ruta) + "; puedes sobrescribir al guardar");
+      } else {
+        await recargarDocumentoRemoto(doc, msg.revision);
+      }
+    }
+    await hospedador.refrescar(PROYECTO).catch(() => {});
+    await refrescarArbol();
+    return;
+  }
+  if (msg.tipo === "mutacion") {
+    if (msg.accion === "renombrar" || msg.accion === "mover") {
+      await hospedador.refrescar(msg.origen).catch(() => {});
+      await hospedador.refrescar(msg.destino).catch(() => {});
+      remapearDocumentos(msg.origen, msg.destino);
+      remapearAbiertos(msg.origen, msg.destino);
+      revelarRuta(estadoPestana.ruta);
+    } else if (msg.accion === "borrar") {
+      await aplicarBorradoRemoto(msg.ruta);
+    } else if (msg.accion === "subir" || msg.accion === "crear") {
+      for (const ruta of msg.rutas || []) {
+        await hospedador.refrescar(ruta).catch(() => {});
+        const doc = documentoDe(ruta);
+        if (!doc) continue;
+        if (doc.sucio) doc.conflicto = "guardado";
+        else await recargarDocumentoRemoto(doc, revisionActual(ruta));
+      }
+    }
+    await hospedador.refrescar(PROYECTO).catch(() => {});
+    await refrescarArbol();
+    return;
+  }
+  if (msg.tipo === "proyecto") {
+    await hospedador.refrescar(PROYECTO).catch(() => {});
+    for (const doc of DOCUMENTOS.lista) {
+      if (doc.sucio) doc.conflicto = "proyecto";
+      else doc.texto = null;
+    }
+    await refrescarArbol();
+    nota("otra ventana creó un proyecto; el árbol se ha actualizado");
+  }
+}
+
 function falloDocumento(e) {
   nota("fallo: " + (e && e.message ? e.message : e));
   console.error(e);
+}
+
+if (canal) {
+  canal.addEventListener("message", (evento) => {
+    if (evento.data && evento.data.origen !== VENTANA) {
+      recibirRemoto(evento.data).catch(falloDocumento);
+    }
+  });
 }
 
 function renderPestanas() {
@@ -876,6 +1027,12 @@ async function activarDocumento(ruta) {
   revelarRuta(ruta);
 
   if (doc.texto === null) {
+    // una pestaña limpia inactiva puede tener una versión vieja en el espejo del worker; solo
+    // se invalida si otra ventana publicó una revisión distinta (no en el flujo local de subida)
+    const revisionDisco = revisionActual(ruta);
+    if (doc.revision && revisionDisco && doc.revision !== revisionDisco) {
+      await hospedador.refrescar(ruta).catch(() => {});
+    }
     let bytes;
     try {
       bytes = await conCarga("Abriendo " + relativa(ruta) + "…", () => hospedador.bytes(ruta));
@@ -894,6 +1051,7 @@ async function activarDocumento(ruta) {
       return quitarDocumento(doc);
     }
     doc.texto = new TextDecoder().decode(bytes);
+    doc.revision = revisionActual(ruta) || doc.revision || null;
   }
 
   await asegurarHistorial(doc, doc.texto);
@@ -1108,8 +1266,9 @@ async function renombrarRuta(ruta) {
   }
   const base = ruta.slice(0, ruta.lastIndexOf("/"));
   const destino = base + "/" + nuevo;
-  const r = await hospedador.renombrar(ruta, destino);
+  const r = await conBloqueo(() => hospedador.renombrar(ruta, destino));
   if (r.tipo === "error") { nota("no se pudo renombrar: " + r.error); return; }
+  publicar({ tipo: "mutacion", accion: "renombrar", origen: ruta, destino: destino });
   remapearDocumentos(ruta, destino);
   remapearAbiertos(ruta, destino);
   revelarRuta(estadoPestana.ruta);
@@ -1120,8 +1279,9 @@ async function renombrarRuta(ruta) {
 
 async function borrarRuta(ruta) {
   if (!window.confirm("¿Borrar " + relativa(ruta) + "?")) return;
-  const r = await hospedador.limpiar(ruta);
+  const r = await conBloqueo(() => hospedador.limpiar(ruta));
   if (r.tipo === "error") { nota("no se pudo borrar: " + r.error); return; }
+  publicar({ tipo: "mutacion", accion: "borrar", ruta: ruta });
   for (const abierta of [...ARBOL.abiertos]) {
     if (abierta === ruta || abierta.startsWith(ruta + "/")) ARBOL.abiertos.delete(abierta);
   }
@@ -1197,8 +1357,9 @@ async function moverRuta(origen, carpeta) {
     nota("no se puede mover una carpeta dentro de sí misma");
     return;
   }
-  const r = await hospedador.renombrar(origen, destino);
+  const r = await conBloqueo(() => hospedador.renombrar(origen, destino));
   if (r.tipo === "error") { nota("no se pudo mover: " + r.error); return; }
+  publicar({ tipo: "mutacion", accion: "mover", origen: origen, destino: destino });
   remapearDocumentos(origen, destino);
   remapearAbiertos(origen, destino);
   revelarRuta(estadoPestana.ruta);
@@ -1386,12 +1547,24 @@ async function guardar() {
   volcarHistorial();
   const ruta = doc.ruta;
   const guardado = EDITOR.texto();
+  const anterior = doc.revision;
+  const revisionGuardada = revisionActual(ruta);
+  if (anterior && revisionGuardada && anterior !== revisionGuardada &&
+      !window.confirm("Otra ventana guardó " + relativa(ruta) + ". ¿Sobrescribir?")) {
+    return false;
+  }
+  const revision = nuevaRevision();
   try {
-    await hospedador.escribir(ruta, new TextEncoder().encode(guardado));
+    await conBloqueo(async () => {
+      const escrito = await hospedador.escribir(ruta, new TextEncoder().encode(guardado));
+      if (escrito && escrito.tipo === "error") throw new Error(escrito.error);
+      try { localStorage.setItem(claveRevision(ruta), revision); } catch (e) { /* sin revisión */ }
+    });
   } catch (e) {
     nota("no se pudo guardar " + ruta + ": " + (e && e.message ? e.message : e));
     return false;
   }
+  doc.revision = revision;
   // si se siguió escribiendo o se cambió de pestaña mientras el worker guardaba, el documento
   // solo queda limpio si el texto en memoria sigue siendo el que se escribió
   const actual = documentoDe(ruta);
@@ -1407,6 +1580,7 @@ async function guardar() {
   renderHistorial();
   actualizarAccionesFichero();
   Historial.guardar(VENTANA, doc.hist).catch(() => {});
+  publicar({ tipo: "guardado", ruta, revision });
   nota("guardado en " + ruta);
   await refrescarArbol();
   guardarPersistencia();
@@ -1457,7 +1631,11 @@ async function nuevoFichero(carpeta) {
   // el fichero nace vacío en OPFS para que el explorador y el estado «sin cambios» digan
   // la verdad: un buffer suelto que no está en el árbol confunde más que ayuda
   try {
-    await hospedador.escribir(nombre, new Uint8Array(0));
+    await conBloqueo(async () => {
+      const r = await hospedador.escribir(nombre, new Uint8Array(0));
+      if (r && r.tipo === "error") throw new Error(r.error);
+      try { localStorage.setItem(claveRevision(nombre), nuevaRevision()); } catch (e) { /* sin revisión */ }
+    });
   } catch (e) {
     nota("no se pudo crear " + relativa(nombre) + ": " + (e && e.message ? e.message : e));
     return;
@@ -1465,6 +1643,7 @@ async function nuevoFichero(carpeta) {
   await abrir(nombre);
   const codigo = document.getElementById("codigo");
   if (codigo) codigo.focus();
+  publicar({ tipo: "mutacion", accion: "crear", rutas: [nombre] });
   nota("creado " + relativa(nombre));
   guardarPersistencia();
 }
@@ -2346,6 +2525,7 @@ export {
   firmar, intentarCompilar, asegurarDebugKeystore, compilarCon, nuevoFichero,
   renombrarRuta, borrarRuta, abrirMenuArchivo, decirEstadoJar,
   consultarJarDelSdk, traerJarDelSdk, asegurarJarDelProyecto,
+  conBloqueo, publicar, recibirRemoto,
 };
 
 // Puente de compatibilidad para las pruebas de navegador y la consola de desarrollo.
@@ -2367,7 +2547,7 @@ if (typeof window !== "undefined") {
     RUTA_JAR, RUTA_LINAJE, RUTA_VIEJO, firmar, intentarCompilar,
     asegurarDebugKeystore, compilarCon, nuevoFichero, renombrarRuta,
     borrarRuta, abrirMenuArchivo, decirEstadoJar, consultarJarDelSdk,
-    traerJarDelSdk, asegurarJarDelProyecto,
+    traerJarDelSdk, asegurarJarDelProyecto, conBloqueo, publicar, recibirRemoto,
   });
   // Superficie completa para las pruebas CDP, que evalúan los nombres antiguos. No se usa desde
   // el código de la página; los imports son la vía normal.

@@ -6,6 +6,7 @@ import { buildProject } from "./app.js";
 import {
   PROYECTO, hospedador, abrir, refrescarArbol, estaSucio,
   hayDocumentosSucios, confirmarDescartes, limpiarEstadoEditor,
+  conBloqueo, publicar,
 } from "./pestana.js";
 
 (() => {
@@ -125,25 +126,28 @@ import {
         .replace("<application ", '<application android:icon="@drawable/icono" ');
     }
 
-    // se borra el proyecto anterior: un /proyecto viejo se traga el create siguiente
-    const limpieza = await hospedador.limpiar(PROYECTO);
-    if (limpieza && limpieza.tipo === "error") throw new Error(limpieza.error);
-    // y las pestañas y el árbol anterior no pueden quedar apuntando a ficheros que ya no existen
-    if (typeof limpiarEstadoEditor === "function") limpiarEstadoEditor();
-    for (const [ruta, contenido] of Object.entries(p.files)) {
-      const escrito = await hospedador.escribir(PROYECTO + "/" + ruta, texto(contenido));
-      if (escrito && escrito.tipo === "error") throw new Error(escrito.error);
-    }
-    for (const d of p.dirs) {
-      // un fichero vacío y su borrado dejan el directorio creado, también en OPFS
-      const creado = await hospedador.escribir(PROYECTO + "/" + d + "/.keep", new Uint8Array(0));
-      if (creado && creado.tipo === "error") throw new Error(creado.error);
-      await hospedador.limpiar(PROYECTO + "/" + d + "/.keep");
-    }
-    if (png) {
-      const iconoEscrito = await hospedador.escribir(PROYECTO + "/res/drawable/icono.png", png);
-      if (iconoEscrito && iconoEscrito.tipo === "error") throw new Error(iconoEscrito.error);
-    }
+    await conBloqueo(async () => {
+      // se borra el proyecto anterior: un /proyecto viejo se traga el create siguiente
+      const limpieza = await hospedador.limpiar(PROYECTO);
+      if (limpieza && limpieza.tipo === "error") throw new Error(limpieza.error);
+      // y las pestañas y el árbol anterior no pueden quedar apuntando a ficheros que ya no existen
+      if (typeof limpiarEstadoEditor === "function") limpiarEstadoEditor();
+      for (const [ruta, contenido] of Object.entries(p.files)) {
+        const escrito = await hospedador.escribir(PROYECTO + "/" + ruta, texto(contenido));
+        if (escrito && escrito.tipo === "error") throw new Error(escrito.error);
+      }
+      for (const d of p.dirs) {
+        // un fichero vacío y su borrado dejan el directorio creado, también en OPFS
+        const creado = await hospedador.escribir(PROYECTO + "/" + d + "/.keep", new Uint8Array(0));
+        if (creado && creado.tipo === "error") throw new Error(creado.error);
+        await hospedador.limpiar(PROYECTO + "/" + d + "/.keep");
+      }
+      if (png) {
+        const iconoEscrito = await hospedador.escribir(PROYECTO + "/res/drawable/icono.png", png);
+        if (iconoEscrito && iconoEscrito.tipo === "error") throw new Error(iconoEscrito.error);
+      }
+    });
+    publicar({ tipo: "proyecto" });
 
     await refrescarArbol();
     if (!(await abrir(PROYECTO + "/AndroidManifest.xml", true))) {

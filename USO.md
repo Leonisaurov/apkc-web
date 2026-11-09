@@ -84,6 +84,11 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
    - `Ctrl+S` o **Guardar** salva el fichero.
    - En **Tema**, en la barra de estado, cambias la interfaz (Catppuccin, Rosé Pine, Tokyo Night,
      Gruvbox) y la paleta ANSI de la terminal (Catppuccin, Rosé Pine, Gruvbox, Solarized, Dracula).
+   - Puedes abrir otra pestaña del navegador con el mismo proyecto: comparten OPFS y se avisan de
+     los guardados. Si la otra ventana guardó algo que tienes sucio, te avisa y puedes
+     **sobrescribir** al guardar.
+   - El service worker cachea la página; una vez cargada, puedes recargarla sin red (el primer
+     acceso y la descarga del `android.jar` sí necesitan conexión).
    - **Archivo** agrupa Nuevo, Subir archivos, Descargar, Renombrar y Borrar.
    - `Tab` / `Shift+Tab` sangran / desangran.
    - `Enter` conserva la sangría y añade un nivel tras `{`.

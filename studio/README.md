@@ -105,11 +105,27 @@ Qué hace de verdad, y qué no:
 | `pestana.js` | editor, pestañas, árbol y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `historial.js` | undo tree por documento: deltas, checkpoints, poda e IndexedDB por ventana; sus funciones puras se prueban en node |
 | `temas.js` | temas de interfaz y de terminal; solo cambia `data-tema` y variables CSS, sin dependencias |
+| `offline.js` | registra el service worker cuando la página se sirve por http(s) |
+| `sw.js` | service worker: cachea el shell y `apkc.wasm`/`wasm_exec.js`; no cachea jar, keystores ni OPFS |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
 | `AGENTS.md` | lo que un agente necesita saber antes de tocar esta carpeta: comandos, contratos y trampas |
 | `_headers` | COOP/COEP para publicar en un host estático que las respete |
 | `package.json` | nombres de las tareas (`npm test`, `npm run e2e`); sin dependencias |
 | `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba más de 50 cosas |
+
+## Varias ventanas y sin red
+
+Dos pestañas del mismo origen comparten `/proyecto` en OPFS. Cada ventana tiene sus pestañas de
+editor (sessionStorage), su undo tree (IndexedDB por ventana) y su worker. Al guardar, la ventana
+toma un lock (`navigator.locks`), escribe una revisión y publica `guardado` por `BroadcastChannel`.
+Las demás refrescan su espejo de OPFS y recargan el fichero si está limpio; si está sucio, avisan
+y permiten **sobrescribir** al guardar (con confirmación si la revisión cambió). Las mutaciones de
+fichero (crear, subir, renombrar, mover, borrar) se publican igual y refrescan el árbol.
+
+`sw.js` cachea el shell y, si el host los sirve, `apkc.wasm` y `wasm_exec.js`. No cachea el `android.jar`
+ni los keystores, y el proyecto no pasa por HTTP. Una recarga sin red conserva COOP/COEP porque las
+respuestas cacheadas mantienen sus cabeceras. La primera visita debe ser online para instalar el
+worker y llenar la caché.
 
 ## Publicar
 

@@ -196,6 +196,28 @@ tema: Oscuro, Catppuccin Mocha, Rosé Pine, Tokyo Night y Gruvbox; y paletas ANS
 Rosé Pine, Gruvbox, Solarized Dark y Dracula. El menú `#menu-apariencia` de la barra de estado
 tiene los dos selectores `#tema-ui` y `#tema-consola`. No hay hojas externas.
 
+### Varias ventanas
+
+- `VENTANA` identifica la pestaña del navegador; la vista (tabs, activa, `ARBOL.abiertos`) va en
+  `sessionStorage`, no en `localStorage`.
+- Cada mutación pasa por `conBloqueo()` (`navigator.locks.request("apkc-studio:/proyecto")`), de
+  modo que dos ventanas no interleaven escrituras. Si Web Locks no existe, se ejecuta directo.
+- `guardar()` guarda una revisión en `localStorage` (`apkc-studio/rev/<ruta>`), la pone en el
+  documento y publica `{tipo:"guardado"}` por `BroadcastChannel`. Si la revisión del disco ya no
+  es la del documento, pide confirmación antes de sobrescribir.
+- `publicar()` avisa también de `crear`, `subir`, `renombrar`, `mover`, `borrar` y `proyecto`.
+- `recibirRemoto()` ignora su propia `VENTANA`, refresca el espejo del worker (`hospedador.refrescar`),
+  recarga la pestaña activa si está limpia y solo deja un aviso si está sucia. Un borrado remoto
+  conserva las pestañas sucias y marca `remotoEliminado`.
+- No hay merge ni CRDT: la última escritura gana y el conflicto es visible.
+
+### Sin red
+
+`main.js` importa `offline.js`, que registra `sw.js` por http(s). El worker cachea el shell en la
+instalación e intenta cachear `apkc.wasm`/`wasm_exec.js`; si fallan, los cachea la primera vez que se piden; no toca `/android-jar`, los
+keystores ni OPFS. Las respuestas cacheadas conservan COOP/COEP, así que una recarga offline sigue
+siendo `crossOriginIsolated`. `prueba-pestana.js` comprueba la recarga con la red emulada apagada.
+
 ## El editor de codigo
 
 La pieza central son tres capas superpuestas:
@@ -380,8 +402,8 @@ En `@media (max-width: 760px)`:
 | --- | --- |
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
 | `node studio/prueba-navegador.js` | `http` sin COOP/COEP: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar y el undo tree con ramas y IndexedDB |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 50 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB y dos ventanas que se pasan guardados por BroadcastChannel |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 70 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la

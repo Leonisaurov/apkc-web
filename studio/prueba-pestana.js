@@ -890,6 +890,42 @@ async function conductor() {
     terminos.antes === "true" && terminos.despues === "false" &&
     /^https:\/\/dl\.google\.com\//.test(terminos.href), JSON.stringify(terminos));
 
+  // 14. recarga sin red: el service worker sirve el shell y conserva el aislamiento
+  const sw = await evaluar(`(async () => {
+    if (!("serviceWorker" in navigator)) return { ok: false, motivo: "sin serviceWorker" };
+    const listo = await Promise.race([
+      navigator.serviceWorker.ready.then(() => true),
+      new Promise((ok) => setTimeout(() => ok(false), 5000)),
+    ]);
+    return { ok: listo, controlado: !!navigator.serviceWorker.controller };
+  })()`);
+  comprueba("el service worker queda listo", sw.ok === true, JSON.stringify(sw));
+  if (sw.ok) {
+    await exec("Network.emulateNetworkConditions", {
+      offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+    });
+    await exec("Page.navigate", { url: URL_PAGINA });
+    let offline = null;
+    for (let i = 0; i < 50; i++) {
+      try {
+        offline = await evaluar(`({
+          listo: typeof abrir === "function" && !!document.getElementById("codigo"),
+          aislada: crossOriginIsolated,
+          controlado: !!navigator.serviceWorker.controller,
+        })`);
+        if (offline.listo) break;
+      } catch (e) { /* aún carga */ }
+      await esperar(300);
+    }
+    comprueba("la página recarga sin red con el service worker",
+      offline && offline.listo === true, JSON.stringify(offline));
+    comprueba("la recarga offline conserva crossOriginIsolated",
+      offline && offline.aislada === true, JSON.stringify(offline));
+    await exec("Network.emulateNetworkConditions", {
+      offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1,
+    });
+  }
+
   // requisito del proyecto, escrito como comprobación: la pestaña no puede pedir nada fuera de
   // su origen. Ni un CDN de un runtime de terceros, ni telemetría, ni una fuente.
   const ajenas = peticiones.filter((u) => !u.startsWith("http://127.0.0.1:" + PUERTO) && !u.startsWith("data:") && !u.startsWith("blob:"));

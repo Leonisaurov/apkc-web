@@ -88,6 +88,40 @@ async function target() {
     return r.result && r.result.result ? r.result.result.value : undefined;
   };
 
+  // segunda pestaña del navegador, mismo origen y mismo OPFS, otra sesión de CDP
+  async function abrirSegundaPagina() {
+    const respuesta = await fetch("http://127.0.0.1:" + CDP + "/json/new?" + encodeURIComponent(URL_PAGINA), { method: "PUT" });
+    const t2 = await respuesta.json();
+    const ws2 = new WebSocket(t2.webSocketDebuggerUrl);
+    await new Promise((res, rej) => { ws2.onopen = res; ws2.onerror = () => rej(new Error("websocket 2 fallo")); });
+    let id2 = 0;
+    const colas2 = new Map();
+    ws2.addEventListener("message", (ev) => {
+      const m = JSON.parse(ev.data);
+      if (m.id && colas2.has(m.id)) { const { res } = colas2.get(m.id); colas2.delete(m.id); res(m); }
+    });
+    const exec2 = (method, params) => new Promise((res) => {
+      const n = ++id2;
+      colas2.set(n, { res });
+      ws2.send(JSON.stringify({ id: n, method, params: params || {} }));
+    });
+    const evaluar2 = async (expresion) => {
+      const r = await exec2("Runtime.evaluate", { expression: expresion, awaitPromise: true, returnByValue: true });
+      if (r.result && r.result.exceptionDetails) {
+        throw new Error("excepcion en la segunda pagina: " + JSON.stringify(r.result.exceptionDetails.exception || r.result.exceptionDetails).slice(0, 300));
+      }
+      return r.result && r.result.result ? r.result.result.value : undefined;
+    };
+    await exec2("Runtime.enable");
+    for (let i = 0; i < 60; i++) {
+      try {
+        if (await evaluar2("typeof abrir === 'function' && !!document.getElementById('codigo')")) break;
+      } catch (e) { /* aún carga */ }
+      await esperar(300);
+    }
+    return { ws: ws2, evaluar: evaluar2 };
+  }
+
   await exec("Runtime.enable");
   for (let i = 0; i < 60; i++) {
     if (await evaluar("typeof hospedador === 'object' && typeof buildProject === 'function' && !!document.getElementById('crear-proyecto')")) break;
@@ -312,6 +346,48 @@ async function target() {
     JSON.stringify({ total: undo.total, filas: undo.filas, activo: undo.activo }).slice(0, 240));
   comprueba("el historial queda persistido en IndexedDB",
     undo.persistido >= 4, String(undo.persistido));
+
+  // 2 ventanas del mismo origen: BroadcastChannel avisa y el espejo del worker se refresca
+  const segunda = await abrirSegundaPagina();
+  const enSegunda = await segunda.evaluar(`(async () => {
+    await abrir("/proyecto/res/nota.txt");
+    return document.getElementById("codigo").value;
+  })()`);
+  comprueba("la segunda ventana abre el mismo fichero de OPFS",
+    enSegunda === "hola desde el dispositivo\n", JSON.stringify(enSegunda).slice(0, 160));
+
+  await evaluar(`(async () => {
+    const area = document.getElementById("codigo");
+    area.value = "desde A\\n";
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    await guardar();
+    return true;
+  })()`);
+  let recibidoEnB = null;
+  for (let i = 0; i < 60; i++) {
+    recibidoEnB = await segunda.evaluar(`document.getElementById("codigo").value`);
+    if (recibidoEnB === "desde A\n") break;
+    await esperar(200);
+  }
+  comprueba("la segunda ventana recibe el guardado de la primera",
+    recibidoEnB === "desde A\n", JSON.stringify(recibidoEnB).slice(0, 160));
+
+  await segunda.evaluar(`(async () => {
+    const area = document.getElementById("codigo");
+    area.value = "desde B\\n";
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    await guardar();
+    return true;
+  })()`);
+  let recibidoEnA = null;
+  for (let i = 0; i < 60; i++) {
+    recibidoEnA = await evaluar(`document.getElementById("codigo").value`);
+    if (recibidoEnA === "desde B\n") break;
+    await esperar(200);
+  }
+  comprueba("la primera ventana recibe la sobrescritura de la segunda",
+    recibidoEnA === "desde B\n", JSON.stringify(recibidoEnA).slice(0, 160));
+  segunda.ws.close();
 
   ws.close();
   apagar();

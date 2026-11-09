@@ -103,6 +103,14 @@ los imports y no debe depender de ese puente.
   la paleta ANSI se cambia con `--ansi-0..15`.
 - **API de compilación.** `#api-version` es el selector visible (34 por defecto) y sincroniza los
   ocultos `#sdk-version`/`#codename` que lee `apkc build`; las pruebas siguen usando los ocultos.
+- **Varias ventanas sin pisarse.** Las escrituras pasan por `conBloqueo()` (Web Locks); la revisión
+  se guarda en `localStorage` (`apkc-studio/rev/<ruta>`) y `BroadcastChannel` avisa de `guardado`,
+  `crear`, `subir`, `renombrar`, `mover`, `borrar` y `proyecto`. `recibirRemoto()` refresca el
+  espejo del worker (`hospedador.refrescar`), recarga limpios y avisa en sucios. No hay CRDT: la
+  última escritura gana y la confirmación de sobrescritura es explícita.
+- **Service worker.** `sw.js` cachea el shell e intenta cachear `apkc.wasm`/`wasm_exec.js`; nunca
+  `/android-jar`, keystores ni OPFS. `offline.js` lo registra solo por http(s). Las respuestas
+  cacheadas deben conservar COOP/COEP; `prueba-pestana.js` prueba la recarga offline.
 - **Nada fuera del origen.** Sin CDN, fuentes, telemetría ni runtimes de terceros. El favicon es
   un `data:` y el informe se descarga como `blob:`.
 - **`apkc build` clásico no corre en wasm.** `js` no tiene `fork/exec`; el botón «Probar el build

@@ -510,6 +510,20 @@ export function crearFs(carpeta) {
       return { nodos: afectados.length, borradoDelDisco };
     },
     async existe(rutaSimulada) { return !!raiz.get(absoluta(String(rutaSimulada))); },
+    // Otra ventana cambió OPFS: este worker tiene su propio espejo en memoria. Se tira el
+    // subárbol afectado y se vuelve a descubrir desde el disco; el siguiente leer/stat ve lo
+    // que escribió la otra ventana.
+    async recargar(rutaSimulada) {
+      const a = absoluta(String(rutaSimulada));
+      const afectados = [...raiz.keys()].filter((k) => k === a || k.startsWith(a + "/"));
+      for (const k of afectados) {
+        const n = raiz.get(k);
+        if (n && n.acceso) { try { n.acceso.close(); } catch (e) { /* ya cerrado */ } }
+        raiz.delete(k);
+      }
+      await extras.sincronizar();
+      return { nodos: afectados.length };
+    },
     // renombrar una entrada del árbol (fichero o carpeta) sin copiar bytes
     renombrar(de, hasta) {
       return new Promise((resuelve) => {

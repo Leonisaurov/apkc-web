@@ -3,3 +3,4 @@
 import "./pestana.js";
 import "./vistas.js";
 import "./diagnostico.js";
+import "./offline.js";
