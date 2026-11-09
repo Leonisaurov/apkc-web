@@ -7,6 +7,34 @@ contexto SELinux `u:r:magisk:s0`, raíz `/data/data/com.termux/files/home/archli
 (el fix de `enter.sh` ya está aplicado; el fallo de `am` sin entorno se midió antes del fix)
 **Pregunta:** ¿por qué no se pueden ejecutar apps Android fácilmente; es culpa del chroot?
 
+## Uso correcto (resumen)
+
+Desde esta sesión, como usuario normal (uid 10237), con el entorno que ya pone `enter.sh`:
+
+```sh
+# abrir una app
+am start --user 0 -n com.android.settings/.Settings
+am start --user 0 -n org.smart.connection/.MainActivity
+
+# abrir una URL en el navegador predeterminado (Brave Nightly)
+termux-open-url 'http://127.0.0.1:8787/'
+
+# o forzar Brave Nightly
+am start --user 0 \
+  -n com.brave.browser_nightly/org.chromium.chrome.browser.ChromeTabbedActivity \
+  -a android.intent.action.VIEW -d 'http://127.0.0.1:8787/'
+
+# leer el estado de la pantalla
+/usr/sbin/sudo dumpsys activity activities | grep topResumedActivity
+/usr/sbin/sudo screencap -p /data/local/tmp/pantalla.png
+```
+
+No usar para lanzar:
+
+- `sudo am` / `sudo cmd` / `sudo -u shell cmd activity` → `Failed transaction`.
+- `sudo input` / `sudo -u shell input` → `Failed transaction`.
+- `pm list packages` → `Failed transaction`; `cmd package list packages` sí funciona como usuario.
+
 ## Veredicto corto
 
 **Sí y no.**
