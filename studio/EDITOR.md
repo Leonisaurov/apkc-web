@@ -209,10 +209,12 @@ el alto; se abre cuando hace falta.
 - `cerrarPanel()` lo esconde y deja `aria-expanded="false"` en el boton `#alternar-panel`.
 - `correr(argv)` abre siempre la pestana Salida, escribe `$ apkc ...`, muestra `#ocupado`
   mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar.
-- `#panel-compilar` conserva los ids del build sin procesos: `#android-jar`, `#usar-android-jar`,
-  `#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`, `#compilar-apk`,
-  `#verificar-apk`, `#descargar-apk-compilada`, `#descargar-idsig-compilada` y
-  `#estado-verificacion`.
+- `#panel-compilar` conserva los ids del build sin procesos: `#traer-android-jar`,
+  `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#keystore-compilar`,
+  `#storepass-compilar`, `#keyalias-compilar`, `#compilar-apk`, `#verificar-apk`,
+  `#descargar-apk-compilada`, `#descargar-idsig-compilada` y `#estado-verificacion`. El botón
+  «Traer el del SDK local» y el primer compilar piden `/android-jar` al mismo origen; si no hay
+  SDK local, queda el selector de fichero. El jar nunca se versiona en el repo.
 - `#panel-firmar` conserva los ids de firma y rotacion: `#keystore`, `#storepass-firmar`,
   `#keyalias-firmar`, `#apk-a-firmar`, `#firmar-aqui`, `#keystore-viejo`, `#storepass-viejo`,
   `#keyalias-viejo`, `#rotation-min-sdk`, `#usar-rotacion`, `#crear-linaje`, `#olvidar-linaje` y
@@ -249,8 +251,8 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` y ahora tambien el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 59 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, firmar, compilar, verificar y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 59 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 60 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, traer el jar del SDK local, firmar, compilar, verificar y no pedir nada fuera del origen |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 60 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).

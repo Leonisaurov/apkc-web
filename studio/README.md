@@ -34,12 +34,13 @@ cabeceras COOP/COEP que OPFS exige (por `file://` no arranca ni el worker de mó
 ```sh
 sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
 sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" node servidor.js'   # http://127.0.0.1:8787/
-# y la prueba que lo conduce todo, con una apk, un keystore y el android.jar del API 34 de ejemplo:
+# y la prueba que lo conduce todo, con una apk, un keystore y el jar del SDK para el selector
+# de fichero. El servidor ya detecta el SDK local sin ANDROID_JAR; la prueba lo pide para poder
+# ejercitar también el camino de elegir el jar desde el disco.
 sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
   APK_EJEMPLO="$PREFIX/tmp/sign-probe/app/build/app.apk" \
   KS_EJEMPLO="$HOME/.android/debug.keystore" \
   ANDROID_JAR="$HOME/Android/platforms/android-34/android.jar" node prueba-pestana.js'
-# sin ANDROID_JAR la prueba lo avisa y no comprueba el build completo (queda en crear/editar/recargar/firmar)
 ```
 
 Qué hace de verdad, y qué no:
@@ -48,8 +49,11 @@ Qué hace de verdad, y qué no:
   entre sesiones en OPFS, `apkc sign` — una apk firmada v1+v2 que `apksigner`, `zipalign -c -p`,
   `jarsigner` y `zipcheck.py` aceptan por fuera — y **compilar el proyecto entero** con
   `build --linker go --compiler go`: enlazar los recursos, sacar el `.class`, dexar y firmar, todo dentro
-  de la pestaña y sin levantar un proceso. El keystore y el `android.jar` se eligen del disco y no salen de
-  la pestaña; el jar se guarda en OPFS una vez y sobrevive a recargar. Medido en `docs/evidencia.md` §45 y
+  de la pestaña y sin levantar un proceso. El keystore y el `android.jar` no salen de la pestaña:
+  `servidor.js` busca el `android.jar` del SDK local y lo sirve en `/android-jar`, y al compilar la
+  página lo pide a su propio origen, lo guarda en OPFS una vez y sobrevive a recargar; si no hay SDK
+  local, queda el selector de fichero. `tools/entorno.sh jar` instala `platforms;android-34` con el
+  `sdkmanager` oficial si falta. Medido en `docs/evidencia.md` §45 y
   §46: el apk que sale es **igual entrada por entrada** al del mismo comando en el binario nativo, y `d8`
   releee el dex que escribió el navegador.
 - **hace también**: compilar un fuente que la página **no** generó. Campos con sus modificadores, variables
@@ -72,7 +76,7 @@ Qué hace de verdad, y qué no:
 
 | Fichero | Qué es |
 | --- | --- |
-| `servidor.js` | estáticos + COOP/COEP, sirve `/apkc.wasm` (de `APKC_WASM`), `/wasm_exec.js` (del `GOROOT`) y `/android-jar` (de `ANDROID_JAR`), solo para la prueba; ningún binario versionado |
+| `servidor.js` | estáticos + COOP/COEP, sirve `/apkc.wasm` (de `APKC_WASM`), `/wasm_exec.js` (del `GOROOT`), `/android-jar` y `/android-jar-info` (del `ANDROID_JAR` o del SDK local que detecta solo); ningún binario versionado |
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |

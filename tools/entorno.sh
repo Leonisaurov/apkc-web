@@ -10,6 +10,7 @@
 #   tools/entorno.sh wasm              # suite en el hospedador con forma de navegador
 #   tools/entorno.sh gate              # binarios + studio/e2e.sh (la página de punta a punta)
 #   tools/entorno.sh banco             # banco/banco.sh (necesita rish para los caminos del aparato)
+#   tools/entorno.sh jar [api]         # ruta del android.jar local o lo instala con sdkmanager (fuente oficial)
 #   tools/entorno.sh doctor            # imprime el entorno resuelto
 #   tools/entorno.sh env               # exports listos para `eval "$(tools/entorno.sh env)"`
 #   tools/entorno.sh -- <comando...>   # ejecuta cualquier comando con el entorno ya puesto
@@ -40,6 +41,17 @@ PATH_EXTRA=/usr/sbin:$PREFIX/bin
 PATH=$PATH_EXTRA:$PATH
 export PATH
 
+# El android.jar no se versiona; se toma del SDK que ya esté instalado. Esta es la única
+# definición de "dónde está el jar" que usan doctor y la tarea jar.
+jar_del_sdk() {
+  api=${1:-34}
+  for j in "$ANDROID_HOME/platforms/android-$api/android.jar" \
+           "$HOME/Android/platforms/android-$api/android.jar"; do
+    [ -f "$j" ] && { printf '%s\n' "$j"; return 0; }
+  done
+  return 1
+}
+
 # tcr de Termux si está; si no, el comando tal cual.
 tcr_o_directo() {
   if command -v tcr >/dev/null 2>&1; then
@@ -63,6 +75,7 @@ verifica_entorno() {
   printf 'RAIZ=%s\nHOME=%s\nPREFIX=%s\nANDROID_HOME=%s\nTMP=%s\n' "$RAIZ" "$HOME" "$PREFIX" "$ANDROID_HOME" "$TMP"
   printf 'build-tools=%s\n' "${BUILD_TOOLS:-<ninguna>}"
   printf 'java=%s\n' "$(command -v java || echo '<no>')"
+  if j=$(jar_del_sdk 34); then printf 'android.jar=%s\n' "$j"; else printf 'android.jar=<falta; tools/entorno.sh jar>\n'; fi
   printf 'apkc=%s\n' "${APKC:-$TMP/apkc-gate}"
   printf 'apkc-wasm=%s\n' "${APKC_WASM:-$TMP/apkc-wasm.wasm}"
   for f in "$HOME/Android/platforms/android-34/android.jar" \
@@ -88,6 +101,27 @@ case "$tarea" in
     ;;
   banco)
     ( cd "$RAIZ" && APKC=${APKC:-$TMP/apkc-gate} sh banco/banco.sh "$@" )
+    ;;
+  jar)
+    api=${1:-34}
+    if j=$(jar_del_sdk "$api"); then printf '%s\n' "$j"; exit 0; fi
+    sdkmanager=$(command -v sdkmanager 2>/dev/null || true)
+    if [ -z "$sdkmanager" ]; then
+      for f in "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager; do
+        [ -x "$f" ] && { sdkmanager=$f; break; }
+      done
+    fi
+    if [ -z "$sdkmanager" ]; then
+      printf 'no hay android.jar de android-%s ni sdkmanager en %s\n' "$api" "$ANDROID_HOME" >&2
+      printf 'instala cmdline-tools y repite: tools/entorno.sh jar %s\n' "$api" >&2
+      exit 2
+    fi
+    printf 'instalando platforms;android-%s desde el repositorio oficial de Google (sdkmanager)\n' "$api" >&2
+    yes | "$sdkmanager" --sdk_root="$ANDROID_HOME" "platforms;android-$api" >&2
+    if j=$(jar_del_sdk "$api"); then printf '%s\n' "$j"; else
+      printf 'sdkmanager terminó sin dejar %s/platforms/android-%s/android.jar\n' "$ANDROID_HOME" "$api" >&2
+      exit 2
+    fi
     ;;
   doctor)
     verifica_entorno

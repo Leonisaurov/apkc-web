@@ -11,6 +11,8 @@
 //   /                 studio/ (esta carpeta)
 //   /apkc.wasm        el binario, con su mime correcto
 //   /wasm_exec.js     el del GOROOT de quien corre: no se versiona (regla 2 del repo)
+//   /android-jar      el android.jar del SDK local, si está instalado; no se versiona
+//   /android-jar-info JSON con versión y tamaño del jar que encuentra (para la pestaña)
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -24,6 +26,32 @@ if (!GOROOT) {
   try { GOROOT = execSync("go env GOROOT", { encoding: "utf8" }).trim(); } catch (e) { GOROOT = ""; }
 }
 const EJECUTA = path.join(GOROOT, "lib", "wasm", "wasm_exec.js");
+
+// El android.jar no se puede versionar (26 MB y licencia de la SDK), pero sí se puede leer del
+// SDK que ya está instalado en la máquina. Se busca en ANDROID_JAR, ANDROID_HOME,
+// ANDROID_SDK_ROOT y ~/Android, de la plataforma más nueva a la más vieja. La página lo pide a
+// su propio origen y lo guarda en OPFS: no sale ni una petición a Google desde la pestaña.
+function jarDelSdk() {
+  if (process.env.ANDROID_JAR && fs.existsSync(process.env.ANDROID_JAR)) return process.env.ANDROID_JAR;
+  const raices = [process.env.ANDROID_HOME, process.env.ANDROID_SDK_ROOT,
+    process.env.HOME ? path.join(process.env.HOME, "Android") : ""].filter(Boolean);
+  for (const raiz of raices) {
+    const plataformas = path.join(raiz, "platforms");
+    if (!fs.existsSync(plataformas)) continue;
+    let candidatas;
+    try {
+      candidatas = fs.readdirSync(plataformas)
+        .map((nombre) => ({ nombre, version: Number((/^android-(\d+)$/.exec(nombre) || [])[1]) }))
+        .filter((x) => Number.isInteger(x.version))
+        .sort((a, b) => b.version - a.version);
+    } catch (e) { continue; }
+    for (const c of candidatas) {
+      const jar = path.join(plataformas, c.nombre, "android.jar");
+      if (fs.existsSync(jar)) return jar;
+    }
+  }
+  return null;
+}
 
 const MIME = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -65,8 +93,20 @@ const servidor = http.createServer((req, res) => {
     fichero = process.env.KS_EJEMPLO;                      // idem: el keystore de debug del sitio
   } else if (ruta === "/keystore-release" && process.env.KS_RELEASE && fs.existsSync(process.env.KS_RELEASE)) {
     fichero = process.env.KS_RELEASE;                      // el de release, de usar y tirar: contraseña y alias conocidos
-  } else if (ruta === "/android-jar" && process.env.ANDROID_JAR && fs.existsSync(process.env.ANDROID_JAR)) {
-    fichero = process.env.ANDROID_JAR;                     // el jar del SDK, por su origen: la pestaña no habla con nadie más
+  } else if (ruta === "/android-jar-info") {
+    const jar = jarDelSdk();
+    const version = jar ? Number((/android-(\d+)/.exec(path.basename(path.dirname(jar))) || [])[1]) : null;
+    res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+    return void res.end(JSON.stringify({
+      disponible: !!jar, version, bytes: jar ? fs.statSync(jar).size : 0,
+    }));
+  } else if (ruta === "/android-jar") {
+    const jar = jarDelSdk();
+    if (!jar) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      return void res.end("no hay android.jar del SDK local; usa el selector de fichero o tools/entorno.sh jar\n");
+    }
+    fichero = jar;                                          // el jar del SDK, por su origen: la pestaña no habla con nadie más
   } else {
     const dentro = path.normalize(path.join(AQUI, ruta === "/" ? "index.html" : ruta));
     if (!dentro.startsWith(AQUI)) { res.writeHead(403); return void res.end("fuera\n"); }
@@ -79,5 +119,9 @@ const servidor = http.createServer((req, res) => {
 });
 
 servidor.listen(PUERTO, "127.0.0.1", () => {
+  const jar = jarDelSdk();
   console.log(`apkc-studio en http://127.0.0.1:${PUERTO}/ (wasm: ${WASM})`);
+  console.log(jar
+    ? `android.jar del SDK local: ${jar} (${fs.statSync(jar).size} bytes)`
+    : "sin android.jar local: usa el selector de fichero o tools/entorno.sh jar");
 });

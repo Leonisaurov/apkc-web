@@ -7100,10 +7100,54 @@ tools/entorno.sh -- sh -c 'APKC_WASM=$TMP/apkc-wasm.wasm \
   node studio/prueba-pestana.js'
 ```
 
-**Resultado**: `59 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
+**Resultado**: `60 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
 ellas de 400 caracteres), baja el textarea 500 px y exige que `#codigo`, `#resalto` y `#numeros`
 tengan el mismo `scrollTop` (`[500,500,500]`) y que el resaltado comparta además el
 `scrollLeft` (`[80,80]`). La `3c` comprueba que Tab sin selección inserta en el cursor, que
 Shift+Tab desindenta, y que `document.execCommand("undo")` revierte la edición: las ediciones
 programáticas pasan por `execCommand("insertText")`, no por `setRangeText`.
+
+## 142. El `android.jar` se toma del SDK local; el repo no lo versiona
+
+Medido el 2026-11-09. El `android.jar` del API 34 pesa **26 361 808 bytes** y su licencia de SDK
+no permite redistribuirlo como si fuera del repo, así que no se versiona. Lo que sí se puede hacer
+es leerlo de una instalación oficial que ya esté en la máquina: `servidor.js` lo busca en
+`ANDROID_JAR`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `~/Android` (de la plataforma más nueva a la
+más vieja), lo sirve en `/android-jar` y publica versión y tamaño en `/android-jar-info`. La
+página pide `/android-jar` a **su propio origen** al compilar si no lo tiene en OPFS, lo guarda
+allí y sigue sin hacer una sola petición fuera; el selector de fichero queda como respaldo. Si no
+hay SDK local, `tools/entorno.sh jar` instala `platforms;android-34` con el `sdkmanager` oficial.
+
+**Comando**
+
+```sh
+tools/entorno.sh -- sh -c 'cd studio && APKC_WASM=$TMP/apkc-wasm.wasm \
+  node servidor.js 8788 >$TMP/jar-servidor.log 2>&1 & pid=$!; sleep 2; \
+  curl -sS http://127.0.0.1:8788/android-jar-info; echo; \
+  curl -sS -o $TMP/jar-servido.bin -w "jar: %{http_code} %{size_download} bytes\n" \
+    http://127.0.0.1:8788/android-jar; \
+  cmp $TMP/jar-servido.bin $HOME/Android/platforms/android-34/android.jar && echo idéntico; \
+  kill $pid'
+```
+
+**Resultado**: `{"disponible":true,"version":34,"bytes":26361808}` y
+`jar: 200 26361808 bytes`, `idéntico`. La comprobación
+`sin jar en OPFS, compilar lo trae solo del SDK local` de `prueba-pestana.js` borra
+`/sdk/android.jar`, llama a `compilarDelTodo()` y exige que el jar vuelva a OPFS y que el apk
+salga con código 0: **60 comprobaciones bien, 0 mal**.
+
+## 143. Compilar dos veces seguidas ya no deja huérfano `build/res`
+
+Medido el 2026-11-09 sobre el mismo chromium y el mismo comando. La segunda compilación del
+proyecto, sin borrar `build/`, fallaba con
+`[build] open build/res/layout/main.xml: No such file or directory`. El `fs` del shim aceptaba
+`unlink` sobre un directorio y borraba el nodo de `build/res` **sin sus hijos**; el `os.RemoveAll`
+de Go daba por hecho el borrado y el segundo enlace dejaba el layout en un directorio que ya no
+existía. Ahora `unlink` de un directorio responde `EISDIR` y la limpieza de OPFS de `unlink` y
+`rmdir` es recursiva, de modo que memoria y disco no se separan.
+
+**Resultado**: con la corrección, la comprobación de la §142 (que compila, borra el jar, vuelve a
+traerlo y compila otra vez sin limpiar `build/`) termina con **60 comprobaciones bien, 0 mal**, y
+el segundo `apkc build --linker go --compiler go` sale 0 con `build/res` presente
+(`/proyecto/build/res:dir` en el árbol).
 

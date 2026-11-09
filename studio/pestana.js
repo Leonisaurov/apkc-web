@@ -827,9 +827,49 @@ async function ponerJarDeUrl(url) {
   const respuesta = await fetch(url);
   if (!respuesta.ok) throw new Error("el android.jar de " + url + " respondió " + respuesta.status);
   const datos = new Uint8Array(await respuesta.arrayBuffer());
+  // un 200 con una página de error no puede acabar en OPFS como si fuera el jar
+  if (datos.length < 1000 || datos[0] !== 0x50 || datos[1] !== 0x4b) {
+    throw new Error("lo que devolvió " + url + " no es un jar (cabecera " +
+      Array.from(datos.slice(0, 2)).join(",") + ")");
+  }
   await hospedador.escribir(RUTA_JAR, datos);
   await decirEstadoJar();
   return datos.length;
+}
+
+// El servidor busca el SDK local y sirve su android.jar en /android-jar; la pestaña lo pide a
+// su propio origen. La licencia de la SDK no permite versionarlo en el repo, pero sí leerlo de
+// una instalación oficial que ya esté en la máquina.
+async function traerJarDelSdk(silencioso) {
+  try {
+    const n = await ponerJarDeUrl("/android-jar");
+    nota("android.jar del SDK local guardado en OPFS (" + n + " bytes)");
+    return true;
+  } catch (e) {
+    if (!silencioso) {
+      const motivo = e && e.message ? e.message : String(e);
+      nota("no se pudo traer el android.jar: " + motivo +
+        ". Elige el fichero del SDK o ejecuta tools/entorno.sh jar");
+    }
+    return false;
+  }
+}
+
+// Pinta si el servidor ve un SDK local, sin bajar el jar entero: es un JSON pequeño y deja claro
+// si el botón «Traer del SDK local» va a poder hacer algo.
+async function consultarJarDelSdk() {
+  const aviso = document.getElementById("estado-jar-sdk");
+  if (!aviso) return;
+  try {
+    const respuesta = await fetch("/android-jar-info");
+    if (!respuesta.ok) throw new Error("HTTP " + respuesta.status);
+    const info = await respuesta.json();
+    aviso.textContent = info.disponible
+      ? "el servidor ve el android.jar del SDK local: API " + info.version + ", " + info.bytes + " bytes"
+      : "el servidor no encontró un SDK local; elige el fichero o ejecuta tools/entorno.sh jar";
+  } catch (e) {
+    aviso.textContent = "este servidor no expone /android-jar-info; usa el selector de fichero";
+  }
 }
 
 async function usarJarElegido() {
@@ -861,7 +901,14 @@ async function decirEstadoJar() {
 
 async function compilarDelTodo() {
   if (!(await decirEstadoJar())) {
-    if (!(await usarJarElegido())) { nota("hace falta el android.jar del API 34 para compilar aquí"); return; }
+    const entrada = document.getElementById("android-jar");
+    // si la persona ya eligió un fichero, ese manda; si no, se prueba el SDK local del origen
+    if (entrada && entrada.files.length) {
+      if (!(await usarJarElegido())) { nota("no se pudo leer el android.jar elegido"); return; }
+    } else if (!(await traerJarDelSdk(true)) && !(await usarJarElegido())) {
+      nota("hace falta el android.jar del API 34: no hay SDK local en el servidor y no elegiste fichero; ejecuta tools/entorno.sh jar o pásalo con el selector");
+      return;
+    }
   }
   const k = await prepararKeystore(KEYSTORES.compilar);
   if (!k) return;
@@ -988,6 +1035,7 @@ if (typeof document !== "undefined") {
     en("ver-keystore-compilar", () => inspeccionarKeystore(KEYSTORES.compilar));
     en("olvidar-keystore-compilar", () => olvidarKeystore(KEYSTORES.compilar));
     en("usar-android-jar", async () => { await usarJarElegido(); });
+    en("traer-android-jar", () => traerJarDelSdk(false));
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
     en("recargar-arbol", refrescarArbol);
@@ -1016,6 +1064,7 @@ if (typeof document !== "undefined") {
     });
 
     decirEstadoJar();
+    consultarJarDelSdk();
     iniciarPestana();
   });
 }

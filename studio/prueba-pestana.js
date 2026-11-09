@@ -447,6 +447,26 @@ async function conductor() {
     fs.writeFileSync(destinoPestana, apkPestana);
     console.log("  --- el apk compilado dentro de la pestaña es " + destinoPestana);
 
+    // 7b. sin jar en OPFS no hace falta elegir fichero: compilarDelTodo lo trae del SDK local que
+    // sirve el mismo origen y lo guarda en OPFS antes de compilar.
+    const auto = await evaluar(`(async () => {
+      await hospedador.limpiar("/sdk/android.jar");
+      await decirEstadoJar();
+      const antes = document.getElementById("estado-jar").textContent;
+      document.getElementById("storepass-compilar").value = "android";
+      await compilarDelTodo();
+      const jar = await hospedador.bytes("/sdk/android.jar");
+      const apk = await hospedador.bytes("/proyecto/build/app.apk");
+      return { antes, jar: jar ? jar.length : 0, apk: apk ? apk.length : 0,
+        codigo: document.getElementById("ultimo-codigo").textContent,
+        aviso: document.getElementById("estado-jar").textContent,
+        cola: String(document.getElementById("consola-pestana").textContent)
+          .replace(/\\u001b\\[[0-9;]*m/g, "").trim().split("\\n").slice(-10).join(" | ") };
+    })()`);
+    comprueba("sin jar en OPFS, compilar lo trae solo del SDK local",
+      auto.jar > 1000000 && auto.apk > 5000 && auto.codigo === "0",
+      "jar " + auto.jar + ", apk " + auto.apk + ", código " + auto.codigo + ": " + auto.cola);
+
     // 8. el proyecto que la PROPIA página genera (con la clase anónima del botón, el `@+id` y el
     // `style`), no la plantilla de create: es el que mide el §42 con javap y el que dexa 6 clases.
     const generado = await evaluar(`(async () => {
@@ -513,7 +533,7 @@ async function conductor() {
     comprueba("el jar elegido de disco queda en OPFS con su tamano", /26361808 bytes/.test(desdeDisco.aviso) && desdeDisco.guardado,
       JSON.stringify(desdeDisco.aviso));
     comprueba("entrar el jar desde el disco no hace ni una peticion",
-      !peticionesNuevo.some((u) => u.includes("/android-jar")),
+      !peticionesNuevo.some((u) => new URL(u).pathname === "/android-jar"),
       peticionesNuevo.length + " peticiones en el tramo: " + peticionesNuevo.slice(0, 3).join(", "));
     const sinConexion = await evaluar(`(async () => {
       await hospedador.limpiar("/proyecto/build");
@@ -545,7 +565,7 @@ async function conductor() {
     })()`);
     comprueba("tras recargar la página el jar sigue en OPFS sin pedirlo otra vez",
       /26361808 bytes/.test(recargada.aviso) && recargada.jar === 26361808 &&
-      !peticiones.slice(antesRecarga).some((u) => u.includes("/android-jar")),
+      !peticiones.slice(antesRecarga).some((u) => new URL(u).pathname === "/android-jar"),
       "aviso " + JSON.stringify(recargada.aviso) + ", jar " + recargada.jar + ", peticiones del tramo " +
       peticiones.slice(antesRecarga).length);
     comprueba("la página recargada compila otra vez con el jar guardado",

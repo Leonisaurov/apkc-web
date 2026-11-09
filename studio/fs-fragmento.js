@@ -86,10 +86,11 @@ export function crearFs(carpeta) {
       throw e;
     }
   }
-  async function borrarOPFS(a) {
+  async function borrarOPFS(a, recursivo) {
     const tramos = tramosDe(a);
     const nombre = tramos.pop();
-    try { (await directorio(tramos, false)).removeEntry(nombre); } catch (e) { /* no estaba: nada que borrar */ }
+    try { (await directorio(tramos, false)).removeEntry(nombre, { recursive: !!recursivo }); }
+    catch (e) { /* no estaba: nada que borrar */ }
   }
 
   // un acceso sincrónico por fichero abierto: es lo que permite escribir en una posición
@@ -324,15 +325,25 @@ export function crearFs(carpeta) {
       if (!n.dir) return void llamar(cb)(err("ENOTDIR", a));
       if ([...raiz.keys()].some((k) => padre(k) === a)) return void llamar(cb)(err("ENOTEMPTY", a));
       raiz.delete(a);
-      await borrarOPFS(a + "/");
+      // recursivo porque el árbol de OPFS puede conservar hijos que la memoria ya no tiene:
+      // un removeEntry sin recursive sobre ese directorio fallaba en silencio y dejaba un
+      // `build/res` fantasma que reaparecía al volver a compilar
+      await borrarOPFS(a + "/", true);
       llamar(cb)(null);
     },
 
     async unlink(calle, cb) {
       const a = absoluta(String(calle));
-      if (!raiz.get(a)) return void llamar(cb)(err("ENOENT", a));
+      const n = raiz.get(a);
+      if (!n) return void llamar(cb)(err("ENOENT", a));
+      // unlink sobre un directorio es EISDIR, como en un fs de verdad. Aceptarlo borraba el
+      // nodo del directorio y dejaba sus hijos vivos: `os.RemoveAll("build/res")` borraba
+      // `build/res` y después la compilación siguiente no encontraba el layout (evidencia §143).
+      if (n.dir) return void llamar(cb)(err("EISDIR", a));
       raiz.delete(a);
-      await borrarOPFS(a);
+      // recursivo por la misma razón que rmdir: si en OPFS quedó un directorio con ese
+      // nombre, un removeEntry sin recursive falla en silencio y el árbol se desincroniza
+      await borrarOPFS(a, true);
       llamar(cb)(null);
     },
 

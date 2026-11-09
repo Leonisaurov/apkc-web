@@ -121,9 +121,14 @@
 
               <div id="panel-compilar" class="panel-vista" role="tabpanel">
                 <p class="nota">Hace falta el <code>android.jar</code> del SDK (API 34) y un keystore para
-                  firmar. Se eligen una vez y se quedan en OPFS; no salen de la pestaña.</p>
+                  firmar. El jar se puede traer del SDK local o elegir del disco; se guarda una vez en
+                  OPFS y no sale de la pestaña.</p>
                 <div class="panel-form">
-                  <label>android.jar <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
+                  <div class="acciones">
+                    <button id="traer-android-jar" type="button">Traer el del SDK local</button>
+                  </div>
+                  <p class="nota" id="estado-jar-sdk">mirando si el servidor tiene un SDK local…</p>
+                  <label>o elige el android.jar del disco <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
                   <div class="acciones">
                     <button id="usar-android-jar" type="button">Guardar el android.jar elegido</button>
                   </div>
