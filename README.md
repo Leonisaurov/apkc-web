@@ -32,6 +32,7 @@ página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** 
 | Fichero | Qué es |
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | reglas del repo, entorno de Termux y el gate que hay que pasar antes de dar nada por hecho |
+| [USO.md](USO.md) | uso concreto: construir, arrancar, abrir en Brave Nightly, editar, compilar, firmar y pasar el gate |
 | [docs/plan.md](docs/plan.md) | el plan detallado: fases, tareas con su criterio de aceptación, y lo que abandona cada una |
 | [docs/evidencia.md](docs/evidencia.md) | lo medido, con el comando que lo produce y la fecha |
 | [docs/situacion.md](docs/situacion.md) | el recap de lo medido, bullet por bullet: dice qué dejó de estar abierto, pero el original es el `§` de evidencia que cada bullet cita |
@@ -51,6 +52,8 @@ página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** 
   lo que deben, las fases 1 y siguientes de [docs/plan.md](docs/plan.md) no se empiezan.
 
 ## Empezar por aquí
+
+La guía concreta, con los comandos en orden, está en [USO.md](USO.md).
 
 ```sh
 sh -c 'cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .'
