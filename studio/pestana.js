@@ -256,11 +256,27 @@ async function firmar() {
   // borra antes de firmar.
   await hospedador.escribir(PROYECTO + "/build/.carpeta", new Uint8Array(0));
   await hospedador.limpiar(PROYECTO + "/build/.carpeta");
-  const r = await correr(["sign", "--keystore", k.ruta, "--storepass", k.pass,
-    "--keyalias", k.alias, "--v4=" + (v4 ? "true" : "false"), "--out", destino, origen]);
+  const argv = ["sign", "--keystore", k.ruta, "--storepass", k.pass,
+    "--keyalias", k.alias, "--v4=" + (v4 ? "true" : "false")];
+  if (document.getElementById("usar-rotacion").checked) {
+    if (esAab) { nota("un .aab no lleva bloque v3/v3.1: la rotación es para apk"); return; }
+    const passV = document.getElementById("storepass-viejo").value;
+    const aliasV = (document.getElementById("keyalias-viejo").value || "androiddebugkey").trim();
+    const rotMin = (document.getElementById("rotation-min-sdk").value || "33").trim();
+    if (!passV) { nota("falta la contraseña del keystore viejo para la rotación"); return; }
+    if (!(await hospedador.leer(RUTA_LINAJE)).bytes) {
+      nota("crea el linaje antes de firmar con rotación");
+      return;
+    }
+    argv.push("--lineage", RUTA_LINAJE, "--old-keystore", RUTA_VIEJO,
+      "--old-storepass", passV, "--old-keyalias", aliasV, "--rotation-min-sdk", rotMin);
+  }
+  argv.push("--out", destino, origen);
+  const r = await correr(argv);
   if (r && r.codigo === 0) {
     const v = await correr(["verify", destino]);
     document.getElementById(cfg.pass).value = "";
+    if (document.getElementById("storepass-viejo")) document.getElementById("storepass-viejo").value = "";
     await descargar(destino);
     await ofrecerDescarga(destino + ".idsig", "descargar-idsig");
     if (v && v.codigo === 0) nota("firmado y verificado: " + destino.split("/").pop());
@@ -305,6 +321,8 @@ async function intentarCompilar() {
 // --- el build sin procesos: recursos, Java, dex y firma, en este mismo binario ------------
 const RUTA_JAR = "/sdk/android.jar";
 const RUTA_KEYSTORE = "/sdk/keystore.p12";
+const RUTA_VIEJO = "/keystore-viejo";
+const RUTA_LINAJE = "/lineage.bin";
 
 // Un keystore por flujo: el del build queda en OPFS (`/sdk/keystore.p12`) y el de `sign` en
 // `/keystore`, las rutas que ya usaban los botones. Lo nuevo es la contraseña, el alias que se
@@ -389,6 +407,44 @@ async function olvidarKeystore(cfg) {
   select.innerHTML = "";
   select.add(new Option("— pulsa «ver certificado» —", ""));
   estadoKeystore(cfg, "keystore olvidado: se borró de esta pestaña");
+}
+
+function estadoLinaje(texto) {
+  const n = document.getElementById("estado-linaje");
+  if (n) n.textContent = texto;
+}
+
+// Crea el linaje con la clave nueva ya inspeccionada (la de arriba) y la vieja de este bloque.
+async function crearLinaje() {
+  const cfg = KEYSTORES.firmar;
+  const k = await prepararKeystore(cfg);
+  if (!k) return;
+  const entrada = document.getElementById("keystore-viejo");
+  if (entrada.files.length) {
+    const datos = new Uint8Array(await entrada.files[0].arrayBuffer());
+    await hospedador.escribir(RUTA_VIEJO, datos);
+  } else if (!(await hospedador.leer(RUTA_VIEJO)).bytes) {
+    estadoLinaje("elige el keystore viejo (.p12 o .jks)");
+    return;
+  }
+  const pass = document.getElementById("storepass-viejo").value;
+  if (!pass) { estadoLinaje("escribe la contraseña del keystore viejo"); return; }
+  const alias = (document.getElementById("keyalias-viejo").value || "androiddebugkey").trim();
+  const r = await correr(["rotate", "--old-keystore", RUTA_VIEJO, "--old-storepass", pass,
+    "--old-keyalias", alias, "--new-keystore", k.ruta, "--new-storepass", k.pass,
+    "--new-keyalias", k.alias, "--out", RUTA_LINAJE]);
+  if (r && r.codigo === 0) {
+    estadoLinaje("linaje listo: la vieja firma v1/v2 y " + k.alias + " firma v3/v3.1");
+  }
+}
+
+async function olvidarLinaje() {
+  await hospedador.limpiar(RUTA_LINAJE);
+  await hospedador.limpiar(RUTA_VIEJO);
+  if (document.getElementById("keystore-viejo")) document.getElementById("keystore-viejo").value = "";
+  document.getElementById("storepass-viejo").value = "";
+  document.getElementById("usar-rotacion").checked = false;
+  estadoLinaje("sin linaje");
 }
 
 async function ponerJarDeUrl(url) {
@@ -485,6 +541,8 @@ if (typeof document !== "undefined") {
       if (nombre) { estadoPestana.ruta = nombre; EDITOR.poner(""); document.getElementById("fichero-abierto").textContent = nombre; }
     });
     document.getElementById("firmar-aqui").addEventListener("click", firmar);
+    document.getElementById("crear-linaje").addEventListener("click", crearLinaje);
+    document.getElementById("olvidar-linaje").addEventListener("click", olvidarLinaje);
     document.getElementById("ver-keystore-firmar").addEventListener("click", () => inspeccionarKeystore(KEYSTORES.firmar));
     document.getElementById("olvidar-keystore-firmar").addEventListener("click", () => olvidarKeystore(KEYSTORES.firmar));
     document.getElementById("ver-keystore-compilar").addEventListener("click", () => inspeccionarKeystore(KEYSTORES.compilar));

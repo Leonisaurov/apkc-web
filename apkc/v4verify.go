@@ -1,9 +1,11 @@
 package main
 
 // Verificación de la firma v4: se vuelve a leer el `.idsig` que está al lado del apk,
-// se recalcula el árbol de verity del fichero y se comprueba la firma del SigningInfo.
-// El formato es el que escribe `v4sign.go`, medido contra `apksigner`; lo que no se ha
-// medido (sal no vacía, varios firmantes) se rechaza con su nombre.
+// se recalcula el árbol de verity del fichero y se comprueba la firma de cada
+// SigningInfo. Un apk con rotación v3.1 lleva dos (el viejo como principal y el nuevo en
+// un SigningInfoBlock con id 0x1b93ad61); sin rotación, uno. El formato es el que escribe
+// `v4sign.go`, medido contra `apksigner`; lo que no se ha medido (sal no vacía, bloques
+// de otros ids) se rechaza con su nombre.
 
 import (
 	"bytes"
@@ -50,6 +52,39 @@ func (l *lectorV4) bytes() ([]byte, error) {
 	v := l.b[l.o : l.o+int(n)]
 	l.o += int(n)
 	return v, nil
+}
+
+type signerV4 struct {
+	apkDigest []byte
+	certDER   []byte
+	extra     []byte
+	pubDER    []byte
+	sigAlg    uint32
+	firma     []byte
+}
+
+func leerSignerV4(l *lectorV4) (signerV4, error) {
+	var s signerV4
+	var err error
+	if s.apkDigest, err = l.bytes(); err != nil {
+		return s, err
+	}
+	if s.certDER, err = l.bytes(); err != nil {
+		return s, err
+	}
+	if s.extra, err = l.bytes(); err != nil {
+		return s, err
+	}
+	if s.pubDER, err = l.bytes(); err != nil {
+		return s, err
+	}
+	if s.sigAlg, err = l.u32(); err != nil {
+		return s, err
+	}
+	if s.firma, err = l.bytes(); err != nil {
+		return s, err
+	}
+	return s, nil
 }
 
 func (v *verificacion) maloV4(motivo string) {
@@ -133,43 +168,34 @@ func (v *verificacion) verificarV4(ruta string) {
 	}
 
 	s := &lectorV4{b: signing}
-	apkDigest, err := s.bytes()
+	principal, err := leerSignerV4(s)
 	if err != nil {
 		v.maloV4("SigningInfo: " + err.Error())
 		return
 	}
-	certDER, err := s.bytes()
-	if err != nil {
-		v.maloV4("SigningInfo: " + err.Error())
-		return
-	}
-	extra, err := s.bytes()
-	if err != nil {
-		v.maloV4("SigningInfo: " + err.Error())
-		return
-	}
-	pubDER, err := s.bytes()
-	if err != nil {
-		v.maloV4("SigningInfo: " + err.Error())
-		return
-	}
-	sigAlg, err := s.u32()
-	if err != nil {
-		v.maloV4("SigningInfo: " + err.Error())
-		return
-	}
-	firma, err := s.bytes()
-	if err != nil {
-		v.maloV4("SigningInfo: " + err.Error())
-		return
-	}
-	if s.o != len(signing) {
-		v.maloV4("el .idsig trae firmantes alternativos, que no están medidos")
-		return
-	}
-	if sigAlg != v4SigAlgRSA {
-		v.maloV4(fmt.Sprintf("algoritmo de firma 0x%04x; solo se mide 0x%04x", sigAlg, v4SigAlgRSA))
-		return
+	firmantes := []signerV4{principal}
+	for s.o < len(signing) {
+		blockID, err := s.u32()
+		if err != nil {
+			v.maloV4("SigningInfoBlock: " + err.Error())
+			return
+		}
+		if blockID != apkSigningBlockIDv3_1 {
+			v.maloV4(fmt.Sprintf("SigningInfoBlock con id 0x%08x: solo se mide el de v3.1", blockID))
+			return
+		}
+		bloque, err := s.bytes()
+		if err != nil {
+			v.maloV4("SigningInfoBlock: " + err.Error())
+			return
+		}
+		bl := &lectorV4{b: bloque}
+		extra, err := leerSignerV4(bl)
+		if err != nil || bl.o != len(bloque) {
+			v.maloV4("SigningInfoBlock: el firmante alternativo no se puede leer")
+			return
+		}
+		firmantes = append(firmantes, extra)
 	}
 
 	// el árbol que el fichero lleva tiene que ser el del apk, byte a byte
@@ -187,47 +213,51 @@ func (v *verificacion) verificarV4(ruta string) {
 		return
 	}
 
-	// el digest del SigningInfo es el del bloque v2/v3 del apk
-	if len(v.digestV2) == 0 {
-		v.maloV4("no hay digest v2 con el que comparar el del .idsig")
-		return
-	}
-	if !bytes.Equal(apkDigest, v.digestV2) {
-		v.maloV4("el digest del .idsig no es el del bloque v2/v3 del apk")
-		return
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		v.maloV4("el certificado del .idsig no se puede leer: " + err.Error())
-		return
-	}
-	pub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-	if err != nil || !bytes.Equal(pub, pubDER) {
-		v.maloV4("la clave pública del .idsig no es la del certificado")
-		return
-	}
-	clave, ok := cert.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		v.maloV4("el certificado del .idsig no lleva una clave RSA")
-		return
-	}
-
-	// y la firma: la misma carga que arma v4sign.go, con el tamaño del fichero final
-	firmado := ponU32(nil, 0)
-	firmado = ponU64(firmado, uint64(len(apk)))
-	firmado = ponU32(firmado, algoritmo)
-	firmado = append(firmado, log2)
-	firmado = ponBytes(firmado, sal)
-	firmado = ponBytes(firmado, raizDicha)
-	firmado = ponBytes(firmado, apkDigest)
-	firmado = ponBytes(firmado, certDER)
-	firmado = ponBytes(firmado, extra)
-	binary.LittleEndian.PutUint32(firmado[:4], uint32(len(firmado)))
-	resumen := sha256.Sum256(firmado)
-	if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], firma); err != nil {
-		v.maloV4("la firma RSA del .idsig no verifica con su certificado")
-		return
+	for i, s := range firmantes {
+		quien := fmt.Sprintf("firmante %d", i+1)
+		if len(v.digestV2) == 0 {
+			v.maloV4("no hay digest v2 con el que comparar el del .idsig")
+			return
+		}
+		if !bytes.Equal(s.apkDigest, v.digestV2) {
+			v.maloV4(quien + ": el digest del .idsig no es el del bloque v2/v3 del apk")
+			return
+		}
+		cert, err := x509.ParseCertificate(s.certDER)
+		if err != nil {
+			v.maloV4(quien + ": el certificado del .idsig no se puede leer: " + err.Error())
+			return
+		}
+		pub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+		if err != nil || !bytes.Equal(pub, s.pubDER) {
+			v.maloV4(quien + ": la clave pública del .idsig no es la del certificado")
+			return
+		}
+		clave, ok := cert.PublicKey.(*rsa.PublicKey)
+		if !ok {
+			v.maloV4(quien + ": el certificado del .idsig no lleva una clave RSA")
+			return
+		}
+		if s.sigAlg != v4SigAlgRSA {
+			v.maloV4(fmt.Sprintf("%s: algoritmo de firma 0x%04x; solo se mide 0x%04x", quien, s.sigAlg, v4SigAlgRSA))
+			return
+		}
+		// la misma carga que arma v4sign.go, con el tamaño del fichero final
+		firmado := ponU32(nil, 0)
+		firmado = ponU64(firmado, uint64(len(apk)))
+		firmado = ponU32(firmado, algoritmo)
+		firmado = append(firmado, log2)
+		firmado = ponBytes(firmado, sal)
+		firmado = ponBytes(firmado, raizDicha)
+		firmado = ponBytes(firmado, s.apkDigest)
+		firmado = ponBytes(firmado, s.certDER)
+		firmado = ponBytes(firmado, s.extra)
+		binary.LittleEndian.PutUint32(firmado[:4], uint32(len(firmado)))
+		resumen := sha256.Sum256(firmado)
+		if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], s.firma); err != nil {
+			v.maloV4(quien + ": la firma RSA del .idsig no verifica con su certificado")
+			return
+		}
 	}
 	v.v4 = len(v.v4Motivos) == 0
 }

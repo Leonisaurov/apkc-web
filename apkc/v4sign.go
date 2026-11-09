@@ -3,10 +3,14 @@ package main
 // Firma v4 de un apk: el fichero `.idsig` que permite la instalación incremental.
 //
 // No va dentro del apk. Es un fichero aparte con tres cosas: el árbol de Merkle de
-// fs-verity del apk (bloques de 4096 y SHA-256), el `SigningInfo` que firma el digest
+// fs-verity del apk (bloques de 4096 y SHA-256), los `SigningInfo` que firman el digest
 // del bloque v2/v3 junto con el tamaño y el árbol, y el propio árbol serializado. El
 // formato se midió sobre un `.idsig` de `apksigner --v4-signing-enabled true` y se
 // reproduce aquí; el oráculo es `apksigner verify --v4-signature-file`.
+//
+// Con rotación v3.1 el `.idsig` lleva **dos** firmantes: el principal (clave vieja) y un
+// `SigningInfoBlock` con el id del bloque v3.1 (0x1b93ad61) y la clave nueva. Es lo que
+// `apksigner` llama V4.1 y exige cuando el apk trae v3.1.
 //
 // El `apkDigest` del SigningInfo es **el mismo digest que va dentro del bloque v3**, no
 // uno recalculado sobre el fichero final: por eso `finishSignedPackage` pasa el que ya
@@ -91,13 +95,18 @@ func ponBytes(dst, b []byte) []byte {
 	return append(dst, b...)
 }
 
-// v4Signature arma el contenido del `.idsig` para un apk ya firmado. `apkDigest` es el
-// digest del bloque v3 (o v2) que el paquete lleva dentro.
-func v4Signature(apk, apkDigest []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
-	raiz, arbol, err := arbolVerity(apk)
-	if err != nil {
-		return nil, err
-	}
+// hashingInfoV4: hashAlgorithm, log2BlockSize, sal (vacía) y raíz.
+func hashingInfoV4(raiz []byte) []byte {
+	out := ponU32(nil, v4HashSHA256)
+	out = append(out, byte(v4Log2BlockSize))
+	out = ponBytes(out, nil) // sal
+	return ponBytes(out, raiz)
+}
+
+// signingInfoV4 arma y firma un SigningInfo para una clave y su certificado. La carga
+// firmada incluye el tamaño del apk, el algoritmo, la raíz del árbol y el digest del
+// bloque v2/v3, además del certificado.
+func signingInfoV4(apk, apkDigest []byte, raiz []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
 	pub, err := x509.MarshalPKIXPublicKey(key.Public())
 	if err != nil {
 		return nil, err
@@ -106,14 +115,6 @@ func v4Signature(apk, apkDigest []byte, key *rsa.PrivateKey, cert *x509.Certific
 		return nil, fmt.Errorf("el digest del apk mide %d bytes y se esperaban %d", len(apkDigest), sha256.Size)
 	}
 
-	// HashingInfo: hashAlgorithm, log2BlockSize, sal (vacía) y raíz.
-	hashing := ponU32(nil, v4HashSHA256)
-	hashing = append(hashing, byte(v4Log2BlockSize))
-	hashing = ponBytes(hashing, nil)
-	hashing = ponBytes(hashing, raiz)
-
-	// SigningInfo firmado: tamaño, tamaño del fichero, algoritmo y los campos con
-	// longitud. El tamaño incluye el u32 del propio tamaño y el u64 del fichero.
 	signed := ponU32(nil, 0) // se rellena cuando ya se sabe el tamaño
 	signed = ponU64(signed, uint64(len(apk)))
 	signed = ponU32(signed, v4HashSHA256)
@@ -131,21 +132,56 @@ func v4Signature(apk, apkDigest []byte, key *rsa.PrivateKey, cert *x509.Certific
 		return nil, err
 	}
 
-	// SigningInfo: apkDigest, certificado, additionalData, clave pública, algoritmo y
-	// firma. El bloque de firmantes alternativos (SigningInfoBlock) no se usa: un solo
-	// firmante, como en el apk que se firma.
+	// SigningInfo: apkDigest, certificado, additionalData, clave pública, algoritmo y firma.
 	signingInfo := ponBytes(nil, apkDigest)
 	signingInfo = ponBytes(signingInfo, cert.Raw)
 	signingInfo = ponBytes(signingInfo, nil)
 	signingInfo = ponBytes(signingInfo, pub)
 	signingInfo = ponU32(signingInfo, v4SigAlgRSA)
-	signingInfo = ponBytes(signingInfo, firma)
+	return ponBytes(signingInfo, firma), nil
+}
 
-	// V4Signature: versión, hashingInfo y signingInfos, cada uno con su longitud; y al
-	// final el árbol de verity, también con la suya.
+// v4Bytes: versión, hashingInfo y signingInfos, cada uno con su longitud; y al final el
+// árbol de verity, también con la suya.
+func v4Bytes(hashing, signingInfos, arbol []byte) []byte {
 	out := ponU32(nil, v4Version)
 	out = ponBytes(out, hashing)
-	out = ponBytes(out, signingInfo)
-	out = ponBytes(out, arbol)
-	return out, nil
+	out = ponBytes(out, signingInfos)
+	return ponBytes(out, arbol)
+}
+
+// v4Signature: el `.idsig` de un apk sin rotación, con un solo firmante.
+func v4Signature(apk, apkDigest []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
+	raiz, arbol, err := arbolVerity(apk)
+	if err != nil {
+		return nil, err
+	}
+	si, err := signingInfoV4(apk, apkDigest, raiz, key, cert)
+	if err != nil {
+		return nil, err
+	}
+	return v4Bytes(hashingInfoV4(raiz), si, arbol), nil
+}
+
+// v4SignatureRotada: el `.idsig` de una rotación v3.1. Lleva el firmante viejo como
+// principal y uno nuevo en un SigningInfoBlock con el id del bloque v3.1, que es lo que
+// `apksigner` llama V4.1.
+func v4SignatureRotada(apk, apkDigest []byte, oldKey *rsa.PrivateKey, oldCert *x509.Certificate,
+	newKey *rsa.PrivateKey, newCert *x509.Certificate) ([]byte, error) {
+	raiz, arbol, err := arbolVerity(apk)
+	if err != nil {
+		return nil, err
+	}
+	viejo, err := signingInfoV4(apk, apkDigest, raiz, oldKey, oldCert)
+	if err != nil {
+		return nil, err
+	}
+	nuevo, err := signingInfoV4(apk, apkDigest, raiz, newKey, newCert)
+	if err != nil {
+		return nil, err
+	}
+	signingInfos := append([]byte{}, viejo...)
+	signingInfos = ponU32(signingInfos, apkSigningBlockIDv3_1)
+	signingInfos = ponBytes(signingInfos, nuevo)
+	return v4Bytes(hashingInfoV4(raiz), signingInfos, arbol), nil
 }

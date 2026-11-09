@@ -290,6 +290,43 @@ async function conductor() {
       String(bundle.consola).slice(-160));
   }
 
+  // 5d. rotación desde la página: el linaje con la clave vieja (debug) y la nueva (release),
+  //     y una firma en la que v1/v2 van con la vieja y v3/v3.1 con la nueva.
+  if (KS_RELEASE) {
+    const rotada = await evaluar(`(async () => {
+      const k = await (await fetch("/keystore-ejemplo")).arrayBuffer();
+      await hospedador.escribir("/keystore-viejo", new Uint8Array(k));
+      document.getElementById("storepass-firmar").value = "saludo";
+      document.getElementById("storepass-viejo").value = "android";
+      document.getElementById("keyalias-viejo").value = "androiddebugkey";
+      await crearLinaje();
+      const linaje = await hospedador.bytes("/lineage.bin");
+      document.getElementById("usar-rotacion").checked = true;
+      document.getElementById("apk-a-firmar").value = "/in.apk";
+      await firmar();
+      const u = await hospedador.bytes("/proyecto/build/firmado.apk");
+      const id = await hospedador.bytes("/proyecto/build/firmado.apk.idsig");
+      const b64 = (buf) => {
+        if (!buf) return "";
+        const t = [];
+        for (let i = 0; i < buf.length; i += 8192) t.push(String.fromCharCode.apply(null, buf.subarray(i, i + 8192)));
+        return btoa(t.join(""));
+      };
+      return { apk: b64(u), idsig: b64(id), linaje: !!linaje,
+        estado: document.getElementById("estado-linaje").textContent,
+        consola: String(document.getElementById("consola-pestana").textContent).slice(-600) };
+    })()`);
+    const apkRotada = Buffer.from(rotada.apk, "base64");
+    const idsigRotada = Buffer.from(rotada.idsig, "base64");
+    fs.writeFileSync(path.join(fuera, "pestanera-rotada.apk"), apkRotada);
+    fs.writeFileSync(path.join(fuera, "pestanera-rotada.apk.idsig"), idsigRotada);
+    comprueba("la pestaña crea el linaje de rotación", rotada.linaje, String(rotada.estado));
+    comprueba("la pestaña firma la rotación y escribe el .idsig", apkRotada.length > 1000 && idsigRotada.length > 100,
+      apkRotada.length + " + " + idsigRotada.length + " bytes · " + String(rotada.consola).slice(-120));
+    comprueba("la pestaña verifica la rotación (v4 de dos firmantes)",
+      /v4 \(APK Signature Scheme v4\): ok/.test(String(rotada.consola)), String(rotada.consola).slice(-160));
+  }
+
   // 6. el muro conocido, dicho tal cual
   const nodos = await evaluar(`(async () => {
     const a = await hospedador.arbol();

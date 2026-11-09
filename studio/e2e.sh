@@ -197,6 +197,27 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       falla "la pestaña no dejó el .aab firmado"
     fi
 
+    # 4a-quater. la rotación hecha desde la página: linaje, v1/v2 vieja, v3/v3.1 nueva y v4 de dos
+    # firmantes. apksigner es el oráculo de los cuatro esquemas y del sidecar.
+    rotada="$TMP/pestana-apk/pestanera-rotada.apk"
+    if [ -f "$rotada" ]; then
+      if "$BUILD_TOOLS/apksigner" verify --verbose "$rotada" >"$TMP/studio-pestana-rotada.log" 2>&1; then
+        for esquema in "v1 scheme (JAR signing)" "v2 scheme (APK Signature Scheme v2)" \
+                       "v3 scheme (APK Signature Scheme v3)" "v3.1 scheme (APK Signature Scheme v3.1)"; do
+          grep -q "$esquema: true" "$TMP/studio-pestana-rotada.log" || falla "pestaña rotación: falta $esquema"
+        done
+      else
+        falla "apksigner no verifica la rotación de la pestaña"; head -6 "$TMP/studio-pestana-rotada.log"
+      fi
+      if "$BUILD_TOOLS/apksigner" verify --v4-signature-file "$rotada.idsig" "$rotada" >"$TMP/studio-pestana-rotada-v4.log" 2>&1; then
+        avisa "pestaña rotación: v1/v2 vieja + v3/v3.1 nueva, v4 de dos firmantes, apksigner y apkc verify"
+      else
+        falla "apksigner no verifica el .idsig de la rotación de la pestaña"; head -6 "$TMP/studio-pestana-rotada-v4.log"
+      fi
+    else
+      falla "la pestaña no dejó el apk de la rotación"
+    fi
+
     # 4b. el apk que la pestaña compiló entera (recursos, Java, dex y firma sin un solo proceso):
     #     los mismos oráculos que se piden a una apk de verdad, por herramientas de fuera
     compilado="$TMP/pestana-apk/pestanera-completa.apk"
@@ -402,6 +423,48 @@ data[valor + (par - 4) // 2] ^= 0x08     # dentro del valor del par de la v2
 open(dst, "wb").write(bytes(data))
 PY
   cotejo bloque-alterado "$alterado" no
+
+  # rotación de clave de punta a punta: `apkc rotate` hace el linaje, `apkc sign --lineage` pone
+  # v1/v2 con la vieja y v3/v3.1 con la nueva, y apksigner tiene que ver los cuatro esquemas y
+  # el .idsig de dos firmantes. Sin apksigner en la firma: solo como oráculo.
+  rot_old=$TMP/studio-rot-old.p12
+  rm -f "$rot_old"
+  "$KEYTOOL" -genkeypair -keystore "$rot_old" -storetype PKCS12 -storepass viejito \
+    -keypass viejito -alias viejo -keyalg RSA -keysize 2048 -validity 3650 \
+    -dname "CN=Rotacion vieja, O=apkc-web, C=ES" >/dev/null 2>&1 ||
+    falla "no se pudo generar la clave vieja de la rotación"
+  rot_lineage=$TMP/studio-lineage.bin
+  if "$APKC" rotate --old-keystore "$rot_old" --old-storepass viejito --old-keyalias viejo \
+       --new-keystore "$KS_RELEASE" --new-storepass saludo --new-keyalias lanzable \
+       --out "$rot_lineage" >"$TMP/studio-rotate.log" 2>&1; then
+    rot_apk=$TMP/studio-rotado.apk
+    if "$APKC" sign --keystore "$KS_RELEASE" --storepass saludo --keyalias lanzable \
+         --old-keystore "$rot_old" --old-storepass viejito --old-keyalias viejo \
+         --lineage "$rot_lineage" --rotation-min-sdk 33 --out "$rot_apk" "$apk_base" \
+         >"$TMP/studio-rot-sign.log" 2>&1; then
+      if "$BUILD_TOOLS/apksigner" verify --verbose "$rot_apk" >"$TMP/studio-rot-verify.log" 2>&1; then
+        for esquema in "v1 scheme (JAR signing)" "v2 scheme (APK Signature Scheme v2)" \
+                       "v3 scheme (APK Signature Scheme v3)" "v3.1 scheme (APK Signature Scheme v3.1)"; do
+          grep -q "$esquema: true" "$TMP/studio-rot-verify.log" || falla "rotación: falta $esquema"
+        done
+      else
+        falla "apksigner no verifica la rotación"; head -6 "$TMP/studio-rot-verify.log"
+      fi
+      if "$BUILD_TOOLS/apksigner" verify --v4-signature-file "$rot_apk.idsig" "$rot_apk" >"$TMP/studio-rot-v4.log" 2>&1; then
+        "$APKC" verify "$rot_apk" >"$TMP/studio-rot-propio.log" 2>&1 ||
+          falla "apkc verify rechaza la rotación"
+        grep -q "v4 (APK Signature Scheme v4): ok" "$TMP/studio-rot-propio.log" ||
+          falla "apkc verify no aprueba la v4 de dos firmantes"
+        avisa "rotación: linaje, v1/v2 vieja + v3/v3.1 nueva, v4 de dos firmantes; apksigner y apkc verify"
+      else
+        falla "apksigner no verifica el .idsig de la rotación"; head -6 "$TMP/studio-rot-v4.log"
+      fi
+    else
+      falla "apkc sign no firma la rotación"; tail -4 "$TMP/studio-rot-sign.log"
+    fi
+  else
+    falla "apkc rotate no crea el linaje"; tail -4 "$TMP/studio-rotate.log"
+  fi
 fi
 
 # 5. el icono de res/drawable (5.16): el PNG viaja literal, su entrada de la tabla es un archivo y

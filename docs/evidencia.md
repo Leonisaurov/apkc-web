@@ -6325,3 +6325,104 @@ Con `--rotation-min-sdk-version 28` el mismo linaje va a un bloque **v3.0** (un 
 nuevo, con el atributo) y `v3.1` sale `false`; con 33 salen los dos bloques y firmantes con
 rangos de SDK. Las constantes del verificador ya usan `0x1b93ad61` para v3.1; escribirlo
 sigue siendo 5.31.
+
+## 121. Rotación v3.1 escrita en Go: linaje, v3.0, v3.1 y v4 de dos firmantes
+
+El linaje de `apkc rotate` sale **byte a byte** igual al de `apksigner rotate`:
+
+```sh
+P=/data/data/com.termux/files/usr
+BT=$HOME/Android/build-tools/34.9.0
+W=$P/tmp/v31probe
+apkc rotate --old-keystore "$W/old.p12" --old-storepass viejito --old-keyalias viejo \
+  --new-keystore "$W/new.p12" --new-storepass nuevito --new-keyalias nuevo \
+  --out "$W/ours-lineage.bin"
+"$BT/apksigner" rotate --out "$W/lineage.bin" \
+  --old-signer --ks "$W/old.p12" --ks-key-alias viejo --ks-pass pass:viejito \
+  --new-signer --ks "$W/new.p12" --ks-key-alias nuevo --ks-pass pass:nuevito
+cmp "$W/ours-lineage.bin" "$W/lineage.bin"
+```
+
+```text
+[rotate] ours-lineage.bin links Viejo -> Nuevo
+cmp rc=0
+d1140cfdea6e3995cbbac67e77db05bcafbeb7de3f9eee4e5352fa9094d5da95  ours-lineage.bin
+d1140cfdea6e3995cbbac67e77db05bcafbeb7de3f9eee4e5352fa9094d5da95  lineage.bin
+```
+
+Y `apksigner` acepta ese linaje para firmar una rotación (`v3` y `v3.1` true), lo que
+prueba que el formato es el suyo y no solo el que lee.
+
+Con `apkc sign --lineage` la v1/v2 las firma la clave vieja y la v3.0/v3.1 la nueva. El
+bloque de firmas lleva v2, v3.1 (`0x1b93ad61`) y v3 (`0xf05368c0`), en ese orden; el
+firmante v3.1 lleva el `proof-of-rotation` (`0x3ba06f8c`) y el v3.0 el
+`rotation-min-sdk-version` (`0x559f8b02`) con el 33. El `.idsig` es V4.1: el firmante
+viejo como principal y el nuevo en un `SigningInfoBlock` con el id `0x1b93ad61`.
+
+```sh
+apkc sign --keystore "$W/new.p12" --storepass nuevito --keyalias nuevo \
+  --old-keystore "$W/old.p12" --old-storepass viejito --old-keyalias viejo \
+  --lineage "$W/ours-lineage.bin" --rotation-min-sdk 33 \
+  --out "$W/ours-rot33.apk" "$W/in.apk"
+"$BT/apksigner" verify --verbose "$W/ours-rot33.apk"
+"$BT/apksigner" verify --v4-signature-file "$W/ours-rot33.apk.idsig" "$W/ours-rot33.apk"
+apkc verify "$W/ours-rot33.apk"
+```
+
+```text
+Verifies
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): true
+[apksigner --v4-signature-file] rc=0
+[verify] v1 (JAR signing): ok — 4 entradas con su digest y la firma PKCS#7 verificada
+[verify] v2 (APK Signature Scheme v2): ok — 7 entradas cubiertas por el digest del bloque
+[verify] v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig
+```
+
+Con `--rotation-min-sdk 28` el mismo comando escribe un solo bloque v3 con la clave nueva
+desde 28 (sin v3.1) y también verifica. La pestaña tiene la rotación en la sección de
+firma: keystore viejo, contraseña, alias, «crear el linaje» y «desde qué API usa la
+nueva»; el linaje y el keystore viejo quedan en OPFS y `firmar` pasa `--lineage` y
+`--old-keystore`.
+
+Pruebas: `TestElLinajeEnlazaYFirmaElNodoNuevo` y `TestLaRotacionV31EscribeV2V31V3` en
+`apkc/lineage_test.go`; `studio/e2e.sh` firma una rotación con `apkc rotate` + `apkc sign`
+y exige v1/v2/v3/v3.1 y el `.idsig` a `apksigner`, y `studio/prueba-pestana.js` conduce la
+rotación desde la página. Frontera: `apkc verify` no verifica la firma de los bloques
+v3/v3.1 (los nombra y no los aprueba); la rotación se apoya en el `.idsig` de dos firmantes
+y en `apksigner` como oráculo.
+
+## 122. EC en el firmante: los algoritmos medidos (5.32, aún abierto)
+
+Medido con `keytool` y `apksigner` antes de escribir el firmante ECDSA. Una clave P-256 y
+otra P-384, cada una en su keystore, y el mismo apk firmado con cada una:
+
+```sh
+K=$PREFIX/lib/jvm/java-21-openjdk/bin/keytool
+BT=$HOME/Android/build-tools/34.9.0
+"$K" -genkeypair -keystore ec.p12 -storetype PKCS12 -storepass ecpass -keypass ecpass \
+  -alias ec -keyalg EC -groupname secp256r1 -validity 3650 -dname "CN=EC, O=apkc, C=ES"
+"$BT/apksigner" sign --ks ec.p12 --ks-pass pass:ecpass --out ec.apk in.apk
+"$K" -genkeypair -keystore ec384.p12 -storetype PKCS12 -storepass ecpass -keypass ecpass \
+  -alias ec384 -keyalg EC -groupname secp384r1 -validity 3650 -dname "CN=EC384, O=apkc, C=ES"
+"$BT/apksigner" sign --ks ec384.p12 --ks-pass pass:ecpass --out ec384.apk in.apk
+```
+
+| clave | bloque v2/v3 | digest del contenido | `.idsig` | firma DER |
+| --- | --- | --- | --- | --- |
+| P-256 | `0x0201` (ECDSA + SHA-256) | 32 bytes | `0x0201` | 71 bytes |
+| P-384 | `0x0202` (ECDSA + SHA-512) | 64 bytes | `0x0202` | 102 bytes |
+
+El PKCS#7 de la v1 de `apksigner` usa `ecdsa-with-SHA384` (OID 1.2.840.10045.4.3.3) porque
+es el algoritmo con el que `keytool` firmó el certificado; el digest del `.SF` sigue siendo
+SHA-256. Para este fork basta con `ecdsa-with-SHA256` (OID 1.2.840.10045.4.3.2) firmando el
+SHA-256 del `.SF`, que es lo que verifica cualquier lector de JAR; el oráculo seguirá siendo
+`apksigner verify` y `jarsigner -verify`.
+
+Lo que hay que tocar: un `firmante` que envuelva `crypto.Signer` y elija
+`(algID, hash, contentHash)` según la clave (RSA 0x0103/SHA-256, P-256 0x0201/SHA-256,
+P-384 0x0202/SHA-512); `chunkedDigest` con SHA-256 o SHA-512; el PKCS#7 con el OID ECDSA y
+la firma DER; el verificador de la v1 aceptando el OID ECDSA. El árbol de fs-verity del
+`.idsig` sigue siendo SHA-256; lo que cambia es el `sigAlg` y el `apkDigest` (32 o 64).

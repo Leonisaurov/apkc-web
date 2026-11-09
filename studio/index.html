@@ -165,6 +165,24 @@
         <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>
         <a id="descargar-idsig" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
       </div>
+      <details>
+        <summary>rotación de clave (v3.1): linaje y firma con la clave vieja</summary>
+        <p class="nota">
+          Para rotar: elige arriba la <strong>clave nueva</strong> (keystore y contraseña), elige aquí la
+          <strong>clave vieja</strong>, crea el linaje y marca «usar este linaje». La v1/v2 las firma la
+          vieja y la v3/v3.1 la nueva; el <code>.idsig</code> lleva las dos.
+        </p>
+        <label>keystore viejo (.p12 o .jks) <input type="file" id="keystore-viejo" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+        <label>contraseña del keystore viejo <input type="password" id="storepass-viejo" autocomplete="off" class="ruta"></label>
+        <label>alias viejo <input type="text" id="keyalias-viejo" value="androiddebugkey" class="ruta"></label>
+        <label>desde qué API usa la nueva <input type="number" id="rotation-min-sdk" value="33" class="ruta"></label>
+        <label><input type="checkbox" id="usar-rotacion"> usar este linaje al firmar</label>
+        <div class="acciones">
+          <button id="crear-linaje">crear el linaje (apkc rotate)</button>
+          <button id="olvidar-linaje">olvidar el linaje</button>
+        </div>
+        <p class="nota" id="estado-linaje">sin linaje</p>
+      </details>
     </details>
 
     <pre id="consola-pestana" class="consola" aria-live="polite"></pre>

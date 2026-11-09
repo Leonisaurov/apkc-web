@@ -34,6 +34,11 @@ func sign() {
 	keyAlias := set.String("keyalias", "androiddebugkey", "key alias to use")
 	out := set.String("out", "", "where to write the signed package (default: over the input, as apksigner does); the switches go before the package, and -- ends them")
 	v4 := set.Bool("v4", true, "write the .idsig sidecar of the v4 signature for incremental installs")
+	lineage := set.String("lineage", "", "lineage file from apkc rotate: sign a key rotation (v1/v2 with the old key, v3/v4 with this one)")
+	oldStore := set.String("old-keystore", "", "old keystore, the one that signs v1/v2 when --lineage is used")
+	oldPass := set.String("old-storepass", "android", "password of the old keystore")
+	oldAlias := set.String("old-keyalias", "androiddebugkey", "alias in the old keystore")
+	rotMin := set.Int("rotation-min-sdk", rotacionMinSdkPorDef, "first API level that uses the new key in a rotation (33 = v3.1, <=32 = v3.0)")
 	set.Parse(os.Args[2:])
 	escribirV4 = *v4
 
@@ -61,12 +66,54 @@ func sign() {
 	}
 	requireKeystore(*keyStore)
 
-	carried, err := resignPackage(packages[0], final, *keyStore, *storePass, *keyAlias)
+	var carried int
+	var err error
+	if *lineage != "" {
+		if strings.HasSuffix(strings.ToLower(packages[0]), ".aab") {
+			LogF("sign", "un .aab no lleva bloque v3/v3.1: --lineage es para apk")
+		}
+		if *oldStore == "" {
+			LogF("sign", "--lineage necesita --old-keystore:",
+				"la v1/v2 las firma la clave vieja, y la nueva va en --keystore")
+		}
+		blob, errR := os.ReadFile(*lineage)
+		if errR != nil {
+			LogF("sign", "lineage:", errR.Error())
+		}
+		inner, errR := innerLinaje(blob)
+		if errR != nil {
+			LogF("sign", errR.Error())
+		}
+		newSigner, newCert, errR := signingKey(*keyStore, *storePass, *keyAlias)
+		if errR != nil {
+			LogF("sign", "new keystore:", errR.Error())
+		}
+		newKey, errR := rsaKey(newSigner)
+		if errR != nil {
+			LogF("sign", errR.Error())
+		}
+		oldSigner, oldCert, errR := signingKey(*oldStore, *oldPass, *oldAlias)
+		if errR != nil {
+			LogF("sign", "old keystore:", errR.Error())
+		}
+		oldKey, errR := rsaKey(oldSigner)
+		if errR != nil {
+			LogF("sign", errR.Error())
+		}
+		rotacionActiva = &rotacion{nuevaLlave: newKey, nuevoCert: newCert, linaje: inner, minSdk: *rotMin}
+		defer func() { rotacionActiva = nil }()
+		carried, err = resignWithKey(packages[0], final, oldKey, oldCert)
+	} else {
+		carried, err = resignPackage(packages[0], final, *keyStore, *storePass, *keyAlias)
+	}
 	if err != nil {
 		LogF("sign", err.Error())
 	}
 	if strings.HasSuffix(strings.ToLower(packages[0]), ".aab") {
 		LogI("sign", final, "carries a v1 JAR signature of its own,", carried,
+			"entries taken over as their bytes already were")
+	} else if *lineage != "" {
+		LogI("sign", final, "carries a rotation signature (v1+v2 old key, v3+v4 new key),", carried,
 			"entries taken over as their bytes already were")
 	} else {
 		LogI("sign", final, "carries a v1+v2+v3 signature of its own,", carried,

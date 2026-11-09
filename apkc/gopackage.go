@@ -41,6 +41,18 @@ const (
 // que se pida `--v4=false`; un bundle no lo escribe porque no tiene bloque v2/v3.
 var escribirV4 = true
 
+// rotacionActiva, si no es nil, firma v1/v2 con la clave vieja (la de `key`/`cert` en
+// finishSignedPackage) y v3/v4 con la nueva, con el linaje en el proof-of-rotation. Es un
+// global de la etapa porque el firmante es síncrono y el comando lo pone y lo quita.
+type rotacion struct {
+	nuevaLlave *rsa.PrivateKey
+	nuevoCert  *x509.Certificate
+	linaje     []byte // linaje interno, el valor del atributo
+	minSdk     int
+}
+
+var rotacionActiva *rotacion
+
 // minAPIForSHA256Digest is the level apksigner itself draws at when it decides whether
 // the JAR signature has to carry SHA-1 digest pairs along with the SHA-256 ones: the
 // platform can read a SHA-256 digest out of a manifest from 4.3 up, and below that it
@@ -160,11 +172,38 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 	if err != nil {
 		return err
 	}
-	v3Block, err := v3SignerBlock(digest, key, cert)
-	if err != nil {
-		return err
+	var v3Block, v31Block []byte
+	v4Key, v4Cert := key, cert
+	if rotacionActiva == nil {
+		v3Block, err = v3SignerBlock(digest, key, cert)
+		if err != nil {
+			return err
+		}
+	} else {
+		rot := rotacionActiva
+		v4Key, v4Cert = rot.nuevaLlave, rot.nuevoCert
+		if rot.minSdk <= 32 {
+			// rotación sin v3.1: un solo bloque v3 con la clave nueva desde minSdk
+			v3Block, err = v3SignerBlockCon(digest, rot.nuevaLlave, rot.nuevoCert,
+				rot.minSdk, 0x7fffffff, atributosRotacion(rot.linaje))
+			if err != nil {
+				return err
+			}
+		} else {
+			// v3.0 con la vieja hasta minSdk-1 y v3.1 con la nueva desde minSdk
+			v3Block, err = v3SignerBlockCon(digest, key, cert, 24, rot.minSdk-1,
+				atributosRotacionMin(rot.minSdk))
+			if err != nil {
+				return err
+			}
+			v31Block, err = v3SignerBlockCon(digest, rot.nuevaLlave, rot.nuevoCert,
+				rot.minSdk, 0x7fffffff, atributosRotacion(rot.linaje))
+			if err != nil {
+				return err
+			}
+		}
 	}
-	block := apkSigningBlock(v2Block, v3Block)
+	block := apkSigningBlock(v2Block, v3Block, v31Block)
 
 	if _, err := out.Write(block); err != nil {
 		return err
@@ -190,7 +229,13 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 		if err != nil {
 			return err
 		}
-		idsig, err := v4Signature(datos, digest, key, cert)
+		var idsig []byte
+		if rotacionActiva != nil && rotacionActiva.minSdk > 32 {
+			idsig, err = v4SignatureRotada(datos, digest, key, cert,
+				rotacionActiva.nuevaLlave, rotacionActiva.nuevoCert)
+		} else {
+			idsig, err = v4Signature(datos, digest, v4Key, v4Cert)
+		}
 		if err != nil {
 			return err
 		}
