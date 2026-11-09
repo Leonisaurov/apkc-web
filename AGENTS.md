@@ -46,6 +46,8 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
    son en inglés (estilo del upstream): no arrastrar esa convención aquí, pero tampoco acentuar
    nunca texto que sea literal de una herramienta o contenido de un fichero generado.
 6. **Commits** `<type>(<scope>): <summary>` (fix|feat|docs|refactor|chore|ci|test), mensaje auditado.
+   Todo cambio ya confirmado —código, documentación o configuración— se cierra con su commit: no se
+   deja trabajo confirmado sin commitear.
 7. **El registro tiene tres sitios y no son intercambiables.** Una medición nueva es un `§` en
    `docs/evidencia.md`, con el comando que la reproduce. Si cambia lo que el subconjunto acepta o rechaza,
    se actualiza **la fila** del inventario de la Fase 5 en `docs/plan.md` (y la tabla Estado del plan si
