@@ -60,6 +60,14 @@ se abre, el editor se encoge y conserva su propio scroll.
 - Al arrancar, `iniciarPestana()` (en `pestana.js`) abre el `AndroidManifest.xml` si ya hay un
   proyecto en OPFS y pulsa la vista Editor. Si no hay proyecto, deja Inicio con el formulario.
 
+## Diagnóstico
+
+El bloque `#detalle-diagnostico` de Inicio es independiente del editor: un `<textarea
+id="salida-apkc">`, los botones `#analizar-salida` y `#limpiar-salida`, el resultado
+`#resultado-analisis` y el enlace `#descargar-informe`. `diagnostico.js` llama a `analyze()` y a
+`informe()` de `app.js`; no tiene reglas propias ni envía el texto a ningún sitio. Cada regla
+reconocida se registra en `localStorage` y el informe se descarga como `informe-apkc.md`.
+
 ## Explorador
 
 El arbol vive en la barra lateral, no dentro del area de codigo:
@@ -232,7 +240,7 @@ el alto; se abre cuando hace falta.
   fichero grande o descargar el jar del SDK. Solo aparece si la tarea pasa de 120 ms, y se retira
   en `finally`, también cuando falla.
 - `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
-  `#verificar-apk`) y deja el resto en tres desplegables: `#detalle-sdk` (términos, descarga
+  `#verificar-apk`, `#probar-build-clasico`) y deja el resto en tres desplegables: `#detalle-sdk` (términos, descarga
   oficial, `.zip`/`.jar`, `#acepto-sdk`, `#descargar-sdk`, `#traer-android-jar`,
   `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
   (`#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`) y opciones avanzadas
@@ -277,11 +285,11 @@ En `@media (max-width: 760px)`:
 
 | Comando | Que cubre |
 | --- | --- |
-| `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` y ahora tambien el resaltador puro (`resaltar`, `esXml`) |
-| `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage |
+| `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`) y el resaltador puro (`resaltar`, `esXml`) |
+| `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage y el diagnóstico sobre una salida real |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 70 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 70 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 50 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).
@@ -300,7 +308,8 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
 - **Una sola pestaña de fichero.** No hay varias pestanas de documentos ni un historial de
   editores.
 - **Sin buscar ni reemplazar.** `Ctrl+F` es el del navegador, no el del editor.
-- **Sin renombrar, borrar ni mover ficheros** desde el arbol. Solo se abren y se pliegan.
+- **Sin mover ficheros entre carpetas.** El menú del explorador permite renombrar y borrar, pero
+  no arrastrar ni cortar y pegar.
 - **Sin autosave.** El guardado es explicito (`Ctrl+S` o el boton).
 - **Sin plegado de codigo, minimapa, multicursor ni diff.**
 - **El resaltado es lexico.** No entiende de tipos, scopes ni errores; no sustituye a un LSP.

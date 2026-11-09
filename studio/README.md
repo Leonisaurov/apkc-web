@@ -1,21 +1,24 @@
 # apkc studio
 
 Una página para crear proyectos de [apkc](../apkc) en el navegador y medir dónde se atasca
-quien los usa. Sin dependencias: abre `index.html` con `file://` y funciona.
+quien los usa. Sin dependencias ni build: Inicio y el diagnóstico abren con `file://`; el Editor
+y `apkc.wasm` necesitan `http(s)` con COOP/COEP, que es lo que pone `servidor.js` o `_headers`.
 
 Qué hace, en el orden en que duele:
 
 1. **Genera el proyecto** (manifest, `MainActivity.java` o `.kt`, layout, styles, carpetas) y lo
-   baja como zip. Las plantillas son copia literal de `apkc/template/*`; `prueba.js` compara los
-   atributos que apkc escribe con los del repo, porque una tilde dentro de `android:versionCode`
-   rompe el XML y `aapt2` lo rechaza en el teléfono.
-2. **Dice qué comandos correr**, en el orden en que un desconocido los necesita.
-3. **Traduce la salida real de apkc**: 24 reglas, cada una con `lit:` (la cadena que la motivó) y
-   `de:` (quién la imprime). Las de apkc se verifican contra el fuente en la propia prueba; una
-   regla inventada explicaría un error que nadie imprime, que es peor que no tenerla.
-4. **Lista las líneas que no conoce** y lleva contadores de dónde se rompió cada intento. Eso es
+   escribe en OPFS. Las plantillas son copia literal de `apkc/template/*`; `prueba.js` compara
+   los atributos que apkc escribe con los del repo, porque una tilde dentro de
+   `android:versionCode` rompe el XML y `aapt2` lo rechaza en el teléfono.
+2. **Traduce la salida real de apkc** en el panel de diagnóstico: 24 reglas, cada una con `lit:`
+   (la cadena que la motivó) y `de:` (quién la imprime). Las de apkc se verifican contra el
+   fuente en la propia prueba; una regla inventada explicaría un error que nadie imprime, que es
+   peor que no tenerla.
+3. **Lista las líneas que no conoce** y lleva contadores de dónde se rompió cada intento. Eso es
    la medida de fricción; el informe en markdown es para traerlo a quien mantiene la herramienta.
-   Los logs pegados no salen del navegador: se quedan en `localStorage`.
+   Los logs pegados no salen del navegador: los contadores se quedan en `localStorage`.
+4. **Compila, firma y verifica** en la pestaña con `apkc.wasm`; el resto de este README lo
+   detalla.
 
 ## Probar
 
@@ -24,6 +27,10 @@ node prueba.js                 # lo que genera: ascii, plantillas contra el repo
 node prueba-navegador.js       # chromium headless por CDP: DOM, clicks, descarga, localStorage
 APKC=/ruta/apkc sh e2e.sh      # todo lo anterior + compilar y verificar los dos proyectos
 ```
+
+`package.json` repite esos comandos con `npm test`, `npm run test:navegador` y `npm run e2e`.
+No hay dependencias: el `package.json` existe para que un editor o una CI encuentren los nombres
+de las tareas, no para instalar nada.
 
 ## La pestaña: apkc.wasm corriendo aquí dentro
 
@@ -74,7 +81,7 @@ Qué hace de verdad, y qué no:
   escribe el campo de la Activity, decide con `if` y arma el texto que muestra — compilada, firmada y
   dictaminada dentro de la pestaña. El editor guarda, compila y descarga ese apk.
 - **no hace**: el `build` de siempre. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
-  arrancan; el botón «intentar compilar con aapt2/javac/d8» lo demuestra y apkc lo dice con su texto:
+  arrancan; el botón «Probar el build clásico» lo demuestra y apkc lo dice con su texto:
   `[build] aapt2 compile never started: pipe: not implemented on js`. Y dentro del `--compiler go` el
   fuente tiene frontera: sin bucles, sin arreglos, sin `switch` ni `try` — lo que no está medido se rechaza
   con su línea, no se compila a medias.
@@ -88,11 +95,35 @@ Qué hace de verdad, y qué no:
 | Fichero | Qué es |
 | --- | --- |
 | `servidor.js` | estáticos + COOP/COEP, sirve `/apkc.wasm` (de `APKC_WASM`), `/wasm_exec.js` (del `GOROOT`), `/android-jar` y `/android-jar-info` (del `ANDROID_JAR` o del SDK local que detecta solo); ningún binario versionado |
+| `app.js` | modelo puro del proyecto: plantillas, `buildProject`, `makeZip`, reglas y análisis de salida; sin DOM y con `module.exports` para node |
+| `vistas.js` | qué vista se ve, reflejo del formulario y creación del proyecto en OPFS |
+| `diagnostico.js` | el panel de diagnóstico de Inicio: pinta las reglas de `app.js` y ofrece el informe |
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
-| `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
+| `pestana.js` | editor, árbol y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 70 cosas |
+| `AGENTS.md` | lo que un agente necesita saber antes de tocar esta carpeta: comandos, contratos y trampas |
+| `_headers` | COOP/COEP para publicar en un host estático que las respete |
+| `package.json` | nombres de las tareas (`npm test`, `npm run e2e`); sin dependencias |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba más de 50 cosas |
+
+## Publicar
+
+La carpeta `studio/` es el sitio: no hay build. Para que OPFS y el worker funcionen, el host
+tiene que mandar `Cross-Origin-Opener-Policy: same-origin` y
+`Cross-Origin-Embedder-Policy: require-corp`; `_headers` ya las declara para Netlify y Cloudflare
+Pages. **GitHub Pages no permite fijar cabeceras**, así que allí Inicio y el diagnóstico
+funcionan pero el Editor no arranca.
+
+Además:
+
+- sirve `studio/` como **raíz del origen**: el worker pide `/apkc.wasm` y `/wasm_exec.js` con
+  ruta absoluta. Si publicas bajo `/studio/`, cambia esas dos rutas en `hospedador.js`.
+- copia `wasm_exec.js` desde `$(go env GOROOT)/lib/wasm/` junto a `index.html` y deja el
+  `apkc.wasm` construido en `/apkc.wasm`; ninguno de los dos se versiona.
+- el `android.jar` y los keystores no viajan con la página: salen del SDK local (mismo origen) o
+  del selector de fichero, y el paquete oficial de Google es una navegación del usuario tras
+  aceptar los términos.
 
 ## Abrir la pestaña en Brave Nightly
 
@@ -139,6 +170,6 @@ OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor
 de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y un panel
 inferior con Salida, Compilar y Firmar (cerrado hasta que hace falta; ``Ctrl + ` `` lo abre).
 `pestana.js` lleva el editor, el árbol y apkc.wasm; `vistas.js` siembra el árbol, cambia de vista
-(también por hash, `index.html#pestana`) y refleja rótulos. Las pruebas de navegador, de creación
-y de la pestaña usan los mismos ids de siempre. El detalle de la estructura, los ids, los atajos y
+(también por hash, `index.html#pestana`) y refleja rótulos; `diagnostico.js` explica la salida
+pegada. Las pruebas de navegador, de creación y de la pestaña usan los mismos ids de siempre. El detalle de la estructura, los ids, los atajos y
 los límites del editor está en `studio/EDITOR.md`.

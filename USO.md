@@ -78,7 +78,7 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
    - `Enter` conserva la sangría y añade un nivel tras `{`.
    - El punto amarillo de la pestaña indica cambios sin guardar.
 5. El panel inferior está cerrado por defecto. Ábrelo con **Panel** o ``Ctrl + ` ``. Sus pestañas son
-   **Salida**, **Compilar** y **Firmar**.
+   **Salida**, **Compilar** y **Firmar otra apk**.
 
 ## 5. Compilar, firmar y verificar
 
@@ -87,7 +87,8 @@ En **Panel → Compilar**:
 1. Elige el `android.jar` del SDK (API 34) y pulsa **Guardar el android.jar elegido**.
 2. Elige el keystore (`.p12` o `.jks`), escribe la contraseña y pulsa **Ver certificado**.
 3. Elige el alias.
-4. Pulsa **Compilar (apkc build)**.
+4. Pulsa **Compilar debug** (clave de depuración generada en la pestaña) o **Compilar release**
+   (el keystore de arriba).
 5. Pulsa **Verificar el apk** para leer el veredicto de `apkc verify`.
 6. Descarga el apk (y el `.idsig` si se generó) con los enlaces del panel.
 
