@@ -470,6 +470,16 @@ async function refrescarArbol() {
       nombre.textContent = n.nombre;
       fila.appendChild(nombre);
 
+      if (!n.dir) {
+        const bajar = document.createElement("span");
+        bajar.className = "arbol-descargar";
+        bajar.textContent = "↓";
+        bajar.title = "Descargar " + relativa(n.ruta);
+        bajar.setAttribute("role", "button");
+        bajar.setAttribute("aria-label", "Descargar " + relativa(n.ruta));
+        fila.appendChild(bajar);
+      }
+
       if (n.dir) {
         fila.onclick = (e) => {
           e.preventDefault();
@@ -480,6 +490,10 @@ async function refrescarArbol() {
       } else {
         fila.onclick = async (e) => {
           e.preventDefault();
+          if (e.target.closest(".arbol-descargar")) {
+            await descargarRuta(n.ruta);
+            return;
+          }
           if (await abrir(n.ruta)) {
             const vista = document.querySelector('[data-vista="pestana"]');
             if (vista && document.body.dataset.vista !== "pestana") vista.click();
@@ -722,6 +736,23 @@ async function firmar() {
     await descargar(destino);
     await ofrecerDescarga(destino + ".idsig", "descargar-idsig");
     if (v && v.codigo === 0) nota("firmado y verificado: " + destino.split("/").pop());
+  }
+}
+
+// Descargar una entrada cualquiera del explorador sin abrirla en el editor: vale también
+// para un PNG, un .apk o un .idsig que no son texto.
+async function descargarRuta(ruta) {
+  try {
+    const bytes = await hospedador.bytes(ruta);
+    if (!bytes) { nota("no existe " + ruta); return; }
+    const enlace = document.createElement("a");
+    enlace.href = URL.createObjectURL(new Blob([bytes]));
+    enlace.download = ruta.split("/").pop();
+    enlace.click();
+    setTimeout(() => URL.revokeObjectURL(enlace.href), 2000);
+    nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
+  } catch (e) {
+    nota("no se pudo descargar " + ruta + ": " + (e && e.message ? e.message : e));
   }
 }
 

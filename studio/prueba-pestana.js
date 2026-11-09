@@ -149,6 +149,8 @@ async function conductor() {
     comprueba("create escribió " + esperado, rutas.includes(esperado),
       rutas.length + " ficheros: " + rutas.slice(0, 6).join(", "));
   }
+  comprueba("el explorador ofrece descargar cada fichero",
+    await evaluar("!!document.querySelector('#arbol-pestana a.archivo .arbol-descargar')"));
 
   // 2. el manifiesto que escribe apkc es el de sus plantillas, no otro
   const manifiesto = await evaluar(`(async () => {

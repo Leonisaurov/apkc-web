@@ -171,6 +171,17 @@ kbd {
   box-shadow: inset 2px 0 0 var(--acento);
 }
 .arbol-pestana a .nombre { overflow: hidden; text-overflow: ellipsis; }
+.arbol-descargar {
+  flex: none;
+  margin-left: auto;
+  padding: 0 3px;
+  color: #7d8590;
+  font-size: 13px;
+  line-height: 1;
+  opacity: .35;
+  cursor: pointer;
+}
+.arbol-pestana a:hover .arbol-descargar { opacity: 1; color: #fff; }
 .arbol-pestana .vacio {
   padding: 12px;
   color: #6e6e6e;
