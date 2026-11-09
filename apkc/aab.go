@@ -1,58 +1,114 @@
 package main
 
 import (
+	"archive/zip"
+	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 )
 
-// buildAAB turns build/bundle.zip into build/app.aab with bundletool. bundletool
-// is not part of the build-tools directory the rest of apkc resolves: it is its
-// own install, and the check that was here looked at cmd.Err before the command
-// had started, which is a field nothing sets until Start runs.
+// buildAAB turns build/bundle.zip into build/app.aab without bundletool.
 //
-// It arrives on a machine either as an executable or as a jar, so both shapes go
-// through the same call: the jar one starts it with the java that javac came from,
-// which is the only reason the JDK is needed for a bundle at all.
+// The bundle.zip that the aapt2 backend leaves is already protobuf: manifest/
+// AndroidManifest.xml, dex/, res/ and resources.pb. What bundletool adds is the
+// BundleConfig.pb and the `base/` prefix of the base module, and that is what this
+// writes. The signature is JAR v1, because a bundle has no APK Signing Block.
 func buildAAB() {
-	if bundletoolPath == "" {
-		LogF("build", "no bundletool found, and an .aab cannot be assembled without it",
-			"put bundletool on PATH or a bundletool-*.jar under the SDK or ~/Android/bundletool")
+	entrada := filepath.Join("build", "bundle.zip")
+	salida := filepath.Join("build", "app.aab")
+	if err := ensamblarAAB(entrada, salida); err != nil {
+		LogF("build", err.Error(), "(el bundle se arma con --aab y el enlazador aapt2)")
 	}
-
-	args := []string{"build-bundle", "--overwrite", "--modules=bundle.zip", "--output=app.aab"}
-	if bundletoolIsJar {
-		args = append([]string{"-jar", bundletoolPath}, args...)
-		cmd := exec.Command(javaCmdPath, args...)
-		cmd.Dir = "build"
-		runOrAbort("bundletool", cmd)
-		return
-	}
-
-	cmd := exec.Command(bundletoolPath, args...)
-	cmd.Dir = "build"
-	runOrAbort("bundletool", cmd)
+	LogI("build", salida, "ensamblado desde", entrada, "sin bundletool")
 }
 
-// signAAB signs the bundle with jarsigner. A bundle is not an apk: it is never
-// zipaligned and never carries an APK Signing Block, so the JAR signature is the
-// only one it has, and the JVM tool is the one that writes it.
-//
-// The digest is SHA-256 and not the SHA1 this used to ask for: the JDK that ships
-// today reports SHA-1 as a security risk and disables it, so a signature written
-// with it is a signature the toolchain itself warns about.
+// ensamblarAAB is the assembly separated from the command so a test can drive it with a
+// synthetic bundle.zip. It returns the error instead of ending the process.
+func ensamblarAAB(entrada, salida string) error {
+	zr, err := zip.OpenReader(entrada)
+	if err != nil {
+		return fmt.Errorf("no se puede abrir %s: %w", entrada, err)
+	}
+	defer zr.Close()
+
+	tmp := salida + ".tmp"
+	out, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	zw := zip.NewWriter(out)
+
+	escribe := func(nombre string, datos []byte) error {
+		w, err := zw.Create(nombre)
+		if err != nil {
+			return err
+		}
+		_, err = w.Write(datos)
+		return err
+	}
+	if err := escribe("BundleConfig.pb", bundleConfigPB()); err != nil {
+		return fmt.Errorf("BundleConfig.pb: %w", err)
+	}
+	for _, f := range zr.File {
+		r, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("%s: %w", f.Name, err)
+		}
+		datos, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			return fmt.Errorf("%s: %w", f.Name, err)
+		}
+		if err := escribe("base/"+f.Name, datos); err != nil {
+			return fmt.Errorf("%s: %w", f.Name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, salida)
+}
+
+// bundleConfigPB es el mensaje que escribió bundletool 1.18.3 en el §127: field 1
+// (Bundletool) con field 2 (version) y la cadena. Es información de la herramienta, no
+// del contenido; se reproduce para que el fichero sea el mismo formato.
+func bundleConfigPB() []byte {
+	const version = "1.18.3"
+	inner := append([]byte{0x12, byte(len(version))}, version...)
+	return append([]byte{0x0a, byte(len(inner))}, inner...)
+}
+
+// signAAB signs the bundle with the v1 signer of this fork. A bundle is not an apk: it
+// is never zipaligned and never carries an APK Signing Block, so the JAR signature is
+// the only one it has; `resignBundleCon` writes it without starting jarsigner.
 func signAAB(keyStore, storePass, keyAlias, sigAlg string) {
 	LogI("build", "signing aab")
+	_ = sigAlg // el algoritmo lo decide la clave: RSA SHA-256 o ECDSA (§123)
 
-	cmd := exec.Command(jarsignerPath, "-verbose", "-sigalg", sigAlg, "-digestalg", "SHA-256",
-		"-storepass", storePass, "-keystore", keyStore, filepath.Join("build", "app.aab"), keyAlias)
-	runOrAbort("jarsigner", cmd)
+	signer, cert, err := signingKey(keyStore, storePass, keyAlias)
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	f, err := firmanteDe(signer, cert)
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	ruta := filepath.Join("build", "app.aab")
+	if _, err := resignBundleCon(ruta, ruta, f); err != nil {
+		LogF("build", "no se pudo firmar el .aab:", err.Error())
+	}
 }
 
-// runOrAbort runs a tool and shows its whole answer when it fails: a bundletool
-// refusal is a wall of text about the module set, and the last three lines of it
-// are not the reason. The tool is named by the caller because the path it was
-// resolved to is sometimes the empty string, and "did not run" without a name
-// leaves nothing to act on.
+// runOrAbort runs a tool and shows its whole answer when it fails: a refusal is a wall of
+// text about the module set, and the last three lines of it are not the reason. The tool
+// is named by the caller because the path it was resolved to is sometimes the empty
+// string, and "did not run" without a name leaves nothing to act on.
 func runOrAbort(tool string, cmd *exec.Cmd) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {

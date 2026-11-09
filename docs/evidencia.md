@@ -6610,3 +6610,39 @@ del propio `bundle.zip` protobuf desde el enlazador Go: aapt2 es quien produce
 `resources.pb` y el proto XML; el linker de este fork escribe `resources.arsc`/AXML, y
 convertirlo es una fase aparte. El oráculo del empaquetado es `bundletool validate` y
 `jarsigner -verify`.
+
+## 128. El `.aab` ensamblado y firmado en Go, sin `bundletool` ni `jarsigner`
+
+`apkc build --aab` deja de arrancar `bundletool` y `jarsigner`: `apkc/aab.go` lee el
+`bundle.zip` que escribe el enlazador aapt2 (ya en protobuf), añade `BundleConfig.pb` y
+prefija cada entrada con `base/`; después firma el ZIP como JAR v1 con `resignBundleCon`,
+la misma pieza de la 5.29. El `BundleConfig.pb` es el mensaje medido en el §127
+(`0a08 1206 "1.18.3"`).
+
+```sh
+apkc build --aab --keystore "$HOME/.android/debug.keystore"
+unzip -l build/app.aab
+java -jar "$HOME/Android/bundletool/bundletool-all-1.18.3.jar" validate --bundle build/app.aab
+jarsigner -verify build/app.aab
+apkc verify build/app.aab
+```
+
+```text
+BundleConfig.pb 10 · base/manifest/AndroidManifest.xml · base/dex/classes.dex ·
+base/resources.pb · base/res/layout/main.xml · META-INF/{MANIFEST.MF,ANDROID.SF,ANDROID.RSA}
+App Bundle information · Feature module: base · validate rc=0
+jar verified. (aviso de cadena autofirmada, rc=0)
+[verify] v1 (JAR signing): ok — 5 entradas con su digest y la firma PKCS#7 verificada
+[verify] el paquete es un .aab: la firma es JAR v1 y no lleva bloque v2/v3
+```
+
+El `.aab` no lleva bloque de firmas v2/v3 ni se zipaligna: es un bundle, y su única firma
+es la JAR v1. `TestBundleConfigPB` y `TestElAABEnsamblaElBundleProto` en `apkc/aab_test.go`
+cubren el mensaje y el ensamblado más la firma (con el verificador propio reconociendo el
+bundle); `studio/e2e.sh` ejecuta `build --aab` en la variante `java` y exige
+`bundletool validate`, `jarsigner -verify` con `jar verified` y `apkc verify`.
+
+Frontera: el `bundle.zip` protobuf lo sigue produciendo aapt2. El enlazador Go de este
+fork escribe AXML y `resources.arsc`, no proto XML ni `resources.pb`; convertirlo es una
+fase aparte, así que el `.aab` de la pestaña (que compila con `--linker go`) todavía no se
+puede armar sin aapt2. La pestaña firma `.aab` que ya vienen en protobuf (§118).

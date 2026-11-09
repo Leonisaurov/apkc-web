@@ -26,6 +26,8 @@ KEYTOOL=$(command -v keytool 2>/dev/null || true)
 [ -n "$KEYTOOL" ] || KEYTOOL=${PREFIX:-/data/data/com.termux/files/usr}/lib/jvm/java-21-openjdk/bin/keytool
 JARSIGNER=$(command -v jarsigner 2>/dev/null || true)
 [ -n "$JARSIGNER" ] || JARSIGNER=${PREFIX:-/data/data/com.termux/files/usr}/lib/jvm/java-21-openjdk/bin/jarsigner
+JAVA=$(command -v java 2>/dev/null || true)
+[ -n "$JAVA" ] || JAVA=${PREFIX:-/data/data/com.termux/files/usr}/lib/jvm/java-21-openjdk/bin/java
 KS_RELEASE="$TMP/studio-release.p12"
 rm -f "$KS_RELEASE"
 if [ -x "$KEYTOOL" ]; then
@@ -102,6 +104,39 @@ variancia() { # $1 nombre, $2 kotlin (0/1)
     falla "$nombre: un LEEME de la página acabó dentro del apk"
   fi
   avisa "$nombre: apk de $(wc -c <build/app.apk | tr -d ' ') bytes, verificado por apksigner y zipcheck"
+
+  # el .aab: el mismo build con --aab lo ensambla y firma apkc en Go, sin bundletool ni
+  # jarsigner. bundletool validate y jarsigner son los oráculos de fuera.
+  if [ "$kotlin" = 0 ]; then
+    rm -f build/app.aab
+    if tcr -j 1 -q -- "$APKC" build --aab >"$TMP/studio-$nombre-aab.log" 2>&1; then
+      if [ -f build/app.aab ]; then
+        bundletool_jar=$(ls "$HOME"/Android/bundletool/bundletool-*.jar 2>/dev/null | sort -V | tail -1)
+        if [ -n "$bundletool_jar" ]; then
+          if ! "$JAVA" -jar "$bundletool_jar" validate --bundle build/app.aab >"$TMP/studio-$nombre-aab-validate.log" 2>&1; then
+            falla "$nombre: bundletool no valida el .aab"; head -8 "$TMP/studio-$nombre-aab-validate.log"
+          fi
+        else
+          avisa "$nombre: sin bundletool para validar el .aab (solo jarsigner)"
+        fi
+        if ! "$JARSIGNER" -verify build/app.aab >"$TMP/studio-$nombre-aab-jar.log" 2>&1; then
+          falla "$nombre: jarsigner no verifica el .aab"; tail -4 "$TMP/studio-$nombre-aab-jar.log"
+        fi
+        grep -q "jar verified" "$TMP/studio-$nombre-aab-jar.log" || falla "$nombre: el .aab no dice jar verified"
+        if "$APKC" verify build/app.aab >"$TMP/studio-$nombre-aab-propio.log" 2>&1; then
+          grep -q "v1 (JAR signing): ok" "$TMP/studio-$nombre-aab-propio.log" ||
+            falla "$nombre: apkc verify no aprueba la v1 del .aab"
+        else
+          falla "$nombre: apkc verify rechaza el .aab"; tail -3 "$TMP/studio-$nombre-aab-propio.log"
+        fi
+        avisa "$nombre: .aab de $(wc -c <build/app.aab | tr -d ' ') bytes, ensamblado y firmado en Go, validado por bundletool y jarsigner"
+      else
+        falla "$nombre: no hay build/app.aab"
+      fi
+    else
+      falla "$nombre no arma el .aab"; tail -10 "$TMP/studio-$nombre-aab.log"
+    fi
+  fi
   cd "$AQUI"
 }
 
