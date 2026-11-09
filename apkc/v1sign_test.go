@@ -199,7 +199,11 @@ func TestPKCS7SignatureVerifiesFromItsOwnBytes(t *testing.T) {
 	}
 
 	sf := []byte("Signature-Version: 1.0\r\n\r\n")
-	block, err := pkcs7Signature(sf, key, cert)
+	f, err := firmanteDe(key, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := pkcs7Signature(sf, f)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,10 +260,10 @@ func TestPKCS7SignatureVerifiesFromItsOwnBytes(t *testing.T) {
 		t.Errorf("the signature does not verify over the .SF bytes: %v", err)
 	}
 
-	if _, err = pkcs7Signature(sf, nil, cert); err == nil {
+	if _, err = pkcs7Signature(sf, &firmante{cert: cert}); err == nil {
 		t.Error("a block was produced without a key")
 	}
-	if _, err = pkcs7Signature(sf, key, nil); err == nil {
+	if _, err = pkcs7Signature(sf, &firmante{signer: key}); err == nil {
 		t.Error("a block was produced without a certificate")
 	}
 }

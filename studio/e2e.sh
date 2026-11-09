@@ -465,6 +465,42 @@ PY
   else
     falla "apkc rotate no crea el linaje"; tail -4 "$TMP/studio-rotate.log"
   fi
+
+  # EC: P-256 y P-384, con su PKCS#7 ECDSA en v1, 0x0201/0x0202 en v2/v3 y el .idsig. El
+  # apksigner de fuera es el oráculo; apkc verify tiene que leer los mismos esquemas.
+  for curva in secp256r1 secp384r1; do
+    ec=$TMP/studio-ec-$curva.p12
+    rm -f "$ec"
+    "$KEYTOOL" -genkeypair -keystore "$ec" -storetype PKCS12 -storepass ecpass -keypass ecpass \
+      -alias "ec-$curva" -keyalg EC -groupname "$curva" -validity 3650 \
+      -dname "CN=EC $curva, O=apkc-web, C=ES" >/dev/null 2>&1 ||
+      falla "no se pudo generar la clave EC $curva"
+    ecapk=$TMP/studio-ec-$curva.apk
+    if "$APKC" sign --keystore "$ec" --storepass ecpass --keyalias "ec-$curva" \
+         --out "$ecapk" "$apk_base" >"$TMP/studio-ec-$curva-sign.log" 2>&1; then
+      if "$BUILD_TOOLS/apksigner" verify --verbose "$ecapk" >"$TMP/studio-ec-$curva-verify.log" 2>&1; then
+        for esquema in "v1 scheme (JAR signing)" "v2 scheme (APK Signature Scheme v2)" \
+                       "v3 scheme (APK Signature Scheme v3)"; do
+          grep -q "$esquema: true" "$TMP/studio-ec-$curva-verify.log" ||
+            falla "EC $curva: falta $esquema"
+        done
+      else
+        falla "apksigner no verifica la firma EC $curva"; head -6 "$TMP/studio-ec-$curva-verify.log"
+      fi
+      if "$BUILD_TOOLS/apksigner" verify --v4-signature-file "$ecapk.idsig" "$ecapk" \
+           >"$TMP/studio-ec-$curva-v4.log" 2>&1; then
+        "$APKC" verify "$ecapk" >"$TMP/studio-ec-$curva-propio.log" 2>&1 ||
+          falla "apkc verify rechaza la firma EC $curva"
+        grep -q "v4 (APK Signature Scheme v4): ok" "$TMP/studio-ec-$curva-propio.log" ||
+          falla "apkc verify no aprueba la v4 de EC $curva"
+        avisa "EC $curva: v1/v2/v3 y .idsig aprobados por apksigner; apkc verify lee v1/v2/v4"
+      else
+        falla "apksigner no verifica el .idsig de EC $curva"; head -6 "$TMP/studio-ec-$curva-v4.log"
+      fi
+    else
+      falla "apkc sign no firma con EC $curva"; tail -4 "$TMP/studio-ec-$curva-sign.log"
+    fi
+  done
 fi
 
 # 5. el icono de res/drawable (5.16): el PNG viaja literal, su entrada de la tabla es un archivo y

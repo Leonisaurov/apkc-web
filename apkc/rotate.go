@@ -37,11 +37,11 @@ func rotar() {
 		LogF("rotate", "los dos keystores tienen el mismo certificado:",
 			"un linaje tiene que enlazar dos claves distintas")
 	}
-	oldKey, err := rsaKey(oldSigner)
+	oldF, err := firmanteDe(oldSigner, oldCert)
 	if err != nil {
 		LogF("rotate", err.Error())
 	}
-	linaje, err := crearLinaje(oldCert, newCert, oldKey)
+	linaje, err := crearLinaje(oldCert, newCert, oldF)
 	if err != nil {
 		LogF("rotate", err.Error())
 	}

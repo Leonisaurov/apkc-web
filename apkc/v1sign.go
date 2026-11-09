@@ -23,11 +23,9 @@ package main
 // here because an asset path longer than 72 bytes is not exotic.
 
 import (
-	"crypto"
-	"crypto/rand"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/sha256"
-	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/base64"
@@ -189,6 +187,7 @@ var (
 	oidPKCS7Data       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
 	oidSHA256          = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
 	oidRSAEncryption   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
+	oidECDSAWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
 )
 
 // the structures of RFC 2315, as far as a detached signature over one file needs them.
@@ -222,18 +221,29 @@ type pkcs7SignedData struct {
 // signing certificate and signs content with it, and nothing else. The signature is
 // detached — the contentInfo names pkcs7-data and holds no bytes — because the .SF
 // file is next to it inside the package, and the verifier reads it from there.
-func pkcs7Signature(content []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
-	if key == nil || cert == nil {
+func pkcs7Signature(content []byte, f *firmante) ([]byte, error) {
+	if f == nil || f.signer == nil || f.cert == nil {
 		return nil, errors.New("the signature needs a key and the certificate that goes with it")
 	}
+	cert := f.cert
 	if len(cert.RawIssuer) == 0 || cert.SerialNumber == nil || len(cert.Raw) == 0 {
 		return nil, errors.New("the certificate of the keystore carries no issuer, serial or DER")
 	}
 
-	digest := sha256.Sum256(content)
-	signed, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, digest[:])
+	signed, err := f.firmaV1(content)
 	if err != nil {
 		return nil, fmt.Errorf("the signing key refused the digest: %w", err)
+	}
+	// RSA firma PKCS#1 v1.5; ECDSA firma DER con ecdsa-with-SHA256. Los parámetros del
+	// algoritmo ECDSA van ausentes, no NULL, que es lo que espera un lector de JAR.
+	var cifrado pkix.AlgorithmIdentifier
+	switch cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		cifrado = pkix.AlgorithmIdentifier{Algorithm: oidRSAEncryption, Parameters: asn1.NullRawValue}
+	case *ecdsa.PublicKey:
+		cifrado = pkix.AlgorithmIdentifier{Algorithm: oidECDSAWithSHA256}
+	default:
+		return nil, fmt.Errorf("the certificate carries a %T and the v1 only writes RSA or ECDSA", cert.PublicKey)
 	}
 
 	data := pkcs7SignedData{
@@ -252,7 +262,7 @@ func pkcs7Signature(content []byte, key *rsa.PrivateKey, cert *x509.Certificate)
 				SerialNumber: cert.SerialNumber,
 			},
 			DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidSHA256, Parameters: asn1.NullRawValue},
-			DigestEncryptionAlgorithm: pkix.AlgorithmIdentifier{Algorithm: oidRSAEncryption, Parameters: asn1.NullRawValue},
+			DigestEncryptionAlgorithm: cifrado,
 			EncryptedDigest:           signed,
 		}},
 	}

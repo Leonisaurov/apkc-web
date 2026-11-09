@@ -88,7 +88,7 @@ func sign() {
 		if errR != nil {
 			LogF("sign", "new keystore:", errR.Error())
 		}
-		newKey, errR := rsaKey(newSigner)
+		newF, errR := firmanteDe(newSigner, newCert)
 		if errR != nil {
 			LogF("sign", errR.Error())
 		}
@@ -96,13 +96,13 @@ func sign() {
 		if errR != nil {
 			LogF("sign", "old keystore:", errR.Error())
 		}
-		oldKey, errR := rsaKey(oldSigner)
+		oldF, errR := firmanteDe(oldSigner, oldCert)
 		if errR != nil {
 			LogF("sign", errR.Error())
 		}
-		rotacionActiva = &rotacion{nuevaLlave: newKey, nuevoCert: newCert, linaje: inner, minSdk: *rotMin}
+		rotacionActiva = &rotacion{nueva: newF, linaje: inner, minSdk: *rotMin}
 		defer func() { rotacionActiva = nil }()
-		carried, err = resignWithKey(packages[0], final, oldKey, oldCert)
+		carried, err = resignWithFirmante(packages[0], final, oldF)
 	} else {
 		carried, err = resignPackage(packages[0], final, *keyStore, *storePass, *keyAlias)
 	}
@@ -128,16 +128,16 @@ func resignPackage(inPath, finalPath, keyPath, storePass, keyAlias string) (int,
 	if err != nil {
 		return 0, err
 	}
-	key, err := rsaKey(signer)
+	f, err := firmanteDe(signer, cert)
 	if err != nil {
 		return 0, err
 	}
 	// Un .aab no es un apk: no lleva bloque de firmas v2/v3 y no se zipaligna. Se firma
 	// como JAR, que es la única firma que un bundle tiene.
 	if strings.HasSuffix(strings.ToLower(inPath), ".aab") {
-		return resignBundle(inPath, finalPath, key, cert)
+		return resignBundleCon(inPath, finalPath, f)
 	}
-	return resignWithKey(inPath, finalPath, key, cert)
+	return resignWithFirmante(inPath, finalPath, f)
 }
 
 // resignBundle writes an .aab with a v1 JAR signature and nothing else. The entries are
@@ -146,6 +146,14 @@ func resignPackage(inPath, finalPath, keyPath, storePass, keyAlias string) (int,
 // whole file and no v2/v3 pair. `jarsigner` and `apkc verify` (bundle mode) are the
 // oracles; `apksigner` is not, because it expects an apk.
 func resignBundle(inPath, finalPath string, key *rsa.PrivateKey, cert *x509.Certificate) (int, error) {
+	f, err := firmanteDe(key, cert)
+	if err != nil {
+		return 0, err
+	}
+	return resignBundleCon(inPath, finalPath, f)
+}
+
+func resignBundleCon(inPath, finalPath string, f *firmante) (int, error) {
 	pkg, err := openPreviousPackage(inPath)
 	if err != nil {
 		return 0, err
@@ -177,7 +185,7 @@ func resignBundle(inPath, finalPath string, key *rsa.PrivateKey, cert *x509.Cert
 	// El manifiesto va primero: `JarInputStream` lo busca en la primera entrada, y un
 	// bundle que se lee así tiene que encontrarlo. Los datos van detrás, con sus bytes tal
 	// como estaban; los digests del manifiesto no dependen del orden.
-	signed, err := writeV1EntriesManifestFirst(out, plan, digests, key, cert)
+	signed, err := writeV1EntriesManifestFirst(out, plan, digests, f)
 	if err != nil {
 		return 0, err
 	}
@@ -212,6 +220,14 @@ func resignBundle(inPath, finalPath string, key *rsa.PrivateKey, cert *x509.Cert
 // padding this entry needs, so a re-sign costs no inflate and no deflate — the same
 // reuse a one line source edit gets in an incremental build, applied to all of it.
 func resignWithKey(inPath, finalPath string, key *rsa.PrivateKey, cert *x509.Certificate) (int, error) {
+	f, err := firmanteDe(key, cert)
+	if err != nil {
+		return 0, err
+	}
+	return resignWithFirmante(inPath, finalPath, f)
+}
+
+func resignWithFirmante(inPath, finalPath string, f *firmante) (int, error) {
 	pkg, err := openPreviousPackage(inPath)
 	if err != nil {
 		return 0, err
@@ -248,7 +264,7 @@ func resignWithKey(inPath, finalPath string, key *rsa.PrivateKey, cert *x509.Cer
 	if err != nil {
 		return 0, err
 	}
-	if err := finishSignedPackage(out, tmpPath, finalPath, records, plan, written, key, cert); err != nil {
+	if err := finishSignedPackage(out, tmpPath, finalPath, records, plan, written, f); err != nil {
 		return 0, err
 	}
 	return carried, nil

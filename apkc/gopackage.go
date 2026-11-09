@@ -14,8 +14,6 @@ package main
 
 import (
 	"archive/zip"
-	"crypto/rsa"
-	"crypto/x509"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -45,10 +43,9 @@ var escribirV4 = true
 // finishSignedPackage) y v3/v4 con la nueva, con el linaje en el proof-of-rotation. Es un
 // global de la etapa porque el firmante es síncrono y el comando lo pone y lo quita.
 type rotacion struct {
-	nuevaLlave *rsa.PrivateKey
-	nuevoCert  *x509.Certificate
-	linaje     []byte // linaje interno, el valor del atributo
-	minSdk     int
+	nueva  *firmante
+	linaje []byte // linaje interno, el valor del atributo
+	minSdk int
 }
 
 var rotacionActiva *rotacion
@@ -107,7 +104,7 @@ func packageWithGo(plan []bundleEntry, recorded map[string]string, keyPath, stor
 	if err != nil {
 		return 0, err
 	}
-	key, err := rsaKey(signer)
+	f, err := firmanteDe(signer, cert)
 	if err != nil {
 		return 0, err
 	}
@@ -123,7 +120,7 @@ func packageWithGo(plan []bundleEntry, recorded map[string]string, keyPath, stor
 	if err != nil {
 		return 0, err
 	}
-	if err := finishSignedPackage(out, packed+".tmp", packed, records, plan, digests, key, cert); err != nil {
+	if err := finishSignedPackage(out, packed+".tmp", packed, records, plan, digests, f); err != nil {
 		return 0, err
 	}
 	// the record of what the next build can copy over, kept here so the caller stores
@@ -144,11 +141,11 @@ func packageWithGo(plan []bundleEntry, recorded map[string]string, keyPath, stor
 // The order of the signature files and the offset substituted into the end record are
 // format decisions, so they live once.
 func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []packedRecord,
-	plan []bundleEntry, digests map[string]string, key *rsa.PrivateKey, cert *x509.Certificate) error {
+	plan []bundleEntry, digests map[string]string, f *firmante) error {
 	// The JAR signature is part of the package: its three files have to be inside
 	// before the central directory is written, and before the signing block that
 	// covers every byte up to it.
-	signed, err := writeV1Entries(out, plan, digests, key, cert)
+	signed, err := writeV1Entries(out, plan, digests, f)
 	if err != nil {
 		return err
 	}
@@ -164,39 +161,37 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 	}
 	cd, eocd := centralDirectory(records, uint32(blockOffset))
 
-	digest, err := chunkedSHA256(fileSection(out, blockOffset), bytesSection(cd), bytesSection(eocd))
+	digest, err := chunkedDigest(f.contentHash, fileSection(out, blockOffset), bytesSection(cd), bytesSection(eocd))
 	if err != nil {
 		return err
 	}
-	v2Block, err := v2SignerBlock(digest, key, cert)
+	v2Block, err := v2SignerBlock(digest, f)
 	if err != nil {
 		return err
 	}
 	var v3Block, v31Block []byte
-	v4Key, v4Cert := key, cert
 	if rotacionActiva == nil {
-		v3Block, err = v3SignerBlock(digest, key, cert)
+		v3Block, err = v3SignerBlock(digest, f)
 		if err != nil {
 			return err
 		}
 	} else {
 		rot := rotacionActiva
-		v4Key, v4Cert = rot.nuevaLlave, rot.nuevoCert
 		if rot.minSdk <= 32 {
 			// rotación sin v3.1: un solo bloque v3 con la clave nueva desde minSdk
-			v3Block, err = v3SignerBlockCon(digest, rot.nuevaLlave, rot.nuevoCert,
+			v3Block, err = v3SignerBlockCon(digest, rot.nueva,
 				rot.minSdk, 0x7fffffff, atributosRotacion(rot.linaje))
 			if err != nil {
 				return err
 			}
 		} else {
 			// v3.0 con la vieja hasta minSdk-1 y v3.1 con la nueva desde minSdk
-			v3Block, err = v3SignerBlockCon(digest, key, cert, 24, rot.minSdk-1,
+			v3Block, err = v3SignerBlockCon(digest, f, 24, rot.minSdk-1,
 				atributosRotacionMin(rot.minSdk))
 			if err != nil {
 				return err
 			}
-			v31Block, err = v3SignerBlockCon(digest, rot.nuevaLlave, rot.nuevoCert,
+			v31Block, err = v3SignerBlockCon(digest, rot.nueva,
 				rot.minSdk, 0x7fffffff, atributosRotacion(rot.linaje))
 			if err != nil {
 				return err
@@ -231,10 +226,9 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 		}
 		var idsig []byte
 		if rotacionActiva != nil && rotacionActiva.minSdk > 32 {
-			idsig, err = v4SignatureRotada(datos, digest, key, cert,
-				rotacionActiva.nuevaLlave, rotacionActiva.nuevoCert)
+			idsig, err = v4SignatureRotada(datos, digest, f, rotacionActiva.nueva)
 		} else {
-			idsig, err = v4Signature(datos, digest, v4Key, v4Cert)
+			idsig, err = v4Signature(datos, digest, f)
 		}
 		if err != nil {
 			return err
@@ -254,7 +248,7 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 // covers fewer files than the package holds is a signature that says nothing about the
 // rest of it, and it still verifies.
 func writeV1Entries(dst *os.File, plan []bundleEntry, digests map[string]string,
-	key *rsa.PrivateKey, cert *x509.Certificate) ([]packedRecord, error) {
+	f *firmante) ([]packedRecord, error) {
 	files, missing := v1FilesOf(plan, digests)
 	if missing > 0 {
 		return nil, fmt.Errorf("%d entries of the package had no content digest to write down", missing)
@@ -262,7 +256,7 @@ func writeV1Entries(dst *os.File, plan []bundleEntry, digests map[string]string,
 
 	manifest := jarManifest(files)
 	sf := signatureFile(manifest, []int{2})
-	block, err := pkcs7Signature(sf, key, cert)
+	block, err := pkcs7Signature(sf, f)
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +291,7 @@ func writeV1Entries(dst *os.File, plan []bundleEntry, digests map[string]string,
 // first entry; the order apksigner uses (SF, RSA, MANIFEST) works for an apk because
 // nothing reads it that way, but jarsigner warns about a bundle written that way.
 func writeV1EntriesManifestFirst(dst *os.File, plan []bundleEntry, digests map[string]string,
-	key *rsa.PrivateKey, cert *x509.Certificate) ([]packedRecord, error) {
+	f *firmante) ([]packedRecord, error) {
 	files, missing := v1FilesOf(plan, digests)
 	if missing > 0 {
 		return nil, fmt.Errorf("%d entries of the package had no content digest to write down", missing)
@@ -305,7 +299,7 @@ func writeV1EntriesManifestFirst(dst *os.File, plan []bundleEntry, digests map[s
 
 	manifest := jarManifest(files)
 	sf := signatureFile(manifest, []int{2})
-	block, err := pkcs7Signature(sf, key, cert)
+	block, err := pkcs7Signature(sf, f)
 	if err != nil {
 		return nil, err
 	}

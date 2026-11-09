@@ -69,10 +69,10 @@ func empaquetaSinAapt2(ruta string, entradas []entradaDePaquete, keyPath, storeP
 		out.Close()
 		return err
 	}
-	key, err := rsaKey(signer)
+	f, err := firmanteDe(signer, cert)
 	if err != nil {
 		out.Close()
 		return err
 	}
-	return finishSignedPackage(out, tmp, ruta, records, plan, digests, key, cert)
+	return finishSignedPackage(out, tmp, ruta, records, plan, digests, f)
 }

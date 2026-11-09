@@ -6426,3 +6426,70 @@ Lo que hay que tocar: un `firmante` que envuelva `crypto.Signer` y elija
 P-384 0x0202/SHA-512); `chunkedDigest` con SHA-256 o SHA-512; el PKCS#7 con el OID ECDSA y
 la firma DER; el verificador de la v1 aceptando el OID ECDSA. El árbol de fs-verity del
 `.idsig` sigue siendo SHA-256; lo que cambia es el `sigAlg` y el `apkDigest` (32 o 64).
+
+## 123. EC en el firmante: RSA, P-256 y P-384 en el mismo camino
+
+El firmante deja de ser una `*rsa.PrivateKey`: `apkc/firmante.go` envuelve un
+`crypto.Signer` y elige el id y el hash que el formato pide. RSA va con `0x0103` y
+SHA-256; P-256 con `0x0201` y SHA-256; P-384 con `0x0202` y SHA-512 (§122). El digest del
+contenido se calcula con `chunkedDigest`, que acepta SHA-256 o SHA-512, y la v1 firma el
+`.SF` con SHA-256 y, para EC, con el OID `ecdsa-with-SHA256`.
+
+```sh
+P=/data/data/com.termux/files/usr
+BT=$HOME/Android/build-tools/34.9.0
+K=$P/lib/jvm/java-21-openjdk/bin/keytool
+W=$P/tmp/ecprobe
+"$K" -genkeypair -keystore "$W/ec.p12" -storetype PKCS12 -storepass ecpass -keypass ecpass \
+  -alias ec -keyalg EC -groupname secp256r1 -validity 3650 -dname "CN=EC, O=apkc, C=ES"
+apkc sign --keystore "$W/ec.p12" --storepass ecpass --keyalias ec \
+  --out "$W/ours-ec.apk" "$W/in.apk"
+"$BT/apksigner" verify --verbose "$W/ours-ec.apk"
+"$BT/apksigner" verify --v4-signature-file "$W/ours-ec.apk.idsig" "$W/ours-ec.apk"
+apkc verify "$W/ours-ec.apk"
+```
+
+```text
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+[apksigner --v4-signature-file] rc=0
+[verify] v1 (JAR signing): ok — 4 entradas con su digest y la firma PKCS#7 verificada
+[verify] v2 (APK Signature Scheme v2): ok — 7 entradas cubiertas por el digest del bloque
+[verify] v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig
+```
+
+Lo mismo con `secp384r1` (0x0202, digest de 64 bytes y firma de 102): `apksigner` verifica
+v1/v2/v3 y el `.idsig`, y `apkc verify` lee v1/v2/v4. La página no necesita nada
+especial: el mismo selector de keystore y el mismo `firmar` sirven; el lector de PKCS#12 ya
+devolvía un `crypto.Signer`, y el verificador de la v1 acepta el OID ECDSA.
+
+Pruebas: `TestElFirmanteEligeElAlgoritmo` y `TestECFirmaYVerifica` en
+`apkc/firmante_test.go`; `studio/e2e.sh` genera un keystore P-256 y otro P-384 con
+`keytool`, firma con `apkc` y exige a `apksigner` v1/v2/v3 y el `.idsig` (y a `apkc
+verify` la v1/v2/v4). Frontera: la rotación con claves EC se apoya en el mismo `firmante`
+pero no se ha medido con `apksigner`; los dos `firmante` de una rotación pueden ser RSA.
+
+## 124. El `minSdk` del proyecto no cambia el firmante v3 de un apk sin rotación
+
+El plan pedía seguir el `minSdkVersion` del proyecto en el firmante v3, que este fork
+escribía fijo en 24. Medido con `apksigner` para 21, 23, 24, 26, 28, 30, 33 y 34:
+
+```sh
+BT=$HOME/Android/build-tools/34.9.0
+W=$PREFIX/tmp/minprobe
+for api in 21 23 24 26 28 30 33 34; do
+  "$BT/apksigner" sign --min-sdk-version "$api" \
+    --ks "$HOME/.android/debug.keystore" --ks-pass pass:android \
+    --out "$W/m$api.apk" "$W/in.apk"
+done
+```
+
+En los ocho casos el firmante v3 del bloque `0xf05368c0` sale con `minSdk = 24` y
+`maxSdk = 0x7fffffff`; lo que cambia con `--min-sdk-version` es la v1 (SHA-1/SHA-256) y si
+la v2/v3 se escriben, no el rango del firmante. Por tanto el 24 fijo de `v3SignerBlock` ya
+es el valor de `apksigner` para un apk con un solo firmante; el `minSdk` solo mueve los
+rangos en una **rotación** (§120-§121), donde el v3.0 cubre hasta 32 y el v3.1 desde 33.
+
+No hay cambio de código: la fila 5.35 se cierra con esta medición y la prueba existente que
+lee el bloque v3 (`TestElBloqueV3LlevaSuParYSuSigner`) sigue exigiendo 24/0x7fffffff.

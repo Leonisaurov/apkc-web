@@ -497,11 +497,15 @@ func TestElBloqueV3LlevaSuParYSuSigner(t *testing.T) {
 	for i := range digest {
 		digest[i] = byte(i)
 	}
-	v2, err := v2SignerBlock(digest, key, cert)
+	f, err := firmanteDe(key, cert)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v3, err := v3SignerBlock(digest, key, cert)
+	v2, err := v2SignerBlock(digest, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v3, err := v3SignerBlock(digest, f)
 	if err != nil {
 		t.Fatal(err)
 	}

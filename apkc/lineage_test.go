@@ -70,8 +70,12 @@ func leerNodoLinaje(t *testing.T, b []byte) (sd []byte, flags, sigAlg uint32, fi
 func TestElLinajeEnlazaYFirmaElNodoNuevo(t *testing.T) {
 	vieja, certVieja := parNuevo(t, "Vieja", 0x1001)
 	_, certNueva := parNuevo(t, "Nueva", 0x1002)
+	viejaF, err := firmanteDe(vieja, certVieja)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	blob, err := crearLinaje(certVieja, certNueva, vieja)
+	blob, err := crearLinaje(certVieja, certNueva, viejaF)
 	if err != nil {
 		t.Fatalf("el linaje no se crea: %v", err)
 	}
@@ -130,7 +134,15 @@ func TestElLinajeEnlazaYFirmaElNodoNuevo(t *testing.T) {
 func TestLaRotacionV31EscribeV2V31V3(t *testing.T) {
 	vieja, certVieja := parNuevo(t, "Vieja", 0x2001)
 	nueva, certNueva := parNuevo(t, "Nueva", 0x2002)
-	blob, err := crearLinaje(certVieja, certNueva, vieja)
+	viejaF, err := firmanteDe(vieja, certVieja)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nuevaF, err := firmanteDe(nueva, certNueva)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := crearLinaje(certVieja, certNueva, viejaF)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +151,7 @@ func TestLaRotacionV31EscribeV2V31V3(t *testing.T) {
 		t.Fatal(err)
 	}
 	anterior := rotacionActiva
-	rotacionActiva = &rotacion{nuevaLlave: nueva, nuevoCert: certNueva, linaje: inner, minSdk: 33}
+	rotacionActiva = &rotacion{nueva: nuevaF, linaje: inner, minSdk: 33}
 	defer func() { rotacionActiva = anterior }()
 
 	salida := filepath.Join(t.TempDir(), "rotado.apk")

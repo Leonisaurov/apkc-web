@@ -9,9 +9,8 @@ package main
 
 import (
 	"bytes"
-	"crypto"
+	"crypto/ecdsa"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
@@ -233,13 +232,13 @@ func (v *verificacion) verificarV4(ruta string) {
 			v.maloV4(quien + ": la clave pública del .idsig no es la del certificado")
 			return
 		}
-		clave, ok := cert.PublicKey.(*rsa.PublicKey)
+		alg, h, ok := hashDeClave(cert.PublicKey)
 		if !ok {
-			v.maloV4(quien + ": el certificado del .idsig no lleva una clave RSA")
+			v.maloV4(quien + ": el certificado del .idsig no lleva una clave RSA o EC medida")
 			return
 		}
-		if s.sigAlg != v4SigAlgRSA {
-			v.maloV4(fmt.Sprintf("%s: algoritmo de firma 0x%04x; solo se mide 0x%04x", quien, s.sigAlg, v4SigAlgRSA))
+		if s.sigAlg != alg {
+			v.maloV4(fmt.Sprintf("%s: algoritmo de firma 0x%04x; la clave pide 0x%04x", quien, s.sigAlg, alg))
 			return
 		}
 		// la misma carga que arma v4sign.go, con el tamaño del fichero final
@@ -253,10 +252,20 @@ func (v *verificacion) verificarV4(ruta string) {
 		firmado = ponBytes(firmado, s.certDER)
 		firmado = ponBytes(firmado, s.extra)
 		binary.LittleEndian.PutUint32(firmado[:4], uint32(len(firmado)))
-		resumen := sha256.Sum256(firmado)
-		if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], s.firma); err != nil {
-			v.maloV4(quien + ": la firma RSA del .idsig no verifica con su certificado")
-			return
+		hh := h.New()
+		hh.Write(firmado)
+		resumen := hh.Sum(nil)
+		switch k := cert.PublicKey.(type) {
+		case *rsa.PublicKey:
+			if err := rsa.VerifyPKCS1v15(k, h, resumen, s.firma); err != nil {
+				v.maloV4(quien + ": la firma RSA del .idsig no verifica con su certificado")
+				return
+			}
+		case *ecdsa.PublicKey:
+			if !ecdsa.VerifyASN1(k, resumen, s.firma) {
+				v.maloV4(quien + ": la firma ECDSA del .idsig no verifica con su certificado")
+				return
+			}
 		}
 	}
 	v.v4 = len(v.v4Motivos) == 0

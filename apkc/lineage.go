@@ -13,10 +13,6 @@ package main
 // cuando no se piden capacidades.
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
@@ -53,19 +49,18 @@ func nodoLinaje(cert *x509.Certificate, parentAlg, sigAlg uint32, firma []byte) 
 
 // crearLinaje enlaza el certificado viejo con el nuevo: el nodo del nuevo lleva la
 // firma de la clave vieja sobre su signedData.
-func crearLinaje(oldCert, newCert *x509.Certificate, oldKey *rsa.PrivateKey) ([]byte, error) {
+func crearLinaje(oldCert, newCert *x509.Certificate, oldF *firmante) ([]byte, error) {
 	// lo que se firma es el contenido del signedData del nodo nuevo
 	innerNuevo := ponBytes(nil, newCert.Raw)
-	innerNuevo = ponU32(innerNuevo, linajeSigAlgRSA)
-	resumen := sha256.Sum256(innerNuevo)
-	firma, err := rsa.SignPKCS1v15(rand.Reader, oldKey, crypto.SHA256, resumen[:])
+	innerNuevo = ponU32(innerNuevo, oldF.algID)
+	firma, err := oldF.firma(innerNuevo)
 	if err != nil {
 		return nil, fmt.Errorf("la clave vieja no firma el linaje: %w", err)
 	}
 
 	variable := ponU32(nil, linajeVersion)
-	variable = append(variable, nodoLinaje(oldCert, 0, linajeSigAlgRSA, nil)...)
-	variable = append(variable, nodoLinaje(newCert, linajeSigAlgRSA, 0, firma)...)
+	variable = append(variable, nodoLinaje(oldCert, 0, oldF.algID, nil)...)
+	variable = append(variable, nodoLinaje(newCert, oldF.algID, 0, firma)...)
 
 	out := ponU32(nil, linajeMagia)
 	out = ponU32(out, linajeVersion)

@@ -21,6 +21,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
@@ -262,14 +264,20 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 		v.maloV1("el bloque PKCS#7 no se puede leer: " + err.Error())
 		return
 	}
-	clave, ok := cert.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		v.maloV1("el certificado del bloque no lleva clave RSA")
-		return
-	}
 	resumen := sha256.Sum256(bytesSF)
-	if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], firma); err != nil {
-		v.maloV1("la firma RSA del .SF no verifica con su propio certificado")
+	switch clave := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], firma); err != nil {
+			v.maloV1("la firma RSA del .SF no verifica con su propio certificado")
+			return
+		}
+	case *ecdsa.PublicKey:
+		if !ecdsa.VerifyASN1(clave, resumen[:], firma) {
+			v.maloV1("la firma ECDSA del .SF no verifica con su propio certificado")
+			return
+		}
+	default:
+		v.maloV1("el certificado del bloque no lleva una clave RSA o EC medida")
 		return
 	}
 
@@ -375,8 +383,9 @@ func leerPKCS7(b []byte) (*x509.Certificate, []byte, error) {
 	if !signer.DigestAlgorithm.Algorithm.Equal(oidSHA256) {
 		return nil, nil, fmt.Errorf("el digest firmado es %s, no SHA-256", signer.DigestAlgorithm.Algorithm.String())
 	}
-	if !signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidRSAEncryption) {
-		return nil, nil, fmt.Errorf("la firma no es RSA sino %s", signer.DigestEncryptionAlgorithm.Algorithm.String())
+	if !signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidRSAEncryption) &&
+		!signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidECDSAWithSHA256) {
+		return nil, nil, fmt.Errorf("la firma no es RSA ni ECDSA, sino %s", signer.DigestEncryptionAlgorithm.Algorithm.String())
 	}
 	if len(dentro.Certificates.Bytes) == 0 {
 		return nil, nil, errors.New("el bloque no trae certificados")
@@ -484,9 +493,9 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 		v.maloV2("el certificado del firmante no se parsea: " + err.Error())
 		return
 	}
-	clave, ok := cert.PublicKey.(*rsa.PublicKey)
+	alg, h, ok := hashDeClave(cert.PublicKey)
 	if !ok {
-		v.maloV2("el certificado del firmante no lleva clave RSA")
+		v.maloV2("el certificado del firmante no lleva una clave RSA o EC medida")
 		return
 	}
 	if der, err := x509.MarshalPKIXPublicKey(cert.PublicKey); err != nil || !bytes.Equal(der, claveDicha) {
@@ -514,7 +523,7 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 	}
 	binary.LittleEndian.PutUint32(registroFinal[sitioDesplazamiento:], uint32(bloque.inicio))
 
-	obtenido, err := chunkedSHA256(fileSection(f, bloque.inicio), bytesSection(directorio), bytesSection(registroFinal))
+	obtenido, err := chunkedDigest(h, fileSection(f, bloque.inicio), bytesSection(directorio), bytesSection(registroFinal))
 	if err != nil {
 		v.maloV2("el digest del contenido no se puede calcular: " + err.Error())
 		return
@@ -523,7 +532,7 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 
 	medido := 0
 	for _, par := range digests {
-		if par.id != algRSASSAConSHA256 {
+		if par.id != alg {
 			v.maloV2(fmt.Sprintf("algoritmo de digest 0x%04x no medido aquí", par.id))
 			continue
 		}
@@ -533,14 +542,23 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 		}
 	}
 	for _, par := range paresFirmas {
-		if par.id != algRSASSAConSHA256 {
+		if par.id != alg {
 			v.maloV2(fmt.Sprintf("algoritmo de firma 0x%04x no medido aquí", par.id))
 			continue
 		}
 		medido++
-		resumen := sha256.Sum256(datosFirmados)
-		if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], par.valor); err != nil {
-			v.maloV2("la firma RSA sobre los datos-firmados no verifica")
+		hh := h.New()
+		hh.Write(datosFirmados)
+		resumen := hh.Sum(nil)
+		switch k := cert.PublicKey.(type) {
+		case *rsa.PublicKey:
+			if err := rsa.VerifyPKCS1v15(k, h, resumen, par.valor); err != nil {
+				v.maloV2("la firma RSA sobre los datos-firmados no verifica")
+			}
+		case *ecdsa.PublicKey:
+			if !ecdsa.VerifyASN1(k, resumen, par.valor) {
+				v.maloV2("la firma ECDSA sobre los datos-firmados no verifica")
+			}
 		}
 	}
 	if medido == 0 {
@@ -554,6 +572,21 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 
 func (v *verificacion) maloV2(motivo string) {
 	v.v2Motivos = append(v.v2Motivos, motivo)
+}
+
+// hashDeClave: el id de algoritmo y el hash del contenido que corresponden a la clave
+// del certificado. RSA y P-256 usan SHA-256; P-384/P-521 usan SHA-512 (§122).
+func hashDeClave(pub crypto.PublicKey) (uint32, crypto.Hash, bool) {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		return algRSASSAWithSHA256, crypto.SHA256, true
+	case *ecdsa.PublicKey:
+		if k.Curve == elliptic.P256() {
+			return algECDSAWithSHA256, crypto.SHA256, true
+		}
+		return algECDSAWithSHA512, crypto.SHA512, true
+	}
+	return 0, 0, false
 }
 
 // notar es lo contrario de un motivo: algo del paquete que esta orden no comprueba pero que quien

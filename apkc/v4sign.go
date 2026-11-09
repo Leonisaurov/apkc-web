@@ -17,9 +17,6 @@ package main
 // calculó para v2/v3.
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
@@ -103,16 +100,16 @@ func hashingInfoV4(raiz []byte) []byte {
 	return ponBytes(out, raiz)
 }
 
-// signingInfoV4 arma y firma un SigningInfo para una clave y su certificado. La carga
-// firmada incluye el tamaño del apk, el algoritmo, la raíz del árbol y el digest del
-// bloque v2/v3, además del certificado.
-func signingInfoV4(apk, apkDigest []byte, raiz []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
-	pub, err := x509.MarshalPKIXPublicKey(key.Public())
+// signingInfoV4 arma y firma un SigningInfo para un firmante. La carga firmada incluye
+// el tamaño del apk, el algoritmo del árbol (SHA-256), la raíz y el digest del bloque
+// v2/v3, además del certificado. La firma usa el hash del firmante (SHA-256 o SHA-512).
+func signingInfoV4(apk, apkDigest []byte, raiz []byte, f *firmante) ([]byte, error) {
+	pub, err := x509.MarshalPKIXPublicKey(f.cert.PublicKey)
 	if err != nil {
 		return nil, err
 	}
-	if len(apkDigest) != sha256.Size {
-		return nil, fmt.Errorf("el digest del apk mide %d bytes y se esperaban %d", len(apkDigest), sha256.Size)
+	if len(apkDigest) != f.contentHash.Size() {
+		return nil, fmt.Errorf("el digest del apk mide %d bytes y se esperaban %d", len(apkDigest), f.contentHash.Size())
 	}
 
 	signed := ponU32(nil, 0) // se rellena cuando ya se sabe el tamaño
@@ -122,22 +119,21 @@ func signingInfoV4(apk, apkDigest []byte, raiz []byte, key *rsa.PrivateKey, cert
 	signed = ponBytes(signed, nil) // sal
 	signed = ponBytes(signed, raiz)
 	signed = ponBytes(signed, apkDigest)
-	signed = ponBytes(signed, cert.Raw)
+	signed = ponBytes(signed, f.cert.Raw)
 	signed = ponBytes(signed, nil) // additionalData
 	binary.LittleEndian.PutUint32(signed[:4], uint32(len(signed)))
 
-	resumen := sha256.Sum256(signed)
-	firma, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, resumen[:])
+	firma, err := f.firma(signed)
 	if err != nil {
 		return nil, err
 	}
 
 	// SigningInfo: apkDigest, certificado, additionalData, clave pública, algoritmo y firma.
 	signingInfo := ponBytes(nil, apkDigest)
-	signingInfo = ponBytes(signingInfo, cert.Raw)
+	signingInfo = ponBytes(signingInfo, f.cert.Raw)
 	signingInfo = ponBytes(signingInfo, nil)
 	signingInfo = ponBytes(signingInfo, pub)
-	signingInfo = ponU32(signingInfo, v4SigAlgRSA)
+	signingInfo = ponU32(signingInfo, f.algID)
 	return ponBytes(signingInfo, firma), nil
 }
 
@@ -151,12 +147,12 @@ func v4Bytes(hashing, signingInfos, arbol []byte) []byte {
 }
 
 // v4Signature: el `.idsig` de un apk sin rotación, con un solo firmante.
-func v4Signature(apk, apkDigest []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
+func v4Signature(apk, apkDigest []byte, f *firmante) ([]byte, error) {
 	raiz, arbol, err := arbolVerity(apk)
 	if err != nil {
 		return nil, err
 	}
-	si, err := signingInfoV4(apk, apkDigest, raiz, key, cert)
+	si, err := signingInfoV4(apk, apkDigest, raiz, f)
 	if err != nil {
 		return nil, err
 	}
@@ -166,17 +162,17 @@ func v4Signature(apk, apkDigest []byte, key *rsa.PrivateKey, cert *x509.Certific
 // v4SignatureRotada: el `.idsig` de una rotación v3.1. Lleva el firmante viejo como
 // principal y uno nuevo en un SigningInfoBlock con el id del bloque v3.1, que es lo que
 // `apksigner` llama V4.1.
-func v4SignatureRotada(apk, apkDigest []byte, oldKey *rsa.PrivateKey, oldCert *x509.Certificate,
-	newKey *rsa.PrivateKey, newCert *x509.Certificate) ([]byte, error) {
+func v4SignatureRotada(apk, apkDigest []byte, oldF *firmante,
+	newF *firmante) ([]byte, error) {
 	raiz, arbol, err := arbolVerity(apk)
 	if err != nil {
 		return nil, err
 	}
-	viejo, err := signingInfoV4(apk, apkDigest, raiz, oldKey, oldCert)
+	viejo, err := signingInfoV4(apk, apkDigest, raiz, oldF)
 	if err != nil {
 		return nil, err
 	}
-	nuevo, err := signingInfoV4(apk, apkDigest, raiz, newKey, newCert)
+	nuevo, err := signingInfoV4(apk, apkDigest, raiz, newF)
 	if err != nil {
 		return nil, err
 	}

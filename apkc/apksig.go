@@ -18,9 +18,6 @@ package main
 
 import (
 	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
@@ -73,9 +70,13 @@ func pairsOf(items [][2]interface{}) []byte {
 	return out
 }
 
-// chunkedSHA256 is the content digest v2 stores. Each section is chunked on its own,
-// so the boundaries of the package survive a chunk landing exactly on one.
-func chunkedSHA256(sections ...sectionToDigest) ([]byte, error) {
+// chunkedDigest is the content digest v2 stores. Each section is chunked on its own,
+// so the boundaries of the package survive a chunk landing exactly on one. The hash is
+// SHA-256 for RSA/P-256 and SHA-512 for P-384 (§122).
+func chunkedDigest(hash crypto.Hash, sections ...sectionToDigest) ([]byte, error) {
+	if !hash.Available() {
+		return nil, fmt.Errorf("el hash %v no está enlazado en este binario", hash)
+	}
 	chunks := 0
 	for _, s := range sections {
 		if s.size > 0 {
@@ -87,7 +88,8 @@ func chunkedSHA256(sections ...sectionToDigest) ([]byte, error) {
 	}
 
 	// 5a | uint32 chunk count | every chunk digest, in file order
-	root := make([]byte, 5+32*chunks)
+	tam := hash.Size()
+	root := make([]byte, 5+tam*chunks)
 	root[0] = 0x5a
 	binary.LittleEndian.PutUint32(root[1:], uint32(chunks))
 
@@ -106,18 +108,22 @@ func chunkedSHA256(sections ...sectionToDigest) ([]byte, error) {
 
 			prefix := [5]byte{0xa5}
 			binary.LittleEndian.PutUint32(prefix[1:], uint32(n))
-			h := sha256.New()
+			h := hash.New()
 			h.Write(prefix[:])
 			h.Write(buf[:n])
-			h.Sum(root[5+at*32 : 5+at*32])
-			copy(root[5+at*32:], h.Sum(nil)[:])
+			copy(root[5+at*tam:], h.Sum(nil))
 			at++
 			remaining -= n
 		}
 	}
 
-	final := sha256.Sum256(root)
-	return final[:], nil
+	final := hash.New()
+	final.Write(root)
+	return final.Sum(nil), nil
+}
+
+func chunkedSHA256(sections ...sectionToDigest) ([]byte, error) {
+	return chunkedDigest(crypto.SHA256, sections...)
 }
 
 // sectionToDigest is one of the parts of the package the digest covers.
@@ -128,13 +134,13 @@ type sectionToDigest struct {
 
 // v2SignerBlock builds the pair the signing block carries: signed data, the signature
 // over it, and the public key the certificate must agree with.
-func v2SignerBlock(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
-	pub, err := x509.MarshalPKIXPublicKey(key.Public())
+func v2SignerBlock(digest []byte, f *firmante) ([]byte, error) {
+	pub, err := x509.MarshalPKIXPublicKey(f.cert.PublicKey)
 	if err != nil {
 		return nil, err
 	}
-	digests := pairsOf([][2]interface{}{{uint32(sigAlgRSASSAWithSHA256), digest}})
-	certs := seqOf(cert.Raw)
+	digests := pairsOf([][2]interface{}{{f.algID, digest}})
+	certs := seqOf(f.cert.Raw)
 	// the fourth element of the signed data is the v1 signed data, empty because the
 	// Go signer writes no JAR signature; the third is the additional attributes,
 	// empty because v2 needs no stripping protection of its own
@@ -144,12 +150,11 @@ func v2SignerBlock(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate) (
 	// digest: the digest inside signed data is what covers the package, and this
 	// signature is what covers that digest. Confusing the two produces a block that
 	// parses and verifies against nothing.
-	signedDigest := sha256.Sum256(signedData)
-	rsaSignature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, signedDigest[:])
+	firma, err := f.firma(signedData)
 	if err != nil {
 		return nil, err
 	}
-	signatures := pairsOf([][2]interface{}{{uint32(sigAlgRSASSAWithSHA256), rsaSignature}})
+	signatures := pairsOf([][2]interface{}{{f.algID, firma}})
 
 	// the public key is checked against the first certificate by the verifier, so it
 	// is the one from the certificate, not a serialization of the signing key.
@@ -167,21 +172,21 @@ func v2SignerBlock(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate) (
 // certificados y, al final, minSdk/maxSdk y la lista de atributos; el signer repite esos tres
 // campos fuera del signed data antes de las firmas y la clave pública. Medido sobre un apk de
 // `apksigner` en el parrafo 108: minSdk 24, maxSdk 0x7fffffff.
-func v3SignerBlock(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate) ([]byte, error) {
-	return v3SignerBlockCon(digest, key, cert, 24, 0x7fffffff, nil)
+func v3SignerBlock(digest []byte, f *firmante) ([]byte, error) {
+	return v3SignerBlockCon(digest, f, 24, 0x7fffffff, nil)
 }
 
 // v3SignerBlockCon: como v3SignerBlock, pero con el rango de SDK y la lista de atributos
 // que pide una rotación. `attrs` ya viene con su longitud (la que arma lineage.go); nil
 // es la lista vacía.
-func v3SignerBlockCon(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate,
+func v3SignerBlockCon(digest []byte, f *firmante,
 	minSdkVal, maxSdkVal int, attrs []byte) ([]byte, error) {
-	pub, err := x509.MarshalPKIXPublicKey(key.Public())
+	pub, err := x509.MarshalPKIXPublicKey(f.cert.PublicKey)
 	if err != nil {
 		return nil, err
 	}
-	digests := pairsOf([][2]interface{}{{uint32(sigAlgRSASSAWithSHA256), digest}})
-	certs := seqOf(cert.Raw)
+	digests := pairsOf([][2]interface{}{{f.algID, digest}})
+	certs := seqOf(f.cert.Raw)
 	minSdk := appendUint32(nil, uint32(minSdkVal))
 	maxSdk := appendUint32(nil, uint32(maxSdkVal))
 	if attrs == nil {
@@ -193,12 +198,11 @@ func v3SignerBlockCon(digest []byte, key *rsa.PrivateKey, cert *x509.Certificate
 	signedData = append(signedData, minSdk...)
 	signedData = append(signedData, maxSdk...)
 	signedData = append(signedData, attrs...)
-	signedDigest := sha256.Sum256(signedData)
-	signature, err := rsa.SignPKCS1v15(rand.Reader, key, crypto.SHA256, signedDigest[:])
+	firma, err := f.firma(signedData)
 	if err != nil {
 		return nil, err
 	}
-	signatures := pairsOf([][2]interface{}{{uint32(sigAlgRSASSAWithSHA256), signature}})
+	signatures := pairsOf([][2]interface{}{{f.algID, firma}})
 	// Fuera del signed data van solo minSdk, maxSdk, las firmas y la clave pública. La lista de
 	// atributos va dentro del signed data; medido en el parrafo 108 sobre apksigner.
 	signer := seqOf(signedData)
