@@ -7100,23 +7100,30 @@ tools/entorno.sh -- sh -c 'APKC_WASM=$TMP/apkc-wasm.wasm \
   node studio/prueba-pestana.js'
 ```
 
-**Resultado**: `60 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
+**Resultado**: `62 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
 ellas de 400 caracteres), baja el textarea 500 px y exige que `#codigo`, `#resalto` y `#numeros`
 tengan el mismo `scrollTop` (`[500,500,500]`) y que el resaltado comparta además el
 `scrollLeft` (`[80,80]`). La `3c` comprueba que Tab sin selección inserta en el cursor, que
 Shift+Tab desindenta, y que `document.execCommand("undo")` revierte la edición: las ediciones
 programáticas pasan por `execCommand("insertText")`, no por `setRangeText`.
 
-## 142. El `android.jar` se toma del SDK local; el repo no lo versiona
+## 142. El `android.jar` sale del SDK local o del paquete oficial de Google; el repo no lo versiona
 
 Medido el 2026-11-09. El `android.jar` del API 34 pesa **26 361 808 bytes** y su licencia de SDK
-no permite redistribuirlo como si fuera del repo, así que no se versiona. Lo que sí se puede hacer
-es leerlo de una instalación oficial que ya esté en la máquina: `servidor.js` lo busca en
-`ANDROID_JAR`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` y `~/Android` (de la plataforma más nueva a la
-más vieja), lo sirve en `/android-jar` y publica versión y tamaño en `/android-jar-info`. La
-página pide `/android-jar` a **su propio origen** al compilar si no lo tiene en OPFS, lo guarda
-allí y sigue sin hacer una sola petición fuera; el selector de fichero queda como respaldo. Si no
-hay SDK local, `tools/entorno.sh jar` instala `platforms;android-34` con el `sdkmanager` oficial.
+no permite redistribuirlo como si fuera del repo, así que no se versiona. Hay dos caminos, y
+ninguno mete el jar en el repositorio:
+
+- **Servidor local (desarrollo):** `servidor.js` lo busca en `ANDROID_JAR`, `ANDROID_HOME`,
+  `ANDROID_SDK_ROOT` y `~/Android` (de la plataforma más nueva a la más vieja), lo sirve en
+  `/android-jar` y publica versión y tamaño en `/android-jar-info`. La página lo pide a **su propio
+  origen** al compilar si no lo tiene en OPFS y lo guarda allí.
+- **Página estática (producción):** no hay endpoint. El panel Compilar pide aceptar los términos
+  del SDK y ofrece el enlace oficial al paquete `platform-34-ext7_r03.zip` de `dl.google.com`
+  (~63 MB); el editor abre el `.zip`, saca `android-34/android.jar` y lo guarda en OPFS. También
+  acepta el `.jar` suelto. El enlace no sale sin marcar la casilla de términos.
+
+Si no hay SDK local, `tools/entorno.sh jar` instala `platforms;android-34` con el `sdkmanager`
+oficial.
 
 **Comando**
 
@@ -7131,10 +7138,27 @@ tools/entorno.sh -- sh -c 'cd studio && APKC_WASM=$TMP/apkc-wasm.wasm \
 ```
 
 **Resultado**: `{"disponible":true,"version":34,"bytes":26361808}` y
-`jar: 200 26361808 bytes`, `idéntico`. La comprobación
-`sin jar en OPFS, compilar lo trae solo del SDK local` de `prueba-pestana.js` borra
-`/sdk/android.jar`, llama a `compilarDelTodo()` y exige que el jar vuelva a OPFS y que el apk
-salga con código 0: **60 comprobaciones bien, 0 mal**.
+`jar: 200 26361808 bytes`, `idéntico`. En `prueba-pestana.js`, la comprobación
+`sin jar en OPFS, compilar lo trae solo del SDK local` borra `/sdk/android.jar`, llama a
+`compilarDelTodo()` y exige que el jar vuelva a OPFS y que el apk salga con código 0; la
+comprobación `el .zip oficial se descomprime y deja el android.jar` construye el zip con
+`makeZip`, lo entrega por el selector y relee `/sdk/android.jar`; y
+`la descarga oficial exige aceptar los términos y apunta a Google` comprueba el `aria-disabled`
+del enlace. **62 comprobaciones bien, 0 mal**.
+
+El paquete oficial real también se abrió una vez: `platform-34-ext7_r03.zip` mide
+**63 180 081 bytes** (SHA-1 `1f2e9478d6a7601425ceaa553311dc43191f103d`, el que publica
+`repository2-3.xml`), contiene `android-34/android.jar`, y `jarDeSeleccion` devolvió
+**26 361 808 bytes idénticos byte a byte** al `android.jar` del SDK instalado
+(SHA-256 `6cea1df3efb77103ac3e2beb9bf4718964b0e0869ab16d39d29d5cbae1c147ad`).
+
+```sh
+curl -fL -o /tmp/platform-34-ext7_r03.zip \
+  https://dl.google.com/android/repository/platform-34-ext7_r03.zip
+node -e 'const fs=require("fs"),crypto=require("crypto"),p=require("./studio/pestana.js");
+p.jarDeSeleccion(new Uint8Array(fs.readFileSync("/tmp/platform-34-ext7_r03.zip")))
+ .then(j=>console.log(j.length, crypto.createHash("sha256").update(j).digest("hex")))'
+```
 
 ## 143. Compilar dos veces seguidas ya no deja huérfano `build/res`
 
@@ -7147,7 +7171,7 @@ existía. Ahora `unlink` de un directorio responde `EISDIR` y la limpieza de OPF
 `rmdir` es recursiva, de modo que memoria y disco no se separan.
 
 **Resultado**: con la corrección, la comprobación de la §142 (que compila, borra el jar, vuelve a
-traerlo y compila otra vez sin limpiar `build/`) termina con **60 comprobaciones bien, 0 mal**, y
+traerlo y compila otra vez sin limpiar `build/`) termina con **62 comprobaciones bien, 0 mal**, y
 el segundo `apkc build --linker go --compiler go` sale 0 con `build/res` presente
 (`/proyecto/build/res:dir` en el árbol).
 

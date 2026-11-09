@@ -123,5 +123,13 @@ if (pestanaMod.esXml("package x; import java.util.List; class X { List<String> x
 if (!pestanaMod.esXml('<!-- c --><resources><string name="x">y</string></resources>'))
   mal("esXml no reconoce un recurso que empieza por comentario");
 
-console.log(fallos ? `PRUEBA FALLA: ${fallos} problemas` : "prueba: todo en orden");
-process.exit(fallos ? 1 : 0);
+// 8. el paquete oficial de la plataforma es un zip con android-34/android.jar: el editor tiene
+// que sacarlo sin depender de un unzip externo. Se prueba con el mismo makeZip de la página.
+(async () => {
+  const interior = "PK" + "x".repeat(2048);
+  const zip = a.makeZip([["android-34/android.jar", interior]]);
+  const jar = await pestanaMod.jarDeSeleccion(zip);
+  if (new TextDecoder().decode(jar) !== interior) mal("jarDeSeleccion no extrae android.jar del .zip oficial");
+  console.log(fallos ? `PRUEBA FALLA: ${fallos} problemas` : "prueba: todo en orden");
+  process.exit(fallos ? 1 : 0);
+})();

@@ -698,6 +698,10 @@ const RUTA_KEYSTORE = "/sdk/keystore.p12";
 const RUTA_VIEJO = "/keystore-viejo";
 const RUTA_LINAJE = "/lineage.bin";
 
+// Lo que el servidor local sabe del SDK. En una página servida de forma estática no hay
+// /android-jar-info: el camino es el paquete oficial de Google, el .zip o el .jar.
+const JAR_SDK = { disponible: false, consultado: false, version: null, bytes: 0 };
+
 // Un keystore por flujo: el del build queda en OPFS (`/sdk/keystore.p12`) y el de `sign` en
 // `/keystore`, las rutas que ya usaban los botones. Lo nuevo es la contraseña, el alias que se
 // elige entre los que el fichero declara, y el certificado que se enseña antes de firmar.
@@ -821,6 +825,72 @@ async function olvidarLinaje() {
   estadoLinaje("sin linaje");
 }
 
+// El paquete oficial de una plataforma es un .zip con `android-34/android.jar` dentro. Se lee
+// el directorio central del zip, se toma esa entrada y se descomprime con DecompressionStream:
+// así una página estática no obliga a descomprimir a mano. Si lo elegido ya es un .jar, no hay
+// entrada anidada y se usa tal cual.
+async function jarDeSeleccion(datos) {
+  if (!datos || datos.length < 1000 || datos[0] !== 0x50 || datos[1] !== 0x4b) {
+    throw new Error("el fichero no es un .jar ni un .zip");
+  }
+  const anidado = await extraerJarDeZip(datos);
+  const jar = anidado || datos;
+  if (jar.length < 1000 || jar[0] !== 0x50 || jar[1] !== 0x4b) {
+    throw new Error("lo elegido no contiene un android.jar (ni es un .jar)");
+  }
+  return jar;
+}
+
+async function extraerJarDeZip(datos) {
+  const dv = new DataView(datos.buffer, datos.byteOffset, datos.byteLength);
+  const desde = Math.max(0, datos.length - 65557);
+  let eocd = -1;
+  for (let i = datos.length - 22; i >= desde; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error("el zip no tiene fin de directorio (EOCD)");
+  const entradas = dv.getUint16(eocd + 10, true);
+  const inicioCentral = dv.getUint32(eocd + 16, true);
+  if (entradas === 0xffff || inicioCentral === 0xffffffff) {
+    throw new Error("zip64 no soportado: descomprime el paquete a mano y elige android.jar");
+  }
+  const dec = new TextDecoder();
+  let p = inicioCentral;
+  for (let i = 0; i < entradas; i++) {
+    if (dv.getUint32(p, true) !== 0x02014b50) throw new Error("zip: entrada central " + i + " corrupta");
+    const metodo = dv.getUint16(p + 10, true);
+    const csize = dv.getUint32(p + 20, true);
+    const usize = dv.getUint32(p + 24, true);
+    const nlen = dv.getUint16(p + 28, true);
+    const elen = dv.getUint16(p + 30, true);
+    const clen = dv.getUint16(p + 32, true);
+    const local = dv.getUint32(p + 42, true);
+    const nombre = dec.decode(datos.subarray(p + 46, p + 46 + nlen));
+    if (/(^|\/)android\.jar$/i.test(nombre)) {
+      if (dv.getUint32(local, true) !== 0x04034b50) throw new Error("zip: cabecera local de " + nombre + " corrupta");
+      const inicioDatos = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      const comprimido = datos.subarray(inicioDatos, inicioDatos + csize);
+      let salida;
+      if (metodo === 0) salida = comprimido.slice();
+      else if (metodo === 8) {
+        if (typeof DecompressionStream !== "function") {
+          throw new Error("este navegador no descomprime deflate: descomprime el zip a mano");
+        }
+        const flujo = new Blob([comprimido]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+        salida = new Uint8Array(await new Response(flujo).arrayBuffer());
+      } else {
+        throw new Error("zip: método de compresión " + metodo + " no soportado");
+      }
+      if (salida.length !== usize) {
+        throw new Error("zip: android.jar descomprimido mide " + salida.length + ", se esperaban " + usize);
+      }
+      return salida;
+    }
+    p += 46 + nlen + elen + clen;
+  }
+  return null;
+}
+
 async function ponerJarDeUrl(url) {
   // la ruta del servidor local, no de un CDN: la página solo habla con su propio origen, y eso es
   // lo que comprueba la prueba de la pestaña contando las peticiones
@@ -859,26 +929,38 @@ async function traerJarDelSdk(silencioso) {
 // si el botón «Traer del SDK local» va a poder hacer algo.
 async function consultarJarDelSdk() {
   const aviso = document.getElementById("estado-jar-sdk");
+  const boton = document.getElementById("traer-android-jar");
+  const sinSdk = "sin servidor local de SDK: descarga el paquete oficial o elige el .jar/.zip";
   if (!aviso) return;
   try {
     const respuesta = await fetch("/android-jar-info");
     if (!respuesta.ok) throw new Error("HTTP " + respuesta.status);
     const info = await respuesta.json();
-    aviso.textContent = info.disponible
+    JAR_SDK.disponible = !!info.disponible;
+    JAR_SDK.version = info.version || null;
+    JAR_SDK.bytes = info.bytes || 0;
+    aviso.textContent = JAR_SDK.disponible
       ? "el servidor ve el android.jar del SDK local: API " + info.version + ", " + info.bytes + " bytes"
-      : "el servidor no encontró un SDK local; elige el fichero o ejecuta tools/entorno.sh jar";
+      : sinSdk;
   } catch (e) {
-    aviso.textContent = "este servidor no expone /android-jar-info; usa el selector de fichero";
+    JAR_SDK.disponible = false;
+    aviso.textContent = sinSdk;
+  } finally {
+    JAR_SDK.consultado = true;
+    if (boton) boton.hidden = !JAR_SDK.disponible;
   }
 }
 
 async function usarJarElegido() {
   const entrada = document.getElementById("android-jar");
-  if (!entrada.files.length) { nota("elige el android.jar primero"); return false; }
-  const datos = new Uint8Array(await entrada.files[0].arrayBuffer());
-  await hospedador.escribir(RUTA_JAR, datos);
+  if (!entrada.files.length) { nota("elige el android.jar o el .zip oficial primero"); return false; }
+  const archivo = entrada.files[0];
+  nota("leyendo " + archivo.name + "…");
+  const datos = new Uint8Array(await archivo.arrayBuffer());
+  const jar = await jarDeSeleccion(datos);
+  await hospedador.escribir(RUTA_JAR, jar);
   await decirEstadoJar();
-  nota("android.jar guardado en esta pestaña (" + datos.length + " bytes); no sube a ningún sitio");
+  nota("android.jar guardado en esta pestaña (" + jar.length + " bytes); no sube a ningún sitio");
   return true;
 }
 
@@ -902,12 +984,17 @@ async function decirEstadoJar() {
 async function compilarDelTodo() {
   if (!(await decirEstadoJar())) {
     const entrada = document.getElementById("android-jar");
-    // si la persona ya eligió un fichero, ese manda; si no, se prueba el SDK local del origen
+    // si la persona ya eligió un fichero, ese manda; si no, solo se prueba el SDK local cuando
+    // el servidor ha dicho que existe (en una página estática ese endpoint no está)
     if (entrada && entrada.files.length) {
       if (!(await usarJarElegido())) { nota("no se pudo leer el android.jar elegido"); return; }
-    } else if (!(await traerJarDelSdk(true)) && !(await usarJarElegido())) {
-      nota("hace falta el android.jar del API 34: no hay SDK local en el servidor y no elegiste fichero; ejecuta tools/entorno.sh jar o pásalo con el selector");
-      return;
+    } else {
+      if (!JAR_SDK.consultado) await consultarJarDelSdk();
+      if (!(JAR_SDK.disponible && await traerJarDelSdk(true))) {
+        nota("hace falta el android.jar: acepta los términos, descarga el paquete oficial y elige el .zip o el .jar en Compilar");
+        mostrarPanel("compilar");
+        return;
+      }
     }
   }
   const k = await prepararKeystore(KEYSTORES.compilar);
@@ -1001,6 +1088,30 @@ if (typeof document !== "undefined") {
       });
     };
     EDITOR.inicializar();
+
+    // La descarga del paquete oficial es una navegación del usuario a Google, no una petición
+    // de la página: por eso sigue funcionando servida de forma estática. Sin aceptar los
+    // términos, el enlace no sale.
+    const acepto = document.getElementById("acepto-sdk");
+    const descargar = document.getElementById("descargar-sdk");
+    if (acepto && descargar) {
+      const reflejarAcepto = () => {
+        const listo = !!acepto.checked;
+        descargar.setAttribute("aria-disabled", String(!listo));
+        if (listo) descargar.removeAttribute("tabindex");
+        else descargar.tabIndex = -1;
+      };
+      acepto.addEventListener("change", reflejarAcepto);
+      descargar.addEventListener("click", (e) => {
+        if (!acepto.checked) {
+          e.preventDefault();
+          nota("acepta los términos del SDK de Android antes de descargar");
+          acepto.focus();
+        }
+      });
+      reflejarAcepto();
+    }
+
     for (const boton of document.querySelectorAll(".panel-tab")) {
       boton.addEventListener("click", () => mostrarPanel(boton.dataset.panel));
     }
@@ -1069,4 +1180,6 @@ if (typeof document !== "undefined") {
   });
 }
 
-if (typeof module !== "undefined") module.exports = { resaltar, esXml, textoHtml };
+if (typeof module !== "undefined") {
+  module.exports = { resaltar, esXml, textoHtml, jarDeSeleccion, extraerJarDeZip };
+}

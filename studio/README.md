@@ -50,10 +50,13 @@ Qué hace de verdad, y qué no:
   `jarsigner` y `zipcheck.py` aceptan por fuera — y **compilar el proyecto entero** con
   `build --linker go --compiler go`: enlazar los recursos, sacar el `.class`, dexar y firmar, todo dentro
   de la pestaña y sin levantar un proceso. El keystore y el `android.jar` no salen de la pestaña:
-  `servidor.js` busca el `android.jar` del SDK local y lo sirve en `/android-jar`, y al compilar la
-  página lo pide a su propio origen, lo guarda en OPFS una vez y sobrevive a recargar; si no hay SDK
-  local, queda el selector de fichero. `tools/entorno.sh jar` instala `platforms;android-34` con el
-  `sdkmanager` oficial si falta. Medido en `docs/evidencia.md` §45 y
+  con `servidor.js`, el jar se toma del SDK local y se sirve en `/android-jar`; en una página
+  estática, el panel Compilar pide aceptar los términos del SDK y enlaza al paquete oficial de
+  Google, y el editor extrae `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Esa
+  descarga es una navegación que pulsa la persona, no una petición de la página: la pestaña sigue
+  sin pedir nada fuera de su origen. En
+  ambos casos se guarda una vez en OPFS y sobrevive a recargar. `tools/entorno.sh jar` instala
+  `platforms;android-34` con el `sdkmanager` oficial si falta. Medido en `docs/evidencia.md` §45 y
   §46: el apk que sale es **igual entrada por entrada** al del mismo comando en el binario nativo, y `d8`
   releee el dex que escribió el navegador.
 - **hace también**: compilar un fuente que la página **no** generó. Campos con sus modificadores, variables
@@ -81,7 +84,7 @@ Qué hace de verdad, y qué no:
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 59 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 62 cosas |
 
 ## Abrir la pestaña en Brave Nightly
 

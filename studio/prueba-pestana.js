@@ -756,6 +756,34 @@ async function conductor() {
   }
 
 
+  // 13. la página servida de forma estática: el paquete oficial de Google es un .zip con
+  // android-34/android.jar dentro; el editor lo extrae al elegirlo, sin unzip externo.
+  const paquete = await evaluar(`(async () => {
+    const interior = "PK" + "x".repeat(2048);
+    const zip = makeZip([["android-34/android.jar", interior]]);
+    const dt = new DataTransfer();
+    dt.items.add(new File([zip], "platform-34.zip", { type: "application/zip" }));
+    document.getElementById("android-jar").files = dt.files;
+    await usarJarElegido();
+    const jar = await hospedador.bytes("/sdk/android.jar");
+    return { largo: jar ? jar.length : 0, cabecera: jar ? String.fromCharCode(jar[0], jar[1]) : "",
+      aviso: document.getElementById("estado-jar").textContent };
+  })()`);
+  comprueba("el .zip oficial se descomprime y deja el android.jar",
+    paquete.largo === 2050 && paquete.cabecera === "PK", JSON.stringify(paquete));
+
+  const terminos = await evaluar(`(() => {
+    const c = document.getElementById("acepto-sdk"), a = document.getElementById("descargar-sdk");
+    const antes = a.getAttribute("aria-disabled");
+    c.checked = true; c.dispatchEvent(new Event("change", { bubbles: true }));
+    const despues = a.getAttribute("aria-disabled");
+    c.checked = false; c.dispatchEvent(new Event("change", { bubbles: true }));
+    return { antes, despues, href: a.href };
+  })()`);
+  comprueba("la descarga oficial exige aceptar los términos y apunta a Google",
+    terminos.antes === "true" && terminos.despues === "false" &&
+    /^https:\/\/dl\.google\.com\//.test(terminos.href), JSON.stringify(terminos));
+
   // requisito del proyecto, escrito como comprobación: la pestaña no puede pedir nada fuera de
   // su origen. Ni un CDN de un runtime de terceros, ni telemetría, ni una fuente.
   const ajenas = peticiones.filter((u) => !u.startsWith("http://127.0.0.1:" + PUERTO) && !u.startsWith("data:") && !u.startsWith("blob:"));

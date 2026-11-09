@@ -404,6 +404,7 @@ button:focus-visible { outline: 1px solid #007fd4; outline-offset: 1px; }
   font-size: 12px;
 }
 .boton-enlace:hover { background: #37373d; text-decoration: none; }
+.boton-enlace[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
 
 .crear-minimo { display: grid; gap: 12px; max-width: 620px; }
 .crear-minimo label { display: grid; gap: 5px; font-size: 12px; color: #b5b5b5; }

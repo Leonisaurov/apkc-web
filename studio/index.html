@@ -121,14 +121,21 @@
 
               <div id="panel-compilar" class="panel-vista" role="tabpanel">
                 <p class="nota">Hace falta el <code>android.jar</code> del SDK (API 34) y un keystore para
-                  firmar. El jar se puede traer del SDK local o elegir del disco; se guarda una vez en
-                  OPFS y no sale de la pestaña.</p>
+                  firmar. Si la página se sirve de forma estática, acepta los términos y descarga el
+                  paquete oficial de Google: dentro está <code>android-34/android.jar</code> y el editor
+                  lo extrae del <code>.zip</code>. También puedes elegir el <code>.jar</code> suelto.
+                  Se guarda una vez en OPFS y no sale de la pestaña.</p>
                 <div class="panel-form">
+                  <label><input type="checkbox" id="acepto-sdk"> Acepto los
+                    <a href="https://developer.android.com/studio/terms" target="_blank" rel="noopener">términos del SDK de Android</a>.</label>
                   <div class="acciones">
-                    <button id="traer-android-jar" type="button">Traer el del SDK local</button>
+                    <a id="descargar-sdk" class="boton-enlace" aria-disabled="true"
+                       href="https://dl.google.com/android/repository/platform-34-ext7_r03.zip"
+                       download="platform-34-ext7_r03.zip" target="_blank" rel="noopener">Descargar el paquete oficial (zip, ~63 MB)</a>
+                    <button id="traer-android-jar" type="button" hidden>Traer el del SDK local</button>
                   </div>
                   <p class="nota" id="estado-jar-sdk">mirando si el servidor tiene un SDK local…</p>
-                  <label>o elige el android.jar del disco <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
+                  <label>o elige el .jar o el .zip oficial <input type="file" id="android-jar" accept=".jar,.zip,application/java-archive,application/zip"></label>
                   <div class="acciones">
                     <button id="usar-android-jar" type="button">Guardar el android.jar elegido</button>
                   </div>
