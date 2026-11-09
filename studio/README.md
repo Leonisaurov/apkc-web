@@ -76,6 +76,7 @@ Qué hace de verdad, y qué no:
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
+| `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
 | `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 41 cosas |
 
 ## Abrir la pestaña en Brave Nightly
@@ -124,4 +125,5 @@ de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la s
 inferior con Salida, Compilar y Firmar (cerrado hasta que hace falta; ``Ctrl + ` `` lo abre).
 `pestana.js` lleva el editor, el árbol y apkc.wasm; `vistas.js` siembra el árbol, cambia de vista
 (también por hash, `index.html#pestana`) y refleja rótulos. Las pruebas de navegador, de creación
-y de la pestaña usan los mismos ids de siempre.
+y de la pestaña usan los mismos ids de siempre. El detalle de la estructura, los ids, los atajos y
+los límites del editor está en `studio/EDITOR.md`.

@@ -104,5 +104,16 @@ for (const m of html.matchAll(/<input[^>]*name="([^"]+)"/g))
   if (!new RegExp(`"(f\\.get|f\\.has)\\(\"${m[1]}\"`).test(js) && !js.includes(`"${m[1]}"`))
     mal(`el formulario tiene ${m[1]} y estado() no lo lee`);
 
+// 7. el resaltador del editor es puro y se puede probar sin DOM; si se rompe, el código se
+// queda sin color o, peor, el HTML del resaltado se come el texto
+const pestanaMod = require(path.join(__dirname, "pestana.js"));
+const java = pestanaMod.resaltar("package x;\n// hola\npublic class X {}\n", "java");
+if (!/<span class="palabra">package<\/span>/.test(java)) mal("el resaltador no pinta package");
+if (!/<span class="comentario">\/\/ hola<\/span>/.test(java)) mal("el resaltador no pinta el comentario");
+const xml = pestanaMod.resaltar('<manifest package="x">', "xml");
+if (!/class="etiqueta">manifest</.test(xml)) mal("el resaltador no pinta la etiqueta XML");
+if (!/class="atributo">package</.test(xml)) mal("el resaltador no pinta el atributo XML");
+if (pestanaMod.esXml("package x;") || !pestanaMod.esXml('<?xml version="1.0"?>')) mal("esXml no distingue Java de XML");
+
 console.log(fallos ? `PRUEBA FALLA: ${fallos} problemas` : "prueba: todo en orden");
 process.exit(fallos ? 1 : 0);
