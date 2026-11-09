@@ -21,7 +21,7 @@ func main() {
 	// verify reads one package and starts nothing either, for the same reason: it is the
 	// stage the tab needs to say something about the apk it just wrote.
 	switch os.Args[1] {
-	case "dex", "link", "compile", "verify":
+	case "dex", "link", "compile", "verify", "keystore":
 	case "build":
 		// `apkc build --linker go --compiler go` starts no process either: it is the whole build of
 		// the tab, and there is no SDK to find in there (§44)
@@ -47,6 +47,8 @@ func main() {
 		clean()
 	case "sign":
 		sign()
+	case "keystore":
+		keystore()
 	case "dex":
 		dex()
 	case "compile":
@@ -74,9 +76,11 @@ build  - build apk (--inc for an incremental build, --aab for an app bundle,
 run    - build apk and run it on an available device (--inc, --rish)
 watch  - rebuild on every change (--inc, --run installs and follows the app)
 clean  - delete build/ dir
-sign   - put an existing apk under a v1+v2 signature of its own, with no zipalign, no
+sign   - put an existing apk under a v1+v2+v3 signature of its own, with no zipalign, no
          apksigner and no external program at all (--keystore, --storepass,
          --keyalias, --out; without --out the package is signed in place)
+keystore - list the signing identities of a keystore (alias, subject, SHA-256 and validity)
+         as one line of JSON, with no process and no JVM (--keystore, --storepass)
 dex    - turn compiled .class files into a classes.dex in Go, with no d8 and no subprocess
          (-o salida, y una o mas carpetas de entrada; es la etapa que puede correr en el
          navegador, el resto del build todavia necesita aapt2 y javac)

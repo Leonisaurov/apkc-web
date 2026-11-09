@@ -141,6 +141,12 @@ type keyMaterial struct {
 	// computed with. A user who converts a keystore and loses the key in the
 	// process at least sees which scheme the file claimed.
 	MacAlgo string
+
+	// Entries is every signing identity the file holds, in the order the file names
+	// them. Signing uses the chosen one; the `keystore` command lists them so a page
+	// can show the alias, the subject and the fingerprint before signing, and require
+	// an explicit alias when the file holds more than one.
+	Entries []keystoreEntry
 }
 
 // rawKey and rawCert are the two halves of an entry as the bags carry them, before
@@ -278,6 +284,9 @@ func readPKCS12(blob []byte, password, alias string) (keyMaterial, error) {
 			break
 		}
 	}
+	if all, err := entriesOf(keys, certs); err == nil {
+		out.Entries = all
+	}
 	signer, cert, entry, err := pickEntry(keys, certs, alias)
 	if err != nil {
 		return out, err
@@ -304,6 +313,36 @@ func pickEntry(keys []rawKey, certs []rawCert, alias string) (crypto.Signer, *x5
 		return nil, nil, "", errors.New("the keystore holds a key with no certificate")
 	}
 
+	entries, unread := entriesOf(keys, certs)
+	if len(entries) == 0 {
+		return nil, nil, "", unread
+	}
+
+	chosen := entries[0]
+	for _, e := range entries {
+		if alias != "" && e.alias == alias {
+			chosen = e
+			break
+		}
+	}
+	if chosen.cert == nil {
+		if len(certs) > 1 {
+			// the certificate is the identity the platform matches an update against,
+			// so a file with several of them is not answered by taking whichever one
+			return nil, nil, "", fmt.Errorf("none of the %d certificates of the keystore carries the public key of %q",
+				len(certs), chosen.alias)
+		}
+		// one key and one certificate: the file cannot mean anything else, whatever
+		// the two encodings say
+		chosen.cert = certs[0].cert
+	}
+	return chosen.signer, chosen.cert, chosen.alias, nil
+}
+
+// entriesOf turns the key bags into signing identities, matching each key with the
+// certificate that carries its public key. A bag this reader cannot open does not hide
+// the entries that can be read: the error is returned only when no key survives.
+func entriesOf(keys []rawKey, certs []rawCert) ([]keystoreEntry, error) {
 	entries := []keystoreEntry{}
 	unread := error(nil)
 	for _, k := range keys {
@@ -328,28 +367,9 @@ func pickEntry(keys []rawKey, certs []rawCert, alias string) (crypto.Signer, *x5
 		entries = append(entries, entry)
 	}
 	if len(entries) == 0 {
-		return nil, nil, "", unread
+		return nil, unread
 	}
-
-	chosen := entries[0]
-	for _, e := range entries {
-		if alias != "" && e.alias == alias {
-			chosen = e
-			break
-		}
-	}
-	if chosen.cert == nil {
-		if len(certs) > 1 {
-			// the certificate is the identity the platform matches an update against,
-			// so a file with several of them is not answered by taking whichever one
-			return nil, nil, "", fmt.Errorf("none of the %d certificates of the keystore carries the public key of %q",
-				len(certs), chosen.alias)
-		}
-		// one key and one certificate: the file cannot mean anything else, whatever
-		// the two encodings say
-		chosen.cert = certs[0].cert
-	}
-	return chosen.signer, chosen.cert, chosen.alias, nil
+	return entries, nil
 }
 
 // keystoreEntry is one signing identity of a keystore: the key, the certificate that

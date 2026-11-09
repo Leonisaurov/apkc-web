@@ -45,7 +45,7 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
 | 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
-| 5 cerrar el subconjunto (Java y recursos) | **abierta el 2026-11-01**: la página compila apps sencillas; faltan `throws`, interfaces, el `MainActivity.class` y las llamadas de seis argumentos, y en recursos los iconos, los calificadores y los tipos que faltan en `values`. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while`, `for`, `do-while`, `break`/`continue`, §63, §69 y §70)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)**, **5.11 (arreglos, `main(String[])`, `new T[] {…}` y los arreglos anchos, §66, §73, §84 y §85)**, **5.1 (`++`/`--` y `+=`/`-=`, §67 y §68)**, **5.9 (`try`/`catch`, `throw`, los dos `catch` y el `finally`, §71 y §75)**, **5.5 (`private`/`protected` y `access$…`, §72)**, **5.8 entero menos dos piezas (§74, §77, §80, §81, §82, §83, §84 y §85)**, **5.4 (`/from16` y `invoke-*/range`, §86 y §90)**, **5.2 (`char`, sus escapes, `caload`/`castore`, `i2c`, `aget-char`/`aput-char` y `sget-char`/`sput-char`, §87)**, **5.3 (`X.class`, `const-class` 0x1c y `==` entre referencias con `if_acmp*`, §89)**, **5.7 (constructores propios, `super`/`this` y los dos `code_item` de una sobrecarga, §91)** y **5.6 (`throws`, interfaces propias, abstractos e `invokeinterface`, §92)**, **5.16 (PNG en `drawable`/`mipmap` y `roundIcon`, §93)** y **5.17 (`values-xx`, `layout-land` y `drawable-hdpi`, §94 y §103)**; están cerrados el control de flujo, los números, el `char`, los literales de clase, las llamadas de seis palabras, los constructores, `throws`/interfaces, el icono y los dos idiomas, 5.18 completa (§96, §105 y §106), 5.19 completa (§97 y §102), 5.20 completa para API 27-35 (§98), 5.14 completa (§99 y §100), 5.15 (`Signature`, §101) y 5.17 completa (§94, §103 y §107). **5.21 queda en parte** (v3 ya se escribe y `apksigner` lo verifica; falta el keystore de release y v4) y **5.22 completa** (§109-§116: lambdas estáticas con o sin capturas, `this`, `this::m`, `Tipo::m`, el SAM genérico, el borrado a una cota, `altMetafactory` serializable y con marcadores y la concatenación dinámica de JDK 9, desugrados y ejecutados en ART; los puentes de `altMetafactory` y las constantes dinámicas se rechazan por nombre), §104, §108 y §109-§116. La **app de cierre** (bucle, `switch`, `try`/`catch`, icono y dos idiomas) ya compila y firma con el camino todo-Go (§95, 9861 bytes, `apksigner` y `zipalign` correctos); **falta instalarla y arrancarla** en el teléfono, que es acción sobre el aparato y se pide al usuario | la sección «Fase 5» de este plan |
+| 5 cerrar el subconjunto (Java y recursos) | **abierta**: el núcleo Java y los recursos de la app de cierre están cerrados, y la firma de release ya entra por la pestaña; quedan las piezas de 5.8, 5.9, 5.12 y 5.13, las fronteras de recursos y las piezas 5.29-5.35 de la firma. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while`, `for`, `do-while`, `break`/`continue`, §63, §69 y §70)**, **5.12 (`switch`, §64)**, **5.23 (`StackMapTable`, §65)**, **5.11 (arreglos, `main(String[])`, `new T[] {…}` y los arreglos anchos, §66, §73, §84 y §85)**, **5.1 (`++`/`--` y `+=`/`-=`, §67 y §68)**, **5.9 (`try`/`catch`, `throw`, los dos `catch` y el `finally`, §71 y §75)**, **5.5 (`private`/`protected` y `access$…`, §72)**, **5.8 entero menos dos piezas (§74, §77, §80, §81, §82, §83, §84 y §85)**, **5.4 (`/from16` y `invoke-*/range`, §86 y §90)**, **5.2 (`char`, sus escapes, `caload`/`castore`, `i2c`, `aget-char`/`aput-char` y `sget-char`/`sput-char`, §87)**, **5.3 (`X.class`, `const-class` 0x1c y `==` entre referencias con `if_acmp*`, §89)**, **5.7 (constructores propios, `super`/`this` y los dos `code_item` de una sobrecarga, §91)** y **5.6 (`throws`, interfaces propias, abstractos e `invokeinterface`, §92)**, **5.16 (PNG en `drawable`/`mipmap` y `roundIcon`, §93)** y **5.17 (`values-xx`, `layout-land` y `drawable-hdpi`, §94 y §103)**; están cerrados el control de flujo, los números, el `char`, los literales de clase, las llamadas de seis palabras, los constructores, `throws`/interfaces, el icono y los dos idiomas, 5.18 completa (§96, §105 y §106), 5.19 completa (§97 y §102), 5.20 completa para API 27-35 (§98), 5.14 completa (§99 y §100), 5.15 (`Signature`, §101) y 5.17 completa (§94, §103 y §107). **5.21 completa y 5.28 hecha** (§104, §108 y §117: v3 escrito y verificado; la pestaña acepta un keystore de release con contraseña, alias y certificado) y **5.22 completa** (§109-§116: lambdas estáticas con o sin capturas, `this`, `this::m`, `Tipo::m`, el SAM genérico, el borrado a una cota, `altMetafactory` serializable y con marcadores y la concatenación dinámica de JDK 9, desugrados y ejecutados en ART; los puentes de `altMetafactory` y las constantes dinámicas se rechazan por nombre), §104, §108 y §109-§117. Quedan abiertas 5.29-5.35 (firmar `.aab`, v4, rotación, EC, construir el bundle en Go, SHA-1 antiguo y el `minSdk` del proyecto en v3). La **app de cierre** (bucle, `switch`, `try`/`catch`, icono y dos idiomas) ya compila y firma con el camino todo-Go (§95, 9861 bytes, `apksigner` y `zipalign` correctos); **falta instalarla y arrancarla** en el teléfono, que es acción sobre el aparato y se pide al usuario | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
 
 ---
@@ -556,57 +556,66 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.18 | **recursos**: tipos que faltan en `values` (`color`, `integer-array`, `string-array`, `plurals`, `bool`, `fraction`, `attr`/`styleable`) | **HECHO** (§96, §105 y §106): `string-array`/`integer-array` (registros `0x01000000\|(índice+1)`), `plurals` (ids de cantidad en orden del fuente), `fraction` (radix 3/0/2 y bit `%p`, 796 bytes idénticos) y `attr`/`declare-styleable` (entrada compleja con el registro `0x01000000` y bits de formato; el styleable vive solo en `R.java`, con `new int[]`), arsc de 596 bytes idéntico. `bool`, `color` e `integer` ya estaban. Frontera: `format="enum"`/`flags"` con hijos | §96, §105 y §106 | hecho |
 | 5.19 | **recursos**: `menu`/`xml` (AXML con raíz que no es `layout`), `raw`, y el `<permission>` del manifiesto | **HECHO** (§97 y §102): `res/menu` y `res/xml` se enlazan como AXML con su raíz y `res/raw` viaja literal; la tabla declara `menu/principal`, `xml/prefs` y `raw/dato`. El `<permission android:name=…>` se recoge del manifiesto y `enlazarConGo` escribe `src/<paquete>/Manifest.java` byte a byte como aapt2 (cabecera, clase y constantes en el orden del manifiesto). Frontera: atributos de `<permission>` distintos de `name` | §97 y §102 | hecho |
 | 5.20 | versión de platform no medida y `--codename`/`--sdk-version` | **HECHO (§98)**: la tabla API→versión de Android es 27→8.1, 28→9, 29→10, 30→11, 31→12, 32→12L, 33→13, 34→14 y 35→15; con ella se escriben `android:compileSdkVersionCodename` y `platformBuildVersionName` (entero si el nombre es numérico, cadena para `8.1`/`12L`). Las APIs fuera de la tabla se rechazan por nombre y `--codename` sigue siendo la salida | §98 | hecho |
-| 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | **HECHO para v3 (§104 y §108)**: el paquete Go escribe los pares v2 y v3, y `apksigner verify` dice v1, v2 y v3 `true`; `apkc verify` sigue tolerando y anotando una v3 ajena. La pestaña tiene selector de fichero (`.p12`/`.jks`), pero solo pasa `--keystore`: con los valores por defecto (`android`/`androiddebugkey`) no abre un keystore de release. El alcance ampliado —credenciales de release, `.aab`, v4, v3.1 y claves EC— está en «Firma: alcance ampliado» | §104 y §108 | parcial |
+| 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | **HECHO (§104, §108 y §117)**: el paquete Go escribe los pares v2 y v3, y `apksigner verify` dice v1, v2 y v3 `true`; `apkc verify` sigue tolerando y anotando una v3 ajena. La pestaña pide la contraseña en cada firma, elige el alias entre los que declara el fichero (lo exige si hay más de uno), enseña sujeto, huella SHA-256 y validez, y pasa `--storepass`/`--keyalias` a `sign` y a `build`; «olvidar» borra el keystore de OPFS. v4, la rotación v3.1, las claves EC, el `.aab` y el `minSdk` del proyecto en el firmante v3 pasan a las filas 5.29-5.35 | §104, §108 y §117 | hecho |
 | 5.23 | `StackMapTable` en el `.class` que emitimos | **HECHO** (§65): medido con `javap -v` dónde pone javac cada marco (sin ramas no hay; en cada destino de salto y tras cada salto incondicional o `return`; `offset_delta` del primero = su pc) y que `top` gana en la unión y que un destino puede ser el pc 0. `apkc/jvmframes.go` calcula los estados con un intérprete abstracto sobre el cuerpo parcheado y escribe `full_frame` (forma legal sin la compresión de javac); el analizador exige que el alto simulado quepa en `max_stack`. Oráculos: `TestLosMarcosSonLosDeJavac` (nuestros marcos expandidos dicen lo mismo que los de javac en `while`, `switch` y la cabecera en el pc 0) y el banco, que ahora ejecuta nuestra `Ver` con `java -Xverify:all` y la compara por texto y rc | — | hecho |
 | 5.24 | `getstatic`/`putstatic` de una **referencia** (`System.out`) | **HECHO** (§62): medido `sget-object` `6200` y `sput-object` `6901` en el fichero de `d8`; `accesoEstatico` acepta `I` y `L` y el resto se rechaza por nombre. De paso, el internado no recorría los estáticos de otra clase y un campo ajeno nunca entraba en `field_ids` (corregido en `dextabla.go`) | — | hecho |
 | 5.25 | temporales en el punto de unión de un `if` con `else` | **HECHO, y la causa no era la unión** (§62): cada `putstatic` pedía un temporal con `toma` y luego lo tiraba al sacar el registro de la pila, así que el marco se quedaba sin temporales; corregido. La unión de brazos no necesitó nada. Queda por medir el presupuesto cuando un bucle tenga valores vivos en la cabecera (5.10) | — | hecho |
 | 5.26 | Resolución de sobrecargas (`println(String)` salía `println(Z)`) | **HECHO** (§62): candidatas por nombre y aridad de la jerarquía, exacta por descriptores, si no la aplicable más específica por cadena de padres e interfaces del jar (JVMS 15.12.2.5), y si no rechazo por nombre. `boxing`, varargs, arrays y ensanchamiento siguen fuera, por nombre | — | hecho |
 | 5.27 | Llamar a un método **sin receptor** desde un `static` | **HECHO** (§62): javac escribe `invokestatic` contra la clase actual, que es la forma 35c ya medida; se rechaza si el método no es estático | — | hecho |
 | 5.22 | `invokedynamic` (lambdas, references de método y concatenación) | **HECHO (§110-§116)**: se leen `CONSTANT_InvokeDynamic`, `BootstrapMethods`, `MethodHandle`/`MethodType` y se validan `LambdaMetafactory.metafactory`, `altMetafactory` y `StringConcatFactory.makeConcatWithConstants`. Se desugran la lambda estática con o sin capturas, la que captura `this`, `this::m`, `Tipo::m`, el SAM genérico (`Function<String,Integer>`), el borrado a una cota (`F<T extends Number>`), la serializable (`(Runnable & Serializable)`) y la intersección con marcadores (`Runnable & R & Serializable & Cloneable`). La clase sintética lleva un campo por captura, constructor con esos tipos, un SAM que los carga y, con `altMetafactory`, las interfaces de los marcadores y `Serializable` en el orden de `d8`; el dueño pierde `$deserializeLambda$`. La concatenación de JDK 9 se trocea por la receta (`\u0001` argumento, `\u0002` constante) y baja a `StringBuilder` con un `append` por tipo. Corre en ART con la salida de la JVM y `dexdump` lo verifica (`banco/lambda.sh`, trece casos). Fuera, rechazados por nombre: los puentes de `altMetafactory` con cuenta distinta de cero (javac los deja en cero) y las constantes dinámicas de la concatenación | §109-§116 | hecho |
+| 5.28 | keystore de release en la pestaña (contraseña, alias y certificado) | **HECHO (§117)**: `apkc keystore` lista alias, sujeto, SHA-256 y validez con los lectores de PKCS#12/JKS, sin JVM; la página pide la contraseña en cada firma, elige el alias entre los que declara el fichero (lo exige si hay más de uno), enseña el certificado y pasa `--storepass`/`--keyalias` a `sign` y `build`; «olvidar» borra el keystore de OPFS. `studio/e2e.sh` firma con un keystore de release de usar y tirar y `apksigner --print-certs` lee `CN=Release de prueba` y v1+v2+v3 | §117 | hecho |
+| 5.29 | firmar un `.aab` en la pestaña | **ABIERTO**: reutiliza `v1sign.go` para la firma JAR; un bundle no lleva bloque de firmas ni zipalign. Construirlo es 5.33 | `jarsigner -verify`, `unzip -l` | abierto |
+| 5.30 | v4 (`.idsig`) | **ABIERTO**: árbol de Merkle con el tamaño de bloque y la sal de `apksigner`, más el `V4Signature`, al lado del apk; con selector y por defecto activado | `apksigner verify --v4-signature-file` | abierto |
+| 5.31 | v3.1 y rotación de clave | **ABIERTO**: `proof-of-rotation`, varios firmantes y rangos por `minSdk`, en Go y sin depender de `apksigner` | `apksigner verify` con una rotación de dos claves | abierto |
+| 5.32 | claves EC (P-256/P-384) | **ABIERTO**: hoy `rsaKey` solo acepta RSA; la firma ECDSA necesita sus `sigAlg` en v1/v2/v3 | `apksigner verify` | abierto |
+| 5.33 | construir el `.aab` en Go | **ABIERTO**: manifiesto y tabla de recursos en protobuf, `BundleConfig.pb` y módulos; hoy lo hace `bundletool` | `bundletool validate`, `jarsigner -verify` | abierto |
+| 5.34 | SHA-1 para `minSdk < 18` | **ABIERTO**: el v1 del firmante Go usa SHA-256 y esas plataformas solo leen SHA-1; sin JVM en la pestaña | `apksigner verify` con `--min-sdk-version 17` | abierto |
+| 5.35 | `minSdk` del proyecto en el firmante v3 | **ABIERTO**: hoy escribe 24 fijo; medir qué escribe `apksigner` con otros `--min-sdk-version` y seguirlo | `apksigner verify` con varios `--min-sdk-version` | abierto |
 
 ### Firma: alcance ampliado (decisión del usuario, 2026-11-09)
 
 La pestaña tiene que **aceptar un keystore de release**, no solo el de depuración. Entran también en
-la cuenta el `.aab`, la firma v4 y el resto de piezas que 5.21 dejaba fuera. Nada de esto está
-implementado: lo que sigue es el alcance y las decisiones que faltan. Las mediciones nuevas van a
+la cuenta el `.aab`, la firma v4 y el resto de piezas que 5.21 dejaba fuera. Las credenciales de
+release ya están (§117); lo demás sigue abierto y es lo que sigue. Las mediciones nuevas van a
 `docs/evidencia.md` con su comando, como siempre.
 
 | pieza | qué haría falta | oráculo | coste |
 | --- | --- | --- | --- |
-| credenciales de release en la pestaña | campos de `--storepass` y `--keyalias`; no guardar la contraseña; enseñar DN y huella SHA-256 del certificado antes de firmar | `apksigner verify --print-certs` sobre un keystore de release generado con `keytool` | bajo |
+| credenciales de release en la pestaña | **HECHO (§117)**: `apkc keystore` lista alias/sujeto/huella; la página pide contraseña, elige alias y enseña el certificado | `apksigner verify --print-certs` sobre un keystore de release generado con `keytool` | bajo |
 | `.aab` | firmarlo como JAR (v1) con el firmante de Go, sin `jarsigner`; **construirlo** exige `bundletool` y un `resources.pb`/manifiesto protobuf que no están medidos | `jarsigner -verify`, `unzip -l` | medio (firmar) / alto (construir) |
 | v4 | escribir el `.idsig` al lado del apk: árbol de Merkle con el tamaño de bloque y la sal de `apksigner`, más el `V4Signature` | `apksigner verify --v4-signature-file` | medio |
 | v3.1 y rotación | `proof-of-rotation` en el firmante, varios firmantes y rangos por `minSdk` | `apksigner verify` con una rotación de dos claves | alto |
 | claves EC | firmar con ECDSA P-256/P-384 además de RSA; hoy `rsaKey` rechaza cualquier otra | `apksigner verify` | medio |
 | formatos | JKS y PKCS#12 ya se leen; JCEKS/BKS se convierten con `keytool` y se rechazan por nombre | — | nulo |
 
-Decisiones abiertas, ninguna tomada todavía:
+Decisiones tomadas (2026-11-09):
 
-1. **Contraseña**: ¿se teclea en cada firma o se guarda en OPFS? Lo recomendable es no guardarla.
-2. **Alias**: ¿texto libre, o una orden que liste los alias del keystore? Los lectores ya devuelven
-   `Alias` y `Keys`, así que listarlos es barato; con más de una clave habría que exigir el alias.
-3. **Keystore en OPFS**: ¿se conserva entre sesiones (con botón de «olvidar») o se pide siempre?
-   Limpiar los datos del sitio lo borra, y una clave de release perdida no se recupera.
-4. **Confirmación de identidad**: ¿se enseña el certificado (DN y huella) antes de firmar? Sin eso,
-   elegir el fichero equivocado produce un apk que instala una vez y falla la siguiente actualización.
-5. **`.aab`**: ¿solo se firma un bundle ya construido, o se construye también en Go? Construirlo
-   implica el manifiesto y la tabla de recursos en protobuf; firmarlo reutiliza `v1sign.go`.
-6. **`.aab` con firma previa**: ¿se vuelve a firmar (como hace `sign` con los apk) o se rechaza?
-7. **Upload key vs app signing key**: para Play se firma con la **upload key** y Play vuelve a firmar;
-   ¿se dice en la página y se impide usar la clave de app signing?
-8. **v4**: ¿por defecto, opt-in o fuera? No hace falta para instalar ni para Play; solo para
-   `adb install --incremental` en Android 11+.
-9. **v3.1/rotación**: ¿se implementa o se deja a Play App Signing y a `apksigner`? Rotar exige el
-   linaje de la clave vieja a la nueva y no se puede inventar.
-10. **`minSdk` del proyecto en v3**: hoy el firmante escribe 24 fijo; ¿se sigue el `minSdkVersion` del
-    manifiesto? Hay que medir antes qué escribe `apksigner` con `--min-sdk-version` distinto de 24.
-11. **EC**: ¿se añade ECDSA o se exige RSA? Play acepta las dos; hoy un keystore EC se rechaza.
-12. **`minSdk` menor que 18**: el v1 del firmante Go usa SHA-256 y esas plataformas solo leen SHA-1;
-    sin JVM en la pestaña, ¿se rechaza por nombre o se implementa SHA-1 (que ya no se debería usar)?
-13. **Oráculo del gate**: ¿se genera un keystore de release de usar y tirar con `keytool` dentro de la
-    prueba, o se mide solo a mano? Nunca se versiona una clave real.
-14. **Alcance de la promesa**: ¿«release» significa un apk instalable y actualizable, o también un
-    `.aab` publicable en Play? Lo segundo arrastra el bundle y el tamaño del `studio/`.
+1. **Contraseña**: se pide en cada firma; no se guarda.
+2. **Alias**: se listan con `apkc keystore`; si hay más de uno, la página exige elegirlo.
+3. **Keystore en OPFS**: se conserva con botón «olvidar» y aviso de que limpiar los datos lo borra.
+4. **Confirmación de identidad**: se enseña sujeto, huella SHA-256 y validez antes de firmar.
+5. **`.aab`**: primero firmar (5.29); construir el bundle después (5.33).
+6. **`.aab` con firma previa**: se vuelve a firmar, como `sign` con los apk.
+7. **Upload key vs app signing key**: se aceptan las dos; la página dice cuál es cuál y no
+   restringe, para que funcione en todos los casos.
+8. **v4**: se implementa con selector, por defecto activado.
+9. **v3.1/rotación**: se implementa en Go, sin depender de `apksigner`; el proyecto tiene que ser
+   standalone.
+10. **`minSdk` del proyecto en v3**: se sigue el `minSdkVersion` del manifiesto, después de medir qué
+    escribe `apksigner`.
+11. **EC**: se añade ECDSA P-256/P-384 además de RSA.
+12. **`minSdk` menor que 18**: se implementa el v1 con SHA-1.
+13. **Oráculo del gate**: keystore de usar y tirar generado con `keytool` dentro de la prueba; nunca
+    se versiona una clave real.
+14. **Promesa**: producción completa, sin debug, y 100% independiente en la pestaña, sea Play o no.
+
+También entran, por indicación del usuario: las dos piezas que 5.8 deja (la cuenta ancha de flotante
+de tres registros y el `ConstantValue` de un `static final long`), las fronteras de 5.9 (`continue`
+que sale de `try`/`finally`, dos `finally` anidados y `catch (A | B e)`), la caída al siguiente brazo
+de 5.12, la comprobación en ART y las formas que 5.13 deja (`instanceof T[]` y la negada), y ampliar
+los recursos (más densidades/orientaciones, `format="enum"`/`"flags"` y atributos de
+`<permission>`). La instalación en el teléfono va al final, con `virtual_screen` para no interrumpir
+la pantalla principal.
 
 ### Dependencias y orden
 
@@ -629,10 +638,14 @@ Decisiones abiertas, ninguna tomada todavía:
 - **Lo primero de todo fue el ejecutor** (§61): antes de tocar un ítem, `banco/banco.sh` corre el fuente
   por los cuatro caminos. En una tarde destapó cinco cosas que ningún oráculo de bytes veía (5.23 a
   5.27 y el `invokestatic` sin argumentos).
-- **Lo que sigue**: solo quedan las piezas opcionales: el keystore de release y v4 (5.21), los
-  puentes de `altMetafactory` (javac los deja en cero, así que no hay fixture) y la instalación en
-  el teléfono. Las lambdas, las referencias de método, los SAM genéricos, `altMetafactory` y la
-  concatenación dinámica medidos ya se desugran y corren (§110-§116).
+- **Lo que sigue**: la firma de release ya entra por la pestaña (5.21 y 5.28, §117). Quedan las
+  piezas de firma que el usuario pidió: firmar `.aab` (5.29), v4 (5.30), rotación v3.1 (5.31), EC
+  (5.32), construir el `.aab` (5.33), SHA-1 antiguo (5.34) y el `minSdk` del proyecto en v3 (5.35).
+  En Java, las dos piezas de 5.8, las fronteras de 5.9, la caída de 5.12 y lo que 5.13 deja; en
+  recursos, más densidades/orientaciones, `enum`/`flags` y atributos de `<permission>`. Al final, la
+  instalación en el teléfono. Los puentes de `altMetafactory` siguen fuera porque javac los deja en
+  cero; las lambdas, referencias, SAM, `altMetafactory` y concatenación ya se desugran y corren
+  (§110-§116).
   Después, el `continue` que sale de un `try` con `finally` y los dos `finally` anidados con salida
   pendiente (5.9, §76). El punto flotante del dex, las ramas anchas, el `char`, los literales de clase,
   `/range`, los constructores, `throws`/interfaces, el icono y `values-es` ya están cerrados

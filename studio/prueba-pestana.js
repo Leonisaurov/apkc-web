@@ -12,6 +12,9 @@ const TMP = process.env.PREFIX ? process.env.PREFIX + "/tmp" : "/tmp";
 const WASM = process.env.APKC_WASM || "";
 const APK = process.env.APK_EJEMPLO || "";
 const KS = process.env.KS_EJEMPLO || "";
+// el keystore de release de la prueba: contraseña y alias conocidos, generado por e2e.sh con
+// keytool. Es de usar y tirar; no se versiona ninguna clave.
+const KS_RELEASE = process.env.KS_RELEASE || "";
 // el android.jar es opcional: sin él no se puede probar el build completo dentro de la pestaña, y
 // la prueba lo dice en la salida en vez de pasar de largo en silencio
 const JAR_SRC = process.env.ANDROID_JAR || "";
@@ -36,6 +39,7 @@ const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- el servidor y el navegador -----------------------------------------------------------
   const envServidor = { ...process.env, APKC_WASM: path.resolve(WASM), APK_EJEMPLO: path.resolve(APK), KS_EJEMPLO: path.resolve(KS) };
+  if (KS_RELEASE) envServidor.KS_RELEASE = path.resolve(KS_RELEASE);
   if (JAR_SRC) envServidor.ANDROID_JAR = path.resolve(JAR_SRC);
   const servidor = spawn(process.execPath, [path.join(__dirname, "servidor.js"), String(PUERTO)], {
     cwd: __dirname,
@@ -205,6 +209,47 @@ async function conductor() {
   comprueba("el magic de zip, por si fuera un texto", apk.slice(0, 2).toString("latin1") === "PK");
   console.log("  --- la apk firmada en la pestaña es " + destino);
 
+  // 5b. un keystore de RELEASE entra por la página: contraseña, alias y certificado. El DN que
+  //     se ve aquí es el que apksigner tiene que leer en el apk que sale de firmar.
+  if (KS_RELEASE) {
+    const ui = await evaluar(`(async () => {
+      const k = await (await fetch("/keystore-release")).arrayBuffer();
+      await hospedador.escribir("/keystore", new Uint8Array(k));
+      document.getElementById("storepass-firmar").value = "saludo";
+      await inspeccionarKeystore(KEYSTORES.firmar);
+      return {
+        estado: document.getElementById("estado-keystore-firmar").textContent,
+        alias: document.getElementById("keyalias-firmar").value,
+        opciones: [...document.getElementById("keyalias-firmar").options].map((o) => o.value),
+      };
+    })()`);
+    comprueba("la pestaña lista el alias del keystore de release", ui.alias === "lanzable", JSON.stringify(ui));
+    comprueba("la pestaña enseña el sujeto y la huella SHA-256 del certificado",
+      String(ui.estado).includes("CN=Release de prueba") && /SHA-256 ([0-9A-F]{2}:){31}/.test(String(ui.estado)),
+      String(ui.estado).slice(0, 140));
+
+    const release = await evaluar(`(async () => {
+      document.getElementById("apk-a-firmar").value = "/in.apk";
+      await firmar();
+      const u = await hospedador.bytes("/proyecto/build/firmado.apk");
+      let b = "";
+      if (u) {
+        const trozos = [];
+        for (let i = 0; i < u.length; i += 8192) trozos.push(String.fromCharCode.apply(null, u.subarray(i, i + 8192)));
+        b = btoa(trozos.join(""));
+      }
+      return { bytes: b, pass: document.getElementById("storepass-firmar").value,
+        estado: document.getElementById("estado-keystore-firmar").textContent,
+        nota: document.getElementById("estado-pestana").textContent,
+        consola: String(document.getElementById("consola-pestana").textContent).slice(-500) };
+    })()`);
+    const apkRelease = Buffer.from(release.bytes, "base64");
+    fs.writeFileSync(path.join(fuera, "pestanera-release.apk"), apkRelease);
+    comprueba("la pestaña firma con el keystore de release", apkRelease.length > 1000,
+      apkRelease.length + " bytes · " + JSON.stringify({ estado: release.estado, nota: release.nota, consola: release.consola }));
+    comprueba("la contraseña no se queda en el campo", release.pass === "", JSON.stringify(release.pass));
+  }
+
   // 6. el muro conocido, dicho tal cual
   const nodos = await evaluar(`(async () => {
     const a = await hospedador.arbol();
@@ -242,6 +287,7 @@ async function conductor() {
       await hospedador.escribir("/sdk/keystore.p12", ks);
       document.getElementById("sdk-version").value = "34";
       document.getElementById("codename").value = "14";
+      document.getElementById("storepass-compilar").value = "android";
       await compilarDelTodo();
       const datos = await hospedador.bytes("/proyecto/build/app.apk");
       return {
@@ -331,6 +377,7 @@ async function conductor() {
       peticionesNuevo.length + " peticiones en el tramo: " + peticionesNuevo.slice(0, 3).join(", "));
     const sinConexion = await evaluar(`(async () => {
       await hospedador.limpiar("/proyecto/build");
+      document.getElementById("storepass-compilar").value = "android";
       await compilarDelTodo();
       const datos = await hospedador.bytes("/proyecto/build/app.apk");
       return { codigo: document.getElementById("ultimo-codigo").textContent, bytes: datos ? datos.length : 0 };
@@ -348,6 +395,7 @@ async function conductor() {
     const recargada = await evaluar(`(async () => {
       const datos = await hospedador.bytes("/sdk/android.jar");
       await hospedador.limpiar("/proyecto/build");
+      document.getElementById("storepass-compilar").value = "android";
       await compilarDelTodo();
       const apk = await hospedador.bytes("/proyecto/build/app.apk");
       return {
@@ -457,6 +505,7 @@ async function conductor() {
       await hospedador.escribir("/proyecto/src/com/myapp/MainActivity.java",
         new TextEncoder().encode(${JSON.stringify(fuenteEscrita)}));
       await hospedador.limpiar("/proyecto/build");
+      document.getElementById("storepass-compilar").value = "android";
       await compilarDelTodo();
       const r = await correr(["verify", "build/app.apk"]);
       const texto = String(r.consola || "").replace(/\\u001b\\[[0-9]*m/g, "");
@@ -520,6 +569,7 @@ async function conductor() {
       await hospedador.escribir("/proyecto/src/com/myapp/MainActivity.java",
         new TextEncoder().encode(${JSON.stringify(fuenteContador)}));
       await hospedador.limpiar("/proyecto/build");
+      document.getElementById("storepass-compilar").value = "android";
       await compilarDelTodo();
       const r = await correr(["verify", "build/app.apk"]);
       const texto = String(r.consola || "").replace(/\\u001b\\[[0-9]*m/g, "");

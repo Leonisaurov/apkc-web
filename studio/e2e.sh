@@ -19,6 +19,22 @@ ANDROID_JAR=${ANDROID_JAR:-$(ls -d "$SDK"/platforms/*/android.jar 2>/dev/null | 
 ZIPCHECK="$HOME/Develop/Go/apkc-harness/zipcheck.py"
 FALLOS=0
 
+# El keystore de release de la prueba: se genera uno de usar y tirar con keytool, con contraseña
+# y alias conocidos, porque una clave de verdad no se versiona ni se mete en una prueba. Es el
+# que la pestaña tiene que abrir con --storepass/--keyalias y enseñar antes de firmar.
+KEYTOOL=$(command -v keytool 2>/dev/null || true)
+[ -n "$KEYTOOL" ] || KEYTOOL=${PREFIX:-/data/data/com.termux/files/usr}/lib/jvm/java-21-openjdk/bin/keytool
+KS_RELEASE="$TMP/studio-release.p12"
+rm -f "$KS_RELEASE"
+if [ -x "$KEYTOOL" ]; then
+  "$KEYTOOL" -genkeypair -keystore "$KS_RELEASE" -storetype PKCS12 -storepass saludo \
+    -keypass saludo -alias lanzable -keyalg RSA -keysize 2048 -validity 3650 \
+    -dname "CN=Release de prueba, O=apkc-web, C=ES" >"$TMP/studio-release-keytool.log" 2>&1 ||
+    falla "no se pudo generar el keystore de release de la prueba"
+else
+  falla "no hay keytool: la prueba del keystore de release no puede correr"
+fi
+
 avisa() { printf '  %s\n' "$*"; }
 falla() { FALLOS=$((FALLOS + 1)); avisa "FALLO: $*"; }
 
@@ -94,6 +110,7 @@ fi
 APK_FIXTURE=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1)
 if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && command -v chromium-browser >/dev/null 2>&1; then
   if ! APKC_WASM="$APKC_WASM" APK_EJEMPLO="$APK_FIXTURE" KS_EJEMPLO="${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
+       KS_RELEASE="$KS_RELEASE" \
        ANDROID_JAR="${ANDROID_JAR:-}" node "$AQUI/prueba-pestana.js" >"$TMP/studio-pestana.log" 2>&1; then
     falla "la pestaña con apkc.wasm"; tail -12 "$TMP/studio-pestana.log"
   else
@@ -105,6 +122,23 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
     grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-verify.log" || falla "apk de pestaña sin v2"
     if ! python3 "$ZIPCHECK" "$firmada" >/dev/null 2>&1; then falla "zipcheck rechaza la apk de la pestaña"; fi
     avisa "pestaña: $(grep -c '^  ok' "$TMP/studio-pestana.log") comprobaciones, apk firmada dentro de chromium de $(wc -c <"$firmada" | tr -d ' ') bytes y verificada"
+
+    # 4a-bis. el apk firmado en la pestaña con el keystore de release: apksigner tiene que leer el
+    # certificado que la página enseñó antes de firmar, no el de debug.
+    release="$TMP/pestana-apk/pestanera-release.apk"
+    if [ -f "$release" ]; then
+      if ! "$BUILD_TOOLS/apksigner" verify --verbose --print-certs --min-sdk-version 21 "$release" >"$TMP/studio-pestana-release.log" 2>&1; then
+        falla "el apk firmado con el keystore de release no verifica"; head -6 "$TMP/studio-pestana-release.log"
+      fi
+      grep -q 'CN=Release de prueba' "$TMP/studio-pestana-release.log" ||
+        falla "el apk de release no lleva el certificado elegido en la pestaña"
+      grep -q 'v3 scheme (APK Signature Scheme v3): true' "$TMP/studio-pestana-release.log" ||
+        falla "el apk de release no lleva v3"
+      if ! python3 "$ZIPCHECK" "$release" >/dev/null 2>&1; then falla "zipcheck rechaza el apk de release"; fi
+      avisa "pestaña release: apk de $(wc -c <"$release" | tr -d ' ') bytes firmado con CN=Release de prueba y verificado por apksigner (v1+v2+v3)"
+    else
+      falla "la pestaña no dejó el apk firmado con el keystore de release"
+    fi
 
     # 4b. el apk que la pestaña compiló entera (recursos, Java, dex y firma sin un solo proceso):
     #     los mismos oráculos que se piden a una apk de verdad, por herramientas de fuera

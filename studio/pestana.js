@@ -242,16 +242,23 @@ async function crearProyecto() {
 }
 
 async function firmar() {
-  const keystore = document.getElementById("keystore");
-  if (!keystore.files.length) { nota("elige primero un keystore (.p12 o .jks)"); return; }
-  const fichero = keystore.files[0];
-  const datos = new Uint8Array(await fichero.arrayBuffer());
-  await hospedador.escribir("/keystore", datos);
+  const cfg = KEYSTORES.firmar;
+  const k = await prepararKeystore(cfg);
+  if (!k) return;
   const entrada = document.getElementById("apk-a-firmar");
   const origen = (entrada.value || PROYECTO + "/build/app.apk").trim();
-  nota("firmando " + origen + " con el keystore que elegiste (no sale de esta pestaña)");
-  const r = await correr(["sign", "--keystore", "/keystore", "--out", PROYECTO + "/build/firmado.apk", origen]);
-  if (r && r.codigo === 0) await descargar(PROYECTO + "/build/firmado.apk");
+  nota("firmando " + origen + " con " + k.alias + " (no sale de esta pestaña)");
+  // `sign` escribe `firmado.apk.tmp` junto al destino y no crea la carpeta. Si el proyecto no se
+  // compiló nunca, build/ no existe: se crea con un fichero vacío (escribir crea los padres) y se
+  // borra antes de firmar.
+  await hospedador.escribir(PROYECTO + "/build/.carpeta", new Uint8Array(0));
+  await hospedador.limpiar(PROYECTO + "/build/.carpeta");
+  const r = await correr(["sign", "--keystore", k.ruta, "--storepass", k.pass,
+    "--keyalias", k.alias, "--out", PROYECTO + "/build/firmado.apk", origen]);
+  if (r && r.codigo === 0) {
+    document.getElementById(cfg.pass).value = "";
+    await descargar(PROYECTO + "/build/firmado.apk");
+  }
 }
 
 async function descargar(ruta, ancla) {
@@ -279,6 +286,91 @@ async function intentarCompilar() {
 // --- el build sin procesos: recursos, Java, dex y firma, en este mismo binario ------------
 const RUTA_JAR = "/sdk/android.jar";
 const RUTA_KEYSTORE = "/sdk/keystore.p12";
+
+// Un keystore por flujo: el del build queda en OPFS (`/sdk/keystore.p12`) y el de `sign` en
+// `/keystore`, las rutas que ya usaban los botones. Lo nuevo es la contraseña, el alias que se
+// elige entre los que el fichero declara, y el certificado que se enseña antes de firmar.
+const KEYSTORES = {
+  compilar: { fichero: "keystore-compilar", pass: "storepass-compilar", alias: "keyalias-compilar",
+              estado: "estado-keystore-compilar", ruta: RUTA_KEYSTORE },
+  firmar: { fichero: "keystore", pass: "storepass-firmar", alias: "keyalias-firmar",
+            estado: "estado-keystore-firmar", ruta: "/keystore" },
+};
+
+function estadoKeystore(cfg, texto) {
+  document.getElementById(cfg.estado).textContent = texto;
+}
+
+// Escribe el fichero elegido en la ruta de la pestaña. Si no hay uno elegido, vale el que ya
+// está guardado: así el botón funciona después de recargar y la prueba puede montarlo.
+async function guardarKeystoreElegido(cfg) {
+  const entrada = document.getElementById(cfg.fichero);
+  if (entrada && entrada.files.length) {
+    const datos = new Uint8Array(await entrada.files[0].arrayBuffer());
+    await hospedador.escribir(cfg.ruta, datos);
+    return true;
+  }
+  return !!(await hospedador.leer(cfg.ruta)).bytes;
+}
+
+// Inspecciona con el mismo binario que firma: alias, sujeto, huella y validez. Llena el
+// <select> y, si el fichero tiene una sola clave, la deja elegida.
+async function inspeccionarKeystore(cfg) {
+  if (!(await guardarKeystoreElegido(cfg))) {
+    estadoKeystore(cfg, "elige primero un keystore (.p12 o .jks)");
+    return null;
+  }
+  const pass = document.getElementById(cfg.pass).value;
+  if (!pass) { estadoKeystore(cfg, "escribe la contraseña del keystore"); return null; }
+  const r = await correr(["keystore", "--keystore", cfg.ruta, "--storepass", pass]);
+  const m = /keystore-json: (\{.*\})/.exec(r.consola || "");
+  if (!m) {
+    const ultima = (r.consola || "").trim().split("\n").pop() || "sin salida";
+    estadoKeystore(cfg, "no se pudo leer el keystore: " + ultima);
+    return null;
+  }
+  let info;
+  try { info = JSON.parse(m[1]); } catch (e) {
+    estadoKeystore(cfg, "el keystore no devolvió un JSON legible");
+    return null;
+  }
+  const select = document.getElementById(cfg.alias);
+  select.innerHTML = "";
+  if (info.keys === 1 && info.entries.length === 1) {
+    const e = info.entries[0];
+    select.add(new Option(e.alias, e.alias, true, true));
+  } else {
+    select.add(new Option("— elige el alias —", ""));
+    for (const e of info.entries) select.add(new Option(e.alias, e.alias));
+  }
+  const e = info.entries.find((x) => x.alias === select.value) || info.entries[0];
+  if (!e) { estadoKeystore(cfg, "el keystore no tiene ninguna clave con la que firmar"); return null; }
+  const huella = e.sha256 ? " · SHA-256 " + e.sha256 : " · sin certificado";
+  const validez = e.notAfter ? " · hasta " + e.notAfter : "";
+  estadoKeystore(cfg, info.keys + " clave(s) · " + e.alias + " · " + e.subject + huella + validez);
+  return { info, elegida: e };
+}
+
+// Lo que firma: inspecciona siempre (para enseñar el certificado y exigir alias si hay varias
+// claves) y devuelve las credenciales. La contraseña solo vive en el campo y en esta llamada.
+async function prepararKeystore(cfg) {
+  const v = await inspeccionarKeystore(cfg);
+  if (!v) return null;
+  const alias = document.getElementById(cfg.alias).value;
+  if (!alias) { estadoKeystore(cfg, "elige el alias con el que firmar"); return null; }
+  return { ruta: cfg.ruta, pass: document.getElementById(cfg.pass).value, alias: alias };
+}
+
+// «olvidar»: borra el fichero de OPFS y el estado de la página. La contraseña no se guardó.
+async function olvidarKeystore(cfg) {
+  await hospedador.limpiar(cfg.ruta);
+  document.getElementById(cfg.pass).value = "";
+  if (document.getElementById(cfg.fichero)) document.getElementById(cfg.fichero).value = "";
+  const select = document.getElementById(cfg.alias);
+  select.innerHTML = "";
+  select.add(new Option("— pulsa «ver certificado» —", ""));
+  estadoKeystore(cfg, "keystore olvidado: se borró de esta pestaña");
+}
 
 async function ponerJarDeUrl(url) {
   // la ruta del servidor local, no de un CDN: la página solo habla con su propio origen, y eso es
@@ -316,22 +408,16 @@ async function compilarDelTodo() {
   if (!(await decirEstadoJar())) {
     if (!(await usarJarElegido())) { nota("hace falta el android.jar del API 34 para compilar aquí"); return; }
   }
-  const keystore = document.getElementById("keystore-compilar");
-  if (keystore.files.length) {
-    const datos = new Uint8Array(await keystore.files[0].arrayBuffer());
-    await hospedador.escribir(RUTA_KEYSTORE, datos);
-    nota("keystore guardado en la pestaña; queda en OPFS");
-  } else if (!(await hospedador.leer(RUTA_KEYSTORE)).bytes) {
-    nota("hace falta también un keystore para poder firmar el apk");
-    return;
-  }
+  const k = await prepararKeystore(KEYSTORES.compilar);
+  if (!k) return;
   const version = (document.getElementById("sdk-version").value || "34").trim();
   const codename = (document.getElementById("codename").value || "14").trim();
   await hospedador.cwd(PROYECTO);
   const r = await correr(["build", "--linker", "go", "--compiler", "go",
     "--android-jar", RUTA_JAR, "--sdk-version", version, "--codename", codename,
-    "--keystore", RUTA_KEYSTORE]);
+    "--keystore", k.ruta, "--storepass", k.pass, "--keyalias", k.alias]);
   if (r && r.codigo === 0) {
+    document.getElementById(KEYSTORES.compilar.pass).value = "";
     await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
     await verificarLoCompilado();
   }
@@ -377,6 +463,10 @@ if (typeof document !== "undefined") {
       if (nombre) { estadoPestana.ruta = nombre; EDITOR.poner(""); document.getElementById("fichero-abierto").textContent = nombre; }
     });
     document.getElementById("firmar-aqui").addEventListener("click", firmar);
+    document.getElementById("ver-keystore-firmar").addEventListener("click", () => inspeccionarKeystore(KEYSTORES.firmar));
+    document.getElementById("olvidar-keystore-firmar").addEventListener("click", () => olvidarKeystore(KEYSTORES.firmar));
+    document.getElementById("ver-keystore-compilar").addEventListener("click", () => inspeccionarKeystore(KEYSTORES.compilar));
+    document.getElementById("olvidar-keystore-compilar").addEventListener("click", () => olvidarKeystore(KEYSTORES.compilar));
     document.getElementById("compilar-aqui").addEventListener("click", intentarCompilar);
     document.getElementById("usar-android-jar").addEventListener("click", async () => { await usarJarElegido(); });
     document.getElementById("compilar-apk").addEventListener("click", compilarDelTodo);

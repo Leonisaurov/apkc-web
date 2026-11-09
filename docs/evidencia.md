@@ -6088,3 +6088,65 @@ dinámico de cada tipo y comprueba que el dex nombra los siete `append`. Pruebas
 
 Frontera: los puentes de `altMetafactory` con cuenta distinta de cero y las constantes dinámicas de
 la concatenación siguen fuera y se rechazan por nombre; `javac` no produce ninguna de las dos.
+
+## 117. Un keystore de release en la pestaña: contraseña, alias y certificado
+
+La página ya tenía un selector de fichero, pero solo pasaba `--keystore`: los valores por defecto
+(`--storepass android`, `--keyalias androiddebugkey`) solo abren un keystore de depuración. Un
+keystore de release normal tiene otra contraseña y otro alias, y fallaba en uno de los dos sitios:
+
+```sh
+P=/data/data/com.termux/files/usr
+KEYTOOL=$P/lib/jvm/java-21-openjdk/bin/keytool
+"$KEYTOOL" -genkeypair -keystore "$P/tmp/studio-release.p12" -storetype PKCS12 \
+  -storepass saludo -keypass saludo -alias lanzable -keyalg RSA -keysize 2048 \
+  -validity 3650 -dname "CN=Release de prueba, O=apkc-web, C=ES"
+apkc sign --keystore "$P/tmp/studio-release.p12" --out /tmp/x.apk app.apk
+# [sign] ... (PKCS#12): the keystore did not open with the given storepass: ... (wrong storepass?)
+apkc sign --keystore "$P/tmp/studio-release.p12" --storepass saludo --out /tmp/x.apk app.apk
+# [sign] ... holds 1 key(s), the nearest name being "lanzable", and none is androiddebugkey: check --keyalias
+```
+
+Ahora `apkc keystore` lista las identidades del fichero con los mismos lectores de PKCS#12 y JKS
+del firmante, sin proceso ni JVM, y la página la usa para enseñar el certificado antes de firmar:
+
+```sh
+apkc keystore --keystore "$P/tmp/studio-release.p12" --storepass saludo
+# keystore-json: {"keys":1,"entries":[{"alias":"lanzable","subject":"CN=Release de prueba,O=apkc-web,C=ES","sha256":"BD:03:7F:CB:4F:D8:79:38:2F:6A:EF:8D:75:0C:62:C2:B6:ED:DA:1B:05:AF:9C:49:78:C4:A9:90:C5:6D:84:F6","notAfter":"2036-11-06"}]}
+```
+
+La huella es la misma que imprime `apksigner`, y la salida es **una sola línea con prefijo** para
+que la página la parsee sin limpiar los códigos de color de las demás. Una contraseña mala se nombra
+como contraseña (`did not open with the given storepass`), no como un fichero corrupto; un alias que
+no está se nombra con el más parecido.
+
+La página pide la contraseña en cada firma (no la guarda), elige el alias entre los que declara el
+fichero —y lo exige si hay más de uno—, enseña sujeto, huella y validez, y pasa
+`--storepass`/`--keyalias` tanto a `apkc sign` como a `build --linker go --compiler go`. «Olvidar»
+borra el fichero de OPFS. La prueba de la pestaña genera el keystore de release con `keytool`, lo
+mete por la página, firma y apksigner lee el certificado elegido:
+
+```sh
+sh -c 'cd studio && APKC_WASM=$P/tmp/apkc-wasm.wasm ... KS_RELEASE=$P/tmp/studio-release.p12 node prueba-pestana.js'
+apksigner verify --verbose --print-certs --min-sdk-version 21 "$P/tmp/pestana-apk/pestanera-release.apk"
+```
+
+```text
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+V3.0 Signer: certificate DN: CN=Release de prueba, O=apkc-web, C=ES
+V3.0 Signer: certificate SHA-256 digest: bd037fcb4fd879382f6aef8d750c62c2b6edda1b05af9c4978c4a990c56d84f6
+```
+
+`studio/e2e.sh` lo exige y lo resume:
+
+```text
+pestaña release: apk de 10352 bytes firmado con CN=Release de prueba y verificado por apksigner (v1+v2+v3)
+```
+
+Pruebas: `TestInspectarKeystoreListaAliasSujetoYHuella`, `TestInspectarKeystoreNombraLaContrasenaMal`
+y `TestInspectarKeystoreLeeJKSYListaSuAlias` en `apkc/keystorelist_test.go`; el caso nuevo de
+`studio/prueba-pestana.js` conduce la página (lista, certificado, firma) y `studio/e2e.sh` corre
+`apksigner` sobre el apk que sale. Frontera: v4, la rotación v3.1, las claves EC, el `.aab` y el
+`minSdk` del proyecto en el firmante v3 quedan como piezas propias (§5.29-§5.35 del plan).

@@ -256,6 +256,10 @@ func readJKS(blob []byte, password, alias string) (keyMaterial, error) {
 	}
 	material.Keys = len(keys)
 	material.Names = true // a JKS entry is always named: the alias is in the file
+	material.Entries = make([]keystoreEntry, 0, len(keys))
+	for _, k := range keys {
+		material.Entries = append(material.Entries, keystoreEntry{alias: k.alias, signer: k.signer, cert: k.cert})
+	}
 	chosen := keys[0]
 	for _, k := range keys {
 		if strings.EqualFold(k.alias, alias) {

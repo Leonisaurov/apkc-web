@@ -115,6 +115,19 @@
       </p>
       <label>android.jar <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
       <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+      <label>contraseña del keystore <input type="password" id="storepass-compilar" autocomplete="off" class="ruta"></label>
+      <label>alias <select id="keyalias-compilar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
+      <div class="acciones">
+        <button id="ver-keystore-compilar">ver certificado</button>
+        <button id="olvidar-keystore-compilar">olvidar el keystore guardado</button>
+      </div>
+      <p class="nota" id="estado-keystore-compilar">sin keystore inspeccionado</p>
+      <p class="nota">
+        La contraseña no se guarda: se pide en cada firma. Para Play se firma con la
+        <strong>upload key</strong> (Play vuelve a firmar el bundle); para instalar el apk por tu
+        cuenta, con la <strong>app signing key</strong>. Las dos valen aquí: el fichero queda en OPFS,
+        no sale de la pestaña, y «olvidar» lo borra.
+      </p>
       <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
         <input type="text" id="codename" value="14" class="ruta"></label>
       <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
@@ -136,6 +149,13 @@
         hay servidor.
       </p>
       <label>keystore (.p12 o .jks) <input type="file" id="keystore" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+      <label>contraseña del keystore <input type="password" id="storepass-firmar" autocomplete="off" class="ruta"></label>
+      <label>alias <select id="keyalias-firmar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
+      <div class="acciones">
+        <button id="ver-keystore-firmar">ver certificado</button>
+        <button id="olvidar-keystore-firmar">olvidar el keystore guardado</button>
+      </div>
+      <p class="nota" id="estado-keystore-firmar">sin keystore inspeccionado</p>
       <label>apk de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
       <div class="acciones">
         <button id="firmar-aqui" class="primario">firmar aquí (apkc sign)</button>

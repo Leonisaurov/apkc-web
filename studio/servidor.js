@@ -61,6 +61,8 @@ const servidor = http.createServer((req, res) => {
     fichero = process.env.APK_EJEMPLO;                     // solo para la prueba de la pestaña
   } else if (ruta === "/keystore-ejemplo" && process.env.KS_EJEMPLO && fs.existsSync(process.env.KS_EJEMPLO)) {
     fichero = process.env.KS_EJEMPLO;                      // idem: el keystore de debug del sitio
+  } else if (ruta === "/keystore-release" && process.env.KS_RELEASE && fs.existsSync(process.env.KS_RELEASE)) {
+    fichero = process.env.KS_RELEASE;                      // el de release, de usar y tirar: contraseña y alias conocidos
   } else if (ruta === "/android-jar" && process.env.ANDROID_JAR && fs.existsSync(process.env.ANDROID_JAR)) {
     fichero = process.env.ANDROID_JAR;                     // el jar del SDK, por su origen: la pestaña no habla con nadie más
   } else {

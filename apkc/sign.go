@@ -10,7 +10,7 @@ package main
 //
 // As a command it is also what a person holding an apk from somewhere else needs: the
 // same entries, byte for byte as they were carried, aligned as they go, under a
-// v1+v2 signature of their own. The signature files of whoever signed it before are
+// v1+v2+v3 signature of their own. The signature files of whoever signed it before are
 // dropped rather than kept, because two signers in one package is what a verifier
 // reports as corrupt instead of as old.
 
@@ -63,7 +63,7 @@ func sign() {
 	if err != nil {
 		LogF("sign", err.Error())
 	}
-	LogI("sign", final, "carries a v1+v2 signature of its own,", carried,
+	LogI("sign", final, "carries a v1+v2+v3 signature of its own,", carried,
 		"entries taken over as their bytes already were")
 }
 
