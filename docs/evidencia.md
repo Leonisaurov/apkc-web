@@ -6493,3 +6493,42 @@ rangos en una **rotación** (§120-§121), donde el v3.0 cubre hasta 32 y el v3.
 
 No hay cambio de código: la fila 5.35 se cierra con esta medición y la prueba existente que
 lee el bloque v3 (`TestElBloqueV3LlevaSuParYSuSigner`) sigue exigiendo 24/0x7fffffff.
+
+## 125. La v1 con SHA-1 para `minSdk < 18`: el formato medido (5.34, aún abierto)
+
+Medido con `apksigner --min-sdk-version 17`; la v2/v3 siguen siendo SHA-256 y se
+escriben igual, lo que cambia es la firma JAR:
+
+```sh
+BT=$HOME/Android/build-tools/34.9.0
+W=$PREFIX/tmp/sha1probe
+"$BT/apksigner" sign --min-sdk-version 17 \
+  --ks "$HOME/.android/debug.keystore" --ks-pass pass:android \
+  --out "$W/sha1.apk" "$W/in.apk"
+unzip -p "$W/sha1.apk" META-INF/MANIFEST.MF
+unzip -p "$W/sha1.apk" META-INF/ANDROIDD.SF
+```
+
+```text
+Manifest-Version: 1.0
+Name: AndroidManifest.xml
+SHA1-Digest: jKpiXWWzk3Ck8KoIm7/CjVjc/qQ=
+...
+Signature-Version: 1.0
+Created-By: 1.0 (Android)
+SHA1-Digest-Manifest: yQzlWEi2quoIg9IeuGKD47AbJT8=
+X-Android-APK-Signed: 2, 3
+...
+SHA1-Digest: IP1zEMhTBWw6she5ykj6M5hIMJk=
+```
+
+Dos detalles que no se adivinan: el atributo es **`SHA1-Digest`**, no `SHA-1-Digest`, y
+el `.SF` lleva `X-Android-APK-Signed: 2, 3` cuando el paquete también tiene v2/v3. El
+PKCS#7 usa `sha1` (OID 1.3.14.3.2.26) como digest y `rsaEncryption` como algoritmo de
+firma; para EC sería `ecdsa-with-SHA1` (1.2.840.10045.4.1) y la firma DER. `apksigner
+verify` sigue diciendo v1/v2/v3 `true`.
+
+Lo que falta para escribirlo: un modo `v1SHA1` que cambie los nombres de atributo, el
+digest del manifiesto y del `.SF`, el OID y el hash de la firma; los mapas de digests SHA-1
+para las entradas, que en el build tienen que convivir con la reutilización de un paquete
+anterior (hoy el mapa es SHA-256), y la lectura del verificador para el OID SHA-1.
