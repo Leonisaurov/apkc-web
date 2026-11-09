@@ -12,8 +12,8 @@ Usa siempre el envoltorio del repo; fija `HOME`, `PREFIX`, `ANDROID_HOME` y `PAT
 tools/entorno.sh doctor
 ```
 
-Las tareas disponibles son `test`, `wasm`, `gate`, `banco` y `doctor`. Para cualquier comando
-suelto:
+Las tareas disponibles son `test`, `wasm`, `gate`, `banco`, `jar`, `doctor` y `env`. Para
+cualquier comando suelto:
 
 ```sh
 tools/entorno.sh -- <comando...>
@@ -131,5 +131,6 @@ tools/entorno.sh -- sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" n
 
 - [`studio/README.md`](studio/README.md): qué hace la pestaña y cómo se prueba.
 - [`studio/EDITOR.md`](studio/EDITOR.md): estructura, ids, atajos y límites del editor.
+- [`studio/AGENTS.md`](studio/AGENTS.md): comandos, contratos y trampas al tocar la página.
 - [`apps.md`](apps.md): ejecutar apps Android desde Termux/chroot y qué no funciona.
 - [`docs/evidencia.md`](docs/evidencia.md): cada medición con su comando.
