@@ -307,7 +307,6 @@ func TestElFinalmenteSeDexaComoJavac(t *testing.T) {
 // su nombre, no por un mensaje generico.
 func TestElFinalmenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"return en un try anidado", "package p;\npublic class A { public static int f(int n) { try { try { if (n > 0) { return 1; } } finally { f(n); } } finally { f(n); } return 2; } }\n", "cruza otro `try` anidado"},
 		{"return dentro del finally", "package p;\npublic class A { public static int f(int n) { try { f(n); } finally { if (n > 0) { return 1; } } return 2; } }\n", "dentro del propio `finally`"},
 		{"throw ultimo del cuerpo", "package p;\npublic class A { public static void f() { try { throw new RuntimeException(); } finally { f(); } } }\n", "ultima sentencia"},
 		{"throw ultimo del catch", "package p;\npublic class A { public static void f(int n) { try { f(n); } catch (RuntimeException e) { throw new RuntimeException(); } finally { f(n); } } }\n", "ultima sentencia de un `catch`"},

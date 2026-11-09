@@ -6972,3 +6972,49 @@ que el rango `any` exterior taparía el `athrow` de ese manejador; `javac` coloc
 después del camino normal y sus rangos los excluyen a propósito. Igualar el dex pide mover la
 emisión de los manejadores (y las copias) al final del constructo, no solo normalizar la tabla.
 Por eso la fila 5.9 sigue con esa frontera y el rechazo por nombre se conserva.
+
+## 139. El `finally` anidado con salida pendiente: copias y manejadores como javac
+
+La forma que faltaba. `javac` copia los bloques de **dentro a fuera** en cada salida, deja la copia
+del interior dentro del rango del exterior, y solapa las filas de la tabla:
+
+```text
+f(0):  return 1  ->  istore_1; finally interior; finally exterior; iload_1; ireturn
+Exception table de f:
+   0    6   42  any      <- interior
+  26   30   42  any
+   0   15   66  any      <- exterior (incluye la copia del interior)
+  26   54   66  any
+Exception table de g (continue/break):
+   9   14   57  any      9   19   73  any
+  27   32   57  any     27   37   73  any
+  45   49   57  any     45   65   73  any
+```
+
+El emisor copia la cadena (`copiaLosFinally`, de dentro a fuera) y cierra el tramo de cada `try`
+antes de su copia, así que el rango exterior incluye la copia interior. El `athrow` que queda al
+final del cuerpo es el del manejador del `try` interior, y por eso ya no dispara el rechazo del
+`throw` del fuente: `terminaEnTry` distingue el caso. Un `try` interior **con `catch`** que cruce
+la salida sigue rechazado por nombre.
+
+El dex no admite `try_item` solapados: `armaTriesSolapados` corta por todos los extremos y en cada
+tramo se queda con las filas que lo cubren hasta la primera `any` (la de dentro), y funde tramos
+contiguos con la misma lista.
+
+```sh
+apkc compile --android-jar "$ANDROID_JAR" -o "$W/nf2/our" "$W/nf2/src/p/Cierre2.java"
+apkc dex -o "$W/nf2/dex/classes.dex" "$W/nf2/our"
+java -cp "$W/nf2/jc" p.Cierre2
+sudo sh -c '. /data/local/tmp/preludio.sh; export CLASSPATH=/data/local/tmp/cierre2.dex;
+            /system/bin/app_process64 /data/local/tmp p.Cierre2'
+sudo /apex/com.android.art/bin/dexdump /data/local/tmp/cierre2.dex
+```
+
+```text
+JVM: 1 110 0 112 330   (rc 0)
+ART: 1 110 0 112 330   (rc 0)
+dexdump: rc 0   (el método f declara 4 filas de catch)
+```
+
+`TestLaSalidaQueCruzaDosFinally` (`apkc/javaemisor_finally_anidado_test.go`) compila un `return`
+y un `continue`/`break` que cruzan los dos bloques y exige el dex **byte a byte** el de javac.

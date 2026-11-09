@@ -4074,8 +4074,10 @@ func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally b
 			apunta(motivoPendiente(jbloque{sentencias: v.defecto}, true, bajoOtroTry, dentroDelFinally))
 		}
 	case jtry:
-		// dentro de otro `try` la forma medida deja de servir: javac solapa los rangos (§76)
-		apunta(motivoPendiente(v.cuerpo, enBucle, true, dentroDelFinally))
+		// un `try` interior con `catch` sigue fuera; uno que solo tiene `finally` deja que la salida
+		// cruce los dos bloques (javac los copia de dentro a fuera, §139)
+		anidado := bajoOtroTry || len(v.atrapas) > 0
+		apunta(motivoPendiente(v.cuerpo, enBucle, anidado, dentroDelFinally))
 		for _, c := range v.atrapas {
 			apunta(motivoPendiente(c.atrapa, enBucle, true, dentroDelFinally))
 		}
@@ -4084,6 +4086,22 @@ func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally b
 		}
 	}
 	return motivo
+}
+
+// terminaEnTry: el cuerpo acaba en un `try` (posiblemente dentro de un bloque). En ese caso la
+// última instrucción emitida puede ser el `athrow` del manejador del `try` interior, que javac deja
+// dentro del rango del exterior a propósito; no es el `throw` del fuente que rechaza `intenta` (§139).
+func terminaEnTry(s jstmt) bool {
+	switch v := s.(type) {
+	case jtry:
+		return true
+	case jbloque:
+		if len(v.sentencias) == 0 {
+			return false
+		}
+		return terminaEnTry(v.sentencias[len(v.sentencias)-1])
+	}
+	return false
 }
 
 // bloqueVacio: un `finally { }` sin sentencias. javac lo suelta entero —ni copia, ni goto, ni fila en
@@ -4178,7 +4196,7 @@ func (e *emisor) intenta(v jtry) error {
 		// el `athrow`: medido en el parrafo 71 (`lee`: 0..3, con el `ireturn` en 3; `T.f`: 0..10, con el
 		// `athrow` en 9)
 		fin = e.finProtegido(inicio, fin)
-	} else if e.ultimaEsLanza(inicio, fin) {
+	} else if e.ultimaEsLanza(inicio, fin) && !terminaEnTry(v.cuerpo) {
 		// con `finally`, un `throw` como ultima sentencia del cuerpo deja en javac un rango que se
 		// pasa a la primera instruccion de su propio manejador (medido: `Fin.lanza` es 0..9 con el
 		// `astore` en 8, y `Fin3.soloLanzaConCatch` mezcla el cuerpo con el `catch` en 0..11). Esa

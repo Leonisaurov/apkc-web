@@ -14,6 +14,7 @@ package main
 
 import (
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -2317,6 +2318,20 @@ func armaTries(p *traduce, m classMethod) ([]tryItem, []byte, error) {
 	if len(m.Tries) == 0 {
 		return nil, nil, nil
 	}
+	// con `finally` anidados javac solapa rangos en la tabla (el `any` de dentro y el de fuera).
+	// El dex exige try_item ordenados y sin solape, así que se corta por los extremos y en cada
+	// tramo manda la primera fila que casa, que es la de dentro (§139)
+	for i := range m.Tries {
+		for j := i + 1; j < len(m.Tries); j++ {
+			a, b := m.Tries[i], m.Tries[j]
+			if a.start == b.start && a.end == b.end {
+				continue
+			}
+			if a.start < b.end && b.start < a.end {
+				return armaTriesSolapados(p, m)
+			}
+		}
+	}
 	type grupo struct {
 		start, end int
 		tipos      []classTry
@@ -2383,4 +2398,104 @@ func armaTries(p *traduce, m classMethod) ([]tryItem, []byte, error) {
 		items = append(items, tryItem{start: uint32(inicio), count: uint16(fin - inicio), handlerOff: uint16(off)})
 	}
 	return items, lista, nil
+}
+
+// armaTriesSolapados normaliza una exception_table con rangos solapados. Corta por todos los
+// extremos, y en cada tramo elige las filas que lo cubren en el orden de la tabla hasta la primera
+// de tipo `any` (esa ya atrapa todo lo demás). Los tramos contiguos con la misma lista se funden.
+func armaTriesSolapados(p *traduce, m classMethod) ([]tryItem, []byte, error) {
+	cortes := map[int]bool{}
+	for _, tr := range m.Tries {
+		cortes[tr.start] = true
+		cortes[tr.end] = true
+	}
+	puntos := make([]int, 0, len(cortes))
+	for c := range cortes {
+		puntos = append(puntos, c)
+	}
+	sort.Ints(puntos)
+	type tramo struct {
+		start, end int
+		tipos      []classTry
+	}
+	tramos := []tramo{}
+	for i := 0; i+1 < len(puntos); i++ {
+		a, b := puntos[i], puntos[i+1]
+		sel := []classTry{}
+		for _, tr := range m.Tries {
+			if tr.start <= a && b <= tr.end {
+				sel = append(sel, tr)
+				if tr.catchType == "" {
+					break
+				}
+			}
+		}
+		if len(sel) == 0 {
+			continue
+		}
+		if n := len(tramos); n > 0 && tramos[n-1].end == a && mismosTries(tramos[n-1].tipos, sel) {
+			tramos[n-1].end = b
+			continue
+		}
+		tramos = append(tramos, tramo{start: a, end: b, tipos: sel})
+	}
+	lista := putUleb(nil, uint32(len(tramos)))
+	items := make([]tryItem, 0, len(tramos))
+	for _, t := range tramos {
+		inicio, ok := p.pcs[t.start]
+		if !ok {
+			return nil, nil, &traduceError{nombre: m.Name, motivo: "a try that starts at a pc which is not an instruction"}
+		}
+		fin, ok := p.pcs[t.end]
+		if !ok {
+			return nil, nil, &traduceError{nombre: m.Name, motivo: "a try that ends at a pc which is not an instruction"}
+		}
+		off := len(lista)
+		n, catchAll := 0, -1
+		for _, tr := range t.tipos {
+			if tr.catchType == "" {
+				catchAll = tr.handler
+				continue
+			}
+			n++
+		}
+		if catchAll >= 0 {
+			lista = putSleb(lista, int32(-n))
+		} else {
+			lista = putSleb(lista, int32(n))
+		}
+		for _, tr := range t.tipos {
+			if tr.catchType == "" {
+				continue
+			}
+			unidad, ok := p.pcs[tr.handler]
+			if !ok {
+				return nil, nil, &traduceError{nombre: m.Name, motivo: "a handler at a pc which is not an instruction"}
+			}
+			lista = putUleb(lista, uint32(p.t.typeIdx[tr.catchType]))
+			lista = putUleb(lista, uint32(unidad))
+		}
+		if catchAll >= 0 {
+			unidad, ok := p.pcs[catchAll]
+			if !ok {
+				return nil, nil, &traduceError{nombre: m.Name, motivo: "a catch-all handler at a pc which is not an instruction"}
+			}
+			lista = putUleb(lista, uint32(unidad))
+		}
+		items = append(items, tryItem{start: uint32(inicio), count: uint16(fin - inicio), handlerOff: uint16(off)})
+	}
+	return items, lista, nil
+}
+
+// mismosTries: dos tramos llevan la misma lista de handlers si coinciden tipo y destino en orden.
+func mismosTries(a, b []classTry) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].catchType != b[i].catchType || a[i].handler != b[i].handler {
+			return false
+		}
+	}
+	return true
 }

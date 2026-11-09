@@ -24,7 +24,7 @@ EXTRAS = [
     ("5.8a", "cuenta ancha de flotante de tres registros", "hecha (§130)", True),
     ("5.8b", "ConstantValue de un static final long", "hecho (§130)", True),
     ("5.9a", "continue que sale de try/finally", "hecho (§132)", True),
-    ("5.9b", "dos finally anidados con salida pendiente", "rangos solapados, sigue fuera (§133)", False),
+    ("5.9b", "dos finally anidados con salida pendiente", "hecho (§139)", True),
     ("5.9c", "catch (A | B e)", "hecho (§132)", True),
     ("5.12a", "caída al siguiente brazo del switch", "hecha (§129)", True),
     ("5.13a", "ART, instanceof T[] y forma negada", "hecho (§131 y §134)", True),
