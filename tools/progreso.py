@@ -16,6 +16,7 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 PLAN = RAIZ / "docs" / "plan.md"
+ACTUAL = Path("/data/data/com.termux/files/usr/tmp/apkc-progreso/actual.txt")
 
 # Fronteras que el inventario marca como hechas pero el usuario pidió cerrar. Se marcan
 # aparte para que el panel enseñe lo que de verdad queda.
@@ -69,9 +70,10 @@ def main() -> int:
     items = filas_del_inventario(texto)
     for numero, texto_item, detalle in EXTRAS:
         items.append({"text": f"{numero} · {texto_item}", "done": False, "detail": detalle})
+    actual = ACTUAL.read_text(encoding="utf-8").strip() if ACTUAL.exists() else ""
     salida.parent.mkdir(parents=True, exist_ok=True)
     temporal = salida.with_suffix(salida.suffix + ".tmp")
-    temporal.write_text(json.dumps({"items": items}, ensure_ascii=False, indent=1), encoding="utf-8")
+    temporal.write_text(json.dumps({"actual": actual, "items": items}, ensure_ascii=False, indent=1), encoding="utf-8")
     temporal.replace(salida)
     return 0
 
