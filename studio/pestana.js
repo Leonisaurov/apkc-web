@@ -247,17 +247,21 @@ async function firmar() {
   if (!k) return;
   const entrada = document.getElementById("apk-a-firmar");
   const origen = (entrada.value || PROYECTO + "/build/app.apk").trim();
+  const esAab = /\.aab$/i.test(origen);
+  const destino = PROYECTO + "/build/firmado." + (esAab ? "aab" : "apk");
   nota("firmando " + origen + " con " + k.alias + " (no sale de esta pestaña)");
-  // `sign` escribe `firmado.apk.tmp` junto al destino y no crea la carpeta. Si el proyecto no se
+  // `sign` escribe `firmado.*.tmp` junto al destino y no crea la carpeta. Si el proyecto no se
   // compiló nunca, build/ no existe: se crea con un fichero vacío (escribir crea los padres) y se
   // borra antes de firmar.
   await hospedador.escribir(PROYECTO + "/build/.carpeta", new Uint8Array(0));
   await hospedador.limpiar(PROYECTO + "/build/.carpeta");
   const r = await correr(["sign", "--keystore", k.ruta, "--storepass", k.pass,
-    "--keyalias", k.alias, "--out", PROYECTO + "/build/firmado.apk", origen]);
+    "--keyalias", k.alias, "--out", destino, origen]);
   if (r && r.codigo === 0) {
+    const v = await correr(["verify", destino]);
     document.getElementById(cfg.pass).value = "";
-    await descargar(PROYECTO + "/build/firmado.apk");
+    await descargar(destino);
+    if (v && v.codigo === 0) nota("firmado y verificado: " + destino.split("/").pop());
   }
 }
 
@@ -266,7 +270,8 @@ async function descargar(ruta, ancla) {
   if (!r.bytes) { nota("no hay nada en " + ruta); return; }
   const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
   const enlace = document.getElementById(ancla || "descargar-apk");
-  enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.android.package-archive" }));
+  const tipo = /\.aab$/i.test(ruta) ? "application/octet-stream" : "application/vnd.android.package-archive";
+  enlace.href = URL.createObjectURL(new Blob([bytes], { type: tipo }));
   enlace.download = ruta.split("/").pop();
   nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
 }

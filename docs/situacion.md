@@ -547,8 +547,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **312 PASS + 2 SKIP** nativa (318 con subpruebas) y
-  **226 PASS + 88 SKIP** en el hospedador (232 con subpruebas): los tests del traductor (branquias incluidas)
+  idénticos a los del binario nativo (§43). Suite actual: **314 PASS + 2 SKIP** nativa (320 con subpruebas) y
+  **228 PASS + 88 SKIP** en el hospedador (234 con subpruebas): los tests del traductor (branquias incluidas)
   pasan dentro; los del emisor se saltan si el hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
   una condición que sea un booleano suelto y anotaciones que no sean `@Override` (el `long`
@@ -564,7 +564,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   anónima en `static` y la captura de locales del 99 y 100, `Signature` del 101, el `Manifest.java` de
   `<permission>` del 102, `layout-land`/`drawable-hdpi` del 103, `fraction` del 105, `attr`/`styleable`
   del 106, `values-es-rMX` del 107, la firma v3 del 108, las lambdas y referencias del 110 al 115, la
-  concatenación dinámica del 116 y el keystore de release de la pestaña del 117).
+  concatenación dinámica del 116, el keystore de release de la pestaña del 117 y la firma JAR del
+  `.aab` del 118).
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

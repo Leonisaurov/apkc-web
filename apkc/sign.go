@@ -63,8 +63,13 @@ func sign() {
 	if err != nil {
 		LogF("sign", err.Error())
 	}
-	LogI("sign", final, "carries a v1+v2+v3 signature of its own,", carried,
-		"entries taken over as their bytes already were")
+	if strings.HasSuffix(strings.ToLower(packages[0]), ".aab") {
+		LogI("sign", final, "carries a v1 JAR signature of its own,", carried,
+			"entries taken over as their bytes already were")
+	} else {
+		LogI("sign", final, "carries a v1+v2+v3 signature of its own,", carried,
+			"entries taken over as their bytes already were")
+	}
 }
 
 // resignPackage is the whole command in one call, so the CLI and a test drive the
@@ -78,7 +83,79 @@ func resignPackage(inPath, finalPath, keyPath, storePass, keyAlias string) (int,
 	if err != nil {
 		return 0, err
 	}
+	// Un .aab no es un apk: no lleva bloque de firmas v2/v3 y no se zipaligna. Se firma
+	// como JAR, que es la única firma que un bundle tiene.
+	if strings.HasSuffix(strings.ToLower(inPath), ".aab") {
+		return resignBundle(inPath, finalPath, key, cert)
+	}
 	return resignWithKey(inPath, finalPath, key, cert)
+}
+
+// resignBundle writes an .aab with a v1 JAR signature and nothing else. The entries are
+// copied as they already are, the three signature files go in, and the central directory
+// follows them directly: a bundle has no APK Signing Block, so there is no digest of the
+// whole file and no v2/v3 pair. `jarsigner` and `apkc verify` (bundle mode) are the
+// oracles; `apksigner` is not, because it expects an apk.
+func resignBundle(inPath, finalPath string, key *rsa.PrivateKey, cert *x509.Certificate) (int, error) {
+	pkg, err := openPreviousPackage(inPath)
+	if err != nil {
+		return 0, err
+	}
+	defer pkg.Close()
+	if pkg.reader == nil {
+		return 0, fmt.Errorf("%s is not a package this reader can list: a file that is not there, or a zip that does not open", inPath)
+	}
+
+	plan, digests, err := carryPlan(pkg, inPath)
+	if err != nil {
+		return 0, err
+	}
+	if len(plan) == 0 {
+		return 0, fmt.Errorf("%s holds nothing outside its own signature", inPath)
+	}
+	reuse := make([]bool, len(plan))
+	for i := range reuse {
+		reuse[i] = true
+	}
+
+	tmpPath := finalPath + ".tmp"
+	out, err := os.Create(tmpPath)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+
+	// El manifiesto va primero: `JarInputStream` lo busca en la primera entrada, y un
+	// bundle que se lee así tiene que encontrarlo. Los datos van detrás, con sus bytes tal
+	// como estaban; los digests del manifiesto no dependen del orden.
+	signed, err := writeV1EntriesManifestFirst(out, plan, digests, key, cert)
+	if err != nil {
+		return 0, err
+	}
+	data, carried, _, err := writePackageEntries(out, plan, reuse, pkg, digests, true)
+	if err != nil {
+		return 0, err
+	}
+	records := append(signed, data...)
+
+	offset, err := out.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, err
+	}
+	cd, eocd := centralDirectory(records, uint32(offset))
+	if _, err := out.Write(cd); err != nil {
+		return 0, err
+	}
+	if _, err := out.Write(eocd); err != nil {
+		return 0, err
+	}
+	if err := out.Close(); err != nil {
+		return 0, err
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return 0, err
+	}
+	return carried, nil
 }
 
 // resignWithKey writes finalPath from inPath. Every entry is copied over as its

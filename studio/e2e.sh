@@ -24,6 +24,8 @@ FALLOS=0
 # que la pestaña tiene que abrir con --storepass/--keyalias y enseñar antes de firmar.
 KEYTOOL=$(command -v keytool 2>/dev/null || true)
 [ -n "$KEYTOOL" ] || KEYTOOL=${PREFIX:-/data/data/com.termux/files/usr}/lib/jvm/java-21-openjdk/bin/keytool
+JARSIGNER=$(command -v jarsigner 2>/dev/null || true)
+[ -n "$JARSIGNER" ] || JARSIGNER=${PREFIX:-/data/data/com.termux/files/usr}/lib/jvm/java-21-openjdk/bin/jarsigner
 KS_RELEASE="$TMP/studio-release.p12"
 rm -f "$KS_RELEASE"
 if [ -x "$KEYTOOL" ]; then
@@ -34,6 +36,19 @@ if [ -x "$KEYTOOL" ]; then
 else
   falla "no hay keytool: la prueba del keystore de release no puede correr"
 fi
+
+# Un .aab mínimo para la prueba de firma de bundles: es un zip con la forma que ve el
+# firmante (BundleConfig.pb y un módulo), no un bundle de bundletool. La firma no depende
+# de la tabla de recursos; la construye la fase 5.33.
+AAB_EJEMPLO="$TMP/studio-ejemplo.aab"
+rm -rf "$TMP/studio-aab-src"
+mkdir -p "$TMP/studio-aab-src/base/dex" "$TMP/studio-aab-src/base/manifest"
+printf 'BundleConfig' >"$TMP/studio-aab-src/BundleConfig.pb"
+printf 'manifest' >"$TMP/studio-aab-src/base/manifest/AndroidManifest.xml"
+printf 'dex' >"$TMP/studio-aab-src/base/dex/classes.dex"
+(cd "$TMP/studio-aab-src" && python3 -m zipfile -c "$AAB_EJEMPLO" \
+  BundleConfig.pb base/dex/classes.dex base/manifest/AndroidManifest.xml) ||
+  falla "no se pudo crear el .aab de la prueba"
 
 avisa() { printf '  %s\n' "$*"; }
 falla() { FALLOS=$((FALLOS + 1)); avisa "FALLO: $*"; }
@@ -110,7 +125,7 @@ fi
 APK_FIXTURE=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1)
 if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && command -v chromium-browser >/dev/null 2>&1; then
   if ! APKC_WASM="$APKC_WASM" APK_EJEMPLO="$APK_FIXTURE" KS_EJEMPLO="${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
-       KS_RELEASE="$KS_RELEASE" \
+       KS_RELEASE="$KS_RELEASE" AAB_EJEMPLO="$AAB_EJEMPLO" \
        ANDROID_JAR="${ANDROID_JAR:-}" node "$AQUI/prueba-pestana.js" >"$TMP/studio-pestana.log" 2>&1; then
     falla "la pestaña con apkc.wasm"; tail -12 "$TMP/studio-pestana.log"
   else
@@ -138,6 +153,32 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       avisa "pestaña release: apk de $(wc -c <"$release" | tr -d ' ') bytes firmado con CN=Release de prueba y verificado por apksigner (v1+v2+v3)"
     else
       falla "la pestaña no dejó el apk firmado con el keystore de release"
+    fi
+
+    # 4a-ter. el .aab firmado en la pestaña: solo v1, sin bloque v2/v3. El oráculo es jarsigner
+    # (que lee el JAR y avisa si el manifiesto no está primero) y el verificador propio.
+    aab="$TMP/pestana-apk/pestanera.aab"
+    if [ -f "$aab" ]; then
+      if ! "$JARSIGNER" -verify "$aab" >"$TMP/studio-pestana-aab.log" 2>&1; then
+        falla "jarsigner no verifica el .aab de la pestaña"; tail -4 "$TMP/studio-pestana-aab.log"
+      fi
+      grep -q "jar verified" "$TMP/studio-pestana-aab.log" ||
+        falla "jarsigner no dijo «jar verified» sobre el .aab"
+      if "$APKC" verify "$aab" >"$TMP/studio-pestana-aab-verify.log" 2>&1; then
+        grep -q "v1 (JAR signing): ok" "$TMP/studio-pestana-aab-verify.log" ||
+          falla "apkc verify no aprobó la v1 del .aab"
+        grep -q "el paquete es un .aab" "$TMP/studio-pestana-aab-verify.log" ||
+          falla "apkc verify no reconoció el .aab como bundle"
+      else
+        falla "apkc verify rechaza el .aab de la pestaña"; tail -3 "$TMP/studio-pestana-aab-verify.log"
+      fi
+      unzip -l "$aab" | grep -q "META-INF/MANIFEST.MF" || falla "el .aab no lleva MANIFEST.MF"
+      if unzip -p "$aab" | grep -aq "APK Sig Block 42"; then
+        falla "el .aab lleva un bloque de firmas de apk"
+      fi
+      avisa "pestaña .aab: $(wc -c <"$aab" | tr -d ' ') bytes, v1 JAR verificada por jarsigner y apkc verify, sin bloque v2/v3"
+    else
+      falla "la pestaña no dejó el .aab firmado"
     fi
 
     # 4b. el apk que la pestaña compiló entera (recursos, Java, dex y firma sin un solo proceso):

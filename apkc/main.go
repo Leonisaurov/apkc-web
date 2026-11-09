@@ -78,7 +78,8 @@ watch  - rebuild on every change (--inc, --run installs and follows the app)
 clean  - delete build/ dir
 sign   - put an existing apk under a v1+v2+v3 signature of its own, with no zipalign, no
          apksigner and no external program at all (--keystore, --storepass,
-         --keyalias, --out; without --out the package is signed in place)
+         --keyalias, --out; without --out the package is signed in place). An .aab gets
+         the v1 JAR signature only, because a bundle has no APK Signing Block
 keystore - list the signing identities of a keystore (alias, subject, SHA-256 and validity)
          as one line of JSON, with no process and no JVM (--keystore, --storepass)
 dex    - turn compiled .class files into a classes.dex in Go, with no d8 and no subprocess
@@ -86,10 +87,11 @@ dex    - turn compiled .class files into a classes.dex in Go, with no d8 and no 
          navegador, el resto del build todavia necesita aapt2 y javac)
 verify - read one package back and check the two signatures this tool writes: the v1 manifest
          and .SF digests recomputed over the stored bytes, the PKCS#7 over the .SF, and the v2
-         block before the central directory with its content digest recalculated. No apksigner,
-         no jarsigner, no subprocess - which is what makes it usable inside the tab. What is not
-         measured here is refused by name (DSA, SHA-1, v3, v4, several signers), and the trust
-         chain is never validated: a debug certificate is self-signed and there is no anchor.
+         block before the central directory with its content digest recalculated. An .aab only
+         has v1 and is reported as such. No apksigner, no jarsigner, no subprocess - which is what
+         makes it usable inside the tab. What is not measured here is refused by name (DSA, SHA-1,
+         v3, v4, several signers), and the trust chain is never validated: a debug certificate is
+         self-signed and there is no anchor.
 version - print the commit this binary was built from
 `)
 }

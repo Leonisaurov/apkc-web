@@ -56,6 +56,7 @@ type verificacion struct {
 	entradasFirmas int
 	v1             bool
 	v2             bool
+	bundle         bool
 	v1Motivos      []string
 	v2Motivos      []string
 	notas          []string
@@ -80,16 +81,19 @@ func verificar() {
 		LogF("verify", err.Error())
 	}
 	// los dos veredictos se dicen siempre: salir al primer fallo ocultaría el estado del otro
-	// esquema, y "este paquete tiene v2 y no tiene v1" es justo la frase que alguien necesita oír
+	// esquema, y "este paquete tiene v2 y no tiene v1" es justo la frase que alguien necesita oír.
+	// Un .aab solo tiene v1: pedirle v2 sería reprocharle el formato que le corresponde.
 	if v.v1 {
 		LogI("verify", "v1 (JAR signing): ok —", v.entradasFirmas, "entradas con su digest y la firma PKCS#7 verificada")
 	} else {
 		LogE("verify", "v1 (JAR signing): mal —", strings.Join(v.v1Motivos, " — "))
 	}
-	if v.v2 {
-		LogI("verify", "v2 (APK Signature Scheme v2): ok —", v.entradas, "entradas cubiertas por el digest del bloque")
-	} else {
-		LogE("verify", "v2 (APK Signature Scheme v2): mal —", strings.Join(v.v2Motivos, " — "))
+	if !v.bundle {
+		if v.v2 {
+			LogI("verify", "v2 (APK Signature Scheme v2): ok —", v.entradas, "entradas cubiertas por el digest del bloque")
+		} else {
+			LogE("verify", "v2 (APK Signature Scheme v2): mal —", strings.Join(v.v2Motivos, " — "))
+		}
 	}
 	if v.certificado != "" {
 		LogI("verify", "certificado", v.certificado, "· firmantes", v.firmantes,
@@ -98,7 +102,7 @@ func verificar() {
 	for _, nota := range v.notas {
 		LogW("verify", nota)
 	}
-	if !v.v1 || !v.v2 {
+	if !v.v1 || (!v.bundle && !v.v2) {
 		os.Exit(1)
 	}
 }
@@ -122,6 +126,14 @@ func verificarApk(ruta string) (*verificacion, error) {
 	}
 
 	v := &verificacion{entradas: len(zr.File)}
+	// un .aab es un zip firmado como JAR: no tiene bloque v2/v3, y pedirle uno sería
+	// reprocharle el formato que le corresponde.
+	if strings.HasSuffix(strings.ToLower(ruta), ".aab") {
+		v.bundle = true
+		v.verificarV1(zr)
+		v.notas = append(v.notas, "el paquete es un .aab: la firma es JAR v1 y no lleva bloque v2/v3")
+		return v, nil
+	}
 	v.verificarV2(f, info.Size())
 	v.verificarV1(zr)
 	return v, nil

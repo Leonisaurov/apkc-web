@@ -141,12 +141,12 @@
     </details>
 
     <details open>
-      <summary>firmar una apk con tu propio keystore, aquí dentro</summary>
+      <summary>firmar una apk o un .aab con tu propio keystore, aquí dentro</summary>
       <p class="nota">
-        <code>apkc sign</code> reempaqueta y escribe v1+v2 sin levantar <code>zipalign</code> ni
-        <code>apksigner</code>; en wasm tarda ~1,2 s para una apk mínima. El keystore se elige de tu
-        disco y <strong>no sale de esta pestaña</strong>: no hay clave en ningún servidor porque no
-        hay servidor.
+        <code>apkc sign</code> reempaqueta y firma sin levantar <code>zipalign</code> ni
+        <code>apksigner</code>: escribe v1+v2+v3 en un apk y solo la v1 (JAR) en un <code>.aab</code>,
+        que no lleva bloque de firmas. El keystore se elige de tu disco y <strong>no sale de esta
+        pestaña</strong>: no hay clave en ningún servidor porque no hay servidor.
       </p>
       <label>keystore (.p12 o .jks) <input type="file" id="keystore" accept=".p12,.keystore,.jks,application/pkcs12"></label>
       <label>contraseña del keystore <input type="password" id="storepass-firmar" autocomplete="off" class="ruta"></label>
@@ -156,7 +156,7 @@
         <button id="olvidar-keystore-firmar">olvidar el keystore guardado</button>
       </div>
       <p class="nota" id="estado-keystore-firmar">sin keystore inspeccionado</p>
-      <label>apk de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
+      <label>apk o .aab de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
       <div class="acciones">
         <button id="firmar-aqui" class="primario">firmar aquí (apkc sign)</button>
         <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>

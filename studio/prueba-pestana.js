@@ -15,6 +15,8 @@ const KS = process.env.KS_EJEMPLO || "";
 // el keystore de release de la prueba: contraseña y alias conocidos, generado por e2e.sh con
 // keytool. Es de usar y tirar; no se versiona ninguna clave.
 const KS_RELEASE = process.env.KS_RELEASE || "";
+// el .aab mínimo de la prueba: un zip con BundleConfig.pb y un módulo, creado por e2e.sh
+const AAB = process.env.AAB_EJEMPLO || "";
 // el android.jar es opcional: sin él no se puede probar el build completo dentro de la pestaña, y
 // la prueba lo dice en la salida en vez de pasar de largo en silencio
 const JAR_SRC = process.env.ANDROID_JAR || "";
@@ -40,6 +42,7 @@ const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 // --- el servidor y el navegador -----------------------------------------------------------
   const envServidor = { ...process.env, APKC_WASM: path.resolve(WASM), APK_EJEMPLO: path.resolve(APK), KS_EJEMPLO: path.resolve(KS) };
   if (KS_RELEASE) envServidor.KS_RELEASE = path.resolve(KS_RELEASE);
+  if (AAB) envServidor.AAB_EJEMPLO = path.resolve(AAB);
   if (JAR_SRC) envServidor.ANDROID_JAR = path.resolve(JAR_SRC);
   const servidor = spawn(process.execPath, [path.join(__dirname, "servidor.js"), String(PUERTO)], {
     cwd: __dirname,
@@ -248,6 +251,31 @@ async function conductor() {
     comprueba("la pestaña firma con el keystore de release", apkRelease.length > 1000,
       apkRelease.length + " bytes · " + JSON.stringify({ estado: release.estado, nota: release.nota, consola: release.consola }));
     comprueba("la contraseña no se queda en el campo", release.pass === "", JSON.stringify(release.pass));
+  }
+
+  // 5c. un .aab entra por la misma sección: firma JAR v1, sin bloque v2/v3, y la pestaña lo verifica.
+  if (AAB) {
+    const bundle = await evaluar(`(async () => {
+      const a = await (await fetch("/aab-ejemplo")).arrayBuffer();
+      await hospedador.escribir("/in.aab", new Uint8Array(a));
+      document.getElementById("storepass-firmar").value = "saludo";
+      document.getElementById("apk-a-firmar").value = "/in.aab";
+      await firmar();
+      const u = await hospedador.bytes("/proyecto/build/firmado.aab");
+      let b = "";
+      if (u) {
+        const trozos = [];
+        for (let i = 0; i < u.length; i += 8192) trozos.push(String.fromCharCode.apply(null, u.subarray(i, i + 8192)));
+        b = btoa(trozos.join(""));
+      }
+      return { bytes: b, consola: String(document.getElementById("consola-pestana").textContent).slice(-900) };
+    })()`);
+    const aab = Buffer.from(bundle.bytes, "base64");
+    fs.writeFileSync(path.join(fuera, "pestanera.aab"), aab);
+    comprueba("la pestaña firma un .aab con el keystore de release", aab.length > 500, aab.length + " bytes");
+    comprueba("el .aab no lleva bloque de firmas de apk", !aab.includes(Buffer.from("APK Sig Block 42")));
+    comprueba("la pestaña verifica la v1 del .aab", /v1 \(JAR signing\): ok/.test(String(bundle.consola)),
+      String(bundle.consola).slice(-160));
   }
 
   // 6. el muro conocido, dicho tal cual

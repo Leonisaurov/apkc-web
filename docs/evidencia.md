@@ -6150,3 +6150,50 @@ y `TestInspectarKeystoreLeeJKSYListaSuAlias` en `apkc/keystorelist_test.go`; el 
 `studio/prueba-pestana.js` conduce la página (lista, certificado, firma) y `studio/e2e.sh` corre
 `apksigner` sobre el apk que sale. Frontera: v4, la rotación v3.1, las claves EC, el `.aab` y el
 `minSdk` del proyecto en el firmante v3 quedan como piezas propias (§5.29-§5.35 del plan).
+
+## 118. Un `.aab` en la pestaña: firma JAR v1, sin bloque de apk
+
+Un bundle no es un apk: es un zip con `BundleConfig.pb` y sus módulos, se firma como un JAR y no
+lleva bloque de firmas v2/v3 ni pasa por `zipalign`. `apkc sign` lo detecta por la extensión y escribe
+solo la v1; el manifiesto va **el primero** porque `JarInputStream` lo busca ahí y `jarsigner` avisa
+si no está (`Manifest is missing when reading via JarInputStream`).
+
+```sh
+P=/data/data/com.termux/files/usr
+W=$P/tmp/aabtest
+mkdir -p "$W/base/dex" "$W/base/manifest"
+printf 'BundleConfig' > "$W/BundleConfig.pb"
+printf 'manifest' > "$W/base/manifest/AndroidManifest.xml"
+printf 'dex' > "$W/base/dex/classes.dex"
+(cd "$W" && python3 -m zipfile -c in.aab BundleConfig.pb base/dex/classes.dex base/manifest/AndroidManifest.xml)
+apkc sign --keystore "$P/tmp/studio-release.p12" --storepass saludo --keyalias lanzable \
+  --out "$W/out.aab" "$W/in.aab"
+jarsigner -verify "$W/out.aab"
+apkc verify "$W/out.aab"
+```
+
+```text
+[sign] out.aab carries a v1 JAR signature of its own, 3 entries taken over as their bytes already were
+jar verified.
+[verify] v1 (JAR signing): ok — 3 entradas con su digest y la firma PKCS#7 verificada
+[verify] el paquete es un .aab: la firma es JAR v1 y no lleva bloque v2/v3
+```
+
+`jarsigner` sigue avisando de que el certificado es auto-firmado y de que no hay timestamp, como con
+cualquier clave de prueba; lo que ya no dice es que el manifiesto falte. `apkc verify` reconoce el
+`.aab` por la extensión, verifica la v1 con su propio lector y **no** le pide una v2 que el formato no
+tiene; `apksigner` no es oráculo aquí porque espera un apk.
+
+La pestaña usa la misma sección de firma: si la ruta de entrada termina en `.aab`, el destino es
+`firmado.aab`, el MIME de descarga es `application/octet-stream` y, tras firmar, la propia página
+ejecuta `apkc verify` y enseña el veredicto. `studio/e2e.sh` crea un `.aab` mínimo con `python3 -m
+zipfile`, lo firma desde la pestaña con el keystore de release y exige:
+
+```text
+pestaña .aab: 2340 bytes, v1 JAR verificada por jarsigner y apkc verify, sin bloque v2/v3
+```
+
+Pruebas: `TestUnBundleSeFirmaComoJarYManifiestoPrimero` y
+`TestSignDistingueElBundlePorLaExtension` en `apkc/bundle_sign_test.go`, más el caso `.aab` de
+`studio/prueba-pestana.js`. Construir el bundle (la tabla de recursos en protobuf, `BundleConfig.pb`
+y los módulos) es 5.33; aquí solo se firma el que ya existe.

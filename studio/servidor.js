@@ -59,6 +59,8 @@ const servidor = http.createServer((req, res) => {
     fichero = process.env.APKC_TEST_WASM;                  // la suite, conducida desde la pestaña
   } else if (ruta === "/apk-ejemplo" && process.env.APK_EJEMPLO && fs.existsSync(process.env.APK_EJEMPLO)) {
     fichero = process.env.APK_EJEMPLO;                     // solo para la prueba de la pestaña
+  } else if (ruta === "/aab-ejemplo" && process.env.AAB_EJEMPLO && fs.existsSync(process.env.AAB_EJEMPLO)) {
+    fichero = process.env.AAB_EJEMPLO;                     // idem: el .aab de la prueba
   } else if (ruta === "/keystore-ejemplo" && process.env.KS_EJEMPLO && fs.existsSync(process.env.KS_EJEMPLO)) {
     fichero = process.env.KS_EJEMPLO;                      // idem: el keystore de debug del sitio
   } else if (ruta === "/keystore-release" && process.env.KS_RELEASE && fs.existsSync(process.env.KS_RELEASE)) {

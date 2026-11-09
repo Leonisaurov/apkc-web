@@ -224,6 +224,47 @@ func writeV1Entries(dst *os.File, plan []bundleEntry, digests map[string]string,
 	return records, nil
 }
 
+// writeV1EntriesManifestFirst writes the three JAR signature files with the manifest
+// first. A bundle is read with JarInputStream, which only looks for MANIFEST.MF in the
+// first entry; the order apksigner uses (SF, RSA, MANIFEST) works for an apk because
+// nothing reads it that way, but jarsigner warns about a bundle written that way.
+func writeV1EntriesManifestFirst(dst *os.File, plan []bundleEntry, digests map[string]string,
+	key *rsa.PrivateKey, cert *x509.Certificate) ([]packedRecord, error) {
+	files, missing := v1FilesOf(plan, digests)
+	if missing > 0 {
+		return nil, fmt.Errorf("%d entries of the package had no content digest to write down", missing)
+	}
+
+	manifest := jarManifest(files)
+	sf := signatureFile(manifest, []int{2})
+	block, err := pkcs7Signature(sf, key, cert)
+	if err != nil {
+		return nil, err
+	}
+
+	when := dosTime(time.Now())
+	records := []packedRecord{}
+	for _, item := range []struct {
+		name    string
+		content []byte
+	}{
+		{v1ManifestEntry, manifest},
+		{v1SFEntry, sf},
+		{v1BlockEntry, block},
+	} {
+		offset, err := dst.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return nil, err
+		}
+		rec, err := writeMemoryEntry(dst, item.name, item.content, offset, when)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+	return records, nil
+}
+
 // openPreviousPackage indexes the package this one replaces: the offsets and the
 // claims of every entry, which is all the reuse needs. Its absence is not a failure,
 // it is a cold build, and an unreadable one costs the reuse and nothing else.
