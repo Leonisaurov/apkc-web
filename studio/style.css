@@ -26,6 +26,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body { height: 100%; }
 
@@ -502,6 +503,7 @@ pre {
 .marca-sucio { color: #d7ba7d; font-size: 11px; line-height: 1; }
 .editor-tabs .nota { margin: 0 6px; align-self: center; }
 .editor-tabs button { align-self: center; height: 26px; padding: 0 10px; }
+.editor-tabs .boton-enlace { align-self: center; height: 26px; padding: 0 10px; line-height: 24px; }
 .editor-tabs button.primario { background: var(--acento); }
 .editor-tabs button.primario:hover { background: var(--acento2); }
 
@@ -619,6 +621,19 @@ pre {
 .panel-tab:hover { color: #fff; }
 .panel-tab.activo { color: #fff; border-bottom-color: var(--acento); }
 .panel-tabs .nota { margin: 0 8px; }
+.panel-descargas {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 5px 10px;
+  background: #202020;
+  border-bottom: 1px solid #1b1b1b;
+}
+.panel-descargas[hidden] { display: none; }
+.panel-descargas .nota { margin: 0 4px 0 0; }
+.panel-descargas .boton-enlace { padding: 3px 8px; font-size: 11px; }
 .panel-cuerpos { flex: 1 1 auto; min-height: 0; position: relative; }
 .panel-vista { display: none; height: 100%; overflow: auto; padding: 10px 14px 18px; }
 .panel-vista.activa { display: block; }
@@ -649,6 +664,43 @@ pre {
   font: 12px/1.55 ui-monospace, Menlo, Consolas, monospace;
   padding: 10px 12px;
 }
+/* colores ANSI de la consola, con la paleta del terminal de VS Code */
+.consola .consola-fuerte { font-weight: 700; }
+.consola .consola-tenue { opacity: .65; }
+.consola .consola-cursiva { font-style: italic; }
+.consola .consola-subrayado { text-decoration: underline; }
+.consola .consola-fg-0 { color: #555; }
+.consola .consola-fg-1 { color: #cd3131; }
+.consola .consola-fg-2 { color: #0dbc79; }
+.consola .consola-fg-3 { color: #e5e510; }
+.consola .consola-fg-4 { color: #2472c8; }
+.consola .consola-fg-5 { color: #bc3fbc; }
+.consola .consola-fg-6 { color: #11a8cd; }
+.consola .consola-fg-7 { color: #e5e5e5; }
+.consola .consola-fg-8 { color: #666; }
+.consola .consola-fg-9 { color: #f14c4c; }
+.consola .consola-fg-10 { color: #23d18b; }
+.consola .consola-fg-11 { color: #f5f543; }
+.consola .consola-fg-12 { color: #3b8eea; }
+.consola .consola-fg-13 { color: #d670d6; }
+.consola .consola-fg-14 { color: #29b8db; }
+.consola .consola-fg-15 { color: #fff; }
+.consola .consola-bg-0 { background: #000; }
+.consola .consola-bg-1 { background: #cd3131; }
+.consola .consola-bg-2 { background: #0dbc79; }
+.consola .consola-bg-3 { background: #e5e510; }
+.consola .consola-bg-4 { background: #2472c8; }
+.consola .consola-bg-5 { background: #bc3fbc; }
+.consola .consola-bg-6 { background: #11a8cd; }
+.consola .consola-bg-7 { background: #e5e5e5; }
+.consola .consola-bg-8 { background: #666; }
+.consola .consola-bg-9 { background: #f14c4c; }
+.consola .consola-bg-10 { background: #23d18b; }
+.consola .consola-bg-11 { background: #f5f543; }
+.consola .consola-bg-12 { background: #3b8eea; }
+.consola .consola-bg-13 { background: #d670d6; }
+.consola .consola-bg-14 { background: #29b8db; }
+.consola .consola-bg-15 { background: #fff; }
 
 /* ---- barra de estado ------------------------------------------------------ */
 

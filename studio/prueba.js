@@ -123,6 +123,13 @@ if (pestanaMod.esXml("package x; import java.util.List; class X { List<String> x
 if (!pestanaMod.esXml('<!-- c --><resources><string name="x">y</string></resources>'))
   mal("esXml no reconoce un recurso que empieza por comentario");
 
+// los códigos ANSI de apkc no se enseñan crudos: se convierten en spans con su color
+const color = pestanaMod.consolaHtml("\u001b[31mrojo\u001b[0m y \u001b[1;34mazul\u001b[0m");
+if (!/class="consola-fg-1">rojo</.test(color) || !/class="consola-fuerte consola-fg-4">azul</.test(color))
+  mal("consolaHtml no traduce los colores ANSI");
+if (/\u001b/.test(color)) mal("consolaHtml deja códigos de escape en la consola");
+if (!/&lt;b&gt;/.test(pestanaMod.consolaHtml("<b>"))) mal("consolaHtml no escapa el HTML");
+
 // 8. el paquete oficial de la plataforma es un zip con android-34/android.jar: el editor tiene
 // que sacarlo sin depender de un unzip externo. Se prueba con el mismo makeZip de la página.
 (async () => {

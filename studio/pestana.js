@@ -327,6 +327,75 @@ function textoHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// La consola de apkc escribe colores ANSI (`\u001b[34m...\u001b[0m`). En un <pre> se veían
+// los códigos crudos; aquí se convierten en spans con clase y el resto de secuencias CSI
+// (borrar línea, mover cursor) se descartan. Es puro para poder probarlo en node.
+function consolaHtml(texto) {
+  const limpio = String(texto).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "");
+  const patron = /\u001b\[([0-9;?]*)([A-Za-z])/g;
+  let salida = "", desde = 0, clases = [];
+  const anadir = (c) => { if (!clases.includes(c)) clases.push(c); };
+  const quitar = (...cs) => { clases = clases.filter((c) => !cs.includes(c)); };
+  const color = (prefijo, n) => {
+    quitar(...clases.filter((c) => c.startsWith(prefijo)));
+    anadir(prefijo + n);
+  };
+  const envolver = (trozo) => {
+    if (!trozo) return "";
+    const html = textoHtml(trozo);
+    return clases.length ? '<span class="' + clases.join(" ") + '">' + html + "</span>" : html;
+  };
+  let m;
+  while ((m = patron.exec(limpio))) {
+    salida += envolver(limpio.slice(desde, m.index));
+    desde = patron.lastIndex;
+    if (m[2] !== "m") continue;                       // otra CSI: no se pinta
+    const codigos = m[1] === "" ? [0] : m[1].split(";").map((x) => Number(x) || 0);
+    for (let i = 0; i < codigos.length; i++) {
+      const c = codigos[i];
+      if (c === 0) clases = [];
+      else if (c === 1) anadir("consola-fuerte");
+      else if (c === 2) anadir("consola-tenue");
+      else if (c === 3) anadir("consola-cursiva");
+      else if (c === 4) anadir("consola-subrayado");
+      else if (c === 22) quitar("consola-fuerte", "consola-tenue");
+      else if (c === 23) quitar("consola-cursiva");
+      else if (c === 24) quitar("consola-subrayado");
+      else if (c === 39) quitar(...clases.filter((x) => x.startsWith("consola-fg-")));
+      else if (c === 49) quitar(...clases.filter((x) => x.startsWith("consola-bg-")));
+      else if (c >= 30 && c <= 37) color("consola-fg-", c - 30);
+      else if (c >= 90 && c <= 97) color("consola-fg-", c - 90 + 8);
+      else if (c >= 40 && c <= 47) color("consola-bg-", c - 40);
+      else if (c >= 100 && c <= 107) color("consola-bg-", c - 100 + 8);
+      else if (c === 38 || c === 48) {
+        // colores extendidos: se consume la secuencia para que no quede el número suelto
+        const modo = codigos[++i];
+        if (modo === 5) i++;
+        else if (modo === 2) i += 3;
+      }
+    }
+  }
+  salida += envolver(limpio.slice(desde));
+  return salida;
+}
+
+const CONSOLA = {
+  texto: "",
+  escribir(trozo) {
+    this.texto += String(trozo);
+    if (this.texto.length > 300000) this.texto = this.texto.slice(-300000);
+    pintarConsola();
+  },
+};
+
+function pintarConsola() {
+  const cuadro = document.getElementById("consola-pestana");
+  if (!cuadro) return;
+  cuadro.innerHTML = consolaHtml(CONSOLA.texto);
+  cuadro.scrollTop = cuadro.scrollHeight;
+}
+
 // --- el árbol y los ficheros --------------------------------------------------------------
 const ARBOL = { plegados: new Set() };
 
@@ -454,6 +523,8 @@ async function abrir(ruta, yaConfirmado) {
     nombre.textContent = relativa(ruta) || ruta;
     nombre.title = ruta;
   }
+  const descargarFichero = document.getElementById("descargar-fichero");
+  if (descargarFichero) descargarFichero.hidden = false;
   await refrescarArbol();
   return true;
 }
@@ -496,6 +567,8 @@ async function guardar() {
     abierto.textContent = relativa(estadoPestana.ruta);
     abierto.title = estadoPestana.ruta;
   }
+  const descargarFichero = document.getElementById("descargar-fichero");
+  if (descargarFichero) descargarFichero.hidden = false;
   nota("guardado en " + estadoPestana.ruta);
   await refrescarArbol();
   return true;
@@ -577,9 +650,8 @@ async function correr(argv) {
   // la salida vive en el panel del editor: un atajo lanzado desde Inicio no puede dejarla oculta
   const vistaEditor = document.querySelector('[data-vista="pestana"]');
   if (vistaEditor && document.body.dataset.vista !== "pestana") vistaEditor.click();
-  const consola = document.getElementById("consola-pestana");
   mostrarPanel("salida");
-  if (consola) consola.textContent += "$ apkc " + argv.join(" ") + "\n";
+  CONSOLA.escribir("$ apkc " + argv.join(" ") + "\n");
   const ocupado = document.getElementById("ocupado");
   if (ocupado) ocupado.hidden = false;
   let r;
@@ -591,11 +663,7 @@ async function correr(argv) {
   } finally {
     if (ocupado) ocupado.hidden = true;
   }
-  if (consola) {
-    consola.textContent += (r.consola || "") + (r.error ? "FALLO DEL HOSPEDADOR: " + r.error + "\n" : "");
-    if (consola.textContent.length > 200000) consola.textContent = consola.textContent.slice(-200000);
-    consola.scrollTop = consola.scrollHeight;
-  }
+  CONSOLA.escribir((r.consola || "") + (r.error ? "FALLO DEL HOSPEDADOR: " + r.error + "\n" : ""));
   if (r.tipo === "terminado") {
     const codigo = document.getElementById("ultimo-codigo");
     if (codigo) codigo.textContent = String(r.codigo);
@@ -665,6 +733,14 @@ async function descargar(ruta, ancla) {
   const tipo = /\.aab$/i.test(ruta) ? "application/octet-stream" : "application/vnd.android.package-archive";
   enlace.href = URL.createObjectURL(new Blob([bytes], { type: tipo }));
   enlace.download = ruta.split("/").pop();
+  enlace.hidden = false;
+  if (ancla === "descargar-fichero") {
+    enlace.textContent = "Descargar";
+  } else {
+    enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
+    const barra = document.getElementById("panel-descargas");
+    if (barra) barra.hidden = false;
+  }
   nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
 }
 
@@ -677,7 +753,10 @@ async function ofrecerDescarga(ruta, ancla) {
   const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
   enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
   enlace.download = ruta.split("/").pop();
+  enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
   enlace.hidden = false;
+  const barra = document.getElementById("panel-descargas");
+  if (barra) barra.hidden = false;
 }
 
 async function intentarCompilar() {
@@ -995,6 +1074,8 @@ async function asegurarJarDelProyecto() {
   if (JAR_SDK.disponible && await traerJarDelSdk(true)) return true;
   nota("hace falta el android.jar: acepta los términos, descarga el paquete oficial y elige el .zip o el .jar en Compilar");
   mostrarPanel("compilar");
+  const detalle = document.getElementById("detalle-sdk");
+  if (detalle) detalle.open = true;
   return false;
 }
 
@@ -1050,6 +1131,8 @@ async function compilarDebug() {
 
 async function compilarDelTodo() {
   if (!(await asegurarJarDelProyecto())) return;
+  const detalle = document.getElementById("detalle-release");
+  if (detalle) detalle.open = true;
   const k = await prepararKeystore(KEYSTORES.compilar);
   if (!k) return;
   return compilarCon(k, "release");
@@ -1133,16 +1216,16 @@ if (typeof document !== "undefined") {
     // de la página: por eso sigue funcionando servida de forma estática. Sin aceptar los
     // términos, el enlace no sale.
     const acepto = document.getElementById("acepto-sdk");
-    const descargar = document.getElementById("descargar-sdk");
-    if (acepto && descargar) {
+    const enlaceSdk = document.getElementById("descargar-sdk");
+    if (acepto && enlaceSdk) {
       const reflejarAcepto = () => {
         const listo = !!acepto.checked;
-        descargar.setAttribute("aria-disabled", String(!listo));
-        if (listo) descargar.removeAttribute("tabindex");
-        else descargar.tabIndex = -1;
+        enlaceSdk.setAttribute("aria-disabled", String(!listo));
+        if (listo) enlaceSdk.removeAttribute("tabindex");
+        else enlaceSdk.tabIndex = -1;
       };
       acepto.addEventListener("change", reflejarAcepto);
-      descargar.addEventListener("click", (e) => {
+      enlaceSdk.addEventListener("click", (e) => {
         if (!acepto.checked) {
           e.preventDefault();
           nota("acepta los términos del SDK de Android antes de descargar");
@@ -1174,6 +1257,8 @@ if (typeof document !== "undefined") {
         abierto.textContent = relativa(nombre);
         abierto.title = nombre;
       }
+      const descargarFichero = document.getElementById("descargar-fichero");
+      if (descargarFichero) descargarFichero.hidden = false;
       const codigo = document.getElementById("codigo");
       if (codigo) codigo.focus();
       await refrescarArbol();
@@ -1199,6 +1284,13 @@ if (typeof document !== "undefined") {
       e.preventDefault();
       descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
     });
+    en("descargar-fichero", (e) => {
+      if (!estadoPestana.ruta) { e.preventDefault(); nota("no hay un fichero abierto"); return; }
+      const enlace = e.currentTarget;
+      // el buffer abierto, no lo último guardado: si hay cambios sin guardar, se descargan igual
+      enlace.href = URL.createObjectURL(new Blob([EDITOR.texto()], { type: "text/plain;charset=utf-8" }));
+      enlace.download = estadoPestana.ruta.split("/").pop();
+    });
 
     // Los atajos no dependen de que el foco esté en el textarea: Ctrl+S guarda también con el
     // cursor en el panel, y Ctrl+` cierra el panel desde cualquier sitio.
@@ -1222,5 +1314,5 @@ if (typeof document !== "undefined") {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { resaltar, esXml, textoHtml, jarDeSeleccion, extraerJarDeZip };
+  module.exports = { resaltar, esXml, textoHtml, consolaHtml, jarDeSeleccion, extraerJarDeZip };
 }

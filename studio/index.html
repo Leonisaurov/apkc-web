@@ -89,6 +89,7 @@
             <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
             <button id="nuevo-fichero" type="button" title="Crear un fichero nuevo">Nuevo</button>
             <button id="guardar-fichero" type="button" class="primario" title="Guardar (Ctrl+S)">Guardar</button>
+            <a id="descargar-fichero" class="boton-enlace" href="#" download hidden title="Descargar el fichero abierto">Descargar</a>
             <button id="alternar-panel" type="button" title="Mostrar u ocultar el panel (Ctrl+`)"
                     aria-expanded="false" aria-controls="panel-inferior">Panel</button>
           </div>
@@ -107,12 +108,19 @@
             <div class="panel-tabs" role="tablist" aria-label="Panel inferior">
               <button class="panel-tab activo" type="button" role="tab" aria-selected="true" data-panel="salida">Salida</button>
               <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="compilar">Compilar</button>
-              <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="firmar">Firmar</button>
+              <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="firmar">Firmar otra apk</button>
               <span class="espacio"></span>
               <span id="estado-pestana" class="nota"></span>
               <button id="cerrar-panel" class="icono-boton" type="button" title="Cerrar el panel" aria-label="Cerrar el panel">
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
               </button>
+            </div>
+            <div class="panel-descargas" id="panel-descargas" hidden>
+              <span class="nota">Descargas:</span>
+              <a id="descargar-apk-compilada" class="boton-enlace" href="#" download hidden>app.apk</a>
+              <a id="descargar-idsig-compilada" class="boton-enlace" href="#" download hidden>app.apk.idsig</a>
+              <a id="descargar-apk" class="boton-enlace" href="#" download hidden>firmado.apk</a>
+              <a id="descargar-idsig" class="boton-enlace" href="#" download hidden>firmado.apk.idsig</a>
             </div>
             <div class="panel-cuerpos">
               <div id="panel-salida" class="panel-vista activa" role="tabpanel">
@@ -120,55 +128,61 @@
               </div>
 
               <div id="panel-compilar" class="panel-vista" role="tabpanel">
-                <p class="nota">Hace falta el <code>android.jar</code> del SDK (API 34) y un keystore para
-                  firmar. Si la página se sirve de forma estática, acepta los términos y descarga el
-                  paquete oficial de Google: dentro está <code>android-34/android.jar</code> y el editor
-                  lo extrae del <code>.zip</code>. También puedes elegir el <code>.jar</code> suelto.
-                  Se guarda una vez en OPFS y no sale de la pestaña.</p>
-                <div class="panel-form">
-                  <label><input type="checkbox" id="acepto-sdk"> Acepto los
-                    <a href="https://developer.android.com/studio/terms" target="_blank" rel="noopener">términos del SDK de Android</a>.</label>
-                  <div class="acciones">
-                    <a id="descargar-sdk" class="boton-enlace" aria-disabled="true"
-                       href="https://dl.google.com/android/repository/platform-34-ext7_r03.zip"
-                       download="platform-34-ext7_r03.zip" target="_blank" rel="noopener">Descargar el paquete oficial (zip, ~63 MB)</a>
-                    <button id="traer-android-jar" type="button" hidden>Traer el del SDK local</button>
-                  </div>
-                  <p class="nota" id="estado-jar-sdk">mirando si el servidor tiene un SDK local…</p>
-                  <label>o elige el .jar o el .zip oficial <input type="file" id="android-jar" accept=".jar,.zip,application/java-archive,application/zip"></label>
-                  <div class="acciones">
-                    <button id="usar-android-jar" type="button">Guardar el android.jar elegido</button>
-                  </div>
-                  <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
+                <p class="nota"><strong>Compilar debug</strong> firma con una clave de depuración
+                  generada en esta pestaña y no pide keystore. <strong>Compilar release</strong> usa el
+                  keystore de «Firma release».</p>
+                <div class="acciones">
+                  <button id="compilar-debug" class="primario" type="button">Compilar debug</button>
+                  <button id="compilar-apk" type="button">Compilar release</button>
+                  <button id="verificar-apk" type="button">Verificar el apk</button>
                 </div>
-                <div class="panel-form">
-                  <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
-                  <label>contraseña <input type="password" id="storepass-compilar" autocomplete="off" class="ruta"></label>
-                  <label>alias <select id="keyalias-compilar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
-                  <div class="acciones">
-                    <button id="ver-keystore-compilar" type="button">Ver certificado</button>
-                    <button id="olvidar-keystore-compilar" type="button">Olvidar el keystore</button>
+                <p class="nota" id="estado-verificacion">sin verificar todavía</p>
+
+                <details id="detalle-sdk">
+                  <summary>SDK y android.jar</summary>
+                  <p class="nota">Hace falta el <code>android.jar</code> del SDK (API 34). Si la página
+                    se sirve de forma estática, acepta los términos y descarga el paquete oficial de
+                    Google: dentro está <code>android-34/android.jar</code> y el editor lo extrae del
+                    <code>.zip</code>. También puedes elegir el <code>.jar</code> suelto. Se guarda una
+                    vez en OPFS y no sale de la pestaña.</p>
+                  <div class="panel-form">
+                    <label><input type="checkbox" id="acepto-sdk"> Acepto los
+                      <a href="https://developer.android.com/studio/terms" target="_blank" rel="noopener">términos del SDK de Android</a>.</label>
+                    <div class="acciones">
+                      <a id="descargar-sdk" class="boton-enlace" aria-disabled="true"
+                         href="https://dl.google.com/android/repository/platform-34-ext7_r03.zip"
+                         download="platform-34-ext7_r03.zip" target="_blank" rel="noopener">Descargar el paquete oficial (zip, ~63 MB)</a>
+                      <button id="traer-android-jar" type="button" hidden>Traer el del SDK local</button>
+                    </div>
+                    <p class="nota" id="estado-jar-sdk">mirando si el servidor tiene un SDK local…</p>
+                    <label>o elige el .jar o el .zip oficial <input type="file" id="android-jar" accept=".jar,.zip,application/java-archive,application/zip"></label>
+                    <div class="acciones">
+                      <button id="usar-android-jar" type="button">Guardar el android.jar elegido</button>
+                    </div>
+                    <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
                   </div>
-                  <p class="nota" id="estado-keystore-compilar">sin keystore inspeccionado</p>
-                </div>
+                </details>
+
+                <details id="detalle-release">
+                  <summary>Firma release (keystore y contraseña)</summary>
+                  <div class="panel-form">
+                    <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+                    <label>contraseña <input type="password" id="storepass-compilar" autocomplete="off" class="ruta"></label>
+                    <label>alias <select id="keyalias-compilar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
+                    <div class="acciones">
+                      <button id="ver-keystore-compilar" type="button">Ver certificado</button>
+                      <button id="olvidar-keystore-compilar" type="button">Olvidar el keystore</button>
+                    </div>
+                    <p class="nota" id="estado-keystore-compilar">sin keystore inspeccionado</p>
+                  </div>
+                </details>
+
                 <details>
                   <summary>Opciones avanzadas</summary>
                   <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
                     <input type="text" id="codename" value="14" class="ruta"></label>
                   <label><input type="checkbox" id="v4-compilar" checked> escribir el <code>.idsig</code> (firma v4)</label>
                 </details>
-                <p class="nota"><strong>Compilar debug</strong> crea una vez la clave típica
-                  (<code>androiddebugkey</code> / <code>android</code> / <code>CN=Android Debug</code>)
-                  en esta pestaña y firma con ella; no hace falta keystore. <strong>Compilar release</strong>
-                  usa el keystore de abajo.</p>
-                <div class="acciones">
-                  <button id="compilar-debug" class="primario" type="button">Compilar debug</button>
-                  <button id="compilar-apk" type="button">Compilar release</button>
-                  <button id="verificar-apk" type="button">Verificar el apk</button>
-                  <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk</a>
-                  <a id="descargar-idsig-compilada" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
-                </div>
-                <p class="nota" id="estado-verificacion">sin verificar todavía</p>
               </div>
 
               <div id="panel-firmar" class="panel-vista" role="tabpanel">
@@ -189,8 +203,6 @@
                   <label><input type="checkbox" id="v4-firmar" checked> escribir el <code>.idsig</code> (firma v4)</label>
                   <div class="acciones">
                     <button id="firmar-aqui" class="primario" type="button">Firmar</button>
-                    <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>
-                    <a id="descargar-idsig" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
                   </div>
                 </div>
                 <details>

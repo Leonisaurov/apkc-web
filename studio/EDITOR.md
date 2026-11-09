@@ -191,10 +191,11 @@ el alto; se abre cuando hace falta.
   <div class="panel-tabs">
     <button class="panel-tab activo" data-panel="salida">Salida</button>
     <button class="panel-tab" data-panel="compilar">Compilar</button>
-    <button class="panel-tab" data-panel="firmar">Firmar</button>
+    <button class="panel-tab" data-panel="firmar">Firmar otra apk</button>
     <span id="estado-pestana"></span>
     <button id="cerrar-panel">...</button>
   </div>
+  <div class="panel-descargas" id="panel-descargas" hidden>...</div>
   <div class="panel-cuerpos">
     <div id="panel-salida" class="panel-vista activa"><pre id="consola-pestana"></pre></div>
     <div id="panel-compilar" class="panel-vista">...</div>
@@ -208,16 +209,23 @@ el alto; se abre cuando hace falta.
 - `alternarPanel()` abre o cierra el panel; si lo abre, vuelve a la pestana activa.
 - `cerrarPanel()` lo esconde y deja `aria-expanded="false"` en el boton `#alternar-panel`.
 - `correr(argv)` abre siempre la pestana Salida, escribe `$ apkc ...`, muestra `#ocupado`
-  mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar.
-- `#panel-compilar` conserva los ids del build sin procesos: `#acepto-sdk`, `#descargar-sdk`,
-  `#traer-android-jar`, `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`,
-  `#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`, `#compilar-debug`,
-  `#compilar-apk`, `#verificar-apk`, `#descargar-apk-compilada`,
-  `#descargar-idsig-compilada` y `#estado-verificacion`. En una página estática, el enlace a
-  Google solo se activa al aceptar los términos y el editor extrae `android-34/android.jar` del
-  `.zip` oficial; el `.jar` suelto también vale. Con `servidor.js`, el botón «Traer el del SDK
-  local» y el primer compilar piden `/android-jar` al mismo origen. El jar nunca se versiona en
-  el repo.
+  mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar. La
+  consola no usa `textContent` directo: `CONSOLA` guarda el texto y `consolaHtml()` convierte los
+  códigos ANSI (`\u001b[34m...\u001b[0m`) en `<span class="consola-fg-4">`; las demás secuencias
+  CSI se descartan. Así se ven los colores de `apkc` y no los códigos crudos.
+- `#panel-descargas` es una barra encima de las vistas, visible en todas las pestanas. `descargar()`
+  y `ofrecerDescarga()` ponen allí los enlaces de `app.apk`, su `.idsig` y los de la firma de una
+  apk existente, con nombre y tamaño; así la descarga no se queda escondida en Compilar. El enlace
+  `#descargar-fichero` de la fila de pestañas descarga el buffer abierto (aunque no esté guardado).
+- `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
+  `#verificar-apk`) y deja el resto en tres desplegables: `#detalle-sdk` (términos, descarga
+  oficial, `.zip`/`.jar`, `#acepto-sdk`, `#descargar-sdk`, `#traer-android-jar`,
+  `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
+  (`#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`) y opciones avanzadas
+  (`#sdk-version`, `#codename`, `#v4-compilar`). En una página estática, el enlace a Google solo
+  se activa al aceptar los términos y el editor extrae `android-34/android.jar` del `.zip`
+  oficial; el `.jar` suelto también vale. Con `servidor.js`, el botón «Traer el del SDK local» y
+  el primer compilar piden `/android-jar` al mismo origen. El jar nunca se versiona en el repo.
 - `#compilar-debug` no lee el keystore de release: la primera vez llama a
   `apkc debug-keystore`, que escribe `/sdk/debug.keystore` (alias `androiddebugkey`,
   contraseña `android`, `CN=Android Debug`) y lo reutiliza en las siguientes compilaciones.
@@ -258,8 +266,8 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` y ahora tambien el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 63 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, firmar, compilar release, verificar y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 63 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 66 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas, consola con colores ANSI, firmar, compilar release, verificar y no pedir nada fuera del origen |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 66 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).

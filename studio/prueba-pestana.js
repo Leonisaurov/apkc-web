@@ -434,6 +434,10 @@ async function conductor() {
         codigo: document.getElementById("ultimo-codigo").textContent,
         bytes: datos ? Array.from(datos) : null,
         descarga: document.getElementById("descargar-apk-compilada").download || "",
+        barra: !document.getElementById("panel-descargas").hidden,
+        enlace: document.getElementById("descargar-apk-compilada").textContent,
+        colores: /class="consola-fg-/.test(document.getElementById("consola-pestana").innerHTML),
+        escape: /\\u001b/.test(document.getElementById("consola-pestana").textContent),
         consola: String(document.getElementById("consola-pestana").textContent).slice(-500),
       };
     })()`);
@@ -443,6 +447,20 @@ async function conductor() {
     comprueba("la pestaña produjo un apk", apkPestana.length > 5000, apkPestana.length + " bytes");
     comprueba("la descarga del apk queda lista en la página", compilado.descarga === "app.apk",
       JSON.stringify(compilado.descarga));
+    comprueba("la descarga del apk se ve en la barra del panel",
+      compilado.barra === true && /app\.apk/.test(compilado.enlace), JSON.stringify(compilado.enlace));
+    comprueba("la consola pinta los colores ANSI y no enseña los códigos",
+      compilado.colores === true && compilado.escape === false,
+      JSON.stringify({ colores: compilado.colores, escape: compilado.escape }));
+    const clicDescarga = await evaluar(`(() => {
+      const a = document.getElementById("descargar-apk-compilada");
+      let error = null;
+      try { a.click(); } catch (e) { error = String(e); }
+      return { href: a.href, download: a.download, error };
+    })()`);
+    comprueba("el enlace de descarga del apk responde al clic",
+      /^blob:/.test(clicDescarga.href) && clicDescarga.download === "app.apk" && !clicDescarga.error,
+      JSON.stringify(clicDescarga));
     const destinoPestana = path.join(fuera, "pestanera-completa.apk");
     fs.writeFileSync(destinoPestana, apkPestana);
     console.log("  --- el apk compilado dentro de la pestaña es " + destinoPestana);

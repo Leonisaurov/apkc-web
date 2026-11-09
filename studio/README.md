@@ -59,7 +59,10 @@ Qué hace de verdad, y qué no:
   descarga es una navegación que pulsa la persona, no una petición de la página: la pestaña sigue
   sin pedir nada fuera de su origen. En
   ambos casos se guarda una vez en OPFS y sobrevive a recargar. `tools/entorno.sh jar` instala
-  `platforms;android-34` con el `sdkmanager` oficial si falta. Medido en `docs/evidencia.md` §45 y
+  `platforms;android-34` con el `sdkmanager` oficial si falta. La salida del panel traduce los
+  colores ANSI de `apkc` (nada de `\u001b[34m` crudo) y la barra de descargas deja a la vista el
+  `app.apk`, su `.idsig` y la apk firmada; el fichero abierto se descarga desde su pestaña.
+  Medido en `docs/evidencia.md` §45 y
   §46: el apk que sale es **igual entrada por entrada** al del mismo comando en el binario nativo, y `d8`
   releee el dex que escribió el navegador.
 - **hace también**: compilar un fuente que la página **no** generó. Campos con sus modificadores, variables
@@ -87,7 +90,7 @@ Qué hace de verdad, y qué no:
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 63 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 66 cosas |
 
 ## Abrir la pestaña en Brave Nightly
 
