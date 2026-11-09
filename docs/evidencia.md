@@ -7100,7 +7100,7 @@ tools/entorno.sh -- sh -c 'APKC_WASM=$TMP/apkc-wasm.wasm \
   node studio/prueba-pestana.js'
 ```
 
-**Resultado**: `67 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
+**Resultado**: `70 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
 ellas de 400 caracteres), baja el textarea 500 px y exige que `#codigo`, `#resalto` y `#numeros`
 tengan el mismo `scrollTop` (`[500,500,500]`) y que el resaltado comparta además el
 `scrollLeft` (`[80,80]`). La `3c` comprueba que Tab sin selección inserta en el cursor, que
@@ -7144,7 +7144,7 @@ tools/entorno.sh -- sh -c 'cd studio && APKC_WASM=$TMP/apkc-wasm.wasm \
 comprobación `el .zip oficial se descomprime y deja el android.jar` construye el zip con
 `makeZip`, lo entrega por el selector y relee `/sdk/android.jar`; y
 `la descarga oficial exige aceptar los términos y apunta a Google` comprueba el `aria-disabled`
-del enlace. **67 comprobaciones bien, 0 mal**.
+del enlace. **70 comprobaciones bien, 0 mal**.
 
 El paquete oficial real también se abrió una vez: `platform-34-ext7_r03.zip` mide
 **63 180 081 bytes** (SHA-1 `1f2e9478d6a7601425ceaa553311dc43191f103d`, el que publica
@@ -7171,7 +7171,7 @@ existía. Ahora `unlink` de un directorio responde `EISDIR` y la limpieza de OPF
 `rmdir` es recursiva, de modo que memoria y disco no se separan.
 
 **Resultado**: con la corrección, la comprobación de la §142 (que compila, borra el jar, vuelve a
-traerlo y compila otra vez sin limpiar `build/`) termina con **67 comprobaciones bien, 0 mal**, y
+traerlo y compila otra vez sin limpiar `build/`) termina con **70 comprobaciones bien, 0 mal**, y
 el segundo `apkc build --linker go --compiler go` sale 0 con `build/res` presente
 (`/proyecto/build/res:dir` en el árbol).
 
@@ -7206,7 +7206,7 @@ produce un apk que `apksigner verify` acepta con v1, v2 y v3 `true`, firmante
 `compilar debug crea la clave típica y firma sin keystore de release` borra
 `/sdk/keystore.p12` y `/sdk/debug.keystore`, deja vacía la contraseña de release, llama a
 `compilarDebug()` y exige `/sdk/debug.keystore`, un apk de más de 5000 bytes, código 0 y
-`certificado Android Debug` en la salida: **67 comprobaciones bien, 0 mal**.
+`certificado Android Debug` en la salida: **70 comprobaciones bien, 0 mal**.
 
 ## 145. La consola pinta ANSI y las descargas se ven sin abrir Compilar
 
@@ -7214,7 +7214,9 @@ Medido el 2026-11-09. `apkc` colorea su salida con secuencias ANSI; un `<pre>` l
 crudas (`\u001b[34m...`). `consolaHtml()` las traduce a spans (`consola-fg-4`, `consola-fuerte`,
 …), descarta el resto de secuencias CSI y escapa el HTML. La prueba de node comprueba el
 traductor sin DOM; la de chromium comprueba que después de compilar la consola tiene clases de
-color y su `textContent` no contiene `\u001b`.
+color y su `textContent` no contiene `\u001b`. La paleta sale de
+`~/.termux/colors.properties` (Catppuccin Mocha): fondo `#1e1e2e`, texto `#cdd6f4` y sus 16
+colores; `LS_COLORS` está vacío, así que no había una lista de colores de `ls` que copiar.
 
 Además, los enlaces de descarga estaban dentro de Compilar, y `correr()` deja activa la pestaña
 Salida: después de compilar no se veían. Ahora `#panel-descargas` vive encima de las vistas y
@@ -7234,10 +7236,28 @@ tools/entorno.sh -- sh -c 'APKC_WASM=$TMP/apkc-wasm.wasm \
   node studio/prueba-pestana.js'
 ```
 
-**Resultado**: `prueba: todo en orden` y `67 comprobaciones bien, 0 mal`. Las comprobaciones
+**Resultado**: `prueba: todo en orden` y `70 comprobaciones bien, 0 mal`. Las comprobaciones
 `la descarga del apk se ve en la barra del panel` (`"app.apk (9252 bytes)"`),
-`el enlace de descarga del apk responde al clic` (href `blob:`, `download=app.apk`),
-`el explorador ofrece descargar cada fichero` y
+`el clic en el enlace descarga de verdad el app.apk` (9252 bytes en el directorio de descargas
+del navegador), `el explorador ofrece descargar cada fichero` y
 `la consola pinta los colores ANSI y no enseña los códigos`
 (`{"colores":true,"escape":false}`) son las que cubren este cambio.
+
+## 146. Menú de mantener pulsado y velo de carga para OPFS
+
+Medido el 2026-11-09. La fila del explorador abre `#menu-archivo` con el botón derecho o con una
+pulsación larga (550 ms, se cancela si el dedo se mueve más de 8 px): **Abrir**, **Descargar**,
+**Renombrar** y **Borrar**. Renombrar usa el mensaje `renombrar` del hospedador, que llama a
+`fs.rename` sin copiar bytes; borrar usa `limpiar` y deja `Sin fichero` si el fichero abierto
+era el borrado. Las operaciones lentas que no son compilar (leer un apk para el blob, extraer
+`android.jar` de un `.zip`, abrir un fichero grande o bajar el jar del SDK) pasan por
+`conCarga()`, que enseña `#cargando` solo si tardan más de 120 ms y lo retira en `finally`.
+
+**Comando**: el mismo `prueba-pestana.js` de la §145.
+
+**Resultado**: además de las comprobaciones anteriores,
+`renombrar y borrar ficheros funciona en OPFS` (`{"tipo":"renombrado","texto":"hola","viejo":false,"borrado":false}`),
+`el menú del fichero ofrece abrir, descargar, renombrar y borrar` y
+`la pantalla de carga aparece en las operaciones lentas`
+(`{"visible":true,"texto":"probando…","oculto":true}`) pasan: **70 comprobaciones bien, 0 mal**.
 

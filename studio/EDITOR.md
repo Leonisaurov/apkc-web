@@ -91,6 +91,13 @@ abrirla, también si es binaria. Las carpetas se pliegan con `ARBOL.plegados`, u
 que sobrevive a los refrescos. Pulsar una carpeta alterna el `Set` y vuelve a pintar; pulsar un
 fichero llama a `abrir(ruta)`.
 
+Con el botón derecho o manteniendo pulsada una fila aparece `#menu-archivo`, un menú con
+**Abrir** y **Descargar** (ficheros), **Renombrar** y **Borrar**. Renombrar cambia el nombre en
+la misma carpeta con `hospedador.renombrar` (host `renombrar` → `fs.rename`, sin copiar bytes) y
+actualiza la pestaña si el fichero abierto es el renombrado o está dentro de la carpeta
+renombrada. Borrar usa `hospedador.limpiar`; si se borra el fichero abierto, el editor vuelve a
+`Sin fichero`.
+
 Si `/proyecto` esta vacio, el arbol pinta un estado vacio con un enlace a Inicio. Si OPFS no esta
 disponible (por ejemplo, `file://`), `refrescarArbol()` captura el error y deja el estado vacio en
 vez de reventar la pagina. `#recargar-arbol` vuelve a pedir el arbol sin recargar la pagina.
@@ -213,11 +220,17 @@ el alto; se abre cuando hace falta.
   mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar. La
   consola no usa `textContent` directo: `CONSOLA` guarda el texto y `consolaHtml()` convierte los
   códigos ANSI (`\u001b[34m...\u001b[0m`) en `<span class="consola-fg-4">`; las demás secuencias
-  CSI se descartan. Así se ven los colores de `apkc` y no los códigos crudos.
+  CSI se descartan. Así se ven los colores de `apkc` y no los códigos crudos. La paleta de
+  `.consola` y de `consola-fg-0..15` es la de `~/.termux/colors.properties` (Catppuccin Mocha:
+  fondo `#1e1e2e`, texto `#cdd6f4`, y sus 16 colores), no la de VS Code.
 - `#panel-descargas` es una barra encima de las vistas, visible en todas las pestanas. `descargar()`
   y `ofrecerDescarga()` ponen allí los enlaces de `app.apk`, su `.idsig` y los de la firma de una
   apk existente, con nombre y tamaño; así la descarga no se queda escondida en Compilar. El enlace
   `#descargar-fichero` de la fila de pestañas descarga el buffer abierto (aunque no esté guardado).
+- `#cargando` es un velo con una rueda (`conCarga(texto, tarea)`) para las operaciones que no son
+  compilar pero tardan: leer el apk para el blob, sacar `android.jar` de un `.zip`, abrir un
+  fichero grande o descargar el jar del SDK. Solo aparece si la tarea pasa de 120 ms, y se retira
+  en `finally`, también cuando falla.
 - `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
   `#verificar-apk`) y deja el resto en tres desplegables: `#detalle-sdk` (términos, descarga
   oficial, `.zip`/`.jar`, `#acepto-sdk`, `#descargar-sdk`, `#traer-android-jar`,
@@ -267,8 +280,8 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` y ahora tambien el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 67 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas, consola con colores ANSI, firmar, compilar release, verificar y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 67 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 70 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 70 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).

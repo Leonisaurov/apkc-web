@@ -18,7 +18,7 @@
   --acento: #007acc;
   --acento2: #1f8ad2;
   --entrada: #3c3c3c;
-  --consola: #181818;
+  --consola: #1e1e2e;
   --ok: #89d185;
   --aviso: #cca700;
   --ed-fuente: 13px/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
@@ -666,7 +666,7 @@ pre {
   border: 0;
   border-radius: 0;
   background: var(--consola);
-  color: #d4d4d4;
+  color: #cdd6f4;
   white-space: pre-wrap;
   height: 100%;
   max-height: none;
@@ -680,38 +680,100 @@ pre {
 .consola .consola-tenue { opacity: .65; }
 .consola .consola-cursiva { font-style: italic; }
 .consola .consola-subrayado { text-decoration: underline; }
-.consola .consola-fg-0 { color: #555; }
-.consola .consola-fg-1 { color: #cd3131; }
-.consola .consola-fg-2 { color: #0dbc79; }
-.consola .consola-fg-3 { color: #e5e510; }
-.consola .consola-fg-4 { color: #2472c8; }
-.consola .consola-fg-5 { color: #bc3fbc; }
-.consola .consola-fg-6 { color: #11a8cd; }
-.consola .consola-fg-7 { color: #e5e5e5; }
-.consola .consola-fg-8 { color: #666; }
-.consola .consola-fg-9 { color: #f14c4c; }
-.consola .consola-fg-10 { color: #23d18b; }
-.consola .consola-fg-11 { color: #f5f543; }
-.consola .consola-fg-12 { color: #3b8eea; }
-.consola .consola-fg-13 { color: #d670d6; }
-.consola .consola-fg-14 { color: #29b8db; }
-.consola .consola-fg-15 { color: #fff; }
-.consola .consola-bg-0 { background: #000; }
-.consola .consola-bg-1 { background: #cd3131; }
-.consola .consola-bg-2 { background: #0dbc79; }
-.consola .consola-bg-3 { background: #e5e510; }
-.consola .consola-bg-4 { background: #2472c8; }
-.consola .consola-bg-5 { background: #bc3fbc; }
-.consola .consola-bg-6 { background: #11a8cd; }
-.consola .consola-bg-7 { background: #e5e5e5; }
-.consola .consola-bg-8 { background: #666; }
-.consola .consola-bg-9 { background: #f14c4c; }
-.consola .consola-bg-10 { background: #23d18b; }
-.consola .consola-bg-11 { background: #f5f543; }
-.consola .consola-bg-12 { background: #3b8eea; }
-.consola .consola-bg-13 { background: #d670d6; }
-.consola .consola-bg-14 { background: #29b8db; }
-.consola .consola-bg-15 { background: #fff; }
+.consola .consola-fg-0 { color: #45475a; }
+.consola .consola-fg-1 { color: #f38ba8; }
+.consola .consola-fg-2 { color: #a6e3a1; }
+.consola .consola-fg-3 { color: #f9e2af; }
+.consola .consola-fg-4 { color: #89b4fa; }
+.consola .consola-fg-5 { color: #f5c2e7; }
+.consola .consola-fg-6 { color: #94e2d5; }
+.consola .consola-fg-7 { color: #bac2de; }
+.consola .consola-fg-8 { color: #585b70; }
+.consola .consola-fg-9 { color: #f38ba8; }
+.consola .consola-fg-10 { color: #a6e3a1; }
+.consola .consola-fg-11 { color: #f9e2af; }
+.consola .consola-fg-12 { color: #89b4fa; }
+.consola .consola-fg-13 { color: #f5c2e7; }
+.consola .consola-fg-14 { color: #94e2d5; }
+.consola .consola-fg-15 { color: #a6adc8; }
+.consola .consola-bg-0 { background: #45475a; }
+.consola .consola-bg-1 { background: #f38ba8; }
+.consola .consola-bg-2 { background: #a6e3a1; }
+.consola .consola-bg-3 { background: #f9e2af; }
+.consola .consola-bg-4 { background: #89b4fa; }
+.consola .consola-bg-5 { background: #f5c2e7; }
+.consola .consola-bg-6 { background: #94e2d5; }
+.consola .consola-bg-7 { background: #bac2de; }
+.consola .consola-bg-8 { background: #585b70; }
+.consola .consola-bg-9 { background: #f38ba8; }
+.consola .consola-bg-10 { background: #a6e3a1; }
+.consola .consola-bg-11 { background: #f9e2af; }
+.consola .consola-bg-12 { background: #89b4fa; }
+.consola .consola-bg-13 { background: #f5c2e7; }
+.consola .consola-bg-14 { background: #94e2d5; }
+.consola .consola-bg-15 { background: #a6adc8; }
+
+/* ---- menú de acciones del explorador -------------------------------------- */
+
+.menu-archivo {
+  position: fixed;
+  z-index: 40;
+  min-width: 168px;
+  padding: 4px;
+  background: #252526;
+  border: 1px solid #454545;
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
+}
+.menu-archivo[hidden] { display: none; }
+.menu-archivo button {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--texto);
+  text-align: left;
+  font-size: 12px;
+}
+.menu-archivo button:hover { background: #094771; color: #fff; }
+.menu-archivo button.peligro { color: #f48771; }
+.menu-archivo button.peligro:hover { background: #5a1d1d; color: #fff; }
+
+/* ---- pantalla de carga ---------------------------------------------------- */
+
+.cargando {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(10, 10, 14, .55);
+  backdrop-filter: blur(1px);
+}
+.cargando[hidden] { display: none; }
+.cargando-caja {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 22px;
+  border: 1px solid var(--borde2);
+  border-radius: 6px;
+  background: #252532;
+  color: var(--brillo);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .5);
+  font-size: 13px;
+}
+.cargando-rueda {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #585b70;
+  border-top-color: #89b4fa;
+  border-radius: 50%;
+  animation: girar .8s linear infinite;
+}
+@keyframes girar { to { transform: rotate(360deg); } }
 
 /* ---- barra de estado ------------------------------------------------------ */
 

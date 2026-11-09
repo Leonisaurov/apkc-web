@@ -179,6 +179,11 @@ self.onmessage = async (evento) => {
       const r = await enCola(() => sistema.limpiar(m.ruta));
       return void postMessage({ id: m.id, tipo: "limpiado", ruta: m.ruta, ...r });
     }
+    if (m.tipo === "renombrar") {
+      const r = await enCola(() => sistema.renombrar(m.de, m.a));
+      if (r && r.ok === false) return void postMessage({ id: m.id, tipo: "error", error: r.error });
+      return void postMessage({ id: m.id, tipo: "renombrado", de: m.de, a: m.a });
+    }
     if (m.tipo === "arbol") {
       return void postMessage({ id: m.id, tipo: "arbol", nodos: sistema.lista(), aislada: crossOriginIsolated });
     }

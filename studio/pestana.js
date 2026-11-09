@@ -47,6 +47,7 @@ const hospedador = (() => {
     escribir: async (ruta, datos) => { await bajarRaiz(); return pedir({ tipo: "montar", ruta, datos }); },
     ejecutar: async (argv) => { await bajarRaiz(); return pedir({ tipo: "ejecutar", argv }); },
     limpiar: async (ruta) => { await bajarRaiz(); return pedir({ tipo: "limpiar", ruta }); },
+    renombrar: async (de, a) => { await bajarRaiz(); return pedir({ tipo: "renombrar", de, a }); },
     cwd: async (ruta) => { await bajarRaiz(); return pedir({ tipo: "cwd", ruta }); },
     sondear: async () => { await bajarRaiz(); return pedir({ tipo: "sondeo" }); },
     // leer con el error nombrado: si el fs falla, la página tiene que decir qué falló y no
@@ -380,6 +381,31 @@ function consolaHtml(texto) {
   return salida;
 }
 
+// Las operaciones con OPFS (leer un apk para el blob, sacar un jar de 26 MB o abrir un
+// fichero grande) no son la compilación, pero tardan y antes no decían nada. Se muestra un
+// velo con una rueda solo si pasan de 120 ms, para no parpadear en las rápidas.
+let cargaSecuencia = 0;
+function mostrarCarga(texto) {
+  const velo = document.getElementById("cargando");
+  const aviso = document.getElementById("cargando-texto");
+  if (aviso) aviso.textContent = texto;
+  if (velo) velo.hidden = false;
+}
+function ocultarCarga() {
+  const velo = document.getElementById("cargando");
+  if (velo) velo.hidden = true;
+}
+async function conCarga(texto, tarea) {
+  const id = ++cargaSecuencia;
+  const temporizador = setTimeout(() => { if (id === cargaSecuencia) mostrarCarga(texto); }, 120);
+  try {
+    return await tarea();
+  } finally {
+    clearTimeout(temporizador);
+    if (id === cargaSecuencia) ocultarCarga();
+  }
+}
+
 const CONSOLA = {
   texto: "",
   escribir(trozo) {
@@ -401,6 +427,114 @@ const ARBOL = { plegados: new Set() };
 
 function relativa(ruta) {
   return ruta === PROYECTO ? "" : (ruta.startsWith(PROYECTO + "/") ? ruta.slice(PROYECTO.length + 1) : ruta);
+}
+
+function cerrarMenuArchivo() {
+  const menu = document.getElementById("menu-archivo");
+  if (menu) menu.hidden = true;
+}
+
+function abrirMenuArchivo(x, y, nodo) {
+  const menu = document.getElementById("menu-archivo");
+  if (!menu) return;
+  menu.textContent = "";
+  const añadir = (texto, accion, peligro) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    b.textContent = texto;
+    if (peligro) b.className = "peligro";
+    b.onclick = () => { cerrarMenuArchivo(); accion(); };
+    menu.appendChild(b);
+  };
+  if (!nodo.dir) {
+    añadir("Abrir", async () => {
+      if (await abrir(nodo.ruta)) {
+        const vista = document.querySelector('[data-vista="pestana"]');
+        if (vista && document.body.dataset.vista !== "pestana") vista.click();
+      }
+    });
+    añadir("Descargar", () => descargarRuta(nodo.ruta));
+  }
+  añadir("Renombrar", () => renombrarRuta(nodo.ruta));
+  añadir("Borrar", () => borrarRuta(nodo.ruta), true);
+  menu.hidden = false;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  const caja = menu.getBoundingClientRect();
+  menu.style.left = Math.max(6, Math.min(x, window.innerWidth - caja.width - 6)) + "px";
+  menu.style.top = Math.max(6, Math.min(y, window.innerHeight - caja.height - 6)) + "px";
+}
+
+function conectarMenu(fila, nodo) {
+  fila.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    abrirMenuArchivo(e.clientX, e.clientY, nodo);
+  });
+  // Long press en táctil: el contexto nativo de Android no es fiable y aquí queremos un menú
+  // propio con renombrar, borrar y descargar.
+  let temporizador = null, inicio = null;
+  const cancelar = () => {
+    if (temporizador) clearTimeout(temporizador);
+    temporizador = null;
+    inicio = null;
+  };
+  fila.addEventListener("pointerdown", (e) => {
+    if (e.pointerType !== "touch") return;
+    inicio = { x: e.clientX, y: e.clientY };
+    temporizador = setTimeout(() => {
+      temporizador = null;
+      fila.dataset.menuLargo = "1";
+      abrirMenuArchivo(inicio.x, inicio.y, nodo);
+    }, 550);
+  });
+  fila.addEventListener("pointermove", (e) => {
+    if (!inicio) return;
+    if (Math.abs(e.clientX - inicio.x) > 8 || Math.abs(e.clientY - inicio.y) > 8) cancelar();
+  });
+  fila.addEventListener("pointerup", cancelar);
+  fila.addEventListener("pointercancel", cancelar);
+}
+
+async function renombrarRuta(ruta) {
+  const nombre = ruta.split("/").pop();
+  const nuevo = prompt("Nuevo nombre de " + nombre, nombre);
+  if (!nuevo || nuevo === nombre) return;
+  if (nuevo === "." || nuevo === ".." || nuevo.includes("/")) {
+    nota("el nombre no puede llevar / ni ser . o ..");
+    return;
+  }
+  const base = ruta.slice(0, ruta.lastIndexOf("/"));
+  const destino = base + "/" + nuevo;
+  const r = await hospedador.renombrar(ruta, destino);
+  if (r.tipo === "error") { nota("no se pudo renombrar: " + r.error); return; }
+  if (estadoPestana.ruta === ruta) {
+    estadoPestana.ruta = destino;
+    const abierto = document.getElementById("fichero-abierto");
+    if (abierto) { abierto.textContent = relativa(destino); abierto.title = destino; }
+  } else if (estadoPestana.ruta && estadoPestana.ruta.startsWith(ruta + "/")) {
+    estadoPestana.ruta = destino + estadoPestana.ruta.slice(ruta.length);
+    const abierto = document.getElementById("fichero-abierto");
+    if (abierto) { abierto.textContent = relativa(estadoPestana.ruta); abierto.title = estadoPestana.ruta; }
+  }
+  await refrescarArbol();
+  nota("renombrado a " + relativa(destino));
+}
+
+async function borrarRuta(ruta) {
+  if (!window.confirm("¿Borrar " + relativa(ruta) + "?")) return;
+  const r = await hospedador.limpiar(ruta);
+  if (r.tipo === "error") { nota("no se pudo borrar: " + r.error); return; }
+  if (estadoPestana.ruta && (estadoPestana.ruta === ruta || estadoPestana.ruta.startsWith(ruta + "/"))) {
+    estadoPestana.ruta = null;
+    EDITOR.poner("");
+    const abierto = document.getElementById("fichero-abierto");
+    if (abierto) { abierto.textContent = "Sin fichero"; abierto.removeAttribute("title"); }
+    const descargarFichero = document.getElementById("descargar-fichero");
+    if (descargarFichero) descargarFichero.hidden = true;
+  }
+  await refrescarArbol();
+  nota("borrado " + relativa(ruta));
 }
 
 async function refrescarArbol() {
@@ -483,6 +617,7 @@ async function refrescarArbol() {
       if (n.dir) {
         fila.onclick = (e) => {
           e.preventDefault();
+          if (fila.dataset.menuLargo) { delete fila.dataset.menuLargo; return; }
           if (ARBOL.plegados.has(n.ruta)) ARBOL.plegados.delete(n.ruta);
           else ARBOL.plegados.add(n.ruta);
           refrescarArbol();
@@ -490,6 +625,7 @@ async function refrescarArbol() {
       } else {
         fila.onclick = async (e) => {
           e.preventDefault();
+          if (fila.dataset.menuLargo) { delete fila.dataset.menuLargo; return; }
           if (e.target.closest(".arbol-descargar")) {
             await descargarRuta(n.ruta);
             return;
@@ -500,6 +636,7 @@ async function refrescarArbol() {
           }
         };
       }
+      conectarMenu(fila, n);
       fuera.appendChild(fila);
       if (n.dir && !ARBOL.plegados.has(n.ruta)) pintar(n.ruta, profundidad + 1);
     }
@@ -521,7 +658,7 @@ async function abrir(ruta, yaConfirmado) {
   if (!yaConfirmado && estaSucio() && !(await confirmarDescartes())) return false;
   let texto;
   try {
-    const bytes = await hospedador.bytes(ruta);
+    const bytes = await conCarga("Abriendo " + relativa(ruta) + "…", () => hospedador.bytes(ruta));
     if (!bytes) { nota("no existe " + ruta); return false; }
     // un PNG del árbol no se abre como si fuera fuente: guardarlo después lo corrompería
     if (bytes.includes(0)) { nota(ruta + " parece un binario; el editor solo abre texto"); return false; }
@@ -742,52 +879,61 @@ async function firmar() {
 // Descargar una entrada cualquiera del explorador sin abrirla en el editor: vale también
 // para un PNG, un .apk o un .idsig que no son texto.
 async function descargarRuta(ruta) {
-  try {
-    const bytes = await hospedador.bytes(ruta);
-    if (!bytes) { nota("no existe " + ruta); return; }
-    const enlace = document.createElement("a");
-    enlace.href = URL.createObjectURL(new Blob([bytes]));
-    enlace.download = ruta.split("/").pop();
-    enlace.click();
-    setTimeout(() => URL.revokeObjectURL(enlace.href), 2000);
-    nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
-  } catch (e) {
-    nota("no se pudo descargar " + ruta + ": " + (e && e.message ? e.message : e));
-  }
+  const nombre = ruta.split("/").pop();
+  return conCarga("Preparando " + nombre + "…", async () => {
+    try {
+      const bytes = await hospedador.bytes(ruta);
+      if (!bytes) { nota("no existe " + ruta); return; }
+      const enlace = document.createElement("a");
+      enlace.href = URL.createObjectURL(new Blob([bytes]));
+      enlace.download = nombre;
+      enlace.click();
+      setTimeout(() => URL.revokeObjectURL(enlace.href), 2000);
+      nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
+    } catch (e) {
+      nota("no se pudo descargar " + ruta + ": " + (e && e.message ? e.message : e));
+    }
+  });
 }
 
 async function descargar(ruta, ancla) {
-  const r = await hospedador.leer(ruta);
-  if (!r.bytes) { nota("no hay nada en " + ruta); return; }
-  const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
-  const enlace = document.getElementById(ancla || "descargar-apk");
-  const tipo = /\.aab$/i.test(ruta) ? "application/octet-stream" : "application/vnd.android.package-archive";
-  enlace.href = URL.createObjectURL(new Blob([bytes], { type: tipo }));
-  enlace.download = ruta.split("/").pop();
-  enlace.hidden = false;
-  if (ancla === "descargar-fichero") {
-    enlace.textContent = "Descargar";
-  } else {
-    enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
-    const barra = document.getElementById("panel-descargas");
-    if (barra) barra.hidden = false;
-  }
-  nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
+  const nombre = ruta.split("/").pop();
+  return conCarga("Preparando " + nombre + "…", async () => {
+    const r = await hospedador.leer(ruta);
+    if (!r.bytes) { nota("no hay nada en " + ruta); return; }
+    const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
+    const enlace = document.getElementById(ancla || "descargar-apk");
+    const tipo = /\.aab$/i.test(ruta) ? "application/octet-stream" : "application/vnd.android.package-archive";
+    enlace.href = URL.createObjectURL(new Blob([bytes], { type: tipo }));
+    enlace.download = nombre;
+    enlace.hidden = false;
+    if (ancla === "descargar-fichero") {
+      enlace.textContent = "Descargar";
+    } else {
+      enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
+      const barra = document.getElementById("panel-descargas");
+      if (barra) barra.hidden = false;
+    }
+    nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
+  });
 }
 
 // El .idsig viaja al lado del apk. Si no existe (un .aab, o --v4=false) el enlace se
 // esconde, para que no quede un botón que no lleva a nada.
 async function ofrecerDescarga(ruta, ancla) {
-  const enlace = document.getElementById(ancla);
-  const r = await hospedador.leer(ruta);
-  if (!r.bytes) { enlace.hidden = true; enlace.removeAttribute("href"); return; }
-  const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
-  enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-  enlace.download = ruta.split("/").pop();
-  enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
-  enlace.hidden = false;
-  const barra = document.getElementById("panel-descargas");
-  if (barra) barra.hidden = false;
+  const nombre = ruta.split("/").pop();
+  return conCarga("Preparando " + nombre + "…", async () => {
+    const enlace = document.getElementById(ancla);
+    const r = await hospedador.leer(ruta);
+    if (!r.bytes) { enlace.hidden = true; enlace.removeAttribute("href"); return; }
+    const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
+    enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    enlace.download = nombre;
+    enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
+    enlace.hidden = false;
+    const barra = document.getElementById("panel-descargas");
+    if (barra) barra.hidden = false;
+  });
 }
 
 async function intentarCompilar() {
@@ -1004,17 +1150,19 @@ async function extraerJarDeZip(datos) {
 async function ponerJarDeUrl(url) {
   // la ruta del servidor local, no de un CDN: la página solo habla con su propio origen, y eso es
   // lo que comprueba la prueba de la pestaña contando las peticiones
-  const respuesta = await fetch(url);
-  if (!respuesta.ok) throw new Error("el android.jar de " + url + " respondió " + respuesta.status);
-  const datos = new Uint8Array(await respuesta.arrayBuffer());
-  // un 200 con una página de error no puede acabar en OPFS como si fuera el jar
-  if (datos.length < 1000 || datos[0] !== 0x50 || datos[1] !== 0x4b) {
-    throw new Error("lo que devolvió " + url + " no es un jar (cabecera " +
-      Array.from(datos.slice(0, 2)).join(",") + ")");
-  }
-  await hospedador.escribir(RUTA_JAR, datos);
-  await decirEstadoJar();
-  return datos.length;
+  return conCarga("Descargando android.jar…", async () => {
+    const respuesta = await fetch(url);
+    if (!respuesta.ok) throw new Error("el android.jar de " + url + " respondió " + respuesta.status);
+    const datos = new Uint8Array(await respuesta.arrayBuffer());
+    // un 200 con una página de error no puede acabar en OPFS como si fuera el jar
+    if (datos.length < 1000 || datos[0] !== 0x50 || datos[1] !== 0x4b) {
+      throw new Error("lo que devolvió " + url + " no es un jar (cabecera " +
+        Array.from(datos.slice(0, 2)).join(",") + ")");
+    }
+    await hospedador.escribir(RUTA_JAR, datos);
+    await decirEstadoJar();
+    return datos.length;
+  });
 }
 
 // El servidor busca el SDK local y sirve su android.jar en /android-jar; la pestaña lo pide a
@@ -1065,13 +1213,14 @@ async function usarJarElegido() {
   const entrada = document.getElementById("android-jar");
   if (!entrada.files.length) { nota("elige el android.jar o el .zip oficial primero"); return false; }
   const archivo = entrada.files[0];
-  nota("leyendo " + archivo.name + "…");
-  const datos = new Uint8Array(await archivo.arrayBuffer());
-  const jar = await jarDeSeleccion(datos);
-  await hospedador.escribir(RUTA_JAR, jar);
-  await decirEstadoJar();
-  nota("android.jar guardado en esta pestaña (" + jar.length + " bytes); no sube a ningún sitio");
-  return true;
+  return conCarga("Leyendo " + archivo.name + "…", async () => {
+    const datos = new Uint8Array(await archivo.arrayBuffer());
+    const jar = await jarDeSeleccion(datos);
+    await hospedador.escribir(RUTA_JAR, jar);
+    await decirEstadoJar();
+    nota("android.jar guardado en esta pestaña (" + jar.length + " bytes); no sube a ningún sitio");
+    return true;
+  });
 }
 
 async function decirEstadoJar() {
@@ -1243,6 +1392,16 @@ if (typeof document !== "undefined") {
     };
     EDITOR.inicializar();
 
+    document.addEventListener("pointerdown", (e) => {
+      const menu = document.getElementById("menu-archivo");
+      if (menu && !menu.hidden && !menu.contains(e.target)) cerrarMenuArchivo();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") cerrarMenuArchivo();
+    });
+    window.addEventListener("scroll", cerrarMenuArchivo, true);
+    window.addEventListener("resize", cerrarMenuArchivo);
+
     // La descarga del paquete oficial es una navegación del usuario a Google, no una petición
     // de la página: por eso sigue funcionando servida de forma estática. Sin aceptar los
     // términos, el enlace no sale.
@@ -1307,14 +1466,9 @@ if (typeof document !== "undefined") {
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
     en("recargar-arbol", refrescarArbol);
-    en("descargar-apk", (e) => {
-      e.preventDefault();
-      descargar((document.getElementById("apk-a-firmar").value || PROYECTO + "/build/firmado.apk").trim());
-    });
-    en("descargar-apk-compilada", (e) => {
-      e.preventDefault();
-      descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
-    });
+    // Los enlaces de la barra ya llevan un href blob cuando están visibles: se deja que el
+    // navegador siga el enlace. Interceptarlos y llamar a descargar() otra vez solo preparaba
+    // el blob y no descargaba nada.
     en("descargar-fichero", (e) => {
       if (!estadoPestana.ruta) { e.preventDefault(); nota("no hay un fichero abierto"); return; }
       const enlace = e.currentTarget;

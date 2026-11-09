@@ -128,6 +128,10 @@ async function conductor() {
   const { evaluar, exec, ws, peticiones } = await conductor();
   const fuera = path.join(TMP, "pestana-apk");
   fs.mkdirSync(fuera, { recursive: true });
+  const descargas = path.join(TMP, "pestana-descargas");
+  fs.rmSync(descargas, { recursive: true, force: true });
+  fs.mkdirSync(descargas, { recursive: true });
+  await exec("Page.setDownloadBehavior", { behavior: "allow", downloadPath: descargas });
 
   comprueba("la página está aislada (OPFS sincrónico disponible)",
     await evaluar("crossOriginIsolated === true"));
@@ -151,6 +155,43 @@ async function conductor() {
   }
   comprueba("el explorador ofrece descargar cada fichero",
     await evaluar("!!document.querySelector('#arbol-pestana a.archivo .arbol-descargar')"));
+
+  const ops = await evaluar(`(async () => {
+    await hospedador.escribir("/proyecto/tmp-renombrar.txt", new TextEncoder().encode("hola"));
+    const r = await hospedador.renombrar("/proyecto/tmp-renombrar.txt", "/proyecto/tmp-renombrado.txt");
+    const texto = await hospedador.texto("/proyecto/tmp-renombrado.txt");
+    const viejo = await hospedador.bytes("/proyecto/tmp-renombrar.txt");
+    await hospedador.limpiar("/proyecto/tmp-renombrado.txt");
+    const borrado = await hospedador.bytes("/proyecto/tmp-renombrado.txt");
+    return { tipo: r.tipo, error: r.error, texto, viejo: !!viejo, borrado: !!borrado };
+  })()`);
+  comprueba("renombrar y borrar ficheros funciona en OPFS",
+    ops.tipo === "renombrado" && ops.texto === "hola" && !ops.viejo && !ops.borrado,
+    JSON.stringify(ops));
+
+  const menu = await evaluar(`(() => {
+    const fila = document.querySelector('#arbol-pestana a.archivo');
+    fila.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }));
+    const m = document.getElementById("menu-archivo");
+    const salida = { visible: !m.hidden, texto: m.textContent };
+    cerrarMenuArchivo();
+    return salida;
+  })()`);
+  comprueba("el menú del fichero ofrece abrir, descargar, renombrar y borrar",
+    menu.visible && /Abrir/.test(menu.texto) && /Descargar/.test(menu.texto) &&
+    /Renombrar/.test(menu.texto) && /Borrar/.test(menu.texto), JSON.stringify(menu));
+
+  const carga = await evaluar(`(async () => {
+    const p = conCarga("probando…", () => new Promise((r) => setTimeout(r, 300)));
+    await new Promise((r) => setTimeout(r, 220));
+    const visible = !document.getElementById("cargando").hidden;
+    const texto = document.getElementById("cargando-texto").textContent;
+    await p;
+    return { visible, texto, oculto: document.getElementById("cargando").hidden };
+  })()`);
+  comprueba("la pantalla de carga aparece en las operaciones lentas",
+    carga.visible === true && carga.texto === "probando…" && carga.oculto === true,
+    JSON.stringify(carga));
 
   // 2. el manifiesto que escribe apkc es el de sus plantillas, no otro
   const manifiesto = await evaluar(`(async () => {
@@ -460,9 +501,13 @@ async function conductor() {
       try { a.click(); } catch (e) { error = String(e); }
       return { href: a.href, download: a.download, error };
     })()`);
-    comprueba("el enlace de descarga del apk responde al clic",
-      /^blob:/.test(clicDescarga.href) && clicDescarga.download === "app.apk" && !clicDescarga.error,
-      JSON.stringify(clicDescarga));
+    for (let i = 0; i < 20 && !fs.existsSync(path.join(descargas, "app.apk")); i++) await esperar(250);
+    const bajado = fs.existsSync(path.join(descargas, "app.apk"))
+      ? fs.statSync(path.join(descargas, "app.apk")).size : 0;
+    comprueba("el clic en el enlace descarga de verdad el app.apk",
+      /^blob:/.test(clicDescarga.href) && clicDescarga.download === "app.apk" &&
+      !clicDescarga.error && bajado > 5000,
+      JSON.stringify({ ...clicDescarga, bajado }));
     const destinoPestana = path.join(fuera, "pestanera-completa.apk");
     fs.writeFileSync(destinoPestana, apkPestana);
     console.log("  --- el apk compilado dentro de la pestaña es " + destinoPestana);

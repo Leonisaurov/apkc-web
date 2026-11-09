@@ -510,6 +510,14 @@ export function crearFs(carpeta) {
       return { nodos: afectados.length, borradoDelDisco };
     },
     async existe(rutaSimulada) { return !!raiz.get(absoluta(String(rutaSimulada))); },
+    // renombrar una entrada del árbol (fichero o carpeta) sin copiar bytes
+    renombrar(de, hasta) {
+      return new Promise((resuelve) => {
+        const a = absoluta(String(de)), b = absoluta(String(hasta));
+        if (raiz.get(b)) return resuelve({ ok: false, error: "EEXIST " + b });
+        fsSim.rename(a, b, (e) => resuelve(e ? { ok: false, error: e.message || String(e) } : { ok: true }));
+      });
+    },
     lista: () => [...raiz.entries()].filter(([k]) => k !== "/").map(([k, v]) => ({
       ruta: k, dir: v.dir, bytes: v.dir ? 0 : v.data.length, mtimeMs: v.mtimeMs,
     })).sort((x, y) => (x.ruta < y.ruta ? -1 : 1)),
