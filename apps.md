@@ -369,3 +369,46 @@ sí funcionan.
 
 La ruta para abrir apps es el `am` de Termux con el entorno que ya pone `enter.sh`: no `sudo am`,
 no `sudo cmd activity`, no `pm`.
+
+---
+
+## Fix shell uid (2026-11-09): el usuario existe, pero no arregla `cmd`/`input`
+
+Se agregó el usuario `shell` (uid/gid 2000) y la regla
+`leonisauro ALL=(shell) NOPASSWD:ALL` en el chroot. Comprobado:
+
+```sh
+getent passwd shell
+# shell:x:2000:2000::/:/system/bin/sh
+sudo -u shell id
+# uid=2000(shell) gid=2000(shell) groups=2000(shell)
+```
+
+La regla está en `/etc/sudoers.d/90-leonisauro:4`. Pero en esta sesión el cambio de uid **no**
+arregla el canal de shell de Android:
+
+```sh
+sudo -u shell cmd activity start-activity -n com.android.settings/.Settings
+# cmd: Failure calling service activity: Failed transaction (2147483646)
+sudo -u shell input keyevent 3
+# cmd: Failure calling service input: Failed transaction (2147483646)
+sudo -u shell pm list packages
+# cmd: Failure calling service package: Failed transaction (2147483646)
+sudo -u shell settings get secure default_input_method
+# cmd: Failure calling service settings: Failed transaction (2147483646)
+```
+
+`sudo -u shell` cambia uid/gid, pero el contexto sigue siendo `u:r:magisk:s0` y `getenforce` dice
+`Disabled`; no cambia el contexto ni el canal que usan `cmd`, `input`, `pm` y `settings`. Lo que
+sí funciona como `shell`: `sudo -u shell dumpsys activity`, `sudo -u shell /system/bin/service
+list` y `sudo -u shell /system/bin/screencap`. `cmd package list packages` sigue funcionando como
+Termux (uid 10237); `pm list packages` no.
+
+Se repitió en una sesión nueva lanzada con `enter.sh -c` (namespace nuevo): `id` da 2000, pero
+`sudo -u shell cmd activity ...` sigue devolviendo `Failed transaction`. No es un namespace viejo:
+el cambio de uid no basta.
+
+Conclusión: el usuario `shell` y la regla de sudo se pueden dejar, pero **no son la ruta para
+abrir apps ni para inyectar toques en esta sesión**. La ruta que funciona sigue siendo `am` como
+Termux con el entorno de `enter.sh`; para `cmd`/`input` haría falta el contexto o el canal
+adecuado (Shizuku, una sesión con el binder/shell correctos), no solo cambiar el uid.
