@@ -7018,3 +7018,65 @@ dexdump: rc 0   (el método f declara 4 filas de catch)
 
 `TestLaSalidaQueCruzaDosFinally` (`apkc/javaemisor_finally_anidado_test.go`) compila un `return`
 y un `continue`/`break` que cruzan los dos bloques y exige el dex **byte a byte** el de javac.
+
+## 140. Abrir la pestaña en Brave Nightly desde Termux: el `BOOTCLASSPATH` que `am` no trae
+
+Medido el 2026-11-09. La página se sirve en `127.0.0.1:8787` y el navegador que ya estaba
+inicializado en el aparato es Brave Nightly (`com.brave.browser_nightly`). Brave a secas
+(`com.brave.browser`) estaba en el primer arranque (`WelcomeOnboardingActivity`) y con una
+petición de rol de navegador predeterminado encima: lanzarlo por el componente de URL abría esa
+pantalla, no la página.
+
+**Comando**
+
+```sh
+# 1. el servidor de la pestaña, con la página nueva
+curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/index.html
+
+# 2. el entorno de Android que app_process no hereda de Termux: se copia de zygote64
+zygote=$(/usr/sbin/sudo sh -c 'pidof zygote64 2>/dev/null || pidof zygote 2>/dev/null' | tr -d '\r')
+eval "$(/usr/sbin/sudo sh -c "tr '\0' '\n' < /proc/$zygote/environ" |
+  grep -E '^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH)=' | sed 's/^/export /')"
+
+# 3. el intento explícito a Brave Nightly. Se va a ChromeTabbedActivity, no al
+#    IntentDispatcher: el dispatcher es el que puede caer en el primer arranque.
+am start --user 0 \
+  -n com.brave.browser_nightly/org.chromium.chrome.browser.ChromeTabbedActivity \
+  -a android.intent.action.VIEW -d 'http://127.0.0.1:8787/'
+```
+
+**Resultado**: salida 0 y
+
+```text
+Starting: Intent { act=android.intent.action.VIEW dat=http://127.0.0.1:8787/...
+  cmp=com.brave.browser_nightly/org.chromium.chrome.browser.ChromeTabbedActivity }
+```
+
+Si la tarea de Nightly ya existía, la segunda vez responde
+`Warning: Activity not started, its current task has been brought to the front`, pero el intento
+`VIEW` llega igual y la pestaña abre la URL. La comprobación que vale es la pantalla, no esa
+advertencia:
+
+```sh
+/usr/sbin/sudo dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'
+/usr/sbin/sudo screencap -p /data/local/tmp/brave.png
+```
+
+Con Nightly delante, el task de `com.brave.browser_nightly` tiene `ChromeTabbedActivity` y la
+captura enseña la barra de direcciones en `127.0.0.1:8787/#pestana` con el explorador y el
+editor. El lanzamiento corre con el uid de Termux; `sudo` solo se usa para leer el `environ` de
+zygote, que Termux no puede leer.
+
+**Los dos fallos anteriores, para no repetirlos**
+
+1. `am start ...` a secas aborta con salida 134 y `logcat` dice
+   `Check failed: !location.empty() BOOTCLASSPATH and DEX2OATBOOTCLASSPATH must not be empty`.
+   El `am` de Termux ejecuta `/system/bin/app_process` sin el entorno de Android; el `BOOTCLASSPATH`
+   de zygote64 es exactamente lo que falta (el mismo preludio que usa `banco/banco.sh` para
+   `app_process64`).
+2. `cmd activity start --user 0 -p com.brave.browser ...` falla con
+   `SecurityException: Permission Denial: package=com.android.shell does not belong to uid=10237`
+   porque `cmd` se identifica como `com.android.shell` y no como Termux. Sin `-p`, o con `sudo`,
+   `cmd activity start` responde `cmd: Failure calling service activity: Failed transaction
+   (2147483646)` en este aparato. La ruta que funciona es el `am` de Termux con el entorno copiado.
+

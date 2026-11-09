@@ -78,6 +78,23 @@ Qué hace de verdad, y qué no:
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 41 cosas |
 
+## Abrir la pestaña en Brave Nightly
+
+Con `servidor.js` escuchando (por ejemplo en `127.0.0.1:8787`), Brave Nightly se abre desde
+Termux copiando primero el `BOOTCLASSPATH` de `zygote64` y lanzando el componente de la pestaña:
+
+```sh
+zygote=$(/usr/sbin/sudo sh -c 'pidof zygote64 2>/dev/null || pidof zygote 2>/dev/null' | tr -d '\r')
+eval "$(/usr/sbin/sudo sh -c "tr '\0' '\n' < /proc/$zygote/environ" |
+  grep -E '^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH)=' | sed 's/^/export /')"
+am start --user 0 \
+  -n com.brave.browser_nightly/org.chromium.chrome.browser.ChromeTabbedActivity \
+  -a android.intent.action.VIEW -d 'http://127.0.0.1:8787/'
+```
+
+El porqué de cada pieza y los dos fallos que no funcionan (`am` sin `BOOTCLASSPATH` y `cmd
+activity`) están medidos en `docs/evidencia.md` §140.
+
 `e2e.sh` incluye la pestaña cuando `APKC_WASM` apunta a un binario wasm; si no, lo avisa en vez de
 darla por probada.
 
