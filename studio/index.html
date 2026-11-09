@@ -4,9 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>apkc studio — crear una app Android sin Gradle</title>
+<meta name="description" content="Crea, edita, compila y firma apps Android en el navegador. Sin Gradle, sin backend y sin dependencias.">
+<meta name="theme-color" content="#1e1e1e">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23007acc'/%3E%3Cpath d='M9 23V9h7a5 5 0 0 1 0 10h-3v4z' fill='%23fff'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-vista="crear">
+<noscript><p class="sin-js">apkc studio necesita JavaScript: crea, edita y compila en el propio navegador, sin enviar nada a un servidor.</p></noscript>
 <div class="marco">
 
   <header class="barra-titulo">
@@ -76,6 +80,22 @@
             <div><kbd>Ctrl</kbd> + <kbd>Enter</kbd> repite el último comando</div>
             <div><kbd>Ctrl</kbd> + <kbd>`</kbd> abre o cierra el panel</div>
           </div>
+
+          <details id="detalle-diagnostico" class="diagnostico">
+            <summary>¿Falló un comando? Pega la salida y te la explico</summary>
+            <p class="nota">Se queda en este navegador: nada sale de la página. Las reglas solo
+              explican mensajes que apkc imprime de verdad.</p>
+            <label class="diagnostico-entrada">Salida de apkc
+              <textarea id="salida-apkc" rows="7" spellcheck="false"
+                placeholder="Pega aquí la salida de apkc, por ejemplo:&#10;[build] aapt2 compile never started: pipe: not implemented on js"></textarea>
+            </label>
+            <div class="acciones">
+              <button id="analizar-salida" class="primario" type="button">Analizar</button>
+              <button id="limpiar-salida" type="button">Limpiar</button>
+              <a id="descargar-informe" class="boton-enlace" href="#" download="informe-apkc.md" hidden>Descargar informe</a>
+            </div>
+            <div id="resultado-analisis" class="resultado-analisis" role="status" aria-live="polite" hidden></div>
+          </details>
         </section>
 
         <section id="pestana" class="vista vista-editor">
@@ -135,8 +155,12 @@
                   <button id="compilar-debug" class="primario" type="button">Compilar debug</button>
                   <button id="compilar-apk" type="button">Compilar release</button>
                   <button id="verificar-apk" type="button">Verificar el apk</button>
+                  <button id="probar-build-clasico" type="button">Probar el build clásico</button>
                 </div>
                 <p class="nota" id="estado-verificacion">sin verificar todavía</p>
+                <p class="nota">El build clásico (<code>aapt2</code>, <code>javac</code> y
+                  <code>d8</code>) no puede arrancar herramientas externas dentro de wasm; el botón
+                  enseña el muro real en la consola en vez de dejar la duda.</p>
 
                 <details id="detalle-sdk">
                   <summary>SDK y android.jar</summary>
@@ -249,5 +273,6 @@
 <script src="app.js"></script>
 <script src="pestana.js"></script>
 <script src="vistas.js"></script>
+<script src="diagnostico.js"></script>
 </body>
 </html>

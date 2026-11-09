@@ -100,6 +100,9 @@ for (const m of js.matchAll(/getElementById\("([^"]+)"\)/g))
 const pestana = fs.readFileSync(path.join(__dirname, "pestana.js"), "utf8");
 for (const m of pestana.matchAll(/getElementById\("([^"]+)"\)/g))
   if (!ids.has(m[1])) mal(`pestana.js pide #${m[1]} y index.html no lo tiene`);
+const diagnostico = fs.readFileSync(path.join(__dirname, "diagnostico.js"), "utf8");
+for (const m of diagnostico.matchAll(/getElementById\("([^"]+)"\)/g))
+  if (!ids.has(m[1])) mal(`diagnostico.js pide #${m[1]} y index.html no lo tiene`);
 for (const m of html.matchAll(/<input[^>]*name="([^"]+)"/g))
   if (!new RegExp(`"(f\\.get|f\\.has)\\(\"${m[1]}\"`).test(js) && !js.includes(`"${m[1]}"`))
     mal(`el formulario tiene ${m[1]} y estado() no lo lee`);

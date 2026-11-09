@@ -588,7 +588,13 @@ async function refrescarArbol() {
       fila.title = relativa(n.ruta);
       fila.style.paddingLeft = (8 + profundidad * 12) + "px";
       fila.className = n.dir ? "dir" : "archivo";
-      if (n.ruta === estadoPestana.ruta) fila.classList.add("activo");
+      fila.setAttribute("role", "treeitem");
+      fila.setAttribute("aria-level", String(profundidad + 1));
+      if (n.dir) fila.setAttribute("aria-expanded", String(!ARBOL.plegados.has(n.ruta)));
+      if (n.ruta === estadoPestana.ruta) {
+        fila.classList.add("activo");
+        fila.setAttribute("aria-selected", "true");
+      }
 
       const flecha = document.createElement("span");
       flecha.className = "arbol-flecha " +
@@ -824,14 +830,9 @@ async function correr(argv) {
 }
 
 function nota(texto) {
+  // la página se puede recortar: sin el aviso, un fallo de OPFS no puede reventar el manejador
   const n = document.getElementById("estado-pestana");
-  n.textContent = texto;
-}
-
-async function crearProyecto() {
-  await correr(["create", PROYECTO]);
-  const r = await hospedador.leer(PROYECTO + "/AndroidManifest.xml");
-  if (r.bytes) await abrir(PROYECTO + "/AndroidManifest.xml");
+  if (n) n.textContent = texto;
 }
 
 async function firmar() {
@@ -866,10 +867,14 @@ async function firmar() {
   }
   argv.push("--out", destino, origen);
   const r = await correr(argv);
+  // la contraseña se limpia también cuando falla: un campo con la clave abierta en una pestaña
+  // que se queda delante no es un detalle de estilo
+  const campoPass = document.getElementById(cfg.pass);
+  if (campoPass) campoPass.value = "";
+  const campoViejo = document.getElementById("storepass-viejo");
+  if (campoViejo) campoViejo.value = "";
   if (r && r.codigo === 0) {
     const v = await correr(["verify", destino]);
-    document.getElementById(cfg.pass).value = "";
-    if (document.getElementById("storepass-viejo")) document.getElementById("storepass-viejo").value = "";
     await descargar(destino);
     await ofrecerDescarga(destino + ".idsig", "descargar-idsig");
     if (v && v.codigo === 0) nota("firmado y verificado: " + destino.split("/").pop());
@@ -896,6 +901,17 @@ async function descargarRuta(ruta) {
   });
 }
 
+// Los enlaces de descarga se reutilizan en cada compilación: guardar el blob anterior y
+// revocarlo evita que una sesión larga acumule apks en memoria.
+function ponerBlob(enlace, bytes, tipo) {
+  if (!enlace) return null;
+  if (enlace.dataset.blob) URL.revokeObjectURL(enlace.dataset.blob);
+  const url = URL.createObjectURL(new Blob([bytes], { type: tipo }));
+  enlace.dataset.blob = url;
+  enlace.href = url;
+  return url;
+}
+
 async function descargar(ruta, ancla) {
   const nombre = ruta.split("/").pop();
   return conCarga("Preparando " + nombre + "…", async () => {
@@ -903,8 +919,9 @@ async function descargar(ruta, ancla) {
     if (!r.bytes) { nota("no hay nada en " + ruta); return; }
     const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
     const enlace = document.getElementById(ancla || "descargar-apk");
+    if (!enlace) return;
     const tipo = /\.aab$/i.test(ruta) ? "application/octet-stream" : "application/vnd.android.package-archive";
-    enlace.href = URL.createObjectURL(new Blob([bytes], { type: tipo }));
+    ponerBlob(enlace, bytes, tipo);
     enlace.download = nombre;
     enlace.hidden = false;
     if (ancla === "descargar-fichero") {
@@ -924,10 +941,16 @@ async function ofrecerDescarga(ruta, ancla) {
   const nombre = ruta.split("/").pop();
   return conCarga("Preparando " + nombre + "…", async () => {
     const enlace = document.getElementById(ancla);
+    if (!enlace) return;
     const r = await hospedador.leer(ruta);
-    if (!r.bytes) { enlace.hidden = true; enlace.removeAttribute("href"); return; }
+    if (!r.bytes) {
+      enlace.hidden = true;
+      if (enlace.dataset.blob) { URL.revokeObjectURL(enlace.dataset.blob); delete enlace.dataset.blob; }
+      enlace.removeAttribute("href");
+      return;
+    }
     const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
-    enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    ponerBlob(enlace, bytes, "application/octet-stream");
     enlace.download = nombre;
     enlace.textContent = enlace.download + " (" + bytes.length + " bytes)";
     enlace.hidden = false;
@@ -942,10 +965,13 @@ async function intentarCompilar() {
   await hospedador.cwd(PROYECTO);
   const r = await correr(["build"]);
   if (r && r.codigo !== 0) {
-    document.getElementById("consola-pestana").textContent +=
+    // por CONSOLA, no por textContent: pintarConsola() reescribe el <pre> desde su buffer y
+    // borraría el aviso en la siguiente línea de salida
+    CONSOLA.escribir(
       "\nEse fallo es el muro conocido: js/wasm no tiene fork/exec, así que aapt2/javac/d8 no pueden arrancar.\n" +
-      "Lo que sí corre aquí entero es `build --linker go --compiler go`: el botón de arriba, que pide el android.jar.\n";
+      "Lo que sí corre aquí entero es `build --linker go --compiler go`: el botón Compilar debug o Compilar release.\n");
   }
+  return r;
 }
 
 // --- el build sin procesos: recursos, Java, dex y firma, en este mismo binario ------------
@@ -1292,8 +1318,12 @@ async function compilarCon(k, tipo) {
     "--android-jar", RUTA_JAR, "--sdk-version", version, "--codename", codename,
     "--keystore", k.ruta, "--storepass", k.pass, "--keyalias", k.alias,
     "--v4=" + (v4 ? "true" : "false")]);
+  // la contraseña de release no se queda escrita aunque el build falle
+  if (tipo !== "debug") {
+    const campoPass = document.getElementById(KEYSTORES.compilar.pass);
+    if (campoPass) campoPass.value = "";
+  }
   if (r && r.codigo === 0) {
-    if (tipo !== "debug") document.getElementById(KEYSTORES.compilar.pass).value = "";
     await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
     await ofrecerDescarga(PROYECTO + "/build/app.apk.idsig", "descargar-idsig-compilada");
     await verificarLoCompilado();
@@ -1331,7 +1361,7 @@ async function verificarLoCompilado() {
     .map((l) => l.replace("[verify] ", "").trim())
     .filter((l) => l.startsWith("v1 (JAR signing)") || l.startsWith("v2 (APK Signature Scheme v2)") ||
       l.startsWith("certificado") || l.startsWith("par desconocido"));
-  aviso.textContent = lineas.length ? lineas.join(" · ") : "apkc no devolvió ningún veredicto";
+  if (aviso) aviso.textContent = lineas.length ? lineas.join(" · ") : "apkc no devolvió ningún veredicto";
   return r;
 }
 
@@ -1465,6 +1495,7 @@ if (typeof document !== "undefined") {
     en("compilar-debug", compilarDebug);
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
+    en("probar-build-clasico", intentarCompilar);
     en("recargar-arbol", refrescarArbol);
     // Los enlaces de la barra ya llevan un href blob cuando están visibles: se deja que el
     // navegador siga el enlace. Interceptarlos y llamar a descargar() otra vez solo preparaba
@@ -1473,7 +1504,7 @@ if (typeof document !== "undefined") {
       if (!estadoPestana.ruta) { e.preventDefault(); nota("no hay un fichero abierto"); return; }
       const enlace = e.currentTarget;
       // el buffer abierto, no lo último guardado: si hay cambios sin guardar, se descargan igual
-      enlace.href = URL.createObjectURL(new Blob([EDITOR.texto()], { type: "text/plain;charset=utf-8" }));
+      ponerBlob(enlace, EDITOR.texto(), "text/plain;charset=utf-8");
       enlace.download = estadoPestana.ruta.split("/").pop();
     });
 

@@ -165,17 +165,6 @@ function buildProject(state) {
   return { dirs, files };
 }
 
-function commands(state) {
-  const c = [];
-  c.push("apkc doctor");
-  c.push("apkc create ./myapp");
-  c.push("cp -r <esta-página>/myapp/* ./myapp/   # o: descomprime el zip ahí");
-  c.push("apkc build --inc");
-  c.push(state.device ? "apkc run --rish   # con Shizuku levantado; sin el, quita --rish y usa adb"
-                      : "adb install -r myapp/build/app.apk");
-  return c;
-}
-
 // ---------------------------------------------------------------- zip (STORE, sin dependencias)
 const CRC_TABLE = (() => {
   const t = new Uint32Array(256);
@@ -392,7 +381,12 @@ function loadLog() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY)) || { pasos: [], eventos: [] }; }
   catch (e) { return { pasos: [], eventos: [] }; }
 }
-function saveLog(l) { localStorage.setItem(STORE_KEY, JSON.stringify(l)); }
+// localStorage puede estar lleno o prohibido (modo privado): perder los contadores no puede
+// impedir que el diagnóstico pinte lo que ya analizó en memoria
+function saveLog(l) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(l)); }
+  catch (e) { /* sin persistencia, la página sigue */ }
+}
 function registrar(tipo, detalle) {
   const l = loadLog();
   l.eventos.push({ t: new Date().toISOString(), tipo, detalle: detalle || null });
@@ -427,4 +421,4 @@ function informe() {
   return md;
 }
 
-if (typeof module !== "undefined") module.exports = { buildProject, makeZip, analyze, crc32, commands, RULES };
+if (typeof module !== "undefined") module.exports = { buildProject, makeZip, analyze, crc32, RULES, loadLog, informe };

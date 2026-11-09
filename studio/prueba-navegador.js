@@ -72,6 +72,16 @@ const conductor = `(async () => {
   r.localStorage = sa(() => { localStorage.setItem("apkc-studio-prueba", "1");
     const v = localStorage.getItem("apkc-studio-prueba"); localStorage.removeItem("apkc-studio-prueba");
     return v === "1" ? "funciona" : "leyo null"; });
+
+  // el diagnóstico explica una salida real de apkc sin sacarla del navegador
+  document.getElementById("salida-apkc").value =
+    "[build] aapt2 compile never started: pipe: not implemented on js";
+  document.getElementById("analizar-salida").click();
+  await new Promise((ok) => setTimeout(ok, 300));
+  const resultado = document.getElementById("resultado-analisis");
+  r.diagnosticoVisible = !resultado.hidden;
+  r.diagnostico = resultado.textContent;
+  r.informe = !document.getElementById("descargar-informe").hidden;
   return r;
 })()`;
 
@@ -122,6 +132,11 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
     comprueba(/OPFS|no se pudo crear/.test(String(v.avisoCrear)), "file:// no avisó de que no hay OPFS: " + v.avisoCrear);
     comprueba(v.sinUndefined, "quedó un 'undefined' visible en la página");
     comprueba(v.localStorage === "funciona", "localStorage en file://: " + v.localStorage);
+    comprueba(v.diagnosticoVisible && /herramienta-no-arranca/.test(String(v.diagnostico)),
+      "el diagnóstico no explicó el muro de aapt2: " + String(v.diagnostico).slice(0, 160));
+    comprueba(/navegador no puede hablar con un proceso/.test(String(v.diagnostico)),
+      "el diagnóstico no dice por qué el build clásico no corre en wasm: " + String(v.diagnostico).slice(0, 160));
+    comprueba(v.informe, "el diagnóstico no ofreció el informe descargable");
   }
   ws.close();
   navegador.kill("SIGKILL");
