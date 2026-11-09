@@ -171,9 +171,12 @@ OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor
 de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y una
 consola inferior con Salida, Compilar y Firmar (cerrada hasta que hace falta; ``Ctrl + ` `` la
 abre). La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
-subir, descargar, renombrar, borrar). El botón de subir del explorador escribe en la carpeta del
+subir, descargar, renombrar, borrar). El árbol arranca **cerrado** y la cabecera del explorador
+tiene botones para contraerlo o desplegarlo entero. El botón de subir escribe en la carpeta del
 fichero abierto; el menú de una carpeta permite subir ahí o una carpeta entera, conservando sus
-subdirectorios. Todo va directo a OPFS: ningún byte sale del navegador.
+subdirectorios. Para mover, se arrastra una fila a otra carpeta con ratón o lápiz, o se usa
+**Mover a…** en el menú de mantener pulsado (la vía fiable en táctil). Todo va directo a OPFS:
+ningún byte sale del navegador.
 `pestana.js` lleva el editor, el árbol y apkc.wasm; `vistas.js` siembra el árbol, cambia de vista
 (también por hash, `index.html#pestana`) y refleja rótulos; `diagnostico.js` explica la salida
 pegada. Las pruebas de navegador, de creación y de la pestaña usan los mismos ids de siempre. El

@@ -97,12 +97,16 @@ directorios y despues los ficheros por `localeCompare`. Cada fila es un `<a>` co
 | `style.paddingLeft` | `8 + profundidad * 12` px; es la jerarquia visual |
 | `class="dir"` / `class="archivo"` | icono y color |
 | `class="activo"` | fila del fichero abierto |
+| `draggable` | solo con puntero fino; en táctil se mueve con **Mover a…** |
+| `class="arrastrando"` / `class="soltar"` | realimentación visual del arrastre |
 
 Cada fila tiene tres piezas: la flecha (`.arbol-flecha`), el icono (`.arbol-icono`) y el nombre
 (`.nombre`). Los ficheros añaden un `↓` (`.arbol-descargar`) que descarga esa entrada de OPFS sin
-abrirla, también si es binaria. Las carpetas se pliegan con `ARBOL.plegados`, un `Set` de rutas
-que sobrevive a los refrescos. Pulsar una carpeta alterna el `Set` y vuelve a pintar; pulsar un
-fichero llama a `abrir(ruta)`.
+abrirla, también si es binaria. Las carpetas se pliegan con `ARBOL.abiertos`, un `Set` que
+**empieza vacío**: el árbol arranca cerrado. `#plegar-arbol` lo vacía y `#desplegar-arbol` mete
+todas las carpetas del proyecto; `revelarRuta()` abre los ancestros del fichero que se abre o se
+mueve. Pulsar una carpeta alterna el `Set` y vuelve a pintar; pulsar un fichero llama a
+`abrir(ruta)`.
 
 `#subir-arbol` pide archivos con `#subir-ficheros` y los escribe en la carpeta del fichero
 abierto, o en `/proyecto` si no hay ninguno. En el menú de una carpeta, **Subir archivos aquí** y
@@ -113,11 +117,17 @@ OPFS y abre el resultado si solo se subió un fichero de texto y no había cambi
 
 Con el botón derecho o manteniendo pulsada una fila aparece `#menu-archivo`, un menú con
 **Abrir** y **Descargar** (ficheros), **Nuevo fichero aquí**, **Subir archivos aquí** y **Subir
-carpeta aquí** (carpetas), **Renombrar** y **Borrar**. Renombrar cambia el nombre en
+carpeta aquí** (carpetas), **Mover a…**, **Renombrar** y **Borrar**. Renombrar cambia el nombre en
 la misma carpeta con `hospedador.renombrar` (host `renombrar` → `fs.rename`, sin copiar bytes) y
 actualiza la pestaña si el fichero abierto es el renombrado o está dentro de la carpeta
 renombrada. Borrar usa `hospedador.limpiar`; si se borra el fichero abierto, el editor vuelve a
 `Sin fichero`.
+
+Mover usa el mismo `fs.rename`: `moverRuta(origen, carpeta)` calcula el destino, rechaza mover
+una carpeta dentro de sí misma y remapea `ARBOL.abiertos` y la ruta del fichero abierto. Con
+ratón o lápiz las filas son `draggable` y las carpetas aceptan el `drop`; en táctil —donde el
+arrastre nativo choca con el menú de mantener pulsado— se usa **Mover a…**, que pide la carpeta
+destino y la valida contra el árbol real.
 
 Si `/proyecto` esta vacio, el arbol pinta un estado vacio con un enlace a Inicio. Si OPFS no esta
 disponible (por ejemplo, `file://`), `refrescarArbol()` captura el error y deja el estado vacio en
@@ -313,7 +323,7 @@ En `@media (max-width: 760px)`:
 | --- | --- |
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`) y el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage y el diagnóstico sobre una salida real |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono y subir un archivo del dispositivo hasta OPFS |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, el árbol cerrado con sus botones, subir un archivo del dispositivo y moverlo de carpeta |
 | `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 50 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
@@ -334,10 +344,9 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
 - **Una sola pestaña de fichero.** No hay varias pestanas de documentos ni un historial de
   editores.
 - **Sin buscar ni reemplazar.** `Ctrl+F` es el del navegador, no el del editor.
-- **Sin mover ficheros entre carpetas.** El menú del explorador permite renombrar y borrar, pero
-  no arrastrar ni cortar y pegar.
-- **Sin arrastrar y soltar.** Los archivos se suben con el botón del explorador o con el menú de
-  la carpeta de destino.
+- **Sin cortar y pegar ni arrastrar en táctil.** Con ratón o lápiz hay arrastrar y soltar entre
+  carpetas; en táctil, el menú de la fila ofrece **Mover a…**. Tampoco hay arrastrar y soltar para
+  subir archivos: se suben con el botón del explorador o el menú de la carpeta.
 - **Sin autosave.** El guardado es explicito (`Ctrl+S` o el boton).
 - **Sin plegado de codigo, minimapa, multicursor ni diff.**
 - **El resaltado es lexico.** No entiende de tipos, scopes ni errores; no sustituye a un LSP.

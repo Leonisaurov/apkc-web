@@ -423,7 +423,15 @@ function pintarConsola() {
 }
 
 // --- el árbol y los ficheros --------------------------------------------------------------
-const ARBOL = { plegados: new Set() };
+// El árbol empieza cerrado: solo se guardan las carpetas abiertas, no las plegadas. Antes el
+// conjunto vacío significaba «todo abierto» y un proyecto con src/ y res/ se comía la pantalla.
+const ARBOL = { abiertos: new Set() };
+
+// En táctil el arrastre nativo compite con el menú de mantener pulsado; el arrastre se ofrece
+// donde hay ratón o lápiz, y en el resto se mueve con «Mover a…».
+const ARRASTRABLE = typeof window !== "undefined" && typeof window.matchMedia === "function"
+  ? window.matchMedia("(pointer: fine)").matches
+  : false;
 
 function relativa(ruta) {
   return ruta === PROYECTO ? "" : (ruta.startsWith(PROYECTO + "/") ? ruta.slice(PROYECTO.length + 1) : ruta);
@@ -526,6 +534,10 @@ function abrirMenuArchivo(x, y, nodo) {
     añadir("Subir archivos aquí", () => pedirSubida(nodo.ruta, false));
     añadir("Subir carpeta aquí", () => pedirSubida(nodo.ruta, true));
   }
+  añadir("Mover a…", async () => {
+    const carpeta = await pedirCarpetaDestino();
+    if (carpeta) await moverRuta(nodo.ruta, carpeta);
+  });
   añadir("Renombrar", () => renombrarRuta(nodo.ruta));
   añadir("Borrar", () => borrarRuta(nodo.ruta), true);
   menu.hidden = false;
@@ -564,6 +576,32 @@ function conectarMenu(fila, nodo) {
   });
   fila.addEventListener("pointerup", cancelar);
   fila.addEventListener("pointercancel", cancelar);
+
+  if (ARRASTRABLE) {
+    fila.draggable = true;
+    fila.addEventListener("dragstart", (e) => {
+      if (!e.dataTransfer) return;
+      e.dataTransfer.setData("text/plain", nodo.ruta);
+      e.dataTransfer.effectAllowed = "move";
+      fila.classList.add("arrastrando");
+    });
+    fila.addEventListener("dragend", () => fila.classList.remove("arrastrando"));
+    if (nodo.dir) {
+      fila.addEventListener("dragover", (e) => {
+        if (!Array.from(e.dataTransfer.types || []).includes("text/plain")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        fila.classList.add("soltar");
+      });
+      fila.addEventListener("dragleave", () => fila.classList.remove("soltar"));
+      fila.addEventListener("drop", (e) => {
+        e.preventDefault();
+        fila.classList.remove("soltar");
+        const origen = e.dataTransfer.getData("text/plain");
+        if (origen) moverRuta(origen, nodo.ruta);
+      });
+    }
+  }
 }
 
 async function renombrarRuta(ruta) {
@@ -587,6 +625,8 @@ async function renombrarRuta(ruta) {
     const abierto = document.getElementById("fichero-abierto");
     if (abierto) { abierto.textContent = relativa(estadoPestana.ruta); abierto.title = estadoPestana.ruta; }
   }
+  remapearAbiertos(ruta, destino);
+  revelarRuta(estadoPestana.ruta);
   actualizarAccionesFichero();
   await refrescarArbol();
   nota("renombrado a " + relativa(destino));
@@ -605,6 +645,89 @@ async function borrarRuta(ruta) {
   }
   await refrescarArbol();
   nota("borrado " + relativa(ruta));
+}
+
+// --- plegar, desplegar y mover ------------------------------------------------------------
+function revelarRuta(ruta) {
+  if (!ruta || !ruta.startsWith(PROYECTO + "/")) return;
+  const partes = relativa(ruta).split("/");
+  partes.pop();
+  let actual = PROYECTO;
+  for (const parte of partes) {
+    actual += "/" + parte;
+    ARBOL.abiertos.add(actual);
+  }
+}
+
+function remapearAbiertos(origen, destino) {
+  for (const ruta of [...ARBOL.abiertos]) {
+    if (ruta === origen || ruta.startsWith(origen + "/")) {
+      ARBOL.abiertos.delete(ruta);
+      ARBOL.abiertos.add(destino + ruta.slice(origen.length));
+    }
+  }
+}
+
+function plegarTodo() {
+  ARBOL.abiertos.clear();
+  refrescarArbol();
+}
+
+async function desplegarTodo() {
+  let r;
+  try { r = await hospedador.arbol(); } catch (e) { r = { nodos: [] }; }
+  for (const nodo of r.nodos || []) {
+    if (nodo.dir && nodo.ruta.startsWith(PROYECTO + "/")) ARBOL.abiertos.add(nodo.ruta);
+  }
+  await refrescarArbol();
+}
+
+async function pedirCarpetaDestino() {
+  const entrada = prompt("Carpeta destino dentro del proyecto", PROYECTO);
+  if (entrada === null) return null;
+  let carpeta = entrada.trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  if (!carpeta.startsWith("/")) carpeta = PROYECTO + "/" + carpeta;
+  carpeta = normalizarRuta(carpeta);
+  if (carpeta !== PROYECTO && !carpeta.startsWith(PROYECTO + "/")) {
+    nota("la carpeta tiene que quedar dentro de /proyecto");
+    return null;
+  }
+  const arbol = await hospedador.arbol();
+  if (!(arbol.nodos || []).some((n) => n.dir && n.ruta === carpeta)) {
+    nota("no existe la carpeta " + carpeta);
+    return null;
+  }
+  return carpeta;
+}
+
+async function moverRuta(origen, carpeta) {
+  if (!origen || !carpeta) return;
+  carpeta = normalizarRuta(carpeta);
+  // el arrastre no puede sacar nada del árbol que se ve
+  if (!origen.startsWith(PROYECTO + "/")) return;
+  if (carpeta !== PROYECTO && !carpeta.startsWith(PROYECTO + "/")) return;
+  const destino = carpeta + "/" + origen.split("/").pop();
+  if (destino === origen) return;
+  if (destino.startsWith(origen + "/")) {
+    nota("no se puede mover una carpeta dentro de sí misma");
+    return;
+  }
+  const r = await hospedador.renombrar(origen, destino);
+  if (r.tipo === "error") { nota("no se pudo mover: " + r.error); return; }
+  if (estadoPestana.ruta === origen) estadoPestana.ruta = destino;
+  else if (estadoPestana.ruta && estadoPestana.ruta.startsWith(origen + "/")) {
+    estadoPestana.ruta = destino + estadoPestana.ruta.slice(origen.length);
+  }
+  remapearAbiertos(origen, destino);
+  revelarRuta(estadoPestana.ruta);
+  const abierto = document.getElementById("fichero-abierto");
+  if (abierto && estadoPestana.ruta) {
+    abierto.textContent = relativa(estadoPestana.ruta);
+    abierto.title = estadoPestana.ruta;
+  }
+  actualizarAccionesFichero();
+  await refrescarArbol();
+  nota("movido a " + relativa(destino));
 }
 
 async function refrescarArbol() {
@@ -660,7 +783,7 @@ async function refrescarArbol() {
       fila.className = n.dir ? "dir" : "archivo";
       fila.setAttribute("role", "treeitem");
       fila.setAttribute("aria-level", String(profundidad + 1));
-      if (n.dir) fila.setAttribute("aria-expanded", String(!ARBOL.plegados.has(n.ruta)));
+      if (n.dir) fila.setAttribute("aria-expanded", String(ARBOL.abiertos.has(n.ruta)));
       if (n.ruta === estadoPestana.ruta) {
         fila.classList.add("activo");
         fila.setAttribute("aria-selected", "true");
@@ -668,7 +791,7 @@ async function refrescarArbol() {
 
       const flecha = document.createElement("span");
       flecha.className = "arbol-flecha " +
-        (n.dir ? (ARBOL.plegados.has(n.ruta) ? "" : "abierta") : "hoja");
+        (n.dir ? (ARBOL.abiertos.has(n.ruta) ? "abierta" : "") : "hoja");
       fila.appendChild(flecha);
 
       const icono = document.createElement("span");
@@ -694,8 +817,8 @@ async function refrescarArbol() {
         fila.onclick = (e) => {
           e.preventDefault();
           if (fila.dataset.menuLargo) { delete fila.dataset.menuLargo; return; }
-          if (ARBOL.plegados.has(n.ruta)) ARBOL.plegados.delete(n.ruta);
-          else ARBOL.plegados.add(n.ruta);
+          if (ARBOL.abiertos.has(n.ruta)) ARBOL.abiertos.delete(n.ruta);
+          else ARBOL.abiertos.add(n.ruta);
           refrescarArbol();
         };
       } else {
@@ -714,7 +837,7 @@ async function refrescarArbol() {
       }
       conectarMenu(fila, n);
       fuera.appendChild(fila);
-      if (n.dir && !ARBOL.plegados.has(n.ruta)) pintar(n.ruta, profundidad + 1);
+      if (n.dir && ARBOL.abiertos.has(n.ruta)) pintar(n.ruta, profundidad + 1);
     }
   };
   pintar(PROYECTO, 0);
@@ -744,6 +867,7 @@ async function abrir(ruta, yaConfirmado) {
     return false;
   }
   estadoPestana.ruta = ruta;
+  revelarRuta(ruta);
   EDITOR.poner(texto);
   const nombre = document.getElementById("fichero-abierto");
   if (nombre) {
@@ -862,6 +986,7 @@ async function nuevoFichero(carpeta) {
     return;
   }
   estadoPestana.ruta = nombre;
+  revelarRuta(nombre);
   EDITOR.poner("");
   const abierto = document.getElementById("fichero-abierto");
   if (abierto) {
@@ -1538,6 +1663,27 @@ if (typeof document !== "undefined") {
     EDITOR.inicializar();
     actualizarAccionesFichero();
 
+    // soltar en el hueco del explorador mueve a la raíz del proyecto
+    const cajaArbol = document.getElementById("arbol-pestana");
+    if (cajaArbol && ARRASTRABLE) {
+      cajaArbol.addEventListener("dragover", (e) => {
+        if (e.target !== cajaArbol) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        cajaArbol.classList.add("soltar-raiz");
+      });
+      cajaArbol.addEventListener("dragleave", (e) => {
+        if (e.target === cajaArbol) cajaArbol.classList.remove("soltar-raiz");
+      });
+      cajaArbol.addEventListener("drop", (e) => {
+        if (e.target !== cajaArbol) return;
+        e.preventDefault();
+        cajaArbol.classList.remove("soltar-raiz");
+        const origen = e.dataTransfer.getData("text/plain");
+        if (origen) moverRuta(origen, PROYECTO);
+      });
+    }
+
     const menuEditor = document.getElementById("menu-editor");
     if (menuEditor) {
       // cualquier acción del menú lo cierra; el <details> no guarda estado en JS
@@ -1619,6 +1765,8 @@ if (typeof document !== "undefined") {
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
     en("probar-build-clasico", intentarCompilar);
+    en("plegar-arbol", plegarTodo);
+    en("desplegar-arbol", desplegarTodo);
     en("recargar-arbol", refrescarArbol);
     // Los enlaces de la barra ya llevan un href blob cuando están visibles: se deja que el
     // navegador siga el enlace. Interceptarlos y llamar a descargar() otra vez solo preparaba

@@ -71,9 +71,11 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
 1. En **Inicio**, escribe el nombre, el package (`com.mi.app`) y, si quieres, un icono PNG.
 2. Pulsa **Crear proyecto y editar**. El proyecto se escribe en OPFS y se abre
    `AndroidManifest.xml` en el **Editor**.
-3. En el **Explorador**, pulsa un fichero para abrirlo. Las carpetas se pliegan. El botón de
-   subir de la cabecera escribe archivos en la carpeta del fichero abierto; el menú de una
-   carpeta permite **Subir archivos aquí** o **Subir carpeta aquí**, conservando subdirectorios.
+3. En el **Explorador**, pulsa un fichero para abrirlo. El árbol empieza **cerrado**; los botones
+   **−** y **+** de la cabecera lo contraen o lo despliegan entero. El botón de subir escribe
+   archivos en la carpeta del fichero abierto; el menú de una carpeta permite **Subir archivos
+   aquí** o **Subir carpeta aquí**, conservando subdirectorios. Para mover, arrastra una fila a
+   otra carpeta (ratón o lápiz) o usa **Mover a…** en el menú de mantener pulsado.
 4. Edita en el área de código:
    - `Ctrl+S` o **Guardar** salva el fichero.
    - **Archivo** agrupa Nuevo, Subir archivos, Descargar, Renombrar y Borrar.

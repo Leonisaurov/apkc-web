@@ -76,6 +76,10 @@ define `hospedador` antes de que `vistas.js` cree el proyecto. No pongas `"type"
   fichero abierto; el menú de una carpeta fija el destino. La subida de carpeta conserva
   `webkitRelativePath` y descarta los tramos `..`; `prueba-crear.js` conduce el input con
   `DataTransfer`.
+- **El árbol empieza cerrado.** `ARBOL.abiertos` vacío significa todo plegado; no lo vuelvas a
+  invertir a `plegados`. Mover es `hospedador.renombrar` a través de `moverRuta`, que remapea
+  `ARBOL.abiertos` y la ruta del fichero abierto. El arrastre solo se activa con puntero fino;
+  en táctil se usa **Mover a…**.
 - **La barra del fichero es deliberada:** `#guardar-fichero` es la acción primaria y
   `#menu-editor` (un `<details>`) agrupa Nuevo, Subir, Descargar, Renombrar y Borrar. No vuelvas
   a sacar esos botones sueltos a la barra.

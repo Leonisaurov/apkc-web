@@ -108,14 +108,31 @@ async function target() {
       if (/proyecto creado|no se pudo/.test(t)) break;
       await new Promise((ok) => setTimeout(ok, 150));
     }
+    const texto = () => document.getElementById("arbol-pestana").textContent;
+    const espera = async (cond) => {
+      for (let i = 0; i < 60; i++) {
+        if (cond()) return true;
+        await new Promise((ok) => setTimeout(ok, 100));
+      }
+      return false;
+    };
+    // el árbol arranca cerrado: las hojas profundas no están en el DOM hasta desplegar
+    const empiezaCerrado = !/MainActivity\\.java/.test(texto());
+    document.getElementById("desplegar-arbol").click();
+    const desplegado = await espera(() => /MainActivity\\.java/.test(texto()));
+    document.getElementById("plegar-arbol").click();
+    const plegado = await espera(() => !/MainActivity\\.java/.test(texto()));
+    document.getElementById("desplegar-arbol").click();
+    await espera(() => /MainActivity\\.java/.test(texto()));
     return {
       aviso: document.getElementById("estado-crear").textContent,
       editor: document.getElementById("pestana").classList.contains("activa"),
       abierto: document.getElementById("fichero-abierto").textContent,
-      arbol: document.getElementById("arbol-pestana").textContent,
+      arbol: texto(),
       rutas: [...document.querySelectorAll("#arbol-pestana a")].map((a) => a.dataset.ruta || ""),
       codigo: document.getElementById("codigo").value,
       titulo: document.getElementById("titulo-proyecto").textContent,
+      empiezaCerrado, desplegado, plegado,
     };
   })()`);
 
@@ -130,6 +147,12 @@ async function target() {
     String(crear.codigo).split("\n").filter((l) => /package=|icon=/.test(l)).join(" ").slice(0, 180));
   comprueba("el icono está en el árbol", /res\/drawable\/icono\.png/.test(rutasArbol),
     rutasArbol.slice(0, 180));
+  comprueba("el árbol empieza cerrado", crear.empiezaCerrado === true,
+    String(crear.empiezaCerrado));
+  comprueba("el botón desplegar abre todas las carpetas", crear.desplegado === true,
+    String(crear.desplegado));
+  comprueba("el botón contraer las vuelve a cerrar", crear.plegado === true,
+    String(crear.plegado));
 
   // subir un archivo del dispositivo: el mismo camino que usa el botón del explorador, sin
   // pasar por ningún servidor. Con el manifiesto abierto, el destino es /proyecto.
@@ -156,6 +179,26 @@ async function target() {
   comprueba("el archivo subido aparece en el árbol y se abre",
     /nota\.txt$/.test(String(subida.abierto)) && subida.rutas.includes("/proyecto/nota.txt"),
     JSON.stringify({ abierto: subida.abierto, rutas: subida.rutas }).slice(0, 220));
+
+  // mover el fichero abierto a res/: el contenido viaja, la pestaña sigue el cambio y el árbol
+  // se reabre en la carpeta de destino
+  const movimiento = await evaluar(`(async () => {
+    await moverRuta("/proyecto/nota.txt", "/proyecto/res");
+    const nuevo = await hospedador.bytes("/proyecto/res/nota.txt");
+    const viejo = await hospedador.bytes("/proyecto/nota.txt");
+    return {
+      texto: nuevo ? new TextDecoder().decode(nuevo) : null,
+      viejo: !!viejo,
+      abierto: document.getElementById("fichero-abierto").textContent,
+      rutas: [...document.querySelectorAll("#arbol-pestana a")].map((a) => a.dataset.ruta || ""),
+    };
+  })()`);
+  comprueba("mover un archivo lo cambia de carpeta y conserva el contenido",
+    movimiento.texto === "hola desde el dispositivo\n" && !movimiento.viejo,
+    JSON.stringify(movimiento).slice(0, 220));
+  comprueba("la pestaña y el árbol siguen al archivo movido",
+    movimiento.abierto === "res/nota.txt" && movimiento.rutas.includes("/proyecto/res/nota.txt"),
+    JSON.stringify({ abierto: movimiento.abierto, rutas: movimiento.rutas }).slice(0, 220));
 
   ws.close();
   apagar();
