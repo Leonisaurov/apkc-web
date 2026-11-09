@@ -241,6 +241,27 @@ func escribeBloqueTipo(ti tipoEscribir, bloque bloqueEscribir) []byte {
 	return append(b, entradas...)
 }
 
+// densidadDe: el número de una carpeta `drawable-…` medida, o 0 si el calificador no es una
+// densidad. Medido con aapt2 en el §137: ldpi 120, mdpi 160, hdpi 240, xhdpi 320, xxhdpi 480 y
+// xxxhdpi 640.
+func densidadDe(calificador string) uint16 {
+	switch calificador {
+	case "ldpi":
+		return 120
+	case "mdpi":
+		return 160
+	case "hdpi":
+		return 240
+	case "xhdpi":
+		return 320
+	case "xxhdpi":
+		return 480
+	case "xxxhdpi":
+		return 640
+	}
+	return 0
+}
+
 // configDe: los 64 bytes de ResTable_config que midió el aapt2 del aparato. La base solo declara su
 // tamaño (64). `values-es` escribe 'e' y 's' en language[0] y language[1] (offset +8 y +9); el resto
 // queda a cero. Medido en el volcado del parrafo 94.
@@ -253,12 +274,15 @@ func configDe(lengua string) []byte {
 		// `es-rMX`: language en +8/+9 y country en +10/+11 (parrafo 107)
 		b[8], b[9] = lengua[0], lengua[1]
 		b[10], b[11] = lengua[4], lengua[5]
+	case lengua == "port":
+		// ResTable_config::orientation = ORIENTATION_PORT (1), en +12 (§137)
+		b[12] = 1
 	case lengua == "land":
 		// ResTable_config::orientation = ORIENTATION_LAND (2), en +12
 		b[12] = 2
-	case lengua == "hdpi":
-		// density = DENSITY_HDPI (240) en +14 y sdkVersion 4 en +24
-		b[14], b[15] = 0xf0, 0
+	case densidadDe(lengua) != 0:
+		// density en +14 y sdkVersion 4 en +24, para todas las densidades medidas (§137)
+		binary.LittleEndian.PutUint16(b[14:], densidadDe(lengua))
 		b[24] = 4
 	default:
 		if len(lengua) != 2 {

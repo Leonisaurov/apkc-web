@@ -6852,3 +6852,123 @@ ids) y los recursos `id` llevan el valor booleano a cero, como un `<item type="i
 resuelven con una pasada previa sobre los tipos y claves ordenados, porque el mapa del atributo
 necesita el número del `id` antes de escribir la tabla. `TestAttrEnumYFlagsConHijos`
 (`apkc/valores_enum_test.go`) exige el arsc **byte a byte** el de aapt2 (896 bytes).
+
+## 136. Instalar la app de cierre destapó dos fallos del emisor
+
+La app de cierre se armó con el camino todo-Go y se instaló en la pantalla secundaria. El
+primer intento murió en `onCreate`, y el logcat dio el motivo exacto.
+
+```sh
+W=$PREFIX/tmp/cierre-app
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$ANDROID_JAR" --keystore "$HOME/.android/debug.keystore"
+virtual_screen app install --open "$W/build/app.apk"
+virtual_screen app logs com.icono
+```
+
+```text
+java.lang.IncompatibleClassChangeError: The method 'int com.icono.MainActivity.calcula()'
+was expected to be of type virtual but instead was found to be of type static
+```
+
+El emisor trataba `calcula()` (un `static` llamado sin receptor desde un método de instancia)
+como `this.calcula()` y escribía `invokevirtual`. Corregido: cuando el candidato es estático se
+escribe `invokestatic` sin cargar `this`. `TestLosEstaticosSeLlamanSinReceptor` compara el dex
+con el de javac.
+
+El segundo intento dio otro error, también del emisor:
+
+```text
+java.lang.NoSuchMethodError: No direct method <init>(Lcom/icono/MainActivity;)V in class
+Landroid/widget/TextView;
+```
+
+`new TextView(this)` se firmaba con el descriptor del **argumento**
+(`(Lcom/icono/MainActivity;)V`) en vez del de la **declaración**
+(`(Landroid/content/Context;)V`). Corregido: el constructor se resuelve con
+`buscarMetodo` y se usa `cand.desc`. `TestElConstructorSeFirmaConSuDescriptor` lo fija con una
+jerarquía `A`/`B` y un `new A(b)`.
+
+Con las dos correcciones la app arranca, con su etiqueta en español y el texto que calcula:
+
+```text
+com.icono/com.icono.MainActivity visible=True tarea=594
+barra de título: «Cierre ES»   TextView: «total 203»
+```
+
+La cuenta del `onCreate`: el bucle deja `n = 10`, el `switch` cae en `case 10` (`total = 110`),
+`+= 'A'` suma 65, el `catch` suma 7, y `seis(1..6)` suma 21 → 203. Es el cierre de la Fase 5:
+bucle, `switch`, `try`/`catch`, `char`, `+=`/`++`, un método de seis argumentos, icono y dos
+idiomas, compilado, empaquetado y firmado por el fork, instalado y ejecutado.
+
+## 137. Más densidades y la orientación `port`
+
+Medido con aapt2 sobre un proyecto con base, `drawable-ldpi/mdpi/xhdpi/xxhdpi`, `layout-land` y
+`layout-port`:
+
+```sh
+W=$PREFIX/tmp/dens3
+BT=$HOME/Android/build-tools/34.9.0
+"$BT/aapt2" compile --dir "$W/res" -o "$W/c.zip"
+"$BT/aapt2" link -o "$W/out/app.apk" -I "$HOME/Android/platforms/android-34/android.jar" \
+  --manifest "$W/AndroidManifest.xml" --no-auto-version "$W/c.zip"
+```
+
+| configuración | `ResTable_config` | spec |
+| --- | --- | --- |
+| ldpi | density 120 en +14, sdkVersion 4 en +24 | `0x0500` |
+| mdpi | density 160, sdkVersion 4 | `0x0500` |
+| xhdpi | density 320, sdkVersion 4 | `0x0500` |
+| xxhdpi | density 480, sdkVersion 4 | `0x0500` |
+| port | orientation 1 en +12 | `0x0080` |
+| land | orientation 2 en +12 | `0x0080` |
+
+Dos detalles que no se ven en el dump de aapt2: el spec del drawable sale `0x0500` **cuando la
+clave tiene base** (con la clave solo en la variante, aapt2 la descarta) y las configuraciones se
+ordenan por su valor, no por su nombre: `port` (1) antes que `land` (2), y las densidades de menor
+a mayor (120, 160, 320, 480), no por los bytes little-endian de +14. `configDe` escribe la
+densidad y `sdkVersion`, `mascaraConfig` da la bandera y `claveDeConfig` fija el orden.
+`apkc/densidades` acepta `layout-port` y `drawable-{ldpi,mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}`; la ruta
+del apk lleva `-v4` como aapt2. `TestDensidadesYOrientacionPort`
+(`apkc/valores_densidades_test.go`) exige el arsc **byte a byte** el de aapt2 (1568 bytes).
+
+Frontera: `nodpi`/`tvdpi`, los calificadores de tamaño (`sw600dp`, `w600dp`) y la copia
+`layout-v1` que el aapt2 por defecto añade siguen fuera.
+
+## 138. Los atributos de `<permission>`: `flags` se escribe en hexadecimal
+
+Un `<permission>` con `label`, `description`, `icon` y `protectionLevel` no rompía el enlace,
+pero el AXML no era el de aapt2: `protectionLevel="dangerous"` salía como entero decimal y
+aapt2 lo escribe hexadecimal.
+
+```sh
+W=$PREFIX/tmp/permprobe
+BT=$HOME/Android/build-tools/34.9.0
+apkc build --linker go --compiler go --signer go \
+  --android-jar "$ANDROID_JAR" --keystore "$HOME/.android/debug.keystore"
+"$BT/aapt2" dump xmltree "$W/build/app.apk" --file AndroidManifest.xml
+"$BT/aapt2" dump xmltree "$W/out/app.apk" --file AndroidManifest.xml
+```
+
+```text
+nuestro:  …:protectionLevel(0x01010009)=1
+aapt2:    …:protectionLevel(0x01010009)=0x00000001
+```
+
+El tipo no se copia del item del framework (ahí `dangerous` está guardado como 0x10): lo decide
+el **formato** del atributo. Los de `format="flags"` (`gravity`, `protectionLevel`) van con
+`0x11`; los `enum` (`orientation`, `layout_width`) con `0x10`. `marcoRecursos` guarda ahora la
+máscara de formato de cada atributo (el registro `0x01000000` que antes se descartaba) y
+`valorDeAtributo` cambia a hexadecimal cuando el bit `0x00020000` está puesto.
+
+Con eso el `AndroidManifest.xml` sale **byte a byte** el de aapt2 (1364 bytes) y el
+`resources.arsc` también. `TestPermisoConSusAtributos` (`apkc/enlazar_permiso_test.go`) lo fija
+con el `android.jar` real. Frontera: los valores compuestos (`protectionLevel="signature|privileged"`)
+siguen fuera; solo se resuelve un nombre por atributo.
+
+Al intentar cerrarlo se midió el segundo motivo, que no es la tabla sino el **orden del código**:
+este emisor escribe el manejador del `try` interior en línea, dentro del cuerpo del exterior, así
+que el rango `any` exterior taparía el `athrow` de ese manejador; `javac` coloca los manejadores
+después del camino normal y sus rangos los excluyen a propósito. Igualar el dex pide mover la
+emisión de los manejadores (y las copias) al final del constructo, no solo normalizar la tabla.
+Por eso la fila 5.9 sigue con esa frontera y el rechazo por nombre se conserva.

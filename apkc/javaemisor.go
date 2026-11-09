@@ -2792,16 +2792,33 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 				return vueltaDe(cand.desc), nil
 			}
 		}
-		// receptor implicito: el Methodref va contra la clase actual, medido en el parrafo 40
-		e.cargaDe(0, "L")
-		tipos, err := e.argumentos(l.args)
-		if err != nil {
-			return "", err
+		// receptor implicito: el Methodref va contra la clase actual, medido en el parrafo 40. Un
+		// metodo `static` de la propia clase se llama sin receptor (`invokestatic`): javac lo escribe
+		// asi desde un metodo de instancia, y emitir `invokevirtual` revienta en ART con
+		// `IncompatibleClassChangeError` (§136)
+		tipos := make([]string, 0, argc)
+		for _, arg := range l.args {
+			d, err := e.tipoEstimado(arg)
+			if err != nil {
+				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+			}
+			tipos = append(tipos, d)
 		}
 		cand, err := e.ctx.buscarMetodo(e.interno, l.nombre, argc, tipos)
 		if err != nil {
 			return "", fmt.Errorf("linea %d: no existe %s con %d argumentos en %s ni en sus padres: %w",
 				l.donde.linea, l.nombre, argc, e.interno, err)
+		}
+		if cand.acceso&accStatic != 0 {
+			if _, err := e.argumentos(l.args); err != nil {
+				return "", err
+			}
+			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
+			return vueltaDe(cand.desc), nil
+		}
+		e.cargaDe(0, "L")
+		if _, err := e.argumentos(l.args); err != nil {
+			return "", err
 		}
 		opcode := byte(opInvokevirt)
 		if cand.acceso&accPrivate != 0 {
@@ -2940,6 +2957,22 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %w", n.donde.linea, err)
 	}
+	// el descriptor del constructor es el de la DECLARACION, no el de los tipos que se le pasan: con
+	// `new TextView(this)` el argumento es la actividad y el constructor es
+	// `<init>(Landroid/content/Context;)V`; firmarlo con el tipo del argumento compila y ART corta con
+	// `NoSuchMethodError` (§136)
+	tipos := make([]string, 0, len(n.args))
+	for _, arg := range n.args {
+		d, err := e.tipoEstimado(arg)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", n.donde.linea, err)
+		}
+		tipos = append(tipos, d)
+	}
+	cand, err := e.ctx.buscarMetodo(interno, "<init>", len(n.args), tipos)
+	if err != nil {
+		return "", fmt.Errorf("linea %d: %s: %w", n.donde.linea, interno, err)
+	}
 	e.usar(interno)
 	idx := e.pool.clase(interno)
 	e.emite(opNew, byte(idx>>8), byte(idx))
@@ -2949,19 +2982,9 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if _, err := e.argumentos(n.args); err != nil {
 		return "", err
 	}
-	sb := strings.Builder{}
-	sb.WriteString("(")
-	for _, arg := range n.args {
-		d, err := e.tipoEstimado(arg)
-		if err != nil {
-			return "", err
-		}
-		sb.WriteString(d)
-	}
-	sb.WriteString(")V")
 	// el `dup` deja dos referencias: el constructor se come una con sus argumentos y la otra es el valor de
 	// la expresion, que es el hueco que sube de la pila al terminar
-	e.invoca(opInvokespec, interno, "<init>", sb.String(), len(n.args)+1)
+	e.invoca(opInvokespec, interno, "<init>", cand.desc, len(n.args)+1)
 	return "L" + interno + ";", nil
 }
 
@@ -3961,6 +3984,29 @@ func (e *emisor) copiaElFinally(c *pendienteTry) error {
 	return e.stm(c.bloque)
 }
 
+// copiaLosFinally: la cadena de `finally` que cruza una salida, de dentro a fuera. Hoy el emisor
+// solo llega aquí con un `finally` (el anidado se rechaza antes por nombre, §133); la cadena queda
+// escrita para cuando esa forma entre medida, con el tramo exterior incluyendo la copia del interior
+// como hace javac.
+func (e *emisor) copiaLosFinally() error {
+	for i := len(e.finalmente) - 1; i >= 0; i-- {
+		c := e.finalmente[i]
+		e.sueltaTrozo(c)
+		if err := e.stm(c.bloque); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// reabreLosFinally: después de la salida abrupta, todos los tramos siguen en la instrucción
+// siguiente; es el `trozo` que javac reabre detrás del `return`/`goto`.
+func (e *emisor) reabreLosFinally() {
+	for _, c := range e.finalmente {
+		c.trozo = len(e.codigo)
+	}
+}
+
 // motivoPendiente: que impide escribir la salida abrupta que hay dentro del cuerpo de un `try` con
 // `finally`. Devuelve vacio cuando no hay ninguna, y es el nombre del caso cuando hay que rechazarlo:
 // el `continue` que sale (no esta medido), un `return` o `break` que esta dentro de **otro** `try`
@@ -4353,15 +4399,15 @@ func (e *emisor) stm(s jstmt) error {
 				// `return;` con un `finally` por delante: primero el bloque copiado y despues el
 				// `return`, sin hueco pendiente y sin fila para el `return` hasta su instruccion
 				// (medido en `Fin6.ramaVoid`: la copia en 4 con la linea del bloque, el `return` en 9
-				// con la del `return;`)
-				if err := e.copiaElFinally(c); err != nil {
+				// con la del `return;`); la cadena copia de dentro a fuera por si algún día hay dos
+				if err := e.copiaLosFinally(); err != nil {
 					return err
 				}
 			}
 			e.marcaLinea(v.donde.linea)
 			e.emite(retorno('V'))
 			if c != nil {
-				c.trozo = len(e.codigo)
+				e.reabreLosFinally()
 			}
 			return nil
 		}
@@ -4382,7 +4428,7 @@ func (e *emisor) stm(s jstmt) error {
 			// linea del `return`)
 			indice := e.reserva("", d)
 			e.guardaDe(indice, d)
-			if err := e.copiaElFinally(c); err != nil {
+			if err := e.copiaLosFinally(); err != nil {
 				return err
 			}
 			e.marcaLinea(v.donde.linea)
@@ -4391,7 +4437,7 @@ func (e *emisor) stm(s jstmt) error {
 		e.emite(retorno(d[0]))
 		e.bajaPor(d)
 		if c != nil {
-			c.trozo = len(e.codigo)
+			e.reabreLosFinally()
 		}
 		return nil
 	case jdecl:
@@ -4529,12 +4575,12 @@ func (e *emisor) stm(s jstmt) error {
 			// `goto` lleva la linea del `break` (medido en `Fin5.breakConFinally`: `11 iconst_3;
 			// 12 putstatic; 15 goto 43`, y en `Fin2.ruptura` la fila 54 en el pc del `goto`). El
 			// trozo que sigue al `try` arranca despues del salto: la fila de javac es `18..22`
-			if err := e.copiaElFinally(c); err != nil {
+			if err := e.copiaLosFinally(); err != nil {
 				return err
 			}
 			e.marcaLinea(v.donde.linea)
 			e.saltoEmite(opGOTO, e.quiebres[len(e.quiebres)-1], 0)
-			c.trozo = len(e.codigo)
+			e.reabreLosFinally()
 			return nil
 		}
 		e.saltoEmite(opGOTO, e.quiebres[len(e.quiebres)-1], 0)
@@ -4552,7 +4598,7 @@ func (e *emisor) stm(s jstmt) error {
 			// el `continue` que sale de un `try` con `finally` es como el `break`: la copia del
 			// bloque delante del salto, el `goto` con la linea del `continue` y el tramo siguiente
 			// abierto despues del salto (§132)
-			if err := e.copiaElFinally(c); err != nil {
+			if err := e.copiaLosFinally(); err != nil {
 				return err
 			}
 			e.marcaLinea(v.donde.linea)
@@ -4562,7 +4608,7 @@ func (e *emisor) stm(s jstmt) error {
 					return fmt.Errorf("linea %d: %w", v.donde.linea, err)
 				}
 			}
-			c.trozo = len(e.codigo)
+			e.reabreLosFinally()
 			return nil
 		}
 		e.saltoEmite(opGOTO, destino, 0)

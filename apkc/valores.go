@@ -204,7 +204,20 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 				configs = append(configs, r.config)
 			}
 		}
-		sort.Strings(configs[1:])
+		// las configuraciones van en el orden de su valor, no en el del nombre: port (1) antes que
+		// land (2) y las densidades de menor a mayor (ldpi, mdpi, …), medido en el §137
+		sort.SliceStable(configs[1:], func(a, b int) bool {
+			ca, cb := configs[1:][a], configs[1:][b]
+			ga, na, _ := claveDeConfig(ca)
+			gb, nb, _ := claveDeConfig(cb)
+			if ga != gb {
+				return ga < gb
+			}
+			if na != nb {
+				return na < nb
+			}
+			return ca < cb
+		})
 		bloques := []bloqueEscribir{}
 		for _, cfg := range configs {
 			bloque := bloqueEscribir{config: cfg, entradas: make([]entradaEscribir, 0, len(clavesTipo))}
@@ -287,14 +300,31 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 	}, nil
 }
 
+// claveDeConfig: el grupo y el número con el que aapt2 ordena las configuraciones dentro de un
+// tipo. Las orientaciones (port 1, land 2) van antes que las densidades (120, 160, …) y los idiomas
+// van tras ellas en orden alfabético.
+func claveDeConfig(cfg string) (grupo, numero int, texto string) {
+	switch cfg {
+	case "port":
+		return 0, 1, cfg
+	case "land":
+		return 0, 2, cfg
+	}
+	if d := densidadDe(cfg); d != 0 {
+		return 1, int(d), cfg
+	}
+	return 2, 0, cfg
+}
+
 // mascaraConfig: las banderas del spec_map que aapt2 pone para cada configuración medida. `es` es
 // locale (0x0004), `land` orientación (0x0080) y `hdpi` densidad (0x0100) más la marca 0x0400 que
 // aapt2 añade al tipo drawable con densidad (medido en el parrafo 103: 0x0500).
 func mascaraConfig(cfg string) uint32 {
-	switch cfg {
-	case "land":
+	switch {
+	case cfg == "port" || cfg == "land":
 		return 0x0080
-	case "hdpi":
+	case densidadDe(cfg) != 0:
+		// densidad (0x0100) y la marca 0x0400 que aapt2 añade cuando la clave tiene base (§103 y §137)
 		return 0x0500
 	default:
 		return 0x0004

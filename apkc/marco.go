@@ -50,6 +50,9 @@ type marcoRecursos struct {
 	porId map[uint32]string
 	// valores son los items enum y flags de cada atributo, por su nombre sin prefijo.
 	valores map[string]map[string]valorEscribir
+	// formatos guarda la mascara de formato de cada atributo (el primer registro de su valor
+	// complejo): los atributos con el bit de flags escriben sus enteros en hexadecimal (§138)
+	formatos map[string]uint32
 	// pendientes son los items leidos antes de conocer el nombre del id al que apuntan.
 	pendientes []itemDeAtributo
 }
@@ -98,7 +101,7 @@ func leeMarco(arsc []byte) (*marcoRecursos, error) {
 	if int(u32re(arsc, 4)) > len(arsc) {
 		return nil, fmt.Errorf("la tabla declara %d bytes y el fichero tiene %d", u32re(arsc, 4), len(arsc))
 	}
-	m := &marcoRecursos{ids: map[string]uint32{}, porId: map[uint32]string{}, valores: map[string]map[string]valorEscribir{}}
+	m := &marcoRecursos{ids: map[string]uint32{}, porId: map[uint32]string{}, valores: map[string]map[string]valorEscribir{}, formatos: map[string]uint32{}}
 	off := 12
 	if off+8 > len(arsc) || u16re(arsc, off) != trozoPool {
 		return nil, fmt.Errorf("tras la cabecera se esperaba el pool global, en %d", off)
@@ -281,8 +284,13 @@ func (m *marcoRecursos) leeBloque(arsc []byte, off, hs, size int, claves []strin
 		for r := 0; r < recuentos; r++ {
 			k := e + 16 + 12*r
 			nombreItem := u32re(arsc, k)
+			if nombreItem == 0x01000000 {
+				// el primer registro del attr es la mascara de formato, no un valor
+				m.formatos[claves[int(clave)]] = u32re(arsc, k+8)
+				continue
+			}
 			if nombreItem&0xff000000 != 0x01000000 {
-				continue // el primer registro del attr es la mascara de formato, no un valor
+				continue
 			}
 			m.pendientes = append(m.pendientes, itemDeAtributo{
 				atributo: claves[int(clave)],
@@ -326,6 +334,13 @@ func (m *marcoRecursos) resuelveItems() {
 // `center` como hexadecimal 0x11, que es como salen en los ficheros de aapt2.
 func (m *marcoRecursos) valoresDeAtributo(nombre string) map[string]valorEscribir {
 	return m.valores[nombre]
+}
+
+// esFlags: el atributo declara el formato `flags` (0x00020000), así que sus enteros se escriben en
+// hexadecimal. Medido en el §138: `protectionLevel="dangerous"` es 0x11 con datos 1, aunque el
+// framework guarde ese item como 0x10 en su propia tabla.
+func (m *marcoRecursos) esFlags(nombre string) bool {
+	return m.formatos[nombre]&0x00020000 != 0
 }
 
 // nombreDeId invierte el mapa: de 0x0103012b a "style/Theme.DeviceDefault.Light".

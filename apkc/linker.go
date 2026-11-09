@@ -123,8 +123,10 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
 			case e.Name() == "layout-land":
 				tipo, config = "layout", "land"
-			case e.Name() == "drawable-hdpi":
-				tipo, config = "drawable", "hdpi"
+			case e.Name() == "layout-port":
+				tipo, config = "layout", "port"
+			case strings.HasPrefix(e.Name(), "drawable-") && densidadDe(strings.TrimPrefix(e.Name(), "drawable-")) != 0:
+				tipo, config = "drawable", strings.TrimPrefix(e.Name(), "drawable-")
 			default:
 				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, layout-land, menu, xml, drawable, drawable-hdpi, mipmap y raw. Otra densidad, orientacion o version de API es una configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
 			}

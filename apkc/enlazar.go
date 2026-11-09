@@ -109,6 +109,9 @@ func valorDeAtributo(attr attrFuente, m *marcoRecursos, ids map[string]uint32) (
 	// el nombre del atributo es la clave de los enum: `layout_width` -> wrap_content, `gravity` -> center
 	for nombre, v := range m.valoresDeAtributo(attr.nombre) {
 		if nombre == attr.texto {
+			if v.tipo == tipoEnteroDec && m.esFlags(attr.nombre) {
+				v.tipo = tipoEnteroHex
+			}
 			return v, nil
 		}
 	}

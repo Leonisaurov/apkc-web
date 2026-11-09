@@ -21,17 +21,17 @@ ACTUAL = Path("/data/data/com.termux/files/usr/tmp/apkc-progreso/actual.txt")
 # Fronteras que el inventario marca como hechas pero el usuario pidió cerrar. Se marcan
 # aparte para que el panel enseñe lo que de verdad queda.
 EXTRAS = [
-    ("5.8a", "cuenta ancha de flotante de tres registros", "medida en §86, todavía no emitida"),
-    ("5.8b", "ConstantValue de un static final long", "falta en el emisor"),
-    ("5.9a", "continue que sale de try/finally", "rechazado por nombre (§76)"),
-    ("5.9b", "dos finally anidados con salida pendiente", "rangos solapados, rechazado"),
-    ("5.9c", "catch (A | B e)", "multicatch, rechazado"),
-    ("5.12a", "caída al siguiente brazo del switch", "fall-through, rechazado"),
-    ("5.13a", "ART, instanceof T[] y forma negada", "fronteras de 5.13"),
-    ("REC-1", "recursos: más densidades y orientaciones", "ampliar los calificadores medidos"),
-    ("REC-2", "recursos: format enum/flags", "hijos de attr/styleable"),
-    ("REC-3", "recursos: atributos de <permission>", "además de android:name"),
-    ("APARATO", "instalar y arrancar la app de cierre", "con virtual_screen, sin tocar la principal"),
+    ("5.8a", "cuenta ancha de flotante de tres registros", "hecha (§130)", True),
+    ("5.8b", "ConstantValue de un static final long", "hecho (§130)", True),
+    ("5.9a", "continue que sale de try/finally", "hecho (§132)", True),
+    ("5.9b", "dos finally anidados con salida pendiente", "rangos solapados, sigue fuera (§133)", False),
+    ("5.9c", "catch (A | B e)", "hecho (§132)", True),
+    ("5.12a", "caída al siguiente brazo del switch", "hecha (§129)", True),
+    ("5.13a", "ART, instanceof T[] y forma negada", "hecho (§131 y §134)", True),
+    ("REC-1", "recursos: más densidades y orientaciones", "hecho (§137)", True),
+    ("REC-2", "recursos: format enum/flags", "hecho (§135)", True),
+    ("REC-3", "recursos: atributos de <permission>", "hecho (§138)", True),
+    ("APARATO", "instalar y arrancar la app de cierre", "instalada y arrancada (§136)", True),
 ]
 
 
@@ -68,8 +68,8 @@ def main() -> int:
     salida = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/data/data/com.termux/files/usr/tmp/apkc-progreso/tareas.json")
     texto = PLAN.read_text(encoding="utf-8")
     items = filas_del_inventario(texto)
-    for numero, texto_item, detalle in EXTRAS:
-        items.append({"text": f"{numero} · {texto_item}", "done": False, "detail": detalle})
+    for numero, texto_item, detalle, hecho in EXTRAS:
+        items.append({"text": f"{numero} · {texto_item}", "done": hecho, "detail": detalle})
     actual = ACTUAL.read_text(encoding="utf-8").strip() if ACTUAL.exists() else ""
     salida.parent.mkdir(parents=True, exist_ok=True)
     temporal = salida.with_suffix(salida.suffix + ".tmp")
