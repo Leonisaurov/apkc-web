@@ -6264,3 +6264,64 @@ Pruebas: `TestV4FirmaYVerifica`, `TestV4RechazaUnArbolCambiado` y
 `TestV4DesactivadoNoEscribeIdsig` en `apkc/v4sign_test.go`, más el caso v4 de
 `studio/prueba-pestana.js`. Frontera: una sal no vacía y los firmantes alternativos del
 `.idsig` se rechazan por nombre; un `.aab` no lleva `.idsig` porque no tiene bloque v2/v3.
+
+## 120. Rotación v3.1: el linaje y el bloque que escribe `apksigner`
+
+Medido para 5.31, que sigue abierto: el comando que crea el linaje, el bloque v3.1 y el
+atributo de prueba de rotación. No hay implementación todavía; esto es el formato que hay
+que reproducir.
+
+```sh
+P=/data/data/com.termux/files/usr
+BT=$HOME/Android/build-tools/34.9.0
+K=$P/lib/jvm/java-21-openjdk/bin/keytool
+W=$P/tmp/v31probe
+"$K" -genkeypair -keystore old.p12 -storetype PKCS12 -storepass viejito -keypass viejito \
+  -alias viejo -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Viejo, O=apkc, C=ES"
+"$K" -genkeypair -keystore new.p12 -storetype PKCS12 -storepass nuevito -keypass nuevito \
+  -alias nuevo -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=Nuevo, O=apkc, C=ES"
+"$BT/apksigner" rotate --out lineage.bin \
+  --old-signer --ks old.p12 --ks-key-alias viejo --ks-pass pass:viejito \
+  --new-signer --ks new.p12 --ks-key-alias nuevo --ks-pass pass:nuevito
+"$BT/apksigner" sign --ks old.p12 --ks-pass pass:viejito \
+  --next-signer --ks new.p12 --ks-pass pass:nuevito \
+  --lineage lineage.bin --rotation-min-sdk-version 33 \
+  --v1-signing-enabled false --v2-signing-enabled false \
+  --out rotated33.apk in.apk
+"$BT/apksigner" verify --verbose --min-sdk-version 28 rotated33.apk
+```
+
+```text
+Verifies
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): true
+Number of signers: 1
+```
+
+El bloque de firmas lleva tres pares:
+
+```text
+0x1b93ad61  3285   <- v3.1, el identificador medido (no 0xf05368c1)
+0xf05368c0  1437   <- v3.0, para las plataformas que no leen v3.1
+0x42726577  3402   <- relleno
+```
+
+El fichero `lineage.bin` (1863 bytes) es un envoltorio con magia `0x3eff39d1`, versión 1 y
+la longitud del linaje interno. El linaje interno (1851 bytes) empieza con versión 1 y una
+lista de nodos; cada nodo es `signedData` con longitud, `flags`, `sigAlgorithm` y `signature`
+con longitud, y su `signedData` es el certificado con longitud más los `flags`. El nuevo
+nodo lo firma la clave vieja. El **valor** del atributo de prueba de rotación es el linaje
+interno tal cual:
+
+| constante | valor |
+| --- | --- |
+| id del bloque v3.1 | `0x1b93ad61` |
+| atributo `proof-of-rotation` | `0x3ba06f8c` |
+| atributo `rotation-min-sdk-version` | `0x559f8b02` |
+| atributo `rotation-on-dev-release` | `0xc2a6b3ba` |
+| versión de rotación por defecto | 33 (Android 13) |
+
+Con `--rotation-min-sdk-version 28` el mismo linaje va a un bloque **v3.0** (un firmante, el
+nuevo, con el atributo) y `v3.1` sale `false`; con 33 salen los dos bloques y firmantes con
+rangos de SDK. Las constantes del verificador ya usan `0x1b93ad61` para v3.1; escribirlo
+sigue siendo 5.31.

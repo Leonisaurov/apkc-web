@@ -37,7 +37,7 @@ import (
 const (
 	idParV2      = uint32(0x7109871a)
 	idParV3      = uint32(0xf05368c0)
-	idParV3_1    = uint32(0xf05368c1)
+	idParV3_1    = uint32(0x1b93ad61)
 	idParV4      = uint32(0x42726576)
 	idParRelleno = uint32(0x42726577)
 
@@ -421,7 +421,7 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 		case idParV2:
 			blobV2 = par.valor
 		case idParV3, idParV3_1:
-			v.notar(fmt.Sprintf("el paquete trae también una firma v3 (par 0x%08x): no se verificó aquí", par.id))
+			v.notar(fmt.Sprintf("el paquete trae también una firma v3/v3.1 (par 0x%08x): no se verificó aquí", par.id))
 		case idParV4:
 			v.notar("el paquete trae también una firma v4: no se verificó aquí")
 		case idParRelleno:
