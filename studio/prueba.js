@@ -88,13 +88,13 @@ for (const r of a.RULES) {
 console.log("reglas:", a.RULES.length, "| ancladas al fuente de apkc o a una salida capturada:",
   a.RULES.length - sinEvidencia, "| sin captura propia:", sinEvidencia);
 
-// 6. el cableado del DOM, que es lo unico que prueba.js no puede ejecutar: todo id que ui.js
-//    pide tiene que estar en index.html, y todo name del formulario lo tiene que leer estado()
+// 6. el cableado del DOM, que es lo unico que prueba.js no puede ejecutar: todo id que vistas.js
+//    pide tiene que estar en index.html, y todo name del formulario lo tiene que leer el creador
 const html = fs.readFileSync(path.join(__dirname, "index.html"), "utf8");
-const js = fs.readFileSync(path.join(__dirname, "ui.js"), "utf8");
+const js = fs.readFileSync(path.join(__dirname, "vistas.js"), "utf8");
 const ids = new Set([...html.matchAll(/id="([^"]+)"/g)].map((m) => m[1]));
 for (const m of js.matchAll(/getElementById\("([^"]+)"\)/g))
-  if (!ids.has(m[1])) mal(`ui.js pide #${m[1]} y index.html no lo tiene`);
+  if (!ids.has(m[1])) mal(`vistas.js pide #${m[1]} y index.html no lo tiene`);
 // lo mismo para la pestaña: es el otro fichero que toca el DOM, y un id que no existe se traduce
 // en un `addEventListener` sobre null que solo se ve cuando alguien pulsa el boton
 const pestana = fs.readFileSync(path.join(__dirname, "pestana.js"), "utf8");

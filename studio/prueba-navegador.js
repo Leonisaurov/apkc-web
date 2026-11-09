@@ -1,6 +1,6 @@
 // prueba en navegador real (chromium headless, por CDP sin dependencias): lo que node no puede
 // ejercitar —el DOM, los manejadores de click, el localStorage del origen file://— que es justo
-// donde una pagina de este tipo se cae.
+// donde una pagina de este tipo se cae. La pestaña (OPFS) se prueba aparte, por http.
 //
 // uso: node prueba-navegador.js   (lanza chromium, conduce la pagina y la apaga)
 const { spawn } = require("child_process");
@@ -9,8 +9,6 @@ const path = require("path");
 
 const PUERTO = process.env.STUDIO_PORT || "9333";
 const URL_PAGINA = "file://" + path.join(__dirname, "index.html");
-const muestras = JSON.parse(fs.readFileSync(path.join(__dirname, "muestras.json"), "utf8"));
-const app = require(path.join(__dirname, "app.js"));   // el numero de reglas cambia: no se congela
 
 // perfil propio y limpio: chromium deja un SingletonLock cuando muere con SIGKILL, y el
 // siguiente arranque con el perfil de ~ no subre el debugger — el fallo parece de la pagina
@@ -40,45 +38,40 @@ async function target() {
   throw new Error("chromium no subio el debugger:\n" + salidaNavegador.slice(0, 400));
 }
 
-const conductor = (pegado) => `(async () => {
+const conductor = `(async () => {
   const r = {};
   const sa = (f) => { try { return f(); } catch (e) { return "EXCEPCION: " + e.message; } };
   r.titulo = document.title;
-  r.reglas = document.getElementById("n-reglas").textContent;
-  r.tarjetasGeneradas = document.querySelectorAll("#ficheros details").length;
+  r.vistas = [...document.querySelectorAll(".pestana-vista")].map((b) => b.textContent.trim());
+  r.actividad = [...document.querySelectorAll(".actividad [data-vista]")].map((b) => b.dataset.vista);
 
-  // cambiar a Kotlin tiene que reflejarse en el arbol sin recargar
-  const kt = document.querySelector('[name="kotlin"]');
-  kt.checked = true; form.dispatchEvent(new Event("input", { bubbles: true }));
-  r.arbolKotlin = /MainActivity\\.kt/.test(document.getElementById("arbol").textContent);
-  r.ficheroKotlin = [...document.querySelectorAll("#ficheros summary")].some((s) => /\\.kt$/.test(s.textContent));
-  kt.checked = false; form.dispatchEvent(new Event("input", { bubbles: true }));
+  // el nombre del formulario se refleja en la barra de título y en el explorador
+  const nombre = document.querySelector('[name="name"]');
+  nombre.value = "Prueba"; nombre.dispatchEvent(new Event("input", { bubbles: true }));
+  r.tituloTrasNombre = document.getElementById("titulo-proyecto").textContent;
+  const paquete = document.querySelector('[name="package"]');
+  paquete.value = "com.prueba.app"; paquete.dispatchEvent(new Event("input", { bubbles: true }));
+  r.paqueteLateral = document.getElementById("lateral-proyecto").textContent;
+  r.icono = !!document.getElementById("icono");
 
-  // textos del formulario que antes se caian a "undefined"
-  const bl = document.querySelector('[name="buttonLabel"]');
-  bl.value = "Pulsar"; bl.dispatchEvent(new Event("input", { bubbles: true }));
-  r.botonPulsar = [...document.querySelectorAll("#ficheros details")].some((d) =>
-    /Press me|Pulsar/.test(d.textContent));
-  r.sinUndefined = !/undefined/.test(document.getElementById("ficheros").textContent);
+  // las pestañas cambian la vista sin recargar
+  document.querySelector('.pestana-vista[data-vista="pestana"]').click();
+  r.editorVisible = document.getElementById("pestana").classList.contains("activa") &&
+    !document.getElementById("crear").classList.contains("activa");
+  r.estadoBarra = document.getElementById("estado-general").textContent;
+  document.querySelector('.pestana-vista[data-vista="crear"]').click();
+  r.vueltaInicio = document.getElementById("crear").classList.contains("activa");
 
-  // pegar una salida real de apkc y traducirla
-  document.getElementById("log").value = ${JSON.stringify(pegado)};
-  sa(() => document.getElementById("analizar").click());
-  r.analizarExcepcion = typeof document.querySelector("#salida-analisis .nota") === "object"
-    ? document.querySelector("#salida-analisis .nota").textContent : null;
-  r.tarjetas = document.querySelectorAll("#salida-analisis .regla").length;
-  r.capas = [...document.querySelectorAll("#salida-analisis h3")].map((h) => h.textContent);
+  // en file:// no hay OPFS: el botón tiene que decirlo, no quedarse colgado
+  document.getElementById("crear-proyecto").click();
+  await new Promise((ok) => setTimeout(ok, 1200));
+  r.avisoCrear = document.getElementById("estado-crear").textContent;
+  r.sinUndefined = !/undefined/.test(document.body.innerText);
 
-  // descargar el zip: en file:// esto crea un blob y hace click en un ancla
-  r.descarga = sa(() => { document.getElementById("descargar").click();
-    return document.getElementById("estado-zip").textContent; });
-
-  // el rastreo local, que es lo que produce el informe de friccion
+  // el rastreo local, que es lo único que la página guarda
   r.localStorage = sa(() => { localStorage.setItem("apkc-studio-prueba", "1");
     const v = localStorage.getItem("apkc-studio-prueba"); localStorage.removeItem("apkc-studio-prueba");
     return v === "1" ? "funciona" : "leyo null"; });
-  r.informe = sa(() => { document.getElementById("ver-informe").click();
-    return document.getElementById("informe-out").textContent.split("\\n")[0]; });
   return r;
 })()`;
 
@@ -102,37 +95,33 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
   });
 
   await exec("Runtime.enable");
-  // dejo cargar el javascript de la pagina
   for (let i = 0; i < 20; i++) {
-    const probe = await exec("Runtime.evaluate", { expression: "typeof RULES === 'object' && typeof analizarPegado === 'function'", awaitPromise: false });
+    const probe = await exec("Runtime.evaluate", { expression: "typeof buildProject === 'function' && typeof RULES === 'object'" });
     if (probe.result && probe.result.value === true) break;
     await esperar(400);
   }
 
-  const pegado = muestras.filter((m) => m.esperada !== "keystore-file-missing").map((m) => m.texto).join("\n")
-    + "\n\u001b[31m[build] algo que la pagina no conoce del todo \u001b[0m";
-  const r = await exec("Runtime.evaluate", { expression: conductor(pegado), awaitPromise: true, returnByValue: true });
-  // CDP envuelve dos veces: {result: {result: {value}}} ; y un fallo dentro de la pagina sale
-  // en exceptionDetails, no como excepcion del websocket
+  const r = await exec("Runtime.evaluate", { expression: conductor, awaitPromise: true, returnByValue: true });
   const v = r.result && r.result.result && r.result.result.value;
   if (r.result && r.result.exceptionDetails)
     console.log("  FALLO: excepcion en la pagina:", JSON.stringify(r.result.exceptionDetails.exception || r.result.exceptionDetails).slice(0, 300));
   if (!v) { console.log("  FALLO: el conductor no devolvio nada", JSON.stringify(r).slice(0, 300)); fallos++; }
   else {
-    console.log("  pagina:", v.titulo, "| reglas:", v.reglas, "| ficheros mostrados:", v.tarjetasGeneradas);
-    console.log("  analisis:", v.tarjetas, "tarjetas en capas:", JSON.stringify(v.capas));
-    console.log("  descarga:", v.descarga, "| localStorage:", v.localStorage, "| informe:", v.informe);
-    comprueba(v.reglas === String(app.RULES.length),
-    "el contador del DOM dice " + v.reglas + " y RULES tiene " + app.RULES.length);
-    comprueba(v.tarjetasGeneradas === 5, "se esperaban 5 ficheros mostrados, hay " + v.tarjetasGeneradas);
-    comprueba(v.arbolKotlin && v.ficheroKotlin, "marcar Kotlin no cambio el arbol");
-    comprueba(v.botonPulsar, "el texto del boton no llego al layout");
-    comprueba(v.sinUndefined, "quedo un 'undefined' visible en los ficheros");
-    comprueba(v.tarjetas >= 5, "el log pegado produjo solo " + v.tarjetas + " tarjetas");
-    comprueba(v.capas.join(" ").includes("que la página no conoce"), "las lineas desconocidas no se listaron");
-    comprueba(typeof v.descarga === "string" && v.descarga.startsWith("descargado"), "la descarga no informou estado: " + v.descarga);
+    console.log("  ui:", v.titulo, "| pestañas:", JSON.stringify(v.vistas), "| actividad:", JSON.stringify(v.actividad));
+    console.log("  inicio:", v.tituloTrasNombre, "|", v.paqueteLateral, "| editor:", v.editorVisible,
+      "| aviso:", String(v.avisoCrear).slice(0, 120));
+    comprueba(/apkc studio/.test(v.titulo), "el título no nombra el studio: " + v.titulo);
+    comprueba(v.vistas.join(",") === "Inicio,Editor", "las pestañas no son las dos medidas: " + v.vistas);
+    comprueba(v.actividad.join(",") === "crear,pestana", "la barra de actividad no tiene las dos vistas: " + v.actividad);
+    comprueba(v.tituloTrasNombre === "Prueba", "el nombre no llegó a la barra de título: " + v.tituloTrasNombre);
+    comprueba(v.paqueteLateral === "com.prueba.app", "el package no llegó al explorador: " + v.paqueteLateral);
+    comprueba(v.editorVisible, "la pestaña Editor no se abrió");
+    comprueba(v.estadoBarra === "Editor", "la barra de estado no dijo Editor: " + v.estadoBarra);
+    comprueba(v.vueltaInicio, "no se pudo volver a Inicio");
+    comprueba(v.icono, "falta el campo del icono");
+    comprueba(/OPFS|no se pudo crear/.test(String(v.avisoCrear)), "file:// no avisó de que no hay OPFS: " + v.avisoCrear);
+    comprueba(v.sinUndefined, "quedó un 'undefined' visible en la página");
     comprueba(v.localStorage === "funciona", "localStorage en file://: " + v.localStorage);
-    comprueba(/^# informe/.test(v.informe), "el informe no arranco: " + v.informe);
   }
   ws.close();
   navegador.kill("SIGKILL");

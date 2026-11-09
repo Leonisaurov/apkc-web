@@ -533,30 +533,33 @@ async function iniciarPestana() {
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", () => {
     if (!document.getElementById("codigo")) return;
+    // la página se puede recortar: cada botón se engancha solo si está en el DOM
+    const en = (id, fn) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("click", fn);
+    };
     EDITOR.inicializar();
-    document.getElementById("crear-aqui").addEventListener("click", crearProyecto);
-    document.getElementById("guardar-fichero").addEventListener("click" , guardar);
-    document.getElementById("nuevo-fichero").addEventListener("click", async () => {
+    en("guardar-fichero", guardar);
+    en("nuevo-fichero", async () => {
       const nombre = await nuevoNombre();
       if (nombre) { estadoPestana.ruta = nombre; EDITOR.poner(""); document.getElementById("fichero-abierto").textContent = nombre; }
     });
-    document.getElementById("firmar-aqui").addEventListener("click", firmar);
-    document.getElementById("crear-linaje").addEventListener("click", crearLinaje);
-    document.getElementById("olvidar-linaje").addEventListener("click", olvidarLinaje);
-    document.getElementById("ver-keystore-firmar").addEventListener("click", () => inspeccionarKeystore(KEYSTORES.firmar));
-    document.getElementById("olvidar-keystore-firmar").addEventListener("click", () => olvidarKeystore(KEYSTORES.firmar));
-    document.getElementById("ver-keystore-compilar").addEventListener("click", () => inspeccionarKeystore(KEYSTORES.compilar));
-    document.getElementById("olvidar-keystore-compilar").addEventListener("click", () => olvidarKeystore(KEYSTORES.compilar));
-    document.getElementById("compilar-aqui").addEventListener("click", intentarCompilar);
-    document.getElementById("usar-android-jar").addEventListener("click", async () => { await usarJarElegido(); });
-    document.getElementById("compilar-apk").addEventListener("click", compilarDelTodo);
-    document.getElementById("verificar-apk").addEventListener("click", verificarLoCompilado);
-    document.getElementById("recargar-arbol").addEventListener("click", refrescarArbol);
-    document.getElementById("descargar-apk").addEventListener("click", (e) => {
+    en("firmar-aqui", firmar);
+    en("crear-linaje", crearLinaje);
+    en("olvidar-linaje", olvidarLinaje);
+    en("ver-keystore-firmar", () => inspeccionarKeystore(KEYSTORES.firmar));
+    en("olvidar-keystore-firmar", () => olvidarKeystore(KEYSTORES.firmar));
+    en("ver-keystore-compilar", () => inspeccionarKeystore(KEYSTORES.compilar));
+    en("olvidar-keystore-compilar", () => olvidarKeystore(KEYSTORES.compilar));
+    en("usar-android-jar", async () => { await usarJarElegido(); });
+    en("compilar-apk", compilarDelTodo);
+    en("verificar-apk", verificarLoCompilado);
+    en("recargar-arbol", refrescarArbol);
+    en("descargar-apk", (e) => {
       e.preventDefault();
       descargar((document.getElementById("apk-a-firmar").value || PROYECTO + "/build/firmado.apk").trim());
     });
-    document.getElementById("descargar-apk-compilada").addEventListener("click", (e) => {
+    en("descargar-apk-compilada", (e) => {
       e.preventDefault();
       descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
     });

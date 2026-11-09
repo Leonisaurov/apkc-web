@@ -149,10 +149,20 @@ if [ -z "${STUDIO_NO_BROWSER:-}" ] && command -v chromium-browser >/dev/null 2>&
   if ! node "$AQUI/prueba-navegador.js" >"$TMP/studio-navegador.log" 2>&1; then
     falla "la pagina en chromium"; tail -8 "$TMP/studio-navegador.log"
   else
-    avisa "$(grep -m1 '^  analisis' "$TMP/studio-navegador.log")"
+    avisa "$(grep -m1 '^  ui' "$TMP/studio-navegador.log")"
   fi
 else
   avisa "sin chromium (o STUDIO_NO_BROWSER puesto): la parte de DOM no se probo"
+fi
+
+# 3b. el flujo nuevo de la página: crear desde el formulario (nombre, package, icono) y quedar
+#     editando el manifiesto. Necesita OPFS y el wasm, así que va por http como la pestaña.
+if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && command -v chromium-browser >/dev/null 2>&1; then
+  if ! APKC_WASM="$APKC_WASM" node "$AQUI/prueba-crear.js" >"$TMP/studio-crear.log" 2>&1; then
+    falla "crear el proyecto desde el formulario"; tail -10 "$TMP/studio-crear.log"
+  else
+    avisa "$(grep -m1 '^crear' "$TMP/studio-crear.log")"
+  fi
 fi
 
 # 4. la pestaña con apkc.wasm dentro de chromium: crea, edita en OPFS, sobrevive a recargar y

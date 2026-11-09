@@ -3,237 +3,180 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>apkc studio — crear una app Android sin Gradle, y medir dónde duele</title>
+<title>apkc studio — crear una app Android sin Gradle</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>apkc studio</h1>
-  <p class="sub">
-    Genera un proyecto de app <em>de verdad</em> para <code>apkc</code> (sin Gradle),
-    te da los comandos, traduce lo que <code>apkc</code> responde y anota en qué paso
-    te atascaste. Y desde la sección 2 <strong>compila aquí dentro</strong>:
-    <code>build --linker go --compiler go</code> enlaza los recursos, saca el <code>.class</code> de tu
-    fuente, lo dexa y firma <strong>sin levantar ningún proceso</strong>, con <code>apkc.wasm</code> y el
-    proyecto en OPFS, sin server ni conexión. Lo que sigue sin poder hacerse es el <code>build</code> de
-    siempre: <code>aapt2</code>, <code>javac</code> y <code>d8</code> son programas externos y
-    <code>js/wasm</code> no tiene <code>fork/exec</code>; el botón «intentar compilar» lo muestra tal cual.
-  </p>
-</header>
+<div class="marco">
 
-<main>
-  <section id="crear">
-    <h2><span class="paso">1</span> Crear el proyecto</h2>
-    <form id="form" class="grid">
-      <label>Nombre de la app <input name="name" value="Hola apkc" required></label>
-      <label>Package <input name="package" value="com.hola.apkcstudio" required
-             pattern="[a-z][a-z0-9_]*(\.[a-z0-9_]+)+" title="minúsculas, dos tramos como mínimo"></label>
-      <label>minSdkVersion <input name="minsdk" type="number" value="21" min="14" max="35"></label>
-      <label>targetSdkVersion <input name="targetsdk" type="number" value="33" min="14" max="36"></label>
-      <label>Texto en pantalla <input name="hello" value="Hello World!"></label>
-      <fieldset>
-        <legend>Qué metes dentro</legend>
-        <label><input type="checkbox" name="button" checked> un botón con menú y Toast</label>
-        <label>Texto del botón <input name="buttonLabel" value="Press me"></label>
-        <label>Mensaje del aviso <input name="toast" value="Clicked!"></label>
-        <label><input type="checkbox" name="kotlin"> en Kotlin (necesita <code>kotlinc</code> y <code>kotlin-stdlib</code> en <code>jar/</code>)</label>
-        <label><input type="checkbox" name="libs"> carpeta <code>jar/</code> para dependencias</label>
-        <label><input type="checkbox" name="native"> un <code>.so</code> con <code>extractNativeLibs="false"</code></label>
-        <label><input type="checkbox" name="assets"> carpeta <code>assets/</code></label>
-        <label><input type="checkbox" name="device" checked> tengo el teléfono conectable (adb o Shizuku)</label>
-      </fieldset>
-    </form>
+  <header class="barra-titulo">
+    <span class="puntos" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="titulo">apkc studio <span class="tenue">—</span> <b id="titulo-proyecto">Mi app</b></span>
+    <span class="titulo-derecha" id="titulo-derecha">sin conexión</span>
+  </header>
 
-    <div class="acciones">
-      <button id="descargar" class="primario">descargar el proyecto (.zip)</button>
-      <button id="copiar-comandos">copiar los comandos</button>
-      <span id="estado-zip" class="nota"></span>
-    </div>
+  <div class="cuerpo">
 
-    <details open>
-      <summary>lo que se genera</summary>
-      <pre id="arbol"></pre>
-    </details>
-    <details>
-      <summary>ficheros, uno por uno</summary>
-      <div id="ficheros"></div>
-    </details>
-  </section>
+    <nav class="actividad" aria-label="Vistas">
+      <button data-vista="crear" class="activo" title="Crear el proyecto" aria-label="Crear el proyecto">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button data-vista="pestana" title="Editor" aria-label="Editor">
+        <svg viewBox="0 0 24 24"><path d="M4 4h7l2 2h7v14H4z"/><path d="M4 10h16"/></svg>
+      </button>
+    </nav>
 
-  <section id="pestana">
-    <h2><span class="paso">2</span> Editar y firmar en la pestaña (apkc en wasm)</h2>
-    <p class="nota">
-      Aquí el que escribe ficheros es <code>apkc</code>, corriendo como <code>apkc.wasm</code>
-      dentro del navegador: sin server, sin SDK y sin JDK. El árbol vive en OPFS
-      (<a href="#" id="recargar-arbol">recargar</a>, aislamiento cross-origin:
-      <span id="aislacion">?</span>), así que lo que escribas sobrevive a recargar la página.
-      <strong>Compilar también se puede</strong>, pero con los backends de este binario:
-      <code>build --linker go --compiler go</code> enlaza los recursos, saca el <code>.class</code>
-      de tu fuente, lo dexa y firma, todo dentro de la pestaña, porque <code>js/wasm</code> no tiene
-      <code>fork/exec</code> y <code>aapt2</code>, <code>javac</code> y <code>d8</code> son programas
-      externos. El botón «intentar compilar» enseña ese muro tal cual lo dice apkc; el del panel de
-      abajo produce el apk.
-    </p>
-    <div class="acciones">
-      <button id="crear-aqui">crear el proyecto aquí (apkc create)</button>
-      <button id="nuevo-fichero">fichero nuevo</button>
-      <button id="guardar-fichero">guardar (Ctrl+S)</button>
-      <button id="compilar-aqui">intentar compilar con aapt2/javac/d8 (falla)</button>
-      <span id="estado-pestana" class="nota"></span>
-      <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
-    </div>
-    <p class="nota"><code>~/proyecto</code> — editando: <code id="fichero-abierto">(nada)</code>,
-      último código de salida <code id="ultimo-codigo">—</code></p>
-    <div class="pestana">
-      <aside id="arbol-pestana" class="arbol-pestana"></aside>
-      <div class="editor">
-        <pre id="numeros" class="numeros" aria-hidden="true"></pre>
-        <div class="capas">
-          <pre id="resalto" class="resalto" aria-hidden="true"></pre>
-          <textarea id="codigo" spellcheck="false" wrap="off"></textarea>
-        </div>
+    <aside class="lateral">
+      <div class="lateral-cab">Proyecto</div>
+      <div class="lateral-proyecto" id="lateral-proyecto">MI APP</div>
+      <div class="lateral-pie">
+        <p class="nota">Los ficheros viven en esta pestaña, en OPFS. No hay servidor y nada sale de aquí.</p>
+        <p class="nota">Al crear el proyecto se abren sus ficheros en el editor; ahí puedes cambiarlo todo y compilar.</p>
       </div>
-    </div>
+    </aside>
 
-    <details open>
-      <summary>compilar el proyecto aquí dentro (apkc build, sin procesos)</summary>
-      <p class="nota">
-        <code>apkc build --linker go --compiler go</code> hace las cuatro cosas con este mismo binario:
-        enlaza los recursos, compila <code>MainActivity.java</code> a <code>.class</code>, dexa y firma. No
-        arranca <code>aapt2</code>, <code>javac</code> ni <code>d8</code>, así que ocurre dentro de la
-        pestaña. Pide dos ficheros tuyos, y ninguno sale de aquí: el <code>android.jar</code> del SDK (la
-        única versión medida es la del API 34) y un keystore para firmar. El jar son ~26 MB y se guardan en
-        OPFS: se elige una vez y sobrevive a recargar.
-      </p>
-      <p class="nota">
-        Y al terminar, <code>apkc verify</code> vuelve a leer el apk desde el <code>fs</code> de esta
-        pestaña y dictamina las dos firmas por su cuenta: recalcula el digest de cada entrada, digiere el
-        manifiesto sección a sección, verifica el PKCS#7 sobre el <code>.SF</code> y comprueba el bloque de
-        firmas v2. Sin <code>apksigner</code> ni conexión. Lo que no está medido aquí se dice con nombre
-        (DSA, SHA-1, v3, v4, varios firmantes), y la cadena de confianza no se valida: un certificado de
-        debug es auto-firmado y no hay ancla que lo respalde.
-      </p>
-      <label>android.jar <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
-      <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
-      <label>contraseña del keystore <input type="password" id="storepass-compilar" autocomplete="off" class="ruta"></label>
-      <label>alias <select id="keyalias-compilar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
-      <div class="acciones">
-        <button id="ver-keystore-compilar">ver certificado</button>
-        <button id="olvidar-keystore-compilar">olvidar el keystore guardado</button>
+    <main class="area">
+      <div class="pestanas" id="pestanas">
+        <button class="pestana-vista activa" data-vista="crear">Inicio</button>
+        <button class="pestana-vista" data-vista="pestana">Editor</button>
+        <span class="pestanas-der"><span id="estado-pestana-cab" class="tenue"></span></span>
       </div>
-      <p class="nota" id="estado-keystore-compilar">sin keystore inspeccionado</p>
-      <p class="nota">
-        La contraseña no se guarda: se pide en cada firma. Para Play se firma con la
-        <strong>upload key</strong> (Play vuelve a firmar el bundle); para instalar el apk por tu
-        cuenta, con la <strong>app signing key</strong>. Las dos valen aquí: el fichero queda en OPFS,
-        no sale de la pestaña, y «olvidar» lo borra.
-      </p>
-      <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
-        <input type="text" id="codename" value="14" class="ruta"></label>
-      <label><input type="checkbox" id="v4-compilar" checked> escribir el <code>.idsig</code> (firma v4, instalación incremental)</label>
-      <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
-      <div class="acciones">
-        <button id="usar-android-jar">guardar el android.jar elegido en la pestaña</button>
-        <button id="compilar-apk" class="primario">compilar aquí (apkc build)</button>
-        <button id="verificar-apk">verificar el apk (apkc verify)</button>
-        <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk compilada</a>
-        <a id="descargar-idsig-compilada" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
+
+      <div class="vistas" id="vistas">
+
+        <section id="crear" class="vista activa">
+          <div class="bienvenida">
+            <p class="miga">apkc studio <span>›</span> inicio</p>
+            <h1>Crear un proyecto</h1>
+            <p class="sub">Pon el nombre, el package y, si quieres, un icono. Después editas todos los
+              ficheros generados y compilas la app aquí mismo, sin Gradle y sin salir del navegador.</p>
+          </div>
+
+          <form id="form" class="crear-minimo">
+            <label>Nombre de la app <input name="name" value="Mi app" required autocomplete="off"></label>
+            <label>Package <input name="package" value="com.mi.app" required autocomplete="off"
+                   pattern="[a-z][a-z0-9_]*(\.[a-z0-9_]+)+" title="minúsculas, dos tramos como mínimo"></label>
+            <label>Icono (opcional, PNG) <input type="file" id="icono" accept="image/png"></label>
+            <div class="acciones">
+              <button id="crear-proyecto" class="primario" type="button">Crear proyecto y editar</button>
+              <span id="estado-crear" class="nota"></span>
+            </div>
+          </form>
+        </section>
+
+        <section id="pestana" class="vista">
+          <div class="bienvenida compacta">
+            <p class="miga">apkc studio <span>›</span> editor</p>
+            <h1>Editar los ficheros</h1>
+            <p class="nota">El árbol de la izquierda es el proyecto en OPFS y sobrevive a recargar la
+              página (<a href="#" id="recargar-arbol">recargar</a>, aislamiento:
+              <span id="aislacion">?</span>). Elige un fichero, cámbialo y pulsa
+              <strong>Guardar</strong>. Para compilar, abre <strong>Compilar</strong> abajo.</p>
+          </div>
+
+          <div class="barra-herramientas">
+            <button id="nuevo-fichero">Fichero nuevo</button>
+            <button id="guardar-fichero">Guardar (Ctrl+S)</button>
+            <span id="estado-pestana" class="nota"></span>
+            <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
+          </div>
+          <p class="nota ruta-editor"><code>/proyecto</code> · editando
+            <code id="fichero-abierto">(nada)</code> · último código
+            <code id="ultimo-codigo">—</code></p>
+
+          <div class="pestana">
+            <aside id="arbol-pestana" class="arbol-pestana"></aside>
+            <div class="editor">
+              <pre id="numeros" class="numeros" aria-hidden="true"></pre>
+              <div class="capas">
+                <pre id="resalto" class="resalto" aria-hidden="true"></pre>
+                <textarea id="codigo" spellcheck="false" wrap="off"></textarea>
+              </div>
+            </div>
+          </div>
+
+          <details id="panel-compilar" open>
+            <summary>Compilar</summary>
+            <p class="nota">Hace falta el <code>android.jar</code> del SDK (API 34) y un keystore para
+              firmar. Se eligen una vez y se quedan en OPFS; no salen de la pestaña.</p>
+            <label>android.jar <input type="file" id="android-jar" accept=".jar,application/java-archive"></label>
+            <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
+            <div class="acciones">
+              <button id="usar-android-jar">Guardar el android.jar elegido</button>
+            </div>
+            <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+            <label>contraseña <input type="password" id="storepass-compilar" autocomplete="off" class="ruta"></label>
+            <label>alias <select id="keyalias-compilar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
+            <div class="acciones">
+              <button id="ver-keystore-compilar">Ver certificado</button>
+              <button id="olvidar-keystore-compilar">Olvidar el keystore</button>
+            </div>
+            <p class="nota" id="estado-keystore-compilar">sin keystore inspeccionado</p>
+            <details>
+              <summary>Opciones avanzadas</summary>
+              <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
+                <input type="text" id="codename" value="14" class="ruta"></label>
+              <label><input type="checkbox" id="v4-compilar" checked> escribir el <code>.idsig</code> (firma v4)</label>
+            </details>
+            <div class="acciones">
+              <button id="compilar-apk" class="primario">Compilar (apkc build)</button>
+              <button id="verificar-apk">Verificar el apk</button>
+              <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk</a>
+              <a id="descargar-idsig-compilada" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
+            </div>
+            <p class="nota" id="estado-verificacion">sin verificar todavía</p>
+          </details>
+
+          <details>
+            <summary>Firmar otra apk o un .aab (avanzado)</summary>
+            <label>keystore (.p12 o .jks) <input type="file" id="keystore" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+            <label>contraseña <input type="password" id="storepass-firmar" autocomplete="off" class="ruta"></label>
+            <label>alias <select id="keyalias-firmar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
+            <div class="acciones">
+              <button id="ver-keystore-firmar">Ver certificado</button>
+              <button id="olvidar-keystore-firmar">Olvidar el keystore</button>
+            </div>
+            <p class="nota" id="estado-keystore-firmar">sin keystore inspeccionado</p>
+            <label>apk o .aab de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
+            <label><input type="checkbox" id="v4-firmar" checked> escribir el <code>.idsig</code> (firma v4)</label>
+            <div class="acciones">
+              <button id="firmar-aqui">Firmar</button>
+              <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>
+              <a id="descargar-idsig" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
+            </div>
+            <details>
+              <summary>Rotación de clave (v3.1)</summary>
+              <label>keystore viejo (.p12 o .jks) <input type="file" id="keystore-viejo" accept=".p12,.keystore,.jks,application/pkcs12"></label>
+              <label>contraseña del keystore viejo <input type="password" id="storepass-viejo" autocomplete="off" class="ruta"></label>
+              <label>alias viejo <input type="text" id="keyalias-viejo" value="androiddebugkey" class="ruta"></label>
+              <label>desde qué API usa la nueva <input type="number" id="rotation-min-sdk" value="33" class="ruta"></label>
+              <label><input type="checkbox" id="usar-rotacion"> usar este linaje al firmar</label>
+              <div class="acciones">
+                <button id="crear-linaje">Crear el linaje</button>
+                <button id="olvidar-linaje">Olvidar el linaje</button>
+              </div>
+              <p class="nota" id="estado-linaje">sin linaje</p>
+            </details>
+          </details>
+
+          <div class="panel-salida">
+            <div class="panel-cab">Salida · apkc</div>
+            <pre id="consola-pestana" class="consola" aria-live="polite"></pre>
+          </div>
+        </section>
+
       </div>
-      <p class="nota" id="estado-verificacion">sin verificar todavía</p>
-    </details>
+    </main>
+  </div>
 
-    <details open>
-      <summary>firmar una apk o un .aab con tu propio keystore, aquí dentro</summary>
-      <p class="nota">
-        <code>apkc sign</code> reempaqueta y firma sin levantar <code>zipalign</code> ni
-        <code>apksigner</code>: escribe v1+v2+v3 en un apk y solo la v1 (JAR) en un <code>.aab</code>,
-        que no lleva bloque de firmas. El keystore se elige de tu disco y <strong>no sale de esta
-        pestaña</strong>: no hay clave en ningún servidor porque no hay servidor.
-      </p>
-      <label>keystore (.p12 o .jks) <input type="file" id="keystore" accept=".p12,.keystore,.jks,application/pkcs12"></label>
-      <label>contraseña del keystore <input type="password" id="storepass-firmar" autocomplete="off" class="ruta"></label>
-      <label>alias <select id="keyalias-firmar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
-      <div class="acciones">
-        <button id="ver-keystore-firmar">ver certificado</button>
-        <button id="olvidar-keystore-firmar">olvidar el keystore guardado</button>
-      </div>
-      <p class="nota" id="estado-keystore-firmar">sin keystore inspeccionado</p>
-      <label>apk o .aab de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
-      <label><input type="checkbox" id="v4-firmar" checked> escribir el <code>.idsig</code> (firma v4)</label>
-      <div class="acciones">
-        <button id="firmar-aqui" class="primario">firmar aquí (apkc sign)</button>
-        <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>
-        <a id="descargar-idsig" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
-      </div>
-      <details>
-        <summary>rotación de clave (v3.1): linaje y firma con la clave vieja</summary>
-        <p class="nota">
-          Para rotar: elige arriba la <strong>clave nueva</strong> (keystore y contraseña), elige aquí la
-          <strong>clave vieja</strong>, crea el linaje y marca «usar este linaje». La v1/v2 las firma la
-          vieja y la v3/v3.1 la nueva; el <code>.idsig</code> lleva las dos.
-        </p>
-        <label>keystore viejo (.p12 o .jks) <input type="file" id="keystore-viejo" accept=".p12,.keystore,.jks,application/pkcs12"></label>
-        <label>contraseña del keystore viejo <input type="password" id="storepass-viejo" autocomplete="off" class="ruta"></label>
-        <label>alias viejo <input type="text" id="keyalias-viejo" value="androiddebugkey" class="ruta"></label>
-        <label>desde qué API usa la nueva <input type="number" id="rotation-min-sdk" value="33" class="ruta"></label>
-        <label><input type="checkbox" id="usar-rotacion"> usar este linaje al firmar</label>
-        <div class="acciones">
-          <button id="crear-linaje">crear el linaje (apkc rotate)</button>
-          <button id="olvidar-linaje">olvidar el linaje</button>
-        </div>
-        <p class="nota" id="estado-linaje">sin linaje</p>
-      </details>
-    </details>
-
-    <pre id="consola-pestana" class="consola" aria-live="polite"></pre>
-  </section>
-
-  <section id="usar">
-    <h2><span class="paso">3</span> Ejecutarlo con apkc</h2>
-    <p class="nota">Estos son los comandos, en orden. Si uno falla, pega su salida abajo:
-      es donde está la información de verdad.</p>
-    <pre id="comandos"></pre>
-    <div class="checklist">
-      <p>Dónde suele romperse la primera vez — marca lo que te haya pasado a ti:</p>
-      <ul id="friccion"></ul>
-    </div>
-  </section>
-
-  <section id="analizar">
-    <h2><span class="paso">4</span> Qué dijo apkc</h2>
-    <textarea id="log" rows="10" spellcheck="false"
-      placeholder="$ apkc build --inc&#10;[doctor] SDK path unknown ..."></textarea>
-    <div class="acciones">
-      <button id="analizar" class="primario">traducir la salida</button>
-      <span class="nota">Se analiza aquí mismo; el texto no sale de este navegador.</span>
-    </div>
-    <div id="salida-analisis"></div>
-  </section>
-
-  <section id="informe">
-    <h2><span class="paso">5</span> El informe de fricción</h2>
-    <p class="nota">
-      La página guarda contadores locales: qué reglas de error aparecieron, en qué capa
-      (entorno, proyecto, herramienta, dispositivo) y cuántas veces. Con esto se ve si lo
-      que cuesta es instalar el SDK, entender un aviso o encontrar el flag correcto.
-    </p>
-    <div class="acciones">
-      <button id="ver-informe">ver el informe</button>
-      <button id="borrar-informe">borrar lo anotado</button>
-    </div>
-    <pre id="informe-out" hidden></pre>
-  </section>
-</main>
-
-<footer>
-  <p>Reglas del analizador: <span id="n-reglas"></span>, todas copiadas de cadenas que
-  <code>apkc</code> imprime de verdad. Plantillas: las de <code>apkc/template/*</code> del
-  repo. Si apkc cambia, esta página queda avisada a mano — es el único punto donde puede
-  desincronizarse.</p>
-</footer>
+  <footer class="barra-estado">
+    <span class="estado-izq"><span class="rama">main</span><span id="estado-general">Inicio</span></span>
+    <span class="estado-der">apkc.wasm <span class="separador">·</span> OPFS <span class="separador">·</span> UTF-8</span>
+  </footer>
+</div>
 
 <script src="app.js"></script>
 <script src="pestana.js"></script>
-<script src="ui.js"></script>
+<script src="vistas.js"></script>
 </body>
 </html>

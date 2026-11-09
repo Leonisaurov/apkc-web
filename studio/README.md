@@ -96,3 +96,13 @@ la omite y lo dice.
 `apkc/template/*` puede cambiar y la página no se entera sola: `prueba.js` compara contra el repo
 que esté en `APKC_REPO` (por defecto `~/Develop/Go/apkc`), así que la desincronización salta al
 correr la prueba, no al usar la página.
+
+## La piel
+
+La página tiene un marco de editor ligero, sin dependencias: barra de título, barra de
+actividad, explorador y dos vistas (Inicio y Editor). En Inicio solo se piden nombre, package y,
+si quieres, un icono PNG; al crear, el proyecto se escribe en OPFS y el manifiesto se abre en el
+editor, donde están todos los ficheros generados. `pestana.js` sigue llevando el editor, el árbol
+y apkc.wasm; `vistas.js` solo siembra el árbol, cambia de vista (también por hash,
+`index.html#pestana`) y refleja rótulos. Las pruebas de navegador, de creación y de la pestaña
+usan los mismos ids de siempre.
