@@ -74,6 +74,10 @@
 
   async function sembrar() {
     if (!form) return;
+    // crear borra /proyecto entero: si el editor tiene cambios sin guardar, primero se pregunta
+    if (typeof estaSucio === "function" && estaSucio() && !confirmarDescartes()) {
+      return "no se creó: hay cambios sin guardar en el editor";
+    }
     const datos = new FormData(form);
     const nombre = String(datos.get("name") || "").trim();
     const paquete = String(datos.get("package") || "").trim().toLowerCase();
@@ -124,7 +128,7 @@
     if (png) await hospedador.escribir(PROYECTO + "/res/drawable/icono.png", png);
 
     await refrescarArbol();
-    await abrir(PROYECTO + "/AndroidManifest.xml");
+    await abrir(PROYECTO + "/AndroidManifest.xml", true);
     mostrar("pestana");
     try { history.replaceState(null, "", "#pestana"); } catch (e) { /* */ }
     return "proyecto creado; abre un fichero del árbol y edítalo";

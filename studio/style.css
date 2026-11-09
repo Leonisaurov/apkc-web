@@ -302,7 +302,8 @@ kbd {
   height: 1px;
   background: var(--acento);
 }
-.pestanas-der { margin-left: auto; display: flex; align-items: center; padding: 0 12px; font-size: 11px; }
+.pestanas-der { margin-left: auto; display: flex; align-items: center; min-width: 0; padding: 0 12px; font-size: 11px; }
+#estado-pestana-cab { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60ch; }
 
 .vistas { overflow: auto; min-height: 0; }
 .vistas.modo-editor { overflow: hidden; }
@@ -525,7 +526,9 @@ pre {
   min-height: 0;
   width: 4ch;
   font: var(--ed-fuente);
+  font-variant-ligatures: none;
   user-select: none;
+  pointer-events: none;
 }
 .capas {
   position: relative;
@@ -541,6 +544,7 @@ pre {
   border: 0;
   border-radius: 0;
   font: var(--ed-fuente);
+  font-variant-ligatures: none;
   white-space: pre;
   tab-size: 4;
   overflow: auto;
@@ -567,6 +571,8 @@ pre {
   color: #d4d4d4;
 }
 .resalto .palabra { color: #569cd6; }
+.resalto .anotacion { color: #dcdcaa; }
+.resalto .numero { color: #b5cea8; }
 .resalto .cadena { color: #ce9178; }
 .resalto .comentario { color: #6a9955; font-style: italic; }
 .resalto .etiqueta { color: #4ec9b0; }
@@ -681,6 +687,7 @@ pre {
   .editor-tab { max-width: 22ch; }
   .panel-inferior { height: 42vh; }
   .barra-titulo .titulo-derecha { display: none; }
+  #estado-cursor { display: none; }
 }
 
 /* barras de desplazamiento finas, como las del editor */

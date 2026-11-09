@@ -174,6 +174,69 @@ async function conductor() {
   comprueba("los números de línea siguen al contenido", editado.lineas === fuente.split("\n").length - 1 || editado.lineas >= 3,
     editado.lineas + " líneas");
 
+  // 3b. el scroll del editor: las tres capas tienen que moverse juntas, también al pasar de la
+  //     primera pantalla (con el transform viejo el <pre> recortaba el contenido y se veía vacío)
+  const desplazado = await evaluar(`(async () => {
+    document.querySelector('[data-vista="pestana"]').click();
+    await new Promise((r) => setTimeout(r, 150));
+    const lineas = Array.from({ length: 120 }, (_, i) => "linea " + (i + 1) + " de la prueba de scroll").join("\\n");
+    EDITOR.poner(lineas + "\\n" + "x".repeat(400));
+    const area = document.getElementById("codigo");
+    const resalto = document.getElementById("resalto");
+    const numeros = document.getElementById("numeros");
+    area.focus();
+    area.scrollTop = 500;
+    area.scrollLeft = 80;
+    await new Promise((r) => setTimeout(r, 80));
+    return {
+      alto: [area.clientHeight, area.scrollHeight],
+      vertical: [area.scrollTop, resalto.scrollTop, numeros.scrollTop],
+      horizontal: [area.scrollLeft, resalto.scrollLeft],
+      numerosVisibles: numeros.textContent.trim().split("\\n").length,
+    };
+  })()`);
+  comprueba("el editor tiene scroll vertical de verdad", desplazado.alto[1] > desplazado.alto[0] * 3,
+    desplazado.alto[0] + " visibles de " + desplazado.alto[1]);
+  comprueba("las tres capas del editor comparten el scroll vertical",
+    desplazado.vertical[0] > 300 && desplazado.vertical[0] === desplazado.vertical[1] &&
+    desplazado.vertical[0] === desplazado.vertical[2], JSON.stringify(desplazado.vertical));
+  comprueba("el resaltado comparte también el scroll horizontal",
+    desplazado.horizontal[0] > 0 && desplazado.horizontal[0] === desplazado.horizontal[1],
+    JSON.stringify(desplazado.horizontal));
+  comprueba("los números de línea llegan a la última línea", desplazado.numerosVisibles === 121,
+    desplazado.numerosVisibles + " números");
+
+  // 3c. teclado: Tab en el cursor y Shift+Tab sobre un bloque; Enter usa el mismo camino y
+  //     entra en el deshacer nativo por EDITOR.cambiar()
+  const teclado = await evaluar(`(async () => {
+    document.querySelector('[data-vista="pestana"]').click();
+    await new Promise((r) => setTimeout(r, 100));
+    const area = document.getElementById("codigo");
+    EDITOR.poner("abc");
+    area.focus();
+    area.setSelectionRange(3, 3);
+    area.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    const conTab = area.value;
+    const deshacer = document.execCommand("undo");
+    const trasDeshacer = area.value;
+    EDITOR.poner("uno\\ndos");
+    area.focus();
+    area.setSelectionRange(0, 7);
+    area.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true }));
+    const bloque = area.value;
+    area.setSelectionRange(0, 15);
+    area.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true }));
+    const sinSangria = area.value;
+    marcarSucio(false);
+    return { conTab, trasDeshacer, bloque, sinSangria, deshacer };
+  })()`);
+  comprueba("Tab sin selección inserta en el cursor y se puede deshacer",
+    teclado.conTab === "abc    " && teclado.trasDeshacer === "abc" && teclado.deshacer === true,
+    JSON.stringify(teclado));
+  comprueba("Tab y Shift+Tab indenta y desindenta el bloque seleccionado",
+    teclado.bloque === "    uno\n    dos" && teclado.sinSangria === "uno\ndos",
+    JSON.stringify({ bloque: teclado.bloque, sin: teclado.sinSangria }));
+
   // 4. persistencia: recargar la página y volver a leer el árbol
   await exec("Page.enable");
   await exec("Page.navigate", { url: URL_PAGINA });

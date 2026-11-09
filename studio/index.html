@@ -89,23 +89,25 @@
             <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
             <button id="nuevo-fichero" type="button" title="Crear un fichero nuevo">Nuevo</button>
             <button id="guardar-fichero" type="button" class="primario" title="Guardar (Ctrl+S)">Guardar</button>
-            <button id="alternar-panel" type="button" title="Mostrar u ocultar el panel (Ctrl+`)">Panel</button>
+            <button id="alternar-panel" type="button" title="Mostrar u ocultar el panel (Ctrl+`)"
+                    aria-expanded="false" aria-controls="panel-inferior">Panel</button>
           </div>
 
           <div class="editor">
             <pre id="numeros" class="numeros" aria-hidden="true"></pre>
             <div class="capas">
               <pre id="resalto" class="resalto" aria-hidden="true"></pre>
-              <textarea id="codigo" spellcheck="false" wrap="off" aria-label="Código del fichero"
+              <textarea id="codigo" spellcheck="false" wrap="off" autocomplete="off"
+                        autocapitalize="off" autocorrect="off" aria-label="Código del fichero"
                         placeholder="Abre un fichero del explorador o crea un proyecto en Inicio."></textarea>
             </div>
           </div>
 
           <div class="panel-inferior" id="panel-inferior" hidden>
             <div class="panel-tabs" role="tablist" aria-label="Panel inferior">
-              <button class="panel-tab activo" type="button" role="tab" data-panel="salida">Salida</button>
-              <button class="panel-tab" type="button" role="tab" data-panel="compilar">Compilar</button>
-              <button class="panel-tab" type="button" role="tab" data-panel="firmar">Firmar</button>
+              <button class="panel-tab activo" type="button" role="tab" aria-selected="true" data-panel="salida">Salida</button>
+              <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="compilar">Compilar</button>
+              <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="firmar">Firmar</button>
               <span class="espacio"></span>
               <span id="estado-pestana" class="nota"></span>
               <button id="cerrar-panel" class="icono-boton" type="button" title="Cerrar el panel" aria-label="Cerrar el panel">
@@ -199,6 +201,8 @@
   <footer class="barra-estado">
     <span class="estado-izq"><span class="rama">main</span><span id="estado-general">Inicio</span></span>
     <span class="estado-der">
+      <span id="estado-cursor">Ln 1, Col 1</span>
+      <span class="separador">·</span>
       <span>último código <code id="ultimo-codigo">—</code></span>
       <span class="separador">·</span><span>apkc.wasm</span>
       <span class="separador">·</span><span>OPFS</span>

@@ -116,37 +116,48 @@ La pieza central son tres capas superpuestas:
 - `#numeros` pinta la columna de numeros. Su ancho se calcula en `EDITOR.numeros()` como
   `calc(Nch + 18px)`, donde `N` crece con el numero de lineas y 18 px son los paddings.
 
-Las dos capas metrican igual porque comparten `font`, `line-height`, `padding`, `tab-size` y
-`white-space: pre`. `EDITOR.sincronizar()` traduce `#resalto` por `-scrollLeft, -scrollTop` y
-`#numeros` solo por `-scrollTop`; asi el texto resaltado y los numeros acompanan al textarea sin
-dos scrolls independientes.
+Las dos capas comparten las métricas (`font`, `line-height`, `padding`, `tab-size` y
+`white-space: pre`). `EDITOR.sincronizar()` copia `scrollTop` y `scrollLeft` del textarea a
+`#resalto`, y `scrollTop` a `#numeros`. Las tres capas son contenedores con scroll propio; la
+primera versión trasladaba las capas con `transform`, pero el `<pre>` recortaba su contenido al
+alto visible y al moverlo hacia arriba no quedaba nada pintado: a partir de la primera pantalla
+el editor se veía vacío y parecía que el scroll no funcionaba. Un `ResizeObserver` sobre
+`.editor` repite la sincronía cuando el panel inferior cambia el alto. La rueda sobre la columna
+de números se reenvía al textarea, y pulsar en el margen devuelve el foco al código.
 
 `EDITOR.pintar()` hace dos cosas: `resaltar(texto, modo)` y `EDITOR.numeros(texto)`. El modo es
-`xml` si `esXml()` ve un `<?xml`, un `<manifest` o una etiqueta con atributos en los primeros 400
-caracteres; si no, `java`. El resaltador es lexico, no un parser:
+`xml` cuando `esXml()` ve un `<?xml`, un `<manifest`, o —quitando BOM, espacios y comentarios—
+el texto empieza por una etiqueta; si no, `java`. Esa última condición importa: un fuente Java
+con genéricos (`List<String>`) no puede confundirse con XML. El resaltador es léxico, no un
+parser:
 
-- Java: palabras clave, cadenas entre comillas y comentarios `//` y `/* ... */`.
+- Java: palabras clave, anotaciones (`@Override`), números, literales de `char`, cadenas entre
+  comillas y comentarios `//` y `/* ... */`.
 - XML: comentarios, etiquetas, atributos y valores entre comillas.
-- Los literales no cruzan de linea: una comilla sin cerrar no se come el resto del fichero.
+- Los literales no cruzan de línea: una comilla sin cerrar no se come el resto del fichero.
 
-`EDITOR.poner(texto)` es la entrada unica para cargar un fichero: escribe el valor, reinicia el
-scroll, pinta, sincroniza y marca el documento como limpio. `EDITOR.texto()` devuelve el valor
-actual.
+`EDITOR.poner(texto)` es la entrada única para cargar un fichero: escribe el valor, deja el
+cursor al principio, reinicia el scroll de las tres capas, pinta y marca el documento como
+limpio. `EDITOR.texto()` devuelve el valor actual.
 
 ### Teclado
 
-| Tecla | Que hace |
+| Tecla | Qué hace |
 | --- | --- |
-| `Tab` | indenta la seleccion (o inserta 4 espacios en el cursor) |
-| `Shift+Tab` | desindenta hasta 4 espacios o un tabulador por linea |
-| `Enter` | conserva la sangria de la linea; si la linea termina en `{`, anade 4 espacios |
-| `Ctrl+S` / `Cmd+S` | guarda el fichero abierto |
-| `Ctrl+Enter` / `Cmd+Enter` | repite el ultimo comando de `apkc` |
+| `Tab` | con selección, indenta las líneas; sin selección, inserta 4 espacios en el cursor |
+| `Shift+Tab` | con selección, desindenta las líneas; sin selección, quita la sangría de su línea |
+| `Enter` | conserva la sangría de la línea; si la línea termina en `{`, añade 4 espacios |
+| `Ctrl+S` / `Cmd+S` | guarda el fichero abierto, tenga el foco donde tenga |
+| `Ctrl+Enter` / `Cmd+Enter` | repite el último comando de `apkc` |
 | ``Ctrl + ` `` | abre o cierra el panel inferior |
 
-`e.isComposing` se comprueba antes de tocar Tab/Enter, para no romper la composicion de un IME.
-La seleccion del textarea usa un azul con alfa (`rgba(38, 79, 120, .55)`) para que el texto del
-`<pre>` se siga leyendo mientras se selecciona.
+Las tres ediciones programáticas (Tab, Shift+Tab y Enter) pasan por `EDITOR.cambiar()`, que usa
+`execCommand("insertText")` cuando existe para que entren en el historial nativo de deshacer
+(`Ctrl+Z`); si el navegador no lo soporta, cae a `setRangeText` y solo se pierde el deshacer de
+esa edición. `e.isComposing` se comprueba antes de tocar Tab/Enter, para no romper la composición
+de un IME. La selección del textarea usa un azul con alfa (`rgba(38, 79, 120, .55)`) para que el
+texto del `<pre>` se siga leyendo mientras se selecciona. `#estado-cursor` muestra `Ln`/`Col` en
+la barra de estado y se actualiza al teclear, al hacer clic y con `selectionchange`.
 
 ### Estado del fichero
 
@@ -154,13 +165,18 @@ La seleccion del textarea usa un azul con alfa (`rgba(38, 79, 120, .55)`) para q
   completa. Si no hay fichero, dice `Sin fichero`.
 - `#marca-sucio` es el punto amarillo de la pestaña; `marcarSucio(true)` lo muestra y
   `marcarSucio(false)` lo esconde. Se marca al teclear, indentar, pegar o entrar, y se limpia al
-  guardar o al cargar otro fichero.
+  guardar o al cargar otro fichero. `beforeunload` avisa antes de cerrar la pestaña con cambios.
 - `abrir(ruta)` pregunta antes de descartar cambios (`confirmarDescartes`), lee los bytes con
-  `hospedador.leer`, los decodifica como UTF-8 y llama a `EDITOR.poner`.
-- `guardar()` pide una ruta si no hay ninguna, escribe los bytes con `hospedador.escribir`, marca
-  limpio, actualiza el estado y refresca el arbol.
-- `nuevo-fichero` pide una ruta con `nuevoNombre()` (valor por defecto
-  `/proyecto/src/com/hola/MainActivity.java`), vacia el editor, pone el foco y refresca el arbol.
+  `hospedador.bytes` (un error del fs se anuncia en la barra, no se convierte en un fichero
+  vacío), los decodifica como UTF-8 y llama a `EDITOR.poner`. Si se abre desde el explorador y
+  la vista activa no es Editor, salta a Editor.
+- `guardar()` pide una ruta si no hay ninguna, escribe los bytes con `hospedador.escribir`,
+  actualiza el estado y refresca el árbol. Solo marca limpio si el texto sigue siendo el que se
+  escribió: si se tecleó mientras el worker guardaba, el documento sigue sucio.
+- `nuevo-fichero` pide una ruta con `nuevoNombre()`. El valor por defecto sale del package del
+  formulario (`/proyecto/src/<package>/MainActivity.java`), la ruta se ancla a `/proyecto`, se
+  normalizan `.` y `..`, y se avisa si el fichero ya existe. Después crea el fichero vacío en
+  OPFS para que el explorador lo muestre, vacía el editor y pone el foco.
 
 Todo el contenido vive en OPFS a traves del worker `hospedador.js`; la pagina no envia el fuente a
 ningun servidor.
@@ -208,10 +224,11 @@ Las acciones concretas de compilar y firmar se documentan en `studio/README.md` 
 ## Barra de estado
 
 La barra azul (`#007acc`, como la de VS Code) muestra `#estado-general` (Inicio o Editor), la rama
-`main`, `#ultimo-codigo`, y la firma de la pagina: `apkc.wasm · OPFS · UTF-8`. `#estado-pestana`
-vive en la cabecera del panel; `vistas.js` lo copia a `#estado-pestana-cab` con un
-`MutationObserver`, para que el mensaje se vea aunque el panel este cerrado. `#ocupado` esta en la
-fila de la pestaña del fichero y solo aparece mientras corre un comando.
+`main`, `#estado-cursor` (`Ln`/`Col`), `#ultimo-codigo`, y la firma de la página:
+`apkc.wasm · OPFS · UTF-8`. `#estado-pestana` vive en la cabecera del panel; `vistas.js` lo copia a
+`#estado-pestana-cab` con un `MutationObserver`, para que el mensaje se vea aunque el panel esté
+cerrado. `#ocupado` está en la fila de la pestaña del fichero y solo aparece mientras corre un
+comando; `correr()` garantiza que se esconde también cuando el hospedador falla.
 
 ## Pantallas estrechas
 
@@ -232,8 +249,8 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` y ahora tambien el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 41 comprobaciones: editar, guardar, recargar, resaltar, numeros de linea, firmar, compilar, verificar y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior mas los apk/aab nativos; en la pestaña son 53 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 59 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, firmar, compilar, verificar y no pedir nada fuera del origen |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 59 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).

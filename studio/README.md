@@ -77,7 +77,7 @@ Qué hace de verdad, y qué no:
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 41 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 59 cosas |
 
 ## Abrir la pestaña en Brave Nightly
 

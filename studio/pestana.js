@@ -65,6 +65,10 @@ const hospedador = (() => {
 
 const estadoPestana = { ruta: null, nodo: null };
 
+// Mientras una edición programática usa execCommand, el evento input que dispara no debe
+// volver a pintar: la propia edición pinta una sola vez al terminar.
+let silencioInput = 0;
+
 // --- el editor, sin dependencias ---------------------------------------------------------
 // Un textarea encima de un <pre> resaltado: es la única forma de tener color sin arrastrar
 // un editor de terceros, y el precio es cuidar que las dos capas metricen igual (misma fuente,
@@ -73,7 +77,13 @@ const EDITOR = {
   inicializar() {
     const area = document.getElementById("codigo");
     if (!area) return;
-    area.addEventListener("input", () => { EDITOR.pintar(); EDITOR.sincronizar(); marcarSucio(true); });
+    area.addEventListener("input", () => {
+      if (silencioInput) return;
+      EDITOR.pintar();
+      EDITOR.sincronizar();
+      actualizarCursor();
+      marcarSucio(true);
+    });
     area.addEventListener("scroll", EDITOR.sincronizar);
     area.addEventListener("keydown", (e) => {
       if (e.isComposing) return;
@@ -85,13 +95,39 @@ const EDITOR = {
       if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         EDITOR.entrar();
-        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); guardar(); }
-      if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); ejecutarUltimo(); }
-      if ((e.ctrlKey || e.metaKey) && (e.key === "`" || e.code === "Backquote")) { e.preventDefault(); alternarPanel(); }
     });
+    area.addEventListener("keyup", actualizarCursor);
+    area.addEventListener("click", actualizarCursor);
+    area.addEventListener("focus", actualizarCursor);
+    document.addEventListener("selectionchange", () => {
+      if (document.activeElement === area) actualizarCursor();
+    });
+
+    // la rueda sobre la columna de números no puede mover el textarea (es otro elemento):
+    // se reenvía, y el clic en el margen devuelve el foco al código sin perder la posición
+    const marco = document.querySelector(".editor");
+    if (marco) {
+      marco.addEventListener("wheel", (e) => {
+        if (e.target === area || e.ctrlKey || e.metaKey) return;
+        const escala = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? area.clientHeight : 1);
+        area.scrollTop += e.deltaY * escala;
+        area.scrollLeft += e.deltaX * escala;
+        EDITOR.sincronizar();
+        e.preventDefault();
+      }, { passive: false });
+      marco.addEventListener("mousedown", (e) => {
+        if (e.target === area || e.button !== 0) return;
+        e.preventDefault();
+        area.focus();
+      });
+      // el panel inferior cambia el alto del editor: lo que estaba visible sigue siéndolo
+      if (typeof ResizeObserver === "function") {
+        new ResizeObserver(() => EDITOR.sincronizar()).observe(marco);
+      }
+    }
     EDITOR.pintar();
+    actualizarCursor();
   },
 
   texto() { return document.getElementById("codigo").value; },
@@ -99,10 +135,12 @@ const EDITOR = {
   poner(texto) {
     const area = document.getElementById("codigo");
     area.value = texto;
+    area.setSelectionRange(0, 0);
     area.scrollTop = 0;
     area.scrollLeft = 0;
     EDITOR.pintar();
     EDITOR.sincronizar();
+    actualizarCursor();
     marcarSucio(false);
   },
 
@@ -126,47 +164,89 @@ const EDITOR = {
     cuadro.style.width = "calc(" + ancho + "ch + 18px)";
   },
 
+  // Las dos capas de solo lectura tienen su propio scroll y se les copia el del textarea.
+  // Antes se trasladaban con transform: el <pre> recortaba su contenido al alto visible y
+  // al trasladarlo hacia arriba no quedaba nada pintado, así que a partir de la primera
+  // pantalla el editor se veía vacío y parecía que no hacía scroll (§141).
   sincronizar() {
     const area = document.getElementById("codigo");
     const resaltado = document.getElementById("resalto");
     const numeros = document.getElementById("numeros");
     if (!area) return;
-    if (resaltado) resaltado.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
-    if (numeros) numeros.style.transform = `translateY(${-area.scrollTop}px)`;
+    if (resaltado) {
+      if (resaltado.scrollTop !== area.scrollTop) resaltado.scrollTop = area.scrollTop;
+      if (resaltado.scrollLeft !== area.scrollLeft) resaltado.scrollLeft = area.scrollLeft;
+    }
+    if (numeros && numeros.scrollTop !== area.scrollTop) numeros.scrollTop = area.scrollTop;
   },
 
-  // Tab y Shift+Tab sobre una o varias líneas: es lo mínimo que se espera de un editor de
-  // código y lo que el textarea no trae de fábrica.
+  // Todo cambio programático pasa por aquí. Se usa execCommand("insertText") porque es la
+  // única forma de que Tab, Shift+Tab y Enter entren en el historial nativo de deshacer;
+  // setRangeText deja el textarea sin Ctrl+Z. Si el navegador no lo soporta, se cae a
+  // setRangeText: el texto queda igual, solo se pierde el deshacer de esa edición.
+  cambiar(desde, hasta, texto, seleccion) {
+    const area = document.getElementById("codigo");
+    let hecho = false;
+    if (typeof document.execCommand === "function") {
+      if (area.selectionStart !== desde || area.selectionEnd !== hasta) {
+        area.setSelectionRange(desde, hasta);
+      }
+      silencioInput++;
+      try { hecho = document.execCommand("insertText", false, texto); }
+      finally { silencioInput--; }
+    }
+    if (!hecho) area.setRangeText(texto, desde, hasta, "preserve");
+    if (seleccion) area.setSelectionRange(seleccion[0], seleccion[1]);
+    EDITOR.pintar();
+    EDITOR.sincronizar();
+    actualizarCursor();
+    marcarSucio(true);
+  },
+
+  // Tab y Shift+Tab: con selección indenta o desindenta las líneas; sin selección, Tab
+  // inserta cuatro espacios en el cursor y Shift+Tab quita la sangría de su línea.
   indentar(delta) {
     const area = document.getElementById("codigo");
     const v = area.value;
     const a = area.selectionStart, b = area.selectionEnd;
+
+    if (a === b) {
+      if (delta > 0) {
+        EDITOR.cambiar(a, b, "    ", [a + 4, a + 4]);
+        return;
+      }
+      const ini = v.lastIndexOf("\n", a - 1) + 1;
+      let finLinea = v.indexOf("\n", a);
+      if (finLinea === -1) finLinea = v.length;
+      const m = /^( {1,4}|\t)/.exec(v.slice(ini, finLinea));
+      if (!m) return;
+      const corte = m[0].length;
+      const cursor = Math.max(ini, a - corte);
+      EDITOR.cambiar(ini, ini + corte, "", [cursor, cursor]);
+      return;
+    }
+
     const ini = v.lastIndexOf("\n", a - 1) + 1;
     let fin = v.indexOf("\n", b);
     if (fin === -1) fin = v.length;
-    const lineas = v.slice(ini, fin).split("\n");
-    let cambio = 0;
-    const nuevas = lineas.map((linea) => {
-      if (delta > 0) {
-        cambio += 4;
-        return "    " + linea;
+    // una selección que termina justo al empezar una línea no incluye esa línea
+    if (b > a && v[b - 1] === "\n") fin = b - 1;
+    let primera = 0, total = 0;
+    const nuevas = v.slice(ini, fin).split("\n").map((linea, i) => {
+      let cambio = 0;
+      if (delta > 0) cambio = 4;
+      else {
+        const m = /^( {1,4}|\t)/.exec(linea);
+        if (m) cambio = -m[0].length;
       }
-      const m = /^( {1,4}|\t)/.exec(linea);
-      if (!m) return linea;
-      cambio -= m[0].length;
-      return linea.slice(m[0].length);
+      if (i === 0) primera = cambio;
+      total += cambio;
+      return delta > 0 ? "    " + linea : linea.slice(Math.max(0, -cambio));
     });
-    if (!cambio) return;
-    area.value = v.slice(0, ini) + nuevas.join("\n") + v.slice(fin);
-    if (a === b) {
-      area.selectionStart = area.selectionEnd = Math.max(ini, a + cambio);
-    } else {
-      area.selectionStart = Math.max(ini, a + (delta > 0 ? 4 : 0));
-      area.selectionEnd = Math.max(area.selectionStart, b + cambio);
-    }
-    EDITOR.pintar();
-    EDITOR.sincronizar();
-    marcarSucio(true);
+    if (!total) return;
+    const nuevoA = Math.max(ini, a + primera);
+    const nuevoB = Math.max(nuevoA, b + total);
+    EDITOR.cambiar(ini, fin, nuevas.join("\n"), [nuevoA, nuevoB]);
   },
 
   // Enter conserva la sangría de la línea y añade un nivel si se acaba de abrir una llave.
@@ -179,17 +259,33 @@ const EDITOR = {
     const sangria = (/^[ \t]*/.exec(linea) || [""])[0];
     const extra = /\{[ \t]*$/.test(linea) ? "    " : "";
     const insertar = "\n" + sangria + extra;
-    area.value = v.slice(0, a) + insertar + v.slice(b);
-    area.selectionStart = area.selectionEnd = a + insertar.length;
-    EDITOR.pintar();
-    EDITOR.sincronizar();
-    marcarSucio(true);
+    EDITOR.cambiar(a, b, insertar, [a + insertar.length, a + insertar.length]);
   },
 };
 
-function esXml(texto) { return /<\?xml|<manifest|<LinearLayout|<[A-Za-z][\w.]*\s*>/.test(texto.slice(0, 400)); }
+// Ln/Col del cursor, en la barra de estado. Se cuenta sobre el valor real, no sobre el HTML
+// resaltado: el resaltado tiene spans y no sirve para medir posiciones.
+function actualizarCursor() {
+  const area = document.getElementById("codigo");
+  const salida = document.getElementById("estado-cursor");
+  if (!area || !salida) return;
+  const antes = area.value.slice(0, area.selectionStart);
+  const lineas = antes.split("\n");
+  salida.textContent = "Ln " + lineas.length + ", Col " + (lineas[lineas.length - 1].length + 1);
+}
 
-const PALABRAS_JAVA = "package|import|public|private|protected|class|extends|implements|interface|void|return|if|else|for|while|switch|case|new|this|super|static|final|int|long|float|double|boolean|byte|char|try|catch|finally|throw|throws|null|true|false|@Override";
+// Un fuente Java puede llevar genéricos (`List<String>`, `Map<K, V>`) y la heurística vieja
+// los tomaba por etiquetas XML: el fichero entero se pintaba con las reglas equivocadas. Lo
+// que distingue a un recurso Android es que, quitando BOM, espacios y comentarios, empieza
+// por una etiqueta; un .java empieza por package, import, un comentario o una anotación.
+function esXml(texto) {
+  const t = texto.slice(0, 400);
+  const limpio = t.replace(/^\uFEFF/, "").trimStart().replace(/^(?:<!--[^]*?-->\s*)+/, "");
+  if (/^<\?xml/i.test(limpio)) return true;
+  return /^<\/?[A-Za-z][\w.:-]*/.test(limpio);
+}
+
+const PALABRAS_JAVA = "abstract|assert|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|goto|if|implements|import|instanceof|int|interface|long|native|new|package|private|protected|public|record|return|sealed|short|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|var|void|volatile|while|yield|null|true|false";
 
 // Un solo pasado de regex por línea, no una cadena de replace: encadenar replace sobre el HTML
 // que el paso anterior ya inyectó coloreaba los nombres de las propias clases CSS (`class`
@@ -197,7 +293,11 @@ const PALABRAS_JAVA = "package|import|public|private|protected|class|extends|imp
 // decorado roto en cuanto había un comentario.
 // Los literales no cruzan de línea: si un fichero se queda sin cerrar una comilla, un `[^]*?`
 // se comería el resto del archivo y el editor quedaría gris de ahí en adelante.
-const PAST_JAVA = new RegExp("(\\/\\/[^\\n]*|/\\*[^]*?\\*/|&quot;[^\\n]*?&quot;)|\\b(" + PALABRAS_JAVA + ")\\b", "g");
+const PAST_JAVA = new RegExp(
+  "(\\/\\/[^\\n]*|/\\*[^]*?\\*/|&quot;[^\\n]*?&quot;|'[^'\\n]*')" +
+  "|(@[A-Za-z_]\\w*)" +
+  "|\\b(" + PALABRAS_JAVA + ")\\b" +
+  "|\\b(0[xX][0-9a-fA-F]+|\\d+(?:\\.\\d+)?[fFdDlL]?)\\b", "g");
 const PAST_XML = /(&lt;!--[^]*?--&gt;)|(&lt;\/?)([\w.:-]+)|(&quot;[^\n]*?&quot;)|([\w.:-]+)(?==)/g;
 
 function resaltar(texto, modo) {
@@ -211,12 +311,14 @@ function resaltar(texto, modo) {
       return todo;
     });
   }
-  return escapado.replace(PAST_JAVA, (todo, literal, palabra) => {
+  return escapado.replace(PAST_JAVA, (todo, literal, anotacion, palabra, numero) => {
     if (literal) {
-      const clase = literal.startsWith("&quot;") ? "cadena" : "comentario";
+      const clase = literal.startsWith("&quot;") || literal.startsWith("'") ? "cadena" : "comentario";
       return '<span class="' + clase + '">' + literal + "</span>";
     }
+    if (anotacion) return '<span class="anotacion">' + anotacion + "</span>";
     if (palabra) return '<span class="palabra">' + palabra + "</span>";
+    if (numero) return '<span class="numero">' + numero + "</span>";
     return todo;
   });
 }
@@ -307,7 +409,13 @@ async function refrescarArbol() {
           refrescarArbol();
         };
       } else {
-        fila.onclick = (e) => { e.preventDefault(); abrir(n.ruta); };
+        fila.onclick = async (e) => {
+          e.preventDefault();
+          if (await abrir(n.ruta)) {
+            const vista = document.querySelector('[data-vista="pestana"]');
+            if (vista && document.body.dataset.vista !== "pestana") vista.click();
+          }
+        };
       }
       fuera.appendChild(fila);
       if (n.dir && !ARBOL.plegados.has(n.ruta)) pintar(n.ruta, profundidad + 1);
@@ -315,13 +423,30 @@ async function refrescarArbol() {
   };
   pintar(PROYECTO, 0);
   fuera.scrollTop = scroll;
+
+  // el fichero abierto puede quedar fuera de la parte visible del explorador: se acerca
+  // solo lo justo, sin saltar al principio ni mover la página entera
+  const activo = fuera.querySelector("a.activo");
+  if (activo) {
+    const r = activo.getBoundingClientRect(), c = fuera.getBoundingClientRect();
+    if (r.top < c.top) fuera.scrollTop -= c.top - r.top;
+    else if (r.bottom > c.bottom) fuera.scrollTop += r.bottom - c.bottom;
+  }
 }
 
-async function abrir(ruta) {
-  if (estaSucio() && !(await confirmarDescartes())) return;
-  const r = await hospedador.leer(ruta);
-  const bytes = r.bytes;
-  const texto = bytes ? new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)) : "";
+async function abrir(ruta, yaConfirmado) {
+  if (!yaConfirmado && estaSucio() && !(await confirmarDescartes())) return false;
+  let texto;
+  try {
+    const bytes = await hospedador.bytes(ruta);
+    if (!bytes) { nota("no existe " + ruta); return false; }
+    // un PNG del árbol no se abre como si fuera fuente: guardarlo después lo corrompería
+    if (bytes.includes(0)) { nota(ruta + " parece un binario; el editor solo abre texto"); return false; }
+    texto = new TextDecoder().decode(bytes);
+  } catch (e) {
+    nota("no se pudo abrir " + ruta + ": " + (e && e.message ? e.message : e));
+    return false;
+  }
   estadoPestana.ruta = ruta;
   EDITOR.poner(texto);
   const nombre = document.getElementById("fichero-abierto");
@@ -330,6 +455,7 @@ async function abrir(ruta) {
     nombre.title = ruta;
   }
   await refrescarArbol();
+  return true;
 }
 
 function marcarSucio(v) {
@@ -341,13 +467,30 @@ function estaSucio() { return !!estadoPestana.sucio; }
 function confirmarDescartes() { return window.confirm("Hay cambios sin guardar. ¿Descartarlos?"); }
 
 async function guardar() {
+  let recien = false;
   if (!estadoPestana.ruta) {
     const nombre = await nuevoNombre();
-    if (!nombre) return;
+    if (!nombre) return false;
     estadoPestana.ruta = nombre;
+    recien = true;
   }
-  await hospedador.escribir(estadoPestana.ruta, new TextEncoder().encode(EDITOR.texto()));
-  marcarSucio(false);
+  if (recien) {
+    const previo = await hospedador.bytes(estadoPestana.ruta);
+    if (previo !== null && !window.confirm("Ya existe " + relativa(estadoPestana.ruta) + ". ¿Reemplazarlo?")) {
+      estadoPestana.ruta = null;
+      return false;
+    }
+  }
+  const guardado = EDITOR.texto();
+  try {
+    await hospedador.escribir(estadoPestana.ruta, new TextEncoder().encode(guardado));
+  } catch (e) {
+    nota("no se pudo guardar " + estadoPestana.ruta + ": " + (e && e.message ? e.message : e));
+    return false;
+  }
+  // si se siguió escribiendo mientras el worker guardaba, el fichero tiene lo viejo y el
+  // documento sigue sucio; marcarlo limpio perdería esos cambios al cerrar la pestaña
+  if (EDITOR.texto() === guardado) marcarSucio(false);
   const abierto = document.getElementById("fichero-abierto");
   if (abierto) {
     abierto.textContent = relativa(estadoPestana.ruta);
@@ -355,11 +498,36 @@ async function guardar() {
   }
   nota("guardado en " + estadoPestana.ruta);
   await refrescarArbol();
+  return true;
+}
+
+// El nombre por defecto sale del package que la persona escribió en Inicio, y cualquier ruta
+// relativa se ancla a /proyecto: así "Nuevo" no puede escribir fuera del árbol que se ve.
+function paqueteDelFormulario() {
+  const campo = document.querySelector('#form [name="package"]');
+  const paquete = campo ? String(campo.value || "").trim().toLowerCase() : "";
+  return /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(paquete) ? paquete : "com.mi.app";
+}
+
+function normalizarRuta(ruta) {
+  const partes = [];
+  for (const parte of ruta.split("/")) {
+    if (!parte || parte === ".") continue;
+    if (parte === "..") { partes.pop(); continue; }
+    partes.push(parte);
+  }
+  return "/" + partes.join("/");
 }
 
 async function nuevoNombre() {
-  const entrada = prompt("Ruta dentro del proyecto", PROYECTO + "/src/com/hola/MainActivity.java");
-  return entrada || null;
+  const sugerida = PROYECTO + "/src/" + paqueteDelFormulario().replace(/\./g, "/") + "/MainActivity.java";
+  const entrada = prompt("Ruta dentro del proyecto", sugerida);
+  if (entrada === null) return null;
+  let ruta = entrada.trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
+  if (!ruta.startsWith("/")) ruta = PROYECTO + "/" + ruta;
+  ruta = normalizarRuta(ruta);
+  if (!ruta.startsWith(PROYECTO + "/")) return null;
+  return ruta;
 }
 
 // --- el panel inferior -------------------------------------------------------------------
@@ -367,14 +535,16 @@ function mostrarPanel(nombre) {
   const panel = document.getElementById("panel-inferior");
   if (!panel) return;
   panel.hidden = false;
-  for (const b of document.querySelectorAll(".panel-tab")) b.classList.toggle("activo", b.dataset.panel === nombre);
+  for (const b of document.querySelectorAll(".panel-tab")) {
+    const activo = b.dataset.panel === nombre;
+    b.classList.toggle("activo", activo);
+    b.setAttribute("aria-selected", String(activo));
+  }
   for (const v of document.querySelectorAll("#panel-inferior .panel-vista")) {
     v.classList.toggle("activa", v.id === "panel-" + nombre);
   }
   const alternar = document.getElementById("alternar-panel");
   if (alternar) alternar.setAttribute("aria-expanded", "true");
-  const activa = document.getElementById("panel-" + nombre);
-  if (activa) activa.scrollTop = 0;
 }
 
 function alternarPanel(nombre) {
@@ -404,15 +574,32 @@ async function ejecutarUltimo() { await correr(ULTIMO.argv); }
 
 async function correr(argv) {
   ULTIMO.argv = argv;
+  // la salida vive en el panel del editor: un atajo lanzado desde Inicio no puede dejarla oculta
+  const vistaEditor = document.querySelector('[data-vista="pestana"]');
+  if (vistaEditor && document.body.dataset.vista !== "pestana") vistaEditor.click();
   const consola = document.getElementById("consola-pestana");
   mostrarPanel("salida");
-  consola.textContent += "$ apkc " + argv.join(" ") + "\n";
-  document.getElementById("ocupado").hidden = false;
-  const r = await hospedador.ejecutar(argv);
-  document.getElementById("ocupado").hidden = true;
-  consola.textContent += (r.consola || "") + (r.error ? "FALLO DEL HOSPEDADOR: " + r.error + "\n" : "");
-  consola.scrollTop = consola.scrollHeight;
-  if (r.tipo === "terminado") document.getElementById("ultimo-codigo").textContent = String(r.codigo);
+  if (consola) consola.textContent += "$ apkc " + argv.join(" ") + "\n";
+  const ocupado = document.getElementById("ocupado");
+  if (ocupado) ocupado.hidden = false;
+  let r;
+  try {
+    r = await hospedador.ejecutar(argv);
+  } catch (e) {
+    // si el worker no arranca, el aviso de «trabajando» no puede quedarse para siempre
+    r = { tipo: "error", error: String((e && e.message) || e), consola: "" };
+  } finally {
+    if (ocupado) ocupado.hidden = true;
+  }
+  if (consola) {
+    consola.textContent += (r.consola || "") + (r.error ? "FALLO DEL HOSPEDADOR: " + r.error + "\n" : "");
+    if (consola.textContent.length > 200000) consola.textContent = consola.textContent.slice(-200000);
+    consola.scrollTop = consola.scrollHeight;
+  }
+  if (r.tipo === "terminado") {
+    const codigo = document.getElementById("ultimo-codigo");
+    if (codigo) codigo.textContent = String(r.codigo);
+  }
   await refrescarArbol();
   return r;
 }
@@ -746,10 +933,25 @@ async function iniciarPestana() {
 if (typeof document !== "undefined") {
   document.addEventListener("DOMContentLoaded", () => {
     if (!document.getElementById("codigo")) return;
-    // la página se puede recortar: cada botón se engancha solo si está en el DOM
+    // la página se puede recortar: cada botón se engancha solo si está en el DOM. El envoltorio
+    // recoge las promesas rechazadas: un fallo de OPFS tiene que salir como aviso en la barra,
+    // no como un unhandledrejection mudo con la página aparentemente viva.
+    const mostrarFallo = (e) => {
+      const texto = e && e.message ? e.message : String(e);
+      nota("fallo: " + texto);
+      console.error(e);
+    };
     const en = (id, fn) => {
       const el = document.getElementById(id);
-      if (el) el.addEventListener("click", fn);
+      if (!el) return;
+      el.addEventListener("click", (e) => {
+        try {
+          const r = fn(e);
+          if (r && typeof r.catch === "function") r.catch(mostrarFallo);
+        } catch (err) {
+          mostrarFallo(err);
+        }
+      });
     };
     EDITOR.inicializar();
     for (const boton of document.querySelectorAll(".panel-tab")) {
@@ -759,8 +961,14 @@ if (typeof document !== "undefined") {
     en("cerrar-panel", cerrarPanel);
     en("guardar-fichero", guardar);
     en("nuevo-fichero", async () => {
+      if (estaSucio() && !(await confirmarDescartes())) return;
       const nombre = await nuevoNombre();
       if (!nombre) return;
+      const previo = await hospedador.bytes(nombre);
+      if (previo !== null && !window.confirm("Ya existe " + relativa(nombre) + ". ¿Reemplazarlo?")) return;
+      // el fichero nace vacío en OPFS para que el explorador y el estado «sin cambios» digan
+      // la verdad: un buffer suelto que no está en el árbol confunde más que ayuda
+      await hospedador.escribir(nombre, new Uint8Array(0));
       estadoPestana.ruta = nombre;
       EDITOR.poner("");
       const abierto = document.getElementById("fichero-abierto");
@@ -791,6 +999,22 @@ if (typeof document !== "undefined") {
       e.preventDefault();
       descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
     });
+
+    // Los atajos no dependen de que el foco esté en el textarea: Ctrl+S guarda también con el
+    // cursor en el panel, y Ctrl+` cierra el panel desde cualquier sitio.
+    document.addEventListener("keydown", (e) => {
+      if (e.isComposing || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const tecla = (e.key || "").toLowerCase();
+      if (tecla === "s") { e.preventDefault(); Promise.resolve(guardar()).catch(mostrarFallo); }
+      else if (e.key === "Enter") { e.preventDefault(); Promise.resolve(ejecutarUltimo()).catch(mostrarFallo); }
+      else if (e.key === "`" || e.code === "Backquote") { e.preventDefault(); alternarPanel(); }
+    });
+    window.addEventListener("beforeunload", (e) => {
+      if (!estaSucio()) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+
     decirEstadoJar();
     iniciarPestana();
   });

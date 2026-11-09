@@ -110,10 +110,18 @@ const pestanaMod = require(path.join(__dirname, "pestana.js"));
 const java = pestanaMod.resaltar("package x;\n// hola\npublic class X {}\n", "java");
 if (!/<span class="palabra">package<\/span>/.test(java)) mal("el resaltador no pinta package");
 if (!/<span class="comentario">\/\/ hola<\/span>/.test(java)) mal("el resaltador no pinta el comentario");
+const anotado = pestanaMod.resaltar("@Override int x = 42; char c = 'a';", "java");
+if (!/class="anotacion">@Override</.test(anotado)) mal("el resaltador no pinta la anotación");
+if (!/class="numero">42</.test(anotado)) mal("el resaltador no pinta el número");
+if (!/class="cadena">'a'</.test(anotado)) mal("el resaltador no pinta el char");
 const xml = pestanaMod.resaltar('<manifest package="x">', "xml");
 if (!/class="etiqueta">manifest</.test(xml)) mal("el resaltador no pinta la etiqueta XML");
 if (!/class="atributo">package</.test(xml)) mal("el resaltador no pinta el atributo XML");
 if (pestanaMod.esXml("package x;") || !pestanaMod.esXml('<?xml version="1.0"?>')) mal("esXml no distingue Java de XML");
+if (pestanaMod.esXml("package x; import java.util.List; class X { List<String> xs; }"))
+  mal("esXml confunde los genéricos de Java con etiquetas XML");
+if (!pestanaMod.esXml('<!-- c --><resources><string name="x">y</string></resources>'))
+  mal("esXml no reconoce un recurso que empieza por comentario");
 
 console.log(fallos ? `PRUEBA FALLA: ${fallos} problemas` : "prueba: todo en orden");
 process.exit(fallos ? 1 : 0);

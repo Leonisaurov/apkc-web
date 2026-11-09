@@ -7080,3 +7080,30 @@ zygote, que Termux no puede leer.
    `cmd activity start` responde `cmd: Failure calling service activity: Failed transaction
    (2147483646)` en este aparato. La ruta que funciona es el `am` de Termux con el entorno copiado.
 
+## 141. El scroll del editor: tres capas con scroll propio, no un `transform`
+
+Medido el 2026-11-09 en chromium headless con la comprobación `3b` de
+`studio/prueba-pestana.js`. La primera versión del editor movía `#resalto` y `#numeros` con
+`transform: translate(0, -scrollTop)`. El `<pre>` lleva `overflow: hidden` y su caja mide el alto
+visible: lo que queda fuera de esa caja no se pinta, y al trasladar la caja hacia arriba el
+editor se veía vacío en cuanto se pasaba de la primera pantalla. Las tres capas tienen que ser
+contenedores con scroll propio y copiarse `scrollTop` (y `scrollLeft` el resaltado).
+
+**Comando**
+
+```sh
+tools/entorno.sh -- sh -c 'APKC_WASM=$TMP/apkc-wasm.wasm \
+  APK_EJEMPLO=$TMP/studio-e2e-java/com.hola.apkcstudio/build/app.apk \
+  KS_EJEMPLO=$HOME/.android/debug.keystore KS_RELEASE=$TMP/studio-release.p12 \
+  AAB_EJEMPLO=$TMP/studio-ejemplo.aab \
+  ANDROID_JAR=$HOME/Android/platforms/android-34/android.jar \
+  node studio/prueba-pestana.js'
+```
+
+**Resultado**: `59 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
+ellas de 400 caracteres), baja el textarea 500 px y exige que `#codigo`, `#resalto` y `#numeros`
+tengan el mismo `scrollTop` (`[500,500,500]`) y que el resaltado comparta además el
+`scrollLeft` (`[80,80]`). La `3c` comprueba que Tab sin selección inserta en el cursor, que
+Shift+Tab desindenta, y que `document.execCommand("undo")` revierte la edición: las ediciones
+programáticas pasan por `execCommand("insertText")`, no por `setRangeText`.
+
