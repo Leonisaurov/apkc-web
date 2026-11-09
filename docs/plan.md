@@ -556,13 +556,57 @@ que la *tarea de medición* va siempre antes que la estimación de trabajo.
 | 5.18 | **recursos**: tipos que faltan en `values` (`color`, `integer-array`, `string-array`, `plurals`, `bool`, `fraction`, `attr`/`styleable`) | **HECHO** (§96, §105 y §106): `string-array`/`integer-array` (registros `0x01000000\|(índice+1)`), `plurals` (ids de cantidad en orden del fuente), `fraction` (radix 3/0/2 y bit `%p`, 796 bytes idénticos) y `attr`/`declare-styleable` (entrada compleja con el registro `0x01000000` y bits de formato; el styleable vive solo en `R.java`, con `new int[]`), arsc de 596 bytes idéntico. `bool`, `color` e `integer` ya estaban. Frontera: `format="enum"`/`flags"` con hijos | §96, §105 y §106 | hecho |
 | 5.19 | **recursos**: `menu`/`xml` (AXML con raíz que no es `layout`), `raw`, y el `<permission>` del manifiesto | **HECHO** (§97 y §102): `res/menu` y `res/xml` se enlazan como AXML con su raíz y `res/raw` viaja literal; la tabla declara `menu/principal`, `xml/prefs` y `raw/dato`. El `<permission android:name=…>` se recoge del manifiesto y `enlazarConGo` escribe `src/<paquete>/Manifest.java` byte a byte como aapt2 (cabecera, clase y constantes en el orden del manifiesto). Frontera: atributos de `<permission>` distintos de `name` | §97 y §102 | hecho |
 | 5.20 | versión de platform no medida y `--codename`/`--sdk-version` | **HECHO (§98)**: la tabla API→versión de Android es 27→8.1, 28→9, 29→10, 30→11, 31→12, 32→12L, 33→13, 34→14 y 35→15; con ella se escriben `android:compileSdkVersionCodename` y `platformBuildVersionName` (entero si el nombre es numérico, cadena para `8.1`/`12L`). Las APIs fuera de la tabla se rechazan por nombre y `--codename` sigue siendo la salida | §98 | hecho |
-| 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | **HECHO para v3 (§104 y §108)**: el paquete Go escribe los pares v2 y v3, y `apksigner verify` dice v1, v2 y v3 `true`; `apkc verify` sigue tolerando y anotando una v3 ajena. La pestaña continúa con el keystore de depuración y no hay selector de keystore de release; v4 y el `--min-sdk` del proyecto fuera del bloque v3 fijo (24) siguen fuera | §104 y §108 | parcial |
+| 5.21 | keystore de release propio en la pestaña y banderas de firma (`v3`, `--min-sdk` del proyecto) | **HECHO para v3 (§104 y §108)**: el paquete Go escribe los pares v2 y v3, y `apksigner verify` dice v1, v2 y v3 `true`; `apkc verify` sigue tolerando y anotando una v3 ajena. La pestaña tiene selector de fichero (`.p12`/`.jks`), pero solo pasa `--keystore`: con los valores por defecto (`android`/`androiddebugkey`) no abre un keystore de release. El alcance ampliado —credenciales de release, `.aab`, v4, v3.1 y claves EC— está en «Firma: alcance ampliado» | §104 y §108 | parcial |
 | 5.23 | `StackMapTable` en el `.class` que emitimos | **HECHO** (§65): medido con `javap -v` dónde pone javac cada marco (sin ramas no hay; en cada destino de salto y tras cada salto incondicional o `return`; `offset_delta` del primero = su pc) y que `top` gana en la unión y que un destino puede ser el pc 0. `apkc/jvmframes.go` calcula los estados con un intérprete abstracto sobre el cuerpo parcheado y escribe `full_frame` (forma legal sin la compresión de javac); el analizador exige que el alto simulado quepa en `max_stack`. Oráculos: `TestLosMarcosSonLosDeJavac` (nuestros marcos expandidos dicen lo mismo que los de javac en `while`, `switch` y la cabecera en el pc 0) y el banco, que ahora ejecuta nuestra `Ver` con `java -Xverify:all` y la compara por texto y rc | — | hecho |
 | 5.24 | `getstatic`/`putstatic` de una **referencia** (`System.out`) | **HECHO** (§62): medido `sget-object` `6200` y `sput-object` `6901` en el fichero de `d8`; `accesoEstatico` acepta `I` y `L` y el resto se rechaza por nombre. De paso, el internado no recorría los estáticos de otra clase y un campo ajeno nunca entraba en `field_ids` (corregido en `dextabla.go`) | — | hecho |
 | 5.25 | temporales en el punto de unión de un `if` con `else` | **HECHO, y la causa no era la unión** (§62): cada `putstatic` pedía un temporal con `toma` y luego lo tiraba al sacar el registro de la pila, así que el marco se quedaba sin temporales; corregido. La unión de brazos no necesitó nada. Queda por medir el presupuesto cuando un bucle tenga valores vivos en la cabecera (5.10) | — | hecho |
 | 5.26 | Resolución de sobrecargas (`println(String)` salía `println(Z)`) | **HECHO** (§62): candidatas por nombre y aridad de la jerarquía, exacta por descriptores, si no la aplicable más específica por cadena de padres e interfaces del jar (JVMS 15.12.2.5), y si no rechazo por nombre. `boxing`, varargs, arrays y ensanchamiento siguen fuera, por nombre | — | hecho |
 | 5.27 | Llamar a un método **sin receptor** desde un `static` | **HECHO** (§62): javac escribe `invokestatic` contra la clase actual, que es la forma 35c ya medida; se rechaza si el método no es estático | — | hecho |
 | 5.22 | `invokedynamic` (lambdas, references de método y concatenación) | **HECHO (§110-§116)**: se leen `CONSTANT_InvokeDynamic`, `BootstrapMethods`, `MethodHandle`/`MethodType` y se validan `LambdaMetafactory.metafactory`, `altMetafactory` y `StringConcatFactory.makeConcatWithConstants`. Se desugran la lambda estática con o sin capturas, la que captura `this`, `this::m`, `Tipo::m`, el SAM genérico (`Function<String,Integer>`), el borrado a una cota (`F<T extends Number>`), la serializable (`(Runnable & Serializable)`) y la intersección con marcadores (`Runnable & R & Serializable & Cloneable`). La clase sintética lleva un campo por captura, constructor con esos tipos, un SAM que los carga y, con `altMetafactory`, las interfaces de los marcadores y `Serializable` en el orden de `d8`; el dueño pierde `$deserializeLambda$`. La concatenación de JDK 9 se trocea por la receta (`\u0001` argumento, `\u0002` constante) y baja a `StringBuilder` con un `append` por tipo. Corre en ART con la salida de la JVM y `dexdump` lo verifica (`banco/lambda.sh`, trece casos). Fuera, rechazados por nombre: los puentes de `altMetafactory` con cuenta distinta de cero (javac los deja en cero) y las constantes dinámicas de la concatenación | §109-§116 | hecho |
+
+### Firma: alcance ampliado (decisión del usuario, 2026-11-09)
+
+La pestaña tiene que **aceptar un keystore de release**, no solo el de depuración. Entran también en
+la cuenta el `.aab`, la firma v4 y el resto de piezas que 5.21 dejaba fuera. Nada de esto está
+implementado: lo que sigue es el alcance y las decisiones que faltan. Las mediciones nuevas van a
+`docs/evidencia.md` con su comando, como siempre.
+
+| pieza | qué haría falta | oráculo | coste |
+| --- | --- | --- | --- |
+| credenciales de release en la pestaña | campos de `--storepass` y `--keyalias`; no guardar la contraseña; enseñar DN y huella SHA-256 del certificado antes de firmar | `apksigner verify --print-certs` sobre un keystore de release generado con `keytool` | bajo |
+| `.aab` | firmarlo como JAR (v1) con el firmante de Go, sin `jarsigner`; **construirlo** exige `bundletool` y un `resources.pb`/manifiesto protobuf que no están medidos | `jarsigner -verify`, `unzip -l` | medio (firmar) / alto (construir) |
+| v4 | escribir el `.idsig` al lado del apk: árbol de Merkle con el tamaño de bloque y la sal de `apksigner`, más el `V4Signature` | `apksigner verify --v4-signature-file` | medio |
+| v3.1 y rotación | `proof-of-rotation` en el firmante, varios firmantes y rangos por `minSdk` | `apksigner verify` con una rotación de dos claves | alto |
+| claves EC | firmar con ECDSA P-256/P-384 además de RSA; hoy `rsaKey` rechaza cualquier otra | `apksigner verify` | medio |
+| formatos | JKS y PKCS#12 ya se leen; JCEKS/BKS se convierten con `keytool` y se rechazan por nombre | — | nulo |
+
+Decisiones abiertas, ninguna tomada todavía:
+
+1. **Contraseña**: ¿se teclea en cada firma o se guarda en OPFS? Lo recomendable es no guardarla.
+2. **Alias**: ¿texto libre, o una orden que liste los alias del keystore? Los lectores ya devuelven
+   `Alias` y `Keys`, así que listarlos es barato; con más de una clave habría que exigir el alias.
+3. **Keystore en OPFS**: ¿se conserva entre sesiones (con botón de «olvidar») o se pide siempre?
+   Limpiar los datos del sitio lo borra, y una clave de release perdida no se recupera.
+4. **Confirmación de identidad**: ¿se enseña el certificado (DN y huella) antes de firmar? Sin eso,
+   elegir el fichero equivocado produce un apk que instala una vez y falla la siguiente actualización.
+5. **`.aab`**: ¿solo se firma un bundle ya construido, o se construye también en Go? Construirlo
+   implica el manifiesto y la tabla de recursos en protobuf; firmarlo reutiliza `v1sign.go`.
+6. **`.aab` con firma previa**: ¿se vuelve a firmar (como hace `sign` con los apk) o se rechaza?
+7. **Upload key vs app signing key**: para Play se firma con la **upload key** y Play vuelve a firmar;
+   ¿se dice en la página y se impide usar la clave de app signing?
+8. **v4**: ¿por defecto, opt-in o fuera? No hace falta para instalar ni para Play; solo para
+   `adb install --incremental` en Android 11+.
+9. **v3.1/rotación**: ¿se implementa o se deja a Play App Signing y a `apksigner`? Rotar exige el
+   linaje de la clave vieja a la nueva y no se puede inventar.
+10. **`minSdk` del proyecto en v3**: hoy el firmante escribe 24 fijo; ¿se sigue el `minSdkVersion` del
+    manifiesto? Hay que medir antes qué escribe `apksigner` con `--min-sdk-version` distinto de 24.
+11. **EC**: ¿se añade ECDSA o se exige RSA? Play acepta las dos; hoy un keystore EC se rechaza.
+12. **`minSdk` menor que 18**: el v1 del firmante Go usa SHA-256 y esas plataformas solo leen SHA-1;
+    sin JVM en la pestaña, ¿se rechaza por nombre o se implementa SHA-1 (que ya no se debería usar)?
+13. **Oráculo del gate**: ¿se genera un keystore de release de usar y tirar con `keytool` dentro de la
+    prueba, o se mide solo a mano? Nunca se versiona una clave real.
+14. **Alcance de la promesa**: ¿«release» significa un apk instalable y actualizable, o también un
+    `.aab` publicable en Play? Lo segundo arrastra el bundle y el tamaño del `studio/`.
 
 ### Dependencias y orden
 
