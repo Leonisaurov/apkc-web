@@ -6,7 +6,7 @@ const CACHE = VERSION;
 
 const SHELL = [
   "./", "./index.html", "./style.css", "./main.js", "./offline.js",
-  "./app.js", "./historial.js", "./pestana.js", "./vistas.js",
+  "./app.js", "./historial.js", "./fusion.js", "./pestana.js", "./vistas.js",
   "./diagnostico.js", "./temas.js", "./apkc.wasm", "./wasm_exec.js",
 ];
 

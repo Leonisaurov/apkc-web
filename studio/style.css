@@ -746,6 +746,19 @@ pre {
 .menu-editor-lista hr { width: 100%; margin: 4px 0; border: 0; border-top: 1px solid var(--borde2); }
 .menu-editor-lista .peligro { color: var(--peligro); }
 
+.conflicto-aviso {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--borde2);
+  background: var(--superficie);
+  color: var(--aviso);
+  font-size: 12px;
+}
+.conflicto-aviso .espacio { flex: 1 1 auto; }
+
 .editor {
   flex: 1 1 auto;
   display: flex;

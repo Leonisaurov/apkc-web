@@ -104,6 +104,7 @@ Qué hace de verdad, y qué no:
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor, pestañas, árbol y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `historial.js` | undo tree por documento: deltas, checkpoints, poda e IndexedDB por ventana; sus funciones puras se prueban en node |
+| `fusion.js` | fusión de tres vías (base, local, remoto) para resolver cambios de dos ventanas sin perder ramas |
 | `temas.js` | temas de interfaz y de terminal; solo cambia `data-tema` y variables CSS, sin dependencias |
 | `offline.js` | registra el service worker cuando la página se sirve por http(s) |
 | `sw.js` | service worker: cachea el shell y `apkc.wasm`/`wasm_exec.js`; no cachea jar, keystores ni OPFS |
@@ -118,9 +119,11 @@ Qué hace de verdad, y qué no:
 Dos pestañas del mismo origen comparten `/proyecto` en OPFS. Cada ventana tiene sus pestañas de
 editor (sessionStorage), su undo tree (IndexedDB por ventana) y su worker. Al guardar, la ventana
 toma un lock (`navigator.locks`), escribe una revisión y publica `guardado` por `BroadcastChannel`.
-Las demás refrescan su espejo de OPFS y recargan el fichero si está limpio; si está sucio, avisan
-y permiten **sobrescribir** al guardar (con confirmación si la revisión cambió). Las mutaciones de
-fichero (crear, subir, renombrar, mover, borrar) se publican igual y refrescan el árbol.
+Las demás refrescan su espejo de OPFS. Si el fichero está limpio, lo recargan; si está sucio,
+hacen una **fusión de tres vías** (base, local y remoto): los cambios que no se pisan se combinan
+solos y los que tocan las mismas líneas abren una banda de conflicto con **Mantener el mío**,
+**Usar el remoto** o **Marcar conflicto**. Las mutaciones de fichero (crear, subir, renombrar,
+mover, borrar) se publican igual y refrescan el árbol.
 
 `sw.js` cachea el shell y, si el host los sirve, `apkc.wasm` y `wasm_exec.js`. No cachea el `android.jar`
 ni los keystores, y el proyecto no pasa por HTTP. Una recarga sin red conserva COOP/COEP porque las

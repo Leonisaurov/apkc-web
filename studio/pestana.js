@@ -1,4 +1,5 @@
 import { Historial } from "./historial.js";
+import { fusionar } from "./fusion.js";
 
 // La pestaña que hace: editor de fuente + un arbol en OPFS + los comandos de apkc.wasm.
 //
@@ -73,6 +74,7 @@ const estadoPestana = { ruta: null, nodo: null };
 // Los limpios se descartan de memoria al cambiar y se releen de OPFS al volver; los sucios
 // conservan su texto hasta que se guarden o se cierren.
 const DOCUMENTOS = { lista: [], activa: null };
+const CONFLICTO = { doc: null, datos: null };
 const PERSISTENCIA = "apkc-studio/editor-v1";
 // una activación lenta no puede pisar a la pestaña que se pulsó después
 let activacion = 0;
@@ -619,32 +621,142 @@ function publicar(mensaje) {
   try { canal.postMessage({ ...mensaje, origen: VENTANA }); } catch (e) { /* sin canal */ }
 }
 
+function ocultarConflicto() {
+  CONFLICTO.doc = null;
+  CONFLICTO.datos = null;
+  const aviso = document.getElementById("conflicto-aviso");
+  if (aviso) aviso.hidden = true;
+}
+
+function mostrarConflicto(doc, datos) {
+  CONFLICTO.doc = doc;
+  CONFLICTO.datos = datos;
+  const texto = document.getElementById("conflicto-texto");
+  const aviso = document.getElementById("conflicto-aviso");
+  if (texto) {
+    texto.textContent = "Otra ventana cambió " + relativa(doc.ruta) +
+      "; las mismas líneas cambiaron en las dos.";
+  }
+  if (aviso) aviso.hidden = false;
+}
+
+function aplicarVersionRemota(doc, datos) {
+  doc.texto = datos.suyo;
+  doc.base = datos.suyo;
+  doc.revision = datos.revision;
+  doc.sucio = false;
+  doc.conflicto = null;
+  if (DOCUMENTOS.activa === doc.ruta) {
+    EDITOR.poner(datos.suyo);
+    marcarSucio(false);
+    actualizarAccionesFichero();
+  }
+  ocultarConflicto();
+  renderPestanas();
+  renderHistorial();
+  guardarPersistencia();
+  nota("usada la versión de la otra ventana en " + relativa(doc.ruta));
+}
+
+function mantenerVersionPropia(doc) {
+  const datos = doc && doc.conflicto ? doc.conflicto : CONFLICTO.datos;
+  if (!doc || !datos) return;
+  doc.base = datos.suyo;
+  doc.revision = datos.revision;
+  doc.sucio = true;
+  doc.conflicto = null;
+  ocultarConflicto();
+  marcarSucio(true);
+  renderPestanas();
+  nota("mantienes tu versión; guarda para sobrescribir");
+}
+
+function insertarMarcasConflicto(doc) {
+  const datos = doc && doc.conflicto ? doc.conflicto : CONFLICTO.datos;
+  if (!doc || !datos) return;
+  const nuestro = DOCUMENTOS.activa === doc.ruta ? EDITOR.texto() : datos.nuestro;
+  const marcas = "<<<<<<< esta ventana\n" + nuestro +
+    (nuestro.endsWith("\n") ? "" : "\n") + "=======\n" + datos.suyo +
+    (datos.suyo.endsWith("\n") ? "" : "\n") + ">>>>>>> otra ventana\n";
+  doc.texto = marcas;
+  doc.base = datos.suyo;
+  doc.revision = datos.revision;
+  doc.sucio = true;
+  doc.conflicto = null;
+  if (DOCUMENTOS.activa === doc.ruta) {
+    EDITOR.poner(marcas);
+    marcarSucio(true);
+  }
+  ocultarConflicto();
+  renderHistorial();
+  nota("marcas de conflicto insertadas; edita y guarda");
+}
+
 async function recargarDocumentoRemoto(doc, revision) {
   try {
     await hospedador.refrescar(doc.ruta);
     const bytes = await hospedador.bytes(doc.ruta);
     if (!bytes) return;
-    const texto = new TextDecoder().decode(bytes);
-    doc.revision = revision || revisionActual(doc.ruta);
-    if (DOCUMENTOS.activa === doc.ruta) {
-      if (doc.sucio) {
-        doc.conflicto = "guardado";
-        nota("otra ventana guardó " + relativa(doc.ruta) + "; guarda para sobrescribir o recarga");
-        return;
-      }
-      EDITOR.poner(texto);
-      doc.texto = texto;
+    const suyo = new TextDecoder().decode(bytes);
+    const rev = revision || revisionActual(doc.ruta);
+    const activo = DOCUMENTOS.activa === doc.ruta;
+    const nuestro = activo ? EDITOR.texto() : doc.texto;
+
+    if (!doc.sucio || nuestro === suyo) {
+      doc.texto = activo ? suyo : null;
+      doc.base = suyo;
+      doc.revision = rev;
       doc.sucio = false;
-      marcarSucio(false);
-      await asegurarHistorial(doc, texto);
-      renderHistorial();
-      actualizarAccionesFichero();
+      doc.conflicto = null;
+      if (activo) {
+        EDITOR.poner(suyo);
+        marcarSucio(false);
+        await asegurarHistorial(doc, suyo);
+        renderHistorial();
+        actualizarAccionesFichero();
+      }
       nota("otra ventana guardó " + relativa(doc.ruta) + "; recargado");
-    } else if (!doc.sucio) {
-      doc.texto = null;
-    } else {
-      doc.conflicto = "guardado";
+      return;
     }
+
+    const base = doc.base === undefined || doc.base === null ? null : doc.base;
+    if (base === null) {
+      doc.conflicto = { base: suyo, suyo, nuestro, revision: rev };
+      if (activo) mostrarConflicto(doc, doc.conflicto);
+      else nota("otra ventana guardó " + relativa(doc.ruta) + "; hay conflicto");
+      return;
+    }
+
+    const fusion = fusionar(base, nuestro, suyo);
+    doc.revision = rev;
+    if (fusion.estado === "suyo" || fusion.estado === "igual") {
+      aplicarVersionRemota(doc, { suyo, revision: rev });
+      return;
+    }
+    if (fusion.estado === "nuestro") {
+      doc.base = suyo;
+      nota("otra ventana guardó " + relativa(doc.ruta) + " sin cambios respecto a la base");
+      return;
+    }
+    if (fusion.estado === "auto") {
+      doc.texto = fusion.texto;
+      doc.base = suyo;
+      doc.sucio = true;
+      doc.conflicto = null;
+      if (activo) {
+        EDITOR.poner(fusion.texto);
+        marcarSucio(true);
+        await asegurarHistorial(doc, fusion.texto);
+        renderHistorial();
+        actualizarAccionesFichero();
+      }
+      nota("cambios fusionados automáticamente en " + relativa(doc.ruta) + "; guarda para publicarlos");
+      return;
+    }
+
+    doc.conflicto = { base, suyo, nuestro, revision: rev };
+    if (activo) mostrarConflicto(doc, doc.conflicto);
+    else nota("otra ventana guardó " + relativa(doc.ruta) + "; hay conflicto");
   } catch (e) {
     nota("no se pudo recargar " + relativa(doc.ruta) + ": " + (e && e.message ? e.message : e));
   }
@@ -684,15 +796,7 @@ async function recibirRemoto(msg) {
   if (!msg || msg.origen === VENTANA) return;
   if (msg.tipo === "guardado") {
     const doc = documentoDe(msg.ruta);
-    if (doc) {
-      doc.revision = msg.revision || revisionActual(msg.ruta);
-      if (doc.sucio) {
-        doc.conflicto = "guardado";
-        nota("otra ventana guardó " + relativa(msg.ruta) + "; puedes sobrescribir al guardar");
-      } else {
-        await recargarDocumentoRemoto(doc, msg.revision);
-      }
-    }
+    if (doc) await recargarDocumentoRemoto(doc, msg.revision);
     await hospedador.refrescar(PROYECTO).catch(() => {});
     await refrescarArbol();
     return;
@@ -711,8 +815,7 @@ async function recibirRemoto(msg) {
         await hospedador.refrescar(ruta).catch(() => {});
         const doc = documentoDe(ruta);
         if (!doc) continue;
-        if (doc.sucio) doc.conflicto = "guardado";
-        else await recargarDocumentoRemoto(doc, revisionActual(ruta));
+        await recargarDocumentoRemoto(doc, revisionActual(ruta));
       }
     }
     await hospedador.refrescar(PROYECTO).catch(() => {});
@@ -722,7 +825,7 @@ async function recibirRemoto(msg) {
   if (msg.tipo === "proyecto") {
     await hospedador.refrescar(PROYECTO).catch(() => {});
     for (const doc of DOCUMENTOS.lista) {
-      if (doc.sucio) doc.conflicto = "proyecto";
+      if (doc.sucio) doc.remotoEliminado = true;
       else doc.texto = null;
     }
     await refrescarArbol();
@@ -1051,6 +1154,7 @@ async function activarDocumento(ruta) {
       return quitarDocumento(doc);
     }
     doc.texto = new TextDecoder().decode(bytes);
+    doc.base = doc.texto;
     doc.revision = revisionActual(ruta) || doc.revision || null;
   }
 
@@ -1068,6 +1172,11 @@ async function activarDocumento(ruta) {
   marcarSucio(sucio);
   renderPestanas();
   renderHistorial();
+  if (doc.conflicto) mostrarConflicto(doc, doc.conflicto);
+  else ocultarConflicto();
+  if (doc.remotoEliminado) {
+    nota("este fichero fue borrado en otra ventana; guardarlo lo recrea");
+  }
   if (doc.recuperable) {
     nota("hay cambios sin guardar de la sesión anterior; ábrelos en Historial");
     doc.recuperable = null;
@@ -1565,6 +1674,7 @@ async function guardar() {
     return false;
   }
   doc.revision = revision;
+  doc.base = guardado;
   // si se siguió escribiendo o se cambió de pestaña mientras el worker guardaba, el documento
   // solo queda limpio si el texto en memoria sigue siendo el que se escribió
   const actual = documentoDe(ruta);
@@ -2438,6 +2548,13 @@ if (typeof document !== "undefined") {
     en("alternar-panel", () => alternarPanel());
     en("cerrar-panel", cerrarPanel);
     en("abrir-historial", () => mostrarPanel("historial"));
+    en("conflicto-mio", () => mantenerVersionPropia(CONFLICTO.doc));
+    en("conflicto-remoto", () => {
+      const doc = CONFLICTO.doc;
+      const datos = doc && doc.conflicto ? doc.conflicto : CONFLICTO.datos;
+      if (doc && datos) aplicarVersionRemota(doc, datos);
+    });
+    en("conflicto-marcas", () => insertarMarcasConflicto(CONFLICTO.doc));
     en("historial-deshacer", deshacer);
     en("historial-rehacer", rehacer);
     en("historial-limpiar", limpiarHistorial);

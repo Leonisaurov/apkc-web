@@ -206,10 +206,18 @@ tiene los dos selectores `#tema-ui` y `#tema-consola`. No hay hojas externas.
   documento y publica `{tipo:"guardado"}` por `BroadcastChannel`. Si la revisión del disco ya no
   es la del documento, pide confirmación antes de sobrescribir.
 - `publicar()` avisa también de `crear`, `subir`, `renombrar`, `mover`, `borrar` y `proyecto`.
-- `recibirRemoto()` ignora su propia `VENTANA`, refresca el espejo del worker (`hospedador.refrescar`),
-  recarga la pestaña activa si está limpia y solo deja un aviso si está sucia. Un borrado remoto
-  conserva las pestañas sucias y marca `remotoEliminado`.
-- No hay merge ni CRDT: la última escritura gana y el conflicto es visible.
+- Cada documento guarda `base`: el texto de la última versión de OPFS. Al guardar o recargar se
+  actualiza.
+- `recibirRemoto()` ignora su propia `VENTANA`, refresca el espejo del worker
+  (`hospedador.refrescar`) y compara `base`, el buffer local y el remoto con `fusionar()`:
+  - sin cambios locales, recarga el remoto;
+  - sin cambios remotos, conserva el local;
+  - cambios en líneas distintas, **fusión automática** y el documento queda sucio para revisar;
+  - cambios en las mismas líneas, **conflicto** con `#conflicto-aviso`: **Mantener el mío**,
+    **Usar el remoto** o **Marcar conflicto** (marcas `<<<<<<<` / `=======` / `>>>>>>>`).
+- La fusión es de tres vías por líneas (`fusion.js`), sin CRDT ni servidor. En ficheros de más de
+  2000 líneas cae a conflicto explícito. Un borrado remoto conserva las pestañas sucias y marca
+  `remotoEliminado`.
 
 ### Sin red
 
@@ -402,8 +410,8 @@ En `@media (max-width: 760px)`:
 | --- | --- |
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
 | `node studio/prueba-navegador.js` | `http` sin COOP/COEP: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB y dos ventanas que se pasan guardados por BroadcastChannel |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 70 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB, dos ventanas que se pasan guardados por BroadcastChannel y la fusión/conflicto de la misma línea |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 74 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la

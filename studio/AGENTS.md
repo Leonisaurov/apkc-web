@@ -50,6 +50,7 @@ dar el editor por probado, comprueba en la salida `pestaña: N comprobaciones` y
 | `app.js` | **modelo puro**: plantillas, `buildProject`, `makeZip`, `RULES`, `analyze`, `informe`. Sin DOM; `export` para el navegador y para node. |
 | `pestana.js` | editor, pestañas, árbol de OPFS, comandos y el puente `hospedador`; `export` de lo que consumen `vistas.js`, `main.js` y las pruebas. |
 | `historial.js` | undo tree por documento: deltas, checkpoints, poda, IndexedDB por ventana. |
+| `fusion.js` | fusión de tres vías (base/local/remoto) por líneas; conflicto explícito si se pisan. |
 | `temas.js` | temas de interfaz y terminal; cambia `data-tema` y variables CSS. Se carga como módulo en el `<head>`. |
 | `vistas.js` | cambio de vista, reflejo nombre/package y creación del proyecto desde el formulario. |
 | `diagnostico.js` | panel de Inicio que pinta `analyze()`; solo DOM, sin reglas propias. |
@@ -106,8 +107,10 @@ los imports y no debe depender de ese puente.
 - **Varias ventanas sin pisarse.** Las escrituras pasan por `conBloqueo()` (Web Locks); la revisión
   se guarda en `localStorage` (`apkc-studio/rev/<ruta>`) y `BroadcastChannel` avisa de `guardado`,
   `crear`, `subir`, `renombrar`, `mover`, `borrar` y `proyecto`. `recibirRemoto()` refresca el
-  espejo del worker (`hospedador.refrescar`), recarga limpios y avisa en sucios. No hay CRDT: la
-  última escritura gana y la confirmación de sobrescritura es explícita.
+  espejo del worker (`hospedador.refrescar`) y fusiona con `fusionar(base, local, remoto)`: sin
+  cambios locales recarga, sin cambios remotos conserva, cambios separados se combinan y los que
+  tocan la misma línea abren `#conflicto-aviso`. No hay CRDT ni servidor; la base es la última
+  versión de OPFS y los ficheros de más de 2000 líneas caen a conflicto explícito.
 - **Service worker.** `sw.js` cachea el shell e intenta cachear `apkc.wasm`/`wasm_exec.js`; nunca
   `/android-jar`, keystores ni OPFS. `offline.js` lo registra solo por http(s). Las respuestas
   cacheadas deben conservar COOP/COEP; `prueba-pestana.js` prueba la recarga offline.

@@ -387,6 +387,40 @@ async function target() {
   }
   comprueba("la primera ventana recibe la sobrescritura de la segunda",
     recibidoEnA === "desde B\n", JSON.stringify(recibidoEnA).slice(0, 160));
+
+  // conflicto real: A tiene cambios sucios y B guarda otra versión de la misma línea
+  await evaluar(`(() => {
+    const area = document.getElementById("codigo");
+    area.value = "local A\\n";
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    return true;
+  })()`);
+  await segunda.evaluar(`(async () => {
+    const area = document.getElementById("codigo");
+    area.value = "remoto B\\n";
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+    await guardar();
+    return true;
+  })()`);
+  let conflicto = null;
+  for (let i = 0; i < 60; i++) {
+    conflicto = await evaluar(`({
+      visible: !document.getElementById("conflicto-aviso").hidden,
+      texto: document.getElementById("conflicto-texto").textContent,
+    })`);
+    if (conflicto.visible) break;
+    await esperar(200);
+  }
+  comprueba("las dos ventanas que tocan la misma línea generan conflicto",
+    conflicto.visible === true && /conflicto|cambiaron/.test(String(conflicto.texto)),
+    JSON.stringify(conflicto).slice(0, 220));
+  await evaluar(`(() => { document.getElementById("conflicto-remoto").click(); return true; })()`);
+  const resuelto = await evaluar(`({
+    texto: document.getElementById("codigo").value,
+    aviso: !document.getElementById("conflicto-aviso").hidden,
+  })`);
+  comprueba("se puede elegir la versión remota del conflicto",
+    resuelto.texto === "remoto B\n" && resuelto.aviso === false, JSON.stringify(resuelto));
   segunda.ws.close();
 
   ws.close();

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { buildProject, makeZip, analyze, RULES } from "./app.js";
 import * as pestanaMod from "./pestana.js";
 import { Historial } from "./historial.js";
+import { fusionar } from "./fusion.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const a = { buildProject, makeZip, analyze, RULES };
@@ -160,6 +161,15 @@ for (let i = 0; i < 300; i++) historial.agregar(h, "v" + i);
 const nodos = Object.keys(h.nodos).length;
 if (nodos > historial.MAX_NODOS) mal("la poda no respeta MAX_NODOS: " + nodos);
 if (!h.nodos[h.actual]) mal("la poda borró el nodo actual");
+
+// 9. fusión de tres vías: cambios separados se combinan; los que se pisan, conflicto
+const baseFusion = "uno\ndos\ntres\n";
+const auto = fusionar(baseFusion, "uno\nDOS\ntres\n", "uno\ndos\nTRES\n");
+if (auto.estado !== "auto" || auto.texto !== "uno\nDOS\nTRES\n") mal("la fusión automática no combina cambios separados");
+const choque = fusionar(baseFusion, "uno\nMIO\ntres\n", "uno\nSUYO\ntres\n");
+if (choque.estado !== "conflicto") mal("la fusión no detecta el cambio en la misma línea");
+if (fusionar(baseFusion, baseFusion, "uno\ndos\nTRES\n").estado !== "suyo") mal("la fusión no toma el remoto si el local no cambió");
+if (fusionar(baseFusion, "uno\nDOS\ntres\n", baseFusion).estado !== "nuestro") mal("la fusión no conserva el local si el remoto no cambió");
 
 // 9. el paquete oficial de la plataforma es un zip con android-34/android.jar: el editor tiene
 // que sacarlo sin depender de un unzip externo. Se prueba con el mismo makeZip de la página.
