@@ -33,7 +33,9 @@ func sign() {
 	storePass := set.String("storepass", "android", "keystore password")
 	keyAlias := set.String("keyalias", "androiddebugkey", "key alias to use")
 	out := set.String("out", "", "where to write the signed package (default: over the input, as apksigner does); the switches go before the package, and -- ends them")
+	v4 := set.Bool("v4", true, "write the .idsig sidecar of the v4 signature for incremental installs")
 	set.Parse(os.Args[2:])
+	escribirV4 = *v4
 
 	packages := set.Args()
 	if len(packages) == 0 {

@@ -85,13 +85,13 @@ keystore - list the signing identities of a keystore (alias, subject, SHA-256 an
 dex    - turn compiled .class files into a classes.dex in Go, with no d8 and no subprocess
          (-o salida, y una o mas carpetas de entrada; es la etapa que puede correr en el
          navegador, el resto del build todavia necesita aapt2 y javac)
-verify - read one package back and check the two signatures this tool writes: the v1 manifest
-         and .SF digests recomputed over the stored bytes, the PKCS#7 over the .SF, and the v2
-         block before the central directory with its content digest recalculated. An .aab only
-         has v1 and is reported as such. No apksigner, no jarsigner, no subprocess - which is what
-         makes it usable inside the tab. What is not measured here is refused by name (DSA, SHA-1,
-         v3, v4, several signers), and the trust chain is never validated: a debug certificate is
-         self-signed and there is no anchor.
+verify - read one package back and check the signatures this tool writes: the v1 manifest
+         and .SF digests recomputed over the stored bytes, the PKCS#7 over the .SF, the v2
+         block before the central directory, and the v4 .idsig next to the apk (verity tree,
+         digest and RSA signature). An .aab only has v1 and is reported as such. No apksigner,
+         no jarsigner, no subprocess - which is what makes it usable inside the tab. What is
+         not measured here is refused by name (DSA, SHA-1, v3, several signers), and the trust
+         chain is never validated: a debug certificate is self-signed and there is no anchor.
 version - print the commit this binary was built from
 `)
 }

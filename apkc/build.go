@@ -54,6 +54,8 @@ type buildOpts struct {
 	storePass   string
 	keyAlias    string
 	sigAlg      string
+	// v4 writes the .idsig sidecar next to the apk for incremental installs
+	v4 bool
 	// signer picks who turns the plan into an apk: the JVM tools apkc has always
 	// shelled out to, or the packager inside this binary
 	signer string
@@ -85,6 +87,7 @@ type buildFlags struct {
 	storePass   *string
 	keyAlias    *string
 	sigAlg      *string
+	v4          *bool
 	signer      *string
 	linker      *string
 	compiler    *string
@@ -106,6 +109,7 @@ func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
 	f.storePass = set.String("storepass", "android", "keystore password")
 	f.keyAlias = set.String("keyalias", "androiddebugkey", "key alias to use")
 	f.sigAlg = set.String("sigalg", "SHA256withRSA", "signature algorithm to use")
+	f.v4 = set.Bool("v4", true, "write the .idsig sidecar of the v4 signature for incremental installs")
 	f.signer = set.String("signer", signerDefault, "packaging and signing backend: auto (the default: go unless the project builds a bundle, uses a keystore format apkc cannot read, or targets a platform older than 4.3), go (zipalign and apksigner never start), jvm (zipalign and apksigner)")
 	f.linker = set.String("linker", "aapt2", "resource linker backend: aapt2 (the default: compile and link by running the SDK tool) or go (this binary writes the resource table, the binary XML and R.java; it refuses projects whose resources it has not been measured against, and needs android.jar for the framework ids)")
 	f.compiler = set.String("compiler", "javac", "java compiler and dexer: javac (the default: both tools run from the SDK) or go (this binary compiles the measured subset of Java and dexes the result, so no process starts; it refuses kotlin sources, jar dependencies and bundles)")
@@ -126,6 +130,7 @@ func (f buildFlags) opts() buildOpts {
 		storePass:   *f.storePass,
 		keyAlias:    *f.keyAlias,
 		sigAlg:      *f.sigAlg,
+		v4:          *f.v4,
 		signer:      *f.signer,
 		linker:      *f.linker,
 		compiler:    *f.compiler,
@@ -150,6 +155,7 @@ func build() {
 // build compiles all the source code and bundles into apk file with dependencies
 func _build(o buildOpts) {
 	defer timeIt("total")()
+	escribirV4 = o.v4
 	if o.linker != "aapt2" && o.linker != linkerGo {
 		LogF("build", "--linker %q: the resource linkers are aapt2 and go", o.linker)
 	}

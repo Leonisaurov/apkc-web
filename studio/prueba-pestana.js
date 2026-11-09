@@ -241,15 +241,27 @@ async function conductor() {
         for (let i = 0; i < u.length; i += 8192) trozos.push(String.fromCharCode.apply(null, u.subarray(i, i + 8192)));
         b = btoa(trozos.join(""));
       }
-      return { bytes: b, pass: document.getElementById("storepass-firmar").value,
+      const id = await hospedador.bytes("/proyecto/build/firmado.apk.idsig");
+      let bi = "";
+      if (id) {
+        const trozos = [];
+        for (let i = 0; i < id.length; i += 8192) trozos.push(String.fromCharCode.apply(null, id.subarray(i, i + 8192)));
+        bi = btoa(trozos.join(""));
+      }
+      return { bytes: b, idsig: bi, pass: document.getElementById("storepass-firmar").value,
         estado: document.getElementById("estado-keystore-firmar").textContent,
         nota: document.getElementById("estado-pestana").textContent,
-        consola: String(document.getElementById("consola-pestana").textContent).slice(-500) };
+        consola: String(document.getElementById("consola-pestana").textContent).slice(-700) };
     })()`);
     const apkRelease = Buffer.from(release.bytes, "base64");
+    const idsigRelease = Buffer.from(release.idsig, "base64");
     fs.writeFileSync(path.join(fuera, "pestanera-release.apk"), apkRelease);
+    fs.writeFileSync(path.join(fuera, "pestanera-release.apk.idsig"), idsigRelease);
     comprueba("la pestaña firma con el keystore de release", apkRelease.length > 1000,
       apkRelease.length + " bytes · " + JSON.stringify({ estado: release.estado, nota: release.nota, consola: release.consola }));
+    comprueba("la pestaña escribe el .idsig de la v4", idsigRelease.length > 100, idsigRelease.length + " bytes");
+    comprueba("la pestaña verifica la v4 de lo que firma", /v4 \(APK Signature Scheme v4\): ok/.test(String(release.consola)),
+      String(release.consola).slice(-160));
     comprueba("la contraseña no se queda en el campo", release.pass === "", JSON.stringify(release.pass));
   }
 

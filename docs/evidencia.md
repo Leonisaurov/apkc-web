@@ -6197,3 +6197,70 @@ Pruebas: `TestUnBundleSeFirmaComoJarYManifiestoPrimero` y
 `TestSignDistingueElBundlePorLaExtension` en `apkc/bundle_sign_test.go`, más el caso `.aab` de
 `studio/prueba-pestana.js`. Construir el bundle (la tabla de recursos en protobuf, `BundleConfig.pb`
 y los módulos) es 5.33; aquí solo se firma el que ya existe.
+
+## 119. Firma v4 (`.idsig`): árbol de verity y la firma que va al lado del apk
+
+La v4 no va dentro del apk: es un fichero `.idsig` al lado, el que usa `adb install
+--incremental` en Android 11+. Se midió sobre uno que escribe `apksigner
+--v4-signing-enabled true` y se reproduce con estos campos, todos little-endian y los
+variables con su longitud en u32:
+
+```text
+u32 version = 2
+bytes hashingInfo:      u32 hashAlgorithm = 1 (SHA-256), u8 log2BlockSize = 12,
+                        bytes salt (vacía), bytes rawRootHash (32)
+bytes signingInfos:     bytes apkDigest (32), bytes certificate (DER), bytes additionalData,
+                        bytes publicKey (SubjectPublicKeyInfo DER), u32 sigAlg = 0x0103,
+                        bytes signature
+bytes verityTree:       el árbol de fs-verity
+```
+
+El `apkDigest` **no** se recalcula sobre el fichero final: es el mismo digest que va dentro
+del bloque v3, y por eso el firmante pasa el que ya calculó para v2/v3. La firma es
+RSASSA-PKCS1-v1_5/SHA-256 sobre esta carga, que también incluye el tamaño del apk y el
+árbol:
+
+```text
+u32 tamaño; u64 fileSize; u32 hashAlgorithm; u8 log2BlockSize;
+bytes salt; bytes rawRootHash; bytes apkDigest; bytes certificate; bytes additionalData
+```
+
+El árbol es el de fs-verity: hojas de 4096 bytes (la última rellena con ceros), cada nivel
+partido en bloques de 4096 y relleno hasta un múltiplo de 4096, y el nivel superior el
+primero en el fichero. El nivel superior es el primero cuyos hashes caben en 4096 bytes; su
+SHA-256 es `rawRootHash`. Para el apk de 12756 bytes de la sonda son cuatro hojas, el nivel
+0 (128 bytes de hashes) relleno a 4096, y `rawRootHash = 50081f11…a17c`, el mismo que el
+`.idsig` de `apksigner`.
+
+```sh
+P=/data/data/com.termux/files/usr
+BT=$HOME/Android/build-tools/34.9.0
+W=$P/tmp/v4probe
+apkc sign --v4 --keystore "$P/tmp/studio-release.p12" --storepass saludo \
+  --keyalias lanzable --out "$W/ours.apk" "$W/in.apk"
+"$BT/apksigner" verify --v4-signature-file "$W/ours.apk.idsig" "$W/ours.apk"
+apkc verify "$W/ours.apk"
+```
+
+```text
+[sign] ours.apk carries a v1+v2+v3 signature of its own, 4 entries taken over as their bytes already were
+[verify] v1 (JAR signing): ok — 4 entradas con su digest y la firma PKCS#7 verificada
+[verify] v2 (APK Signature Scheme v2): ok — 7 entradas cubiertas por el digest del bloque
+[verify] v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig
+```
+
+`apksigner verify --v4-signature-file` sale 0 con el `.idsig` que escribe este fork, tanto
+sobre el apk mínimo como sobre uno de 678823 bytes (varios niveles de árbol), y también sale
+0 al revés: `apkc verify` aprueba el `.idsig` que escribió `apksigner`. La página tiene una
+casilla `escribir el .idsig` encendida por defecto, pasa `--v4=true` a `sign`/`build`, ofrece
+la descarga del sidecar y su `apkc verify` lo comprueba; la prueba de la pestaña exporta el
+`.idsig` y `studio/e2e.sh` lo coteja con `apksigner`:
+
+```text
+pestaña v4: .idsig de 5562 bytes, apksigner y apkc verify lo aprueban
+```
+
+Pruebas: `TestV4FirmaYVerifica`, `TestV4RechazaUnArbolCambiado` y
+`TestV4DesactivadoNoEscribeIdsig` en `apkc/v4sign_test.go`, más el caso v4 de
+`studio/prueba-pestana.js`. Frontera: una sal no vacía y los firmantes alternativos del
+`.idsig` se rechazan por nombre; un `.aab` no lleva `.idsig` porque no tiene bloque v2/v3.

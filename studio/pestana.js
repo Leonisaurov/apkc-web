@@ -249,6 +249,7 @@ async function firmar() {
   const origen = (entrada.value || PROYECTO + "/build/app.apk").trim();
   const esAab = /\.aab$/i.test(origen);
   const destino = PROYECTO + "/build/firmado." + (esAab ? "aab" : "apk");
+  const v4 = document.getElementById("v4-firmar").checked;
   nota("firmando " + origen + " con " + k.alias + " (no sale de esta pestaña)");
   // `sign` escribe `firmado.*.tmp` junto al destino y no crea la carpeta. Si el proyecto no se
   // compiló nunca, build/ no existe: se crea con un fichero vacío (escribir crea los padres) y se
@@ -256,11 +257,12 @@ async function firmar() {
   await hospedador.escribir(PROYECTO + "/build/.carpeta", new Uint8Array(0));
   await hospedador.limpiar(PROYECTO + "/build/.carpeta");
   const r = await correr(["sign", "--keystore", k.ruta, "--storepass", k.pass,
-    "--keyalias", k.alias, "--out", destino, origen]);
+    "--keyalias", k.alias, "--v4=" + (v4 ? "true" : "false"), "--out", destino, origen]);
   if (r && r.codigo === 0) {
     const v = await correr(["verify", destino]);
     document.getElementById(cfg.pass).value = "";
     await descargar(destino);
+    await ofrecerDescarga(destino + ".idsig", "descargar-idsig");
     if (v && v.codigo === 0) nota("firmado y verificado: " + destino.split("/").pop());
   }
 }
@@ -274,6 +276,18 @@ async function descargar(ruta, ancla) {
   enlace.href = URL.createObjectURL(new Blob([bytes], { type: tipo }));
   enlace.download = ruta.split("/").pop();
   nota("descarga lista: " + enlace.download + " (" + bytes.length + " bytes)");
+}
+
+// El .idsig viaja al lado del apk. Si no existe (un .aab, o --v4=false) el enlace se
+// esconde, para que no quede un botón que no lleva a nada.
+async function ofrecerDescarga(ruta, ancla) {
+  const enlace = document.getElementById(ancla);
+  const r = await hospedador.leer(ruta);
+  if (!r.bytes) { enlace.hidden = true; enlace.removeAttribute("href"); return; }
+  const bytes = r.bytes instanceof Uint8Array ? r.bytes : new Uint8Array(r.bytes);
+  enlace.href = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+  enlace.download = ruta.split("/").pop();
+  enlace.hidden = false;
 }
 
 async function intentarCompilar() {
@@ -415,15 +429,18 @@ async function compilarDelTodo() {
   }
   const k = await prepararKeystore(KEYSTORES.compilar);
   if (!k) return;
+  const v4 = document.getElementById("v4-compilar").checked;
   const version = (document.getElementById("sdk-version").value || "34").trim();
   const codename = (document.getElementById("codename").value || "14").trim();
   await hospedador.cwd(PROYECTO);
   const r = await correr(["build", "--linker", "go", "--compiler", "go",
     "--android-jar", RUTA_JAR, "--sdk-version", version, "--codename", codename,
-    "--keystore", k.ruta, "--storepass", k.pass, "--keyalias", k.alias]);
+    "--keystore", k.ruta, "--storepass", k.pass, "--keyalias", k.alias,
+    "--v4=" + (v4 ? "true" : "false")]);
   if (r && r.codigo === 0) {
     document.getElementById(KEYSTORES.compilar.pass).value = "";
     await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
+    await ofrecerDescarga(PROYECTO + "/build/app.apk.idsig", "descargar-idsig-compilada");
     await verificarLoCompilado();
   }
 }

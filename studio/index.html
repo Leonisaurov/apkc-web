@@ -130,12 +130,14 @@
       </p>
       <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
         <input type="text" id="codename" value="14" class="ruta"></label>
+      <label><input type="checkbox" id="v4-compilar" checked> escribir el <code>.idsig</code> (firma v4, instalación incremental)</label>
       <p class="nota" id="estado-jar">sin android.jar en esta pestaña todavía</p>
       <div class="acciones">
         <button id="usar-android-jar">guardar el android.jar elegido en la pestaña</button>
         <button id="compilar-apk" class="primario">compilar aquí (apkc build)</button>
         <button id="verificar-apk">verificar el apk (apkc verify)</button>
         <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk compilada</a>
+        <a id="descargar-idsig-compilada" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
       </div>
       <p class="nota" id="estado-verificacion">sin verificar todavía</p>
     </details>
@@ -157,9 +159,11 @@
       </div>
       <p class="nota" id="estado-keystore-firmar">sin keystore inspeccionado</p>
       <label>apk o .aab de entrada <input type="text" id="apk-a-firmar" value="/proyecto/build/app.apk" class="ruta"></label>
+      <label><input type="checkbox" id="v4-firmar" checked> escribir el <code>.idsig</code> (firma v4)</label>
       <div class="acciones">
         <button id="firmar-aqui" class="primario">firmar aquí (apkc sign)</button>
         <a id="descargar-apk" class="boton-enlace" href="#" download>descargar la apk firmada</a>
+        <a id="descargar-idsig" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>
       </div>
     </details>
 

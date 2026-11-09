@@ -37,6 +37,10 @@ const (
 	signerDefault = signerAuto
 )
 
+// escribirV4 enciende el `.idsig` de la firma v4. Build y sign lo dejan encendido salvo
+// que se pida `--v4=false`; un bundle no lo escribe porque no tiene bloque v2/v3.
+var escribirV4 = true
+
 // minAPIForSHA256Digest is the level apksigner itself draws at when it decides whether
 // the JAR signature has to carry SHA-1 digest pairs along with the SHA-256 ones: the
 // platform can read a SHA-256 digest out of a manifest from 4.3 up, and below that it
@@ -175,7 +179,26 @@ func finishSignedPackage(out *os.File, tmpPath, finalPath string, records []pack
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, finalPath)
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		return err
+	}
+	// La v4 no va dentro del apk: es un `.idsig` al lado, y se calcula sobre el fichero
+	// final (con el bloque v2/v3 ya escrito). El digest que firma es el mismo que el
+	// bloque v3 lleva dentro, no uno recalculado.
+	if escribirV4 {
+		datos, err := os.ReadFile(finalPath)
+		if err != nil {
+			return err
+		}
+		idsig, err := v4Signature(datos, digest, key, cert)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(finalPath+".idsig", idsig, 0644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeV1Entries appends META-INF/ANDROID.SF, META-INF/ANDROID.RSA and

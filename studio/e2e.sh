@@ -151,6 +151,21 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         falla "el apk de release no lleva v3"
       if ! python3 "$ZIPCHECK" "$release" >/dev/null 2>&1; then falla "zipcheck rechaza el apk de release"; fi
       avisa "pestaña release: apk de $(wc -c <"$release" | tr -d ' ') bytes firmado con CN=Release de prueba y verificado por apksigner (v1+v2+v3)"
+      idsig="$release.idsig"
+      if [ -f "$idsig" ]; then
+        if ! "$BUILD_TOOLS/apksigner" verify --v4-signature-file "$idsig" "$release" >"$TMP/studio-pestana-v4.log" 2>&1; then
+          falla "apksigner no verifica el .idsig de la pestaña"; tail -4 "$TMP/studio-pestana-v4.log"
+        fi
+        if "$APKC" verify "$release" >"$TMP/studio-pestana-v4-verify.log" 2>&1; then
+          grep -q "v4 (APK Signature Scheme v4): ok" "$TMP/studio-pestana-v4-verify.log" ||
+            falla "apkc verify no aprobó la v4 del .idsig"
+        else
+          falla "apkc verify rechaza el apk con .idsig"; tail -3 "$TMP/studio-pestana-v4-verify.log"
+        fi
+        avisa "pestaña v4: .idsig de $(wc -c <"$idsig" | tr -d ' ') bytes, apksigner y apkc verify lo aprueban"
+      else
+        falla "la pestaña no escribió el .idsig de la v4"
+      fi
     else
       falla "la pestaña no dejó el apk firmado con el keystore de release"
     fi
@@ -176,6 +191,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       if unzip -p "$aab" | grep -aq "APK Sig Block 42"; then
         falla "el .aab lleva un bloque de firmas de apk"
       fi
+      [ ! -f "$aab.idsig" ] || falla "un .aab no lleva .idsig"
       avisa "pestaña .aab: $(wc -c <"$aab" | tr -d ' ') bytes, v1 JAR verificada por jarsigner y apkc verify, sin bloque v2/v3"
     else
       falla "la pestaña no dejó el .aab firmado"

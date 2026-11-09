@@ -11,11 +11,11 @@ package main
 // porque un verificador que lee lo que el escritor recuerda no verifica nada.
 //
 // Lo que no está medido se rechaza con nombre, como en el resto del fork: se sabe leer una firma v1
-// con SHA-256 y una v2 con RSASSA-PKCS1-v1_5/SHA-256 de un único firmante. DSA, SHA-1, v3, v4,
-// varios firmantes o un certificado que no empareja con su clave pública se dicen y no se aprueban.
-// Tampoco se valida la cadena de confianza: el certificado de debug es auto-firmado y no hay ancla
-// que lo respalde, así que se informa de él (asunto, serie, caducidad) sin afirmar que sea digno de
-// confianza; `apksigner` hace exactamente lo mismo y lo llama "not trusted".
+// con SHA-256, una v2 con RSASSA-PKCS1-v1_5/SHA-256 de un único firmante y el `.idsig` de la v4.
+// DSA, SHA-1, v3, varios firmantes o un certificado que no empareja con su clave pública se dicen y
+// no se aprueban. Tampoco se valida la cadena de confianza: el certificado de debug es auto-firmado
+// y no hay ancla que lo respalde, así que se informa de él (asunto, serie, caducidad) sin afirmar
+// que sea digno de confianza; `apksigner` hace exactamente lo mismo y lo llama "not trusted".
 
 import (
 	"archive/zip"
@@ -56,12 +56,16 @@ type verificacion struct {
 	entradasFirmas int
 	v1             bool
 	v2             bool
+	v4             bool
 	bundle         bool
+	v4Presente     bool
 	v1Motivos      []string
 	v2Motivos      []string
+	v4Motivos      []string
 	notas          []string
 	firmantes      int
 	certificado    string
+	digestV2       []byte
 }
 
 func verificar() {
@@ -94,6 +98,13 @@ func verificar() {
 		} else {
 			LogE("verify", "v2 (APK Signature Scheme v2): mal —", strings.Join(v.v2Motivos, " — "))
 		}
+		if v.v4Presente {
+			if v.v4 {
+				LogI("verify", "v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig")
+			} else {
+				LogE("verify", "v4 (APK Signature Scheme v4): mal —", strings.Join(v.v4Motivos, " — "))
+			}
+		}
 	}
 	if v.certificado != "" {
 		LogI("verify", "certificado", v.certificado, "· firmantes", v.firmantes,
@@ -102,7 +113,7 @@ func verificar() {
 	for _, nota := range v.notas {
 		LogW("verify", nota)
 	}
-	if !v.v1 || (!v.bundle && !v.v2) {
+	if !v.v1 || (!v.bundle && !v.v2) || (v.v4Presente && !v.v4) {
 		os.Exit(1)
 	}
 }
@@ -136,6 +147,7 @@ func verificarApk(ruta string) (*verificacion, error) {
 	}
 	v.verificarV2(f, info.Size())
 	v.verificarV1(zr)
+	v.verificarV4(ruta)
 	return v, nil
 }
 
@@ -507,6 +519,7 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 		v.maloV2("el digest del contenido no se puede calcular: " + err.Error())
 		return
 	}
+	v.digestV2 = obtenido
 
 	medido := 0
 	for _, par := range digests {
