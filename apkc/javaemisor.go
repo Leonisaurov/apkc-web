@@ -1973,12 +1973,23 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		if len(d) == 0 || d[0] != 'L' {
 			return "", fmt.Errorf("linea %d: `instanceof` sobre %s: solo se midio sobre una referencia", v.donde.linea, d)
 		}
+		// `o instanceof String[]` y `o instanceof int[]`: el tipo del `instanceof` es el descriptor del
+		// arreglo (`[Ljava/lang/String;`, `[I`), medido en la sonda `E` del §131
+		interno := ""
 		if strings.Contains(v.tipo, "[") {
-			return "", fmt.Errorf("linea %d: `instanceof %s` con un arreglo no esta medido", v.donde.linea, v.tipo)
-		}
-		interno, err := e.ctx.tipoAInterno(v.tipo)
-		if err != nil {
-			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+			desc, err := e.ctx.descriptorDe(v.tipo)
+			if err != nil {
+				return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+			}
+			if !strings.HasPrefix(desc, "[") {
+				return "", fmt.Errorf("linea %d: `instanceof %s` no es un arreglo ni una clase", v.donde.linea, v.tipo)
+			}
+			interno = desc
+		} else {
+			interno, err = e.ctx.tipoAInterno(v.tipo)
+			if err != nil {
+				return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+			}
 		}
 		e.usar(interno)
 		idx := e.pool.clase(interno)
@@ -3420,13 +3431,22 @@ func esEnteroDesc(desc string) bool {
 // izquierda y las referencias comparadas entre sí.
 func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 	// `x instanceof T` deja un 0/1 y javac branquea con el `ifeq` **sin invertir** (parrafo 79,
-	// `Ins.esCadena`: `aload_0; instanceof #7; 4: ifeq 9`). La forma negada (`if (!(x instanceof T))`)
-	// no esta medida y cae en el rechazo de abajo.
+	// `Ins.esCadena`: `aload_0; instanceof #7; 4: ifeq 9`). La forma negada
+	// (`if (!(x instanceof T))`) es el mismo `instanceof` y después `ifne`, medido en la sonda `E`
+	// del §131: javac no invierte con `iconst`/`ixor`.
 	if v, esInstance := cond.(jinstanceof); esInstance {
 		if _, err := e.exp(v); err != nil {
 			return 0, 0, err
 		}
 		return opIFEQ, 1, nil
+	}
+	if neg, esNegacion := cond.(jnegacion); esNegacion {
+		if v, esInstance := neg.dentro.(jinstanceof); esInstance {
+			if _, err := e.exp(v); err != nil {
+				return 0, 0, err
+			}
+			return opIFNE, 1, nil
+		}
 	}
 	op, esComp := cond.(joperador)
 	if !esComp {
@@ -3793,23 +3813,37 @@ func (e *emisor) cambio(v jswitch) error {
 	e.baja(1) // el switch consume el valor del selector
 	// un `break` dentro de un brazo (aunque este anidado en un `if`) sale del switch: se apila su fin
 	e.quiebres = append(e.quiebres, fin)
-	for _, c := range casos {
+	// los cuerpos se emiten en el orden del fuente, no en el de la tabla: es el orden de javac y es
+	// lo que hace que la caída de un brazo al siguiente caiga en el que sigue (§129)
+	orden := v.orden
+	if len(orden) == 0 {
+		for i := range casos {
+			orden = append(orden, i)
+		}
+		if v.defecto != nil {
+			orden = append(orden, -1)
+		}
+	}
+	for i, idx := range orden {
+		if idx < 0 {
+			e.cierra(defecto)
+			if err := e.stm(jbloque{sentencias: v.defecto, donde: v.donde}); err != nil {
+				e.quiebres = e.quiebres[:len(e.quiebres)-1]
+				return err
+			}
+			continue
+		}
+		c := v.casos[idx]
 		e.cierra(etiqueta[c.valor])
 		if err := e.stm(jbloque{sentencias: c.cuerpo, donde: c.donde}); err != nil {
 			e.quiebres = e.quiebres[:len(e.quiebres)-1]
 			return err
 		}
 		// el `goto` al final solo lo escribe javac detrás del brazo que acaba en `break`; el que
-		// termina en `return` no lo necesita y el último cae ya en el final
-		if c.rompe {
+		// termina en `return` no lo necesita, el que cae al siguiente tampoco y el último ya cae
+		// en el final del switch
+		if c.rompe && i != len(orden)-1 {
 			e.saltoEmite(opGOTO, fin, 0)
-		}
-	}
-	if v.defecto != nil {
-		e.cierra(defecto)
-		if err := e.stm(jbloque{sentencias: v.defecto, donde: v.donde}); err != nil {
-			e.quiebres = e.quiebres[:len(e.quiebres)-1]
-			return err
 		}
 	}
 	e.quiebres = e.quiebres[:len(e.quiebres)-1]
@@ -3961,8 +3995,14 @@ func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally b
 		}
 		return ""
 	case jcontinua:
-		if !enBucle {
-			return "un `continue` que sale de un `try` con `finally` no esta medido"
+		if enBucle {
+			return ""
+		}
+		if dentroDelFinally {
+			return "un `continue` dentro del propio `finally` no esta medido"
+		}
+		if bajoOtroTry {
+			return "un `continue` que cruza otro `try` anidado no esta medido"
 		}
 		return ""
 	case jbloque:
@@ -4014,13 +4054,24 @@ func bloqueVacio(s jstmt) bool {
 // que guarda la excepción en un local que nadie mas usa, copia el bloque, y la re-lanza. Las filas de
 // la tabla salen en ese orden: los tipos del try, el `any` del try, y el `any` de cada cuerpo del catch.
 func (e *emisor) intenta(v jtry) error {
-	descs := make([]string, len(v.atrapas))
+	// un `catch (A | B e)` lleva una entrada por tipo y un solo manejador, con la excepcion guardada
+	// en un local del supertipo comun (§132). Aqui se usa `Throwable` como tipo del hueco: cualquier
+	// excepcion es asignable a el, y el dex no guarda el tipo del local (sus lineas no traen tabla de
+	// variables), asi que no cambia ni una instruccion.
+	descs := make([][]string, len(v.atrapas))
+	locales := make([]string, len(v.atrapas))
 	for i, c := range v.atrapas {
-		desc, err := e.ctx.descriptorDe(c.tipo)
-		if err != nil {
-			return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+		for _, t := range c.tipos {
+			desc, err := e.ctx.descriptorDe(t)
+			if err != nil {
+				return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+			}
+			descs[i] = append(descs[i], desc)
 		}
-		descs[i] = desc
+		locales[i] = descs[i][0]
+		if len(descs[i]) > 1 {
+			locales[i] = "Ljava/lang/Throwable;"
+		}
 	}
 	finalmente := v.finalmente
 	if bloqueVacio(finalmente) {
@@ -4140,9 +4191,9 @@ func (e *emisor) intenta(v jtry) error {
 		h := len(e.codigo)
 		manejadores[i] = h
 		e.marcaLinea(c.lineaAtrapa)
-		indice := e.reserva(c.excep, descs[i])
+		indice := e.reserva(c.excep, locales[i])
 		e.sube() // la excepción que el verificador deja en la pila al entrar al handler
-		e.guardaDe(indice, descs[i])
+		e.guardaDe(indice, locales[i])
 		ctxCatch := nuevoTrozo(func(a, b int) {
 			filasCatch = append(filasCatch, entradaTry{inicio: a, fin: b, tipo: ""})
 		})
@@ -4179,7 +4230,9 @@ func (e *emisor) intenta(v jtry) error {
 	}
 	filas := make([]entradaTry, 0, len(v.atrapas)+len(filasCuerpo)+len(filasCatch))
 	for i := range v.atrapas {
-		filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: manejadores[i], tipo: descs[i]})
+		for _, desc := range descs[i] {
+			filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: manejadores[i], tipo: desc})
+		}
 	}
 	if finalmente != nil {
 		// el manejador `any`: guarda la excepcion en el hueco mas alto que vio el metodo, copia el
@@ -4495,6 +4548,23 @@ func (e *emisor) stm(s jstmt) error {
 			return fmt.Errorf("linea %d: un `continue` fuera de un bucle", v.donde.linea)
 		}
 		destino := e.continuar[len(e.continuar)-1]
+		if c := e.finalmenteVivo(); c != nil {
+			// el `continue` que sale de un `try` con `finally` es como el `break`: la copia del
+			// bloque delante del salto, el `goto` con la linea del `continue` y el tramo siguiente
+			// abierto despues del salto (§132)
+			if err := e.copiaElFinally(c); err != nil {
+				return err
+			}
+			e.marcaLinea(v.donde.linea)
+			e.saltoEmite(opGOTO, destino, 0)
+			if _, cerrada := e.etiquetas[destino]; cerrada {
+				if err := e.resuelveAtras(destino); err != nil {
+					return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+				}
+			}
+			c.trozo = len(e.codigo)
+			return nil
+		}
 		e.saltoEmite(opGOTO, destino, 0)
 		// la vuelta de un `while` apunta a una etiqueta ya cerrada: se parchea ahora, no al cerrar
 		if _, cerrada := e.etiquetas[destino]; cerrada {
@@ -4929,12 +4999,30 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 		// un `static final char` se dobla igual que un `static final int`: `ConstantValue` con una entrada
 		// `Integer` y sin `putstatic` en el `<clinit>` (medido en `Letras`, `ConstantValue: int 90`,
 		// parrafo 87)
-		constante := esLit && (lit.tipoJ == 'i' || lit.tipoJ == 'c')
+		//
+		// y el resto de la familia, medido en `G` (§130): `static final long L = 6L` lleva
+		// `ConstantValue: long 6l` (tag 5), `float` tag 4, `double` tag 6 y `String` tag 8, todos sin
+		// `putstatic` en el `<clinit>`.
+		indice, constante := 0, false
+		if esLit {
+			switch {
+			case (lit.tipoJ == 'i' || lit.tipoJ == 'c') && (desc == "I" || desc == "C" || desc == "S" || desc == "B" || desc == "Z"):
+				indice, constante = e.pool.entero(lit.entero), true
+			case lit.tipoJ == 'j' && desc == "J":
+				indice, constante = e.pool.largo8(lit.largo), true
+			case lit.tipoJ == 'f' && desc == "F":
+				indice, constante = e.pool.flotante4(lit.flotante), true
+			case lit.tipoJ == 'd' && desc == "D":
+				indice, constante = e.pool.doble8(lit.flotante), true
+			case lit.tipoJ == 's' && desc == "Ljava/lang/String;":
+				indice, constante = e.pool.cadena(lit.texto), true
+			}
+		}
 		if esFinal && !constante {
-			return nil, fmt.Errorf("el ConstantValue de un campo `final` cuyo inicializador no es un entero literal no esta medido")
+			return nil, fmt.Errorf("el ConstantValue de un campo `final` cuyo inicializador no es un literal del tipo del campo no esta medido")
 		}
 		if esFinal {
-			attrs = append(attrs, attrInfo(e.pool, "ConstantValue", u2be(uint16(e.pool.entero(lit.entero))))...)
+			attrs = append(attrs, attrInfo(e.pool, "ConstantValue", u2be(uint16(indice)))...)
 			conte = 1
 		}
 	}

@@ -97,11 +97,10 @@ func TestElSwitchSeEscribeComoJavac(t *testing.T) {
 	conOpcode("disperso", 0x2c)
 }
 
-// TestElSwitchDelFuenteRechazaLoNoMedido: la caída de un caso al siguiente, una clave que no es
-// literal entero y una clave repetida se rechazan por nombre.
+// TestElSwitchDelFuenteRechazaLoNoMedido: una clave que no es literal entero y una clave repetida se
+// rechazan por nombre.
 func TestElSwitchDelFuenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"caida", "package p;\npublic class A { static int t; public static void f(int n) { switch (n) { case 0: t = 1; case 1: t = 2; break; } } }\n", "caida"},
 		{"clave", "package p;\npublic class A { static int t; static final int K = 3; public static void f(int n) { switch (n) { case K: t = 1; break; } } }\n", "literal entero"},
 		{"repetida", "package p;\npublic class A { static int t; public static void f(int n) { switch (n) { case 1: t = 1; break; case 1: t = 2; break; } } }\n", "dos veces"},
 	}
@@ -114,5 +113,74 @@ func TestElSwitchDelFuenteRechazaLoNoMedido(t *testing.T) {
 		if !strings.Contains(err.Error(), c.pista) {
 			t.Errorf("%s: el mensaje no nombra %q: %v", c.nombre, c.pista, err)
 		}
+	}
+}
+
+// fuenteCae es la sonda del §129: un brazo que cae al siguiente, dos claves en orden del fuente que no
+// es el numérico, un `default` primero que cae en el caso siguiente y un último brazo sin `break`.
+const fuenteCae = `package p;
+public class Cae {
+    static int total = 0;
+    public static void uno(int n) {
+        switch (n) {
+            case 0: total = 1;
+            case 1: total = 2; break;
+            case 3: total = 3; break;
+        }
+    }
+    public static void dos(int n) {
+        switch (n) {
+            case 5: total = 5;
+            case 20: total = 2; break;
+            default: total = 7;
+        }
+    }
+    public static void tres(int n) {
+        switch (n) {
+            default: total = 9;
+            case 1: total = 1; break;
+            case 20: total = 2;
+        }
+    }
+}
+`
+
+// caeJavac: `javac --release 8 -g:lines,source Cae.java` y `base64 -w0 Cae.class`.
+const caeJavac = "yv66vgAAADQAFwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCQAIAAkHAAoMAAsADAEABXAvQ2FlAQAFdG90YWwBAAFJAQAEQ29kZQEAD0xpbmVOdW1iZXJUYWJsZQEAA3VubwEABChJKVYBAA1TdGFja01hcFRhYmxlAQADZG9zAQAEdHJlcwEACDxjbGluaXQ+AQAKU291cmNlRmlsZQEACENhZS5qYXZhACEACAACAAAAAQAIAAsADAAAAAUAAQAFAAYAAQANAAAAHQABAAEAAAAFKrcAAbEAAAABAA4AAAAGAAEAAAACAAkADwAQAAEADQAAAGQAAQABAAAAMBqqAAAAAAAuAAAAAAAAAAMAAAAfAAAAIwAAAC4AAAAqBLMABwWzAAenAAcGswAHsQAAAAIADgAAABYABQAAAAUAIAAGACQABwArAAgALwAKABEAAAAGAAQgAwYDAAkAEgAQAAEADQAAAGEAAQABAAAALRqrAAAAAAAmAAAAAgAAAAUAAAAbAAAAFAAAAB8IswAHBbMAB6cACBAHswAHsQAAAAIADgAAABYABQAAAAwAHAANACAADgAnAA8ALAARABEAAAAGAAQcAwYEAAkAEwAQAAEADQAAAGEAAQABAAAALRqrAAAAAAAbAAAAAgAAAAEAAAAgAAAAFAAAACcQCbMABwSzAAenAAcFswAHsQAAAAIADgAAABYABQAAABMAHAAUACEAFQAoABYALAAYABEAAAAGAAQcBAYDAAgAFAAGAAEADQAAAB0AAQAAAAAABQOzAAexAAAAAQAOAAAABgABAAAAAwABABUAAAACABY="
+
+// TestLaCaidaAlSiguienteBrazo: con la caída medida, el `.class` sale byte a byte el de javac y el dex
+// también. Es lo que fija que los cuerpos se emiten en el orden del fuente y que solo el brazo que
+// acaba en `break` lleva su `goto` al final.
+func TestLaCaidaAlSiguienteBrazo(t *testing.T) {
+	salida, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/Cae.java", contenido: fuenteCae}}, jarDelSDK(t))
+	if err != nil {
+		t.Fatalf("el emisor rechazó la caída: %v", err)
+	}
+	if len(salida) != 1 {
+		t.Fatalf("%d clases, una", len(salida))
+	}
+	datos, err := base64.StdEncoding.DecodeString(caeJavac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nuestra, err := readClassFull(salida[0].datos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suya, err := readClassFull(datos)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deUno, err := dexDeClases([]classFull{nuestra})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deOtro, err := dexDeClases([]classFull{suya})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(deUno, deOtro) {
+		t.Errorf("el dex mide %d bytes y el de javac %d; el primero que difiere es el %d",
+			len(deUno), len(deOtro), primerByteDistinto(deUno, deOtro))
 	}
 }

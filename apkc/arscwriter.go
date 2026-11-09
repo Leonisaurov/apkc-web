@@ -38,7 +38,11 @@ type valorEscribir struct {
 // Medido en el AppTheme del studio (parrafo 27): nombre u32, y detras tam=8, res0=0, tipo, datos.
 type registroEscribir struct {
 	nombre uint32
-	valor  valorEscribir
+	// nombreId, si no está vacío, es el nombre de un recurso `id` cuyo número no se conoce todavía:
+	// los hijos `enum`/`flags` de un atributo se guardan con el id de su propio recurso, que depende
+	// del orden de la tabla (§135)
+	nombreId string
+	valor    valorEscribir
 }
 
 // entradaEscribir es un ResTable_entry. Simple: declara 8 bytes y lleva el Res_value detras.
@@ -131,8 +135,10 @@ func escribeTablaRecursos(t tablaEscribir) ([]byte, error) {
 					continue
 				}
 				for k, r := range e.registros {
-					if r.nombre&0xff000000 != 0x01000000 {
-						return nil, fmt.Errorf("registro %d de la entrada %d del tipo %d: nombre %#08x, y la unica forma medida es un id del framework (0x01……)", k, j, ti.id, r.nombre)
+					// las dos formas medidas: un atributo del framework (0x01……) en un estilo, y el id
+					// de un recurso `id` del propio paquete en el mapa de un `enum`/`flags` (§135)
+					if r.nombre&0xff000000 != 0x01000000 && r.nombre&0xff000000 != 0x7f000000 {
+						return nil, fmt.Errorf("registro %d de la entrada %d del tipo %d: nombre %#08x, y solo se midieron ids del framework (0x01……) y del paquete (0x7f……)", k, j, ti.id, r.nombre)
 					}
 				}
 			}

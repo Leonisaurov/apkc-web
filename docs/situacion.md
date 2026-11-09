@@ -547,8 +547,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   mismas lineas que sobre las de javac 21 (solo difieren los numeros de pool), y `apkc dex` sobre las unas da
   **el mismo fichero byte a byte** que sobre las otras: 2696 = 2696, `cmp` mudo. Dentro del hospedador con
   forma de navegador, con el jar montado en `/sdk/android.jar`, `compile` tarda 1,16 s y sus seis ficheros son
-  idénticos a los del binario nativo (§43). Suite actual: **324 PASS + 2 SKIP** nativa (330 con subpruebas) y
-  **238 PASS + 88 SKIP** en el hospedador (244 con subpruebas): los tests del traductor (branquias incluidas)
+  idénticos a los del binario nativo (§43). Suite actual: **331 PASS + 2 SKIP** nativa (337 con subpruebas) y
+  **239 PASS + 94 SKIP** en el hospedador (251 con subpruebas): los tests del traductor (branquias incluidas)
   pasan dentro; los del emisor se saltan si el hospedador no lleva `android.jar` montado. El portero
   rechaza con nombre lo no medido: anónima sobre una clase o dentro de otra o en un método `static`,
   una condición que sea un booleano suelto y anotaciones que no sean `@Override` (el `long`
@@ -566,7 +566,11 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   del 106, `values-es-rMX` del 107, la firma v3 del 108, las lambdas y referencias del 110 al 115, la
   concatenación dinámica del 116, el keystore de release de la pestaña del 117, la firma JAR del
   `.aab` del 118, la firma v4 del 119, la rotación v3.1 con linaje del 121, las claves EC del 123,
-  el `minSdk` del firmante v3 del 124, la v1 SHA-1 del 126 y el `.aab` ensamblado en Go del 128).
+  el `minSdk` del firmante v3 del 124, la v1 SHA-1 del 126, el `.aab` ensamblado en Go del 128,
+  la caída del `switch` del 129, el `ConstantValue` ancho y la cuenta 23x del 130, el
+  `format="enum"`/`"flags"` del 135, el
+  `instanceof` de arreglos del 131, el multi-catch y el `continue` del 132 y las corridas en ART
+  del 134; el `finally` anidado sigue fuera (133)).
 - **Dos trampas del hospedador con el jar**: `os.Stat` de un fichero montado responde que no existe mientras
   abrirlo funciona (los tests localizan el jar abriendolo, con `sync.Once` para no releer 26 MB, y
   `fuentesJava` lee el fichero en vez de preguntarle al Stat), y el orden

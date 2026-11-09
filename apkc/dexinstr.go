@@ -364,7 +364,14 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		"fadd": 0xc6, "fsub": 0xc7, "fmul": 0xc8, "fdiv": 0xc9, "frem": 0xca,
 		"dadd": 0xcb, "dsub": 0xcc, "dmul": 0xcd, "ddiv": 0xce, "drem": 0xcf,
 	}
-	tres := map[string]byte{"ladd": 0x9b, "lsub": 0x9c, "lmul": 0x9d, "ldiv": 0x9e, "lrem": 0x9f}
+	tres := map[string]byte{
+		"ladd": 0x9b, "lsub": 0x9c, "lmul": 0x9d, "ldiv": 0x9e, "lrem": 0x9f,
+		// la forma de tres registros de `float` y `double` (23x), medida en el §130 sobre el
+		// fichero de `d8`: `ab02 0210` = `add-double v2, v2, v16` cuando un operando no cabe en un
+		// nibble y no hay `/2addr` que lo cubra
+		"fadd": 0xa6, "fsub": 0xa7, "fmul": 0xa8, "fdiv": 0xa9, "frem": 0xaa,
+		"dadd": 0xab, "dsub": 0xac, "dmul": 0xad, "ddiv": 0xae, "drem": 0xaf,
+	}
 	op, ok := dos[in.name]
 	if !ok {
 		p.falla(in, "a wide arithmetic opcode this translator does not know")
@@ -384,40 +391,56 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		}
 		return false
 	}
-	switch {
-	case !vivo(a):
-		if !p.nibble(a, in) || !p.nibble(b, in) {
-			return
-		}
-		p.palabra(unidad12x(op, a, b))
-		p.push(a)
-		p.sueltaPar(b)
-	case conmuta && !vivo(b):
-		if !p.nibble(b, in) || !p.nibble(a, in) {
-			return
-		}
-		p.palabra(unidad12x(op, b, a))
-		p.push(b)
-		p.sueltaPar(a)
-	default:
+	// la forma de dos registros exige que los dos operandos quepan en un nibble; si no, la de tres
+	// registros (23x) es la única que los puede nombrar, y es la que escribe `d8` (§130). Con un
+	// operando muerto, `d8` usa ese mismo registro como destino (`ab00 0010` = `add-double v0, v0,
+	// v16`), así que no hace falta temporal.
+	cabe := func(r int) bool { return !p.techo || (r >= 0 && r <= 15) }
+	tresRegistros := func(destino int) {
 		tresOp, medida := tres[in.name]
 		if !medida {
-			p.falla(in, "the three-register form of a float or double arithmetic: only the /2addr was measured (parrafo 80)")
+			p.falla(in, "a wide arithmetic opcode with no measured three-register form")
 			return
 		}
+		if !p.octeto(destino, in) || !p.octeto(a, in) || !p.octeto(b, in) {
+			return
+		}
+		u1, u2 := unidad23x(tresOp, destino, a, b)
+		p.palabra(u1)
+		p.palabra(u2)
+		p.push(destino)
+		p.sueltaPar(a)
+		p.sueltaPar(b)
+	}
+	switch {
+	case !vivo(a):
+		if cabe(a) && cabe(b) {
+			if !p.nibble(a, in) || !p.nibble(b, in) {
+				return
+			}
+			p.palabra(unidad12x(op, a, b))
+			p.push(a)
+			p.sueltaPar(b)
+			return
+		}
+		tresRegistros(a)
+	case conmuta && !vivo(b):
+		if cabe(a) && cabe(b) {
+			if !p.nibble(b, in) || !p.nibble(a, in) {
+				return
+			}
+			p.palabra(unidad12x(op, b, a))
+			p.push(b)
+			p.sueltaPar(a)
+			return
+		}
+		tresRegistros(b)
+	default:
 		r := p.tomaPar(in)
 		if p.err != nil {
 			return
 		}
-		if !p.octeto(r, in) || !p.octeto(a, in) || !p.octeto(b, in) {
-			return
-		}
-		u1, u2 := unidad23x(tresOp, r, a, b)
-		p.palabra(u1)
-		p.palabra(u2)
-		p.push(r)
-		p.sueltaPar(a)
-		p.sueltaPar(b)
+		tresRegistros(r)
 	}
 }
 

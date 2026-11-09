@@ -307,14 +307,12 @@ func TestElFinalmenteSeDexaComoJavac(t *testing.T) {
 // su nombre, no por un mensaje generico.
 func TestElFinalmenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"continue que sale", "package p;\npublic class A { public static int f(int n) { int r = 0; while (n > 0) { try { if (n > 2) { continue; } r = r + 1; } finally { r = 2; } n = n - 1; } return r; } }\n", "un `continue` que sale de un `try` con `finally` no esta medido"},
 		{"return en un try anidado", "package p;\npublic class A { public static int f(int n) { try { try { if (n > 0) { return 1; } } finally { f(n); } } finally { f(n); } return 2; } }\n", "cruza otro `try` anidado"},
 		{"return dentro del finally", "package p;\npublic class A { public static int f(int n) { try { f(n); } finally { if (n > 0) { return 1; } } return 2; } }\n", "dentro del propio `finally`"},
 		{"throw ultimo del cuerpo", "package p;\npublic class A { public static void f() { try { throw new RuntimeException(); } finally { f(); } } }\n", "ultima sentencia"},
 		{"throw ultimo del catch", "package p;\npublic class A { public static void f(int n) { try { f(n); } catch (RuntimeException e) { throw new RuntimeException(); } finally { f(n); } } }\n", "ultima sentencia de un `catch`"},
 		{"cuerpo que sale por dos trozos con catch", "package p;\npublic class A { public static int f(int n) { try { if (n > 0) { return 1; } f(n); } catch (RuntimeException e) { f(n); } finally { f(n); } return 2; } }\n", "dos trozos"},
 		{"cuerpo sin nada protegido", "package p;\npublic class A { public static void f(int n) { try { return; } finally { f(n); } } }\n", "nada protegido"},
-		{"catch con dos tipos", "package p;\npublic class A { public static void f() { try { f(); } catch (RuntimeException | Error e) { f(); } } }\n", "separados por `|`"},
 	}
 	for _, c := range casos {
 		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/A.java", contenido: c.fuente}}, jarDelSDK(t))

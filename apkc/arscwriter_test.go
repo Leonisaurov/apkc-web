@@ -191,9 +191,9 @@ func TestEscribeTablaRechaza(t *testing.T) {
 	}
 
 	malo = tablaDelStudio()
-	malo.tipos[2].bloques[0].entradas[0].registros[0].nombre = 0x7f010000
+	malo.tipos[2].bloques[0].entradas[0].registros[0].nombre = 0x7e010000
 	if _, err := escribeTablaRecursos(malo); err == nil {
-		t.Error("un registro con un nombre que no es un id del framework fue aceptado")
+		t.Error("un registro con un nombre que no es del framework ni del paquete fue aceptado")
 	}
 
 	malo = tablaDelStudio()

@@ -6646,3 +6646,209 @@ Frontera: el `bundle.zip` protobuf lo sigue produciendo aapt2. El enlazador Go d
 fork escribe AXML y `resources.arsc`, no proto XML ni `resources.pb`; convertirlo es una
 fase aparte, así que el `.aab` de la pestaña (que compila con `--linker go`) todavía no se
 puede armar sin aapt2. La pestaña firma `.aab` que ya vienen en protobuf (§118).
+
+## 129. La caída de un brazo del `switch` al siguiente
+
+Medido sobre `javac --release 8` y comprobado con el dex. Lo que cambia no es la tabla: los
+cuerpos se emiten **en el orden del fuente** (no en el de la clave), el `default` se queda donde
+el fuente lo pone, y solo el brazo que acaba en `break` lleva su `goto` al final —y el último
+brazo no lo lleva, porque cae ya en el final del `switch`—.
+
+```sh
+P=/data/data/com.termux/files/usr
+JDK=$P/lib/jvm/java-21-openjdk/bin
+W=$P/tmp/jprobe5
+"$JDK/javac" --release 8 -g:lines,source -d "$W/cae/classes" "$W/cae/src/p/Cae.java"
+"$JDK/javap" -c -p "$W/cae/classes/p/Cae.class"
+```
+
+```text
+case 0: total = 1;              32: iconst_1
+case 1: total = 2; break;       33: putstatic
+                                36: iconst_2
+                                40: goto 47
+case 5: total = 5;              28: iconst_5    (lookupswitch 5: 28, 20: 32)
+case 20: total = 2; break;      29: putstatic
+                                32: iconst_2
+                                36: goto 44
+default: total = 9;             28: bipush 9   (default primero, cae en case 1)
+case 1: total = 1; break;       33: iconst_1
+```
+
+`TestLaCaidaAlSiguienteBrazo` (`apkc/javaemisor_switch_test.go`) compila ese fuente con el
+emisor y exige que el dex sea **byte a byte** el de las clases de javac. El rechazo que había
+por nombre desaparece de `TestElSwitchDelFuenteRechazaLoNoMedido`.
+
+## 130. `ConstantValue` ancho y la cuenta de `float`/`double` en tres registros
+
+Dos piezas de la fila 5.8. Primero el atributo: `javac` dobla en `ConstantValue` también los
+`static final` que no son `int`/`char`, sin bajarlos al `<clinit>`.
+
+```sh
+"$JDK/javac" --release 8 -g:lines,source -d "$W/cf/classes" "$W/cf/src/p/Constantes.java"
+"$JDK/javap" -v -p "$W/cf/classes/p/Constantes.class"
+```
+
+```text
+static final long L;    ConstantValue: long 6l       (tag 5)
+static final float F;   ConstantValue: float 2.5f    (tag 4)
+static final double D;  ConstantValue: double 3.5d   (tag 6)
+static final String S;  ConstantValue: String hola   (tag 8)
+```
+
+Segundo, la forma 23x: `d8` la escribe cuando un operando no cabe en un nibble, por ejemplo
+nueve `double` de parámetro (`i` en v16): `ab00 0010` = `add-double v0, v0, v16`. El traductor
+la emite ahora con destino en el operando muerto y, si los dos están vivos, en un par temporal.
+La sonda `a - (a - c)` fuerza la forma porque `a` está vivo en la pila al hacer la resta
+interior: `ac00 0402` = `sub-double v0, v4, v2`.
+
+`TestElConstantValueLargoFlotanteDobleYCadena` y `TestLaCuentaAnchaDeTresRegistros`
+(`apkc/javaemisor_tres_registros_test.go`) exigen el dex byte a byte igual al de javac y, en la
+segunda, que el cuerpo lleve `sub-double` 0xac y `sub-float` 0xa7 en la forma 23x.
+
+## 131. `instanceof T[]` y la forma negada
+
+```sh
+"$JDK/javac" --release 8 -g:lines,source -d "$W/ti/classes" "$W/ti/src/p/Tipo.java"
+"$JDK/javap" -c -p "$W/ti/classes/p/Tipo.class"
+```
+
+```text
+o instanceof String[]   -> 1: instanceof #7  // class "[Ljava/lang/String;"
+                           4: ifeq 9
+!(o instanceof String)  -> 1: instanceof #9  // class java/lang/String
+                           4: ifne 9
+!(o instanceof int[])   -> 1: instanceof #11 // class "[I"
+                           4: ifne 10
+```
+
+El tipo probado es el descriptor del arreglo (`[Ljava/lang/String;`, `[I`) y la negación no
+añade `iconst`/`ixor`: el mismo `instanceof` y la branquia invertida (`ifne`). `TestInstanceOfDeUnArregloYSuFormaNegada`
+(`apkc/javaemisor_instanceof_arreglo_test.go`) exige el dex byte a byte igual al de javac y que
+nombren los dos descriptores. `TestElInstanceofRechazaLoNoMedido` conserva el rechazo del
+`instanceof` sobre un entero.
+
+## 132. `catch (A | B e)` y el `continue` que sale de un `try` con `finally`
+
+El multi-catch de `javac` es **una fila de la tabla por tipo y un solo manejador**: la excepción
+se guarda una vez (`astore_1`) y el cuerpo está una vez.
+
+```text
+Exception table:
+   from    to  target type
+       0    16    27   Class java/lang/IllegalArgumentException
+       0    16    27   Class java/lang/IllegalStateException
+       0    16    44   any
+      27    33    44   any
+```
+
+El emisor escribe cada tipo en `tipos` de la captura, un solo bloque de handler y una fila por
+descriptor; el hueco de la excepción es `Throwable` (cualquier excepción es asignable y el dex no
+guarda el tipo del local porque no hay tabla de variables). Con `finally` el `any` del cuerpo y el
+del catch salen en el mismo orden que javac.
+
+El `continue` que sale de un `try` con `finally` es como el `break`: la copia del bloque delante
+del `goto`, la línea del `continue` en el salto y el tramo protegido cortado después del salto.
+
+```sh
+"$JDK/javac" --release 8 -g:lines,source -d "$W/mu/classes" "$W/mu/src/p/Multi.java"
+"$JDK/javac" --release 8 -g:lines,source -d "$W/co/classes" "$W/co/src/p/Cont.java"
+```
+
+`TestElCatchDeVariosTipos` y `TestElContinueQueSaleDeUnTryConFinally` comparan el dex byte a byte
+con el de javac. Frontera que sigue abierta: los **dos `finally` anidados con salida pendiente**
+(§133), donde javac solapa rangos de la tabla y el dex no los admite solapados.
+
+## 133. Los dos `finally` anidados con salida pendiente: sigue fuera, y por qué
+
+El emisor rechaza el caso con su nombre:
+
+```sh
+apkc compile --android-jar "$ANDROID_JAR" -o "$W/nd/out" "$W/nd/src/p/D.java"
+```
+
+```text
+[compile] D.java: linea 2: linea 4: linea 5: un `return` que cruza otro `try` anidado no esta medido
+```
+
+`javac` lo escribe con la tabla **solapada**, en orden de dentro hacia fuera (la primera fila
+que casa es la que gana):
+
+```text
+Exception table:
+   from    to  target type
+       0     6    42   any     <- finally interior
+      26    30    42   any
+       0    15    66   any     <- finally exterior
+      26    54    66   any
+```
+
+El dex no admite `try_item` solapados, así que escribirlo pide dos cosas que no están hechas:
+normalizar la tabla en `armaTries` (cortar por los extremos y quedarse, en cada tramo, con el
+primer `any` que casa) y que `intenta` copie los dos bloques seguidos en cada salida, como hace
+`javac`. Medido y dejado fuera a propósito; la fila 5.9 lo dice.
+
+## 134. Las piezas nuevas ejecutadas en ART
+
+Además del dex byte a byte, dos sondas con `main` se compilan con el emisor, se dexan con el
+fork y se corren en el aparato con `app_process64`, comparando con la JVM:
+
+```sh
+apkc compile --android-jar "$ANDROID_JAR" -o "$W/cie/our" "$W/cie/src/p/Cierre.java"
+apkc dex -o "$W/cie/dex/classes.dex" "$W/cie/our"
+java -cp "$W/cie/jc" p.Cierre
+sudo sh -c '. /data/local/tmp/preludio.sh; export CLASSPATH=/data/local/tmp/cierre.dex;
+            /system/bin/app_process64 /data/local/tmp p.Cierre'
+```
+
+```text
+JVM: 2121045997  (rc 0)
+ART: 2121045997  (rc 0)
+dexdump: rc 0
+```
+
+`Cierre` junta la caída del `switch` (`cae`), el `continue` que sale de un `try` con `finally`
+(`cont`), el `catch (A | B e)` (`multi`) y la resta ancha en tres registros (`ancha`). Y la
+sonda `Tipo` corre en ART con `instance-of` sobre `[Ljava/lang/String;` y `[I`:
+
+```text
+instance-of v0, v2, [Ljava/lang/String; // type@0008
+instance-of v0, v2, Ljava/lang/String;  // type@0003
+instance-of v0, v2, [I                 // type@0007
+JVM: 108 (rc 0)   ART: 108 (rc 0)
+```
+
+## 135. `format="enum"` y `format="flags"` con hijos
+
+El mapa de un atributo con hijos no es solo la marca de formato: cada hijo es un recurso `id` y el
+registro lo referencia con ese id; el valor es el entero.
+
+```sh
+W=$PREFIX/tmp/enumprobe
+BT=$HOME/Android/build-tools/34.9.0
+"$BT/aapt2" compile --dir "$W/res" -o "$W/compiled.zip"
+"$BT/aapt2" link -o "$W/out/app.apk" -I "$HOME/Android/platforms/android-34/android.jar" \
+  --manifest "$W/AndroidManifest.xml" --no-auto-version "$W/compiled.zip"
+"$BT/aapt2" dump resources "$W/out/app.apk"
+```
+
+```text
+type attr id=01 entryCount=2
+  resource 0x7f010000 attr/banderas
+    () (attr) type=flags size=2
+      alta(0x7f020000)=0x00000001
+      baja(0x7f020001)=0x00000002
+  resource 0x7f010001 attr/modo
+    () (attr) type=enum size=2
+      dos(0x7f020002)=0x00000002
+      uno(0x7f020003)=0x00000001
+type id id=02 entryCount=4
+  resource 0x7f020000 id/alta … id/uno
+```
+
+Las marcas son `0x00010000` (enum) y `0x00020000` (flags), la misma familia que los bits de
+`format` ya medidos. Los registros van ordenados por el nombre del hijo (que es el orden de los
+ids) y los recursos `id` llevan el valor booleano a cero, como un `<item type="id">`. Los ids se
+resuelven con una pasada previa sobre los tipos y claves ordenados, porque el mapa del atributo
+necesita el número del `id` antes de escribir la tabla. `TestAttrEnumYFlagsConHijos`
+(`apkc/valores_enum_test.go`) exige el arsc **byte a byte** el de aapt2 (896 bytes).

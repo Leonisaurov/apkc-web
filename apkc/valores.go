@@ -83,6 +83,31 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 	}
 	sort.Strings(tipos)
 
+	// los ids de los recursos, que hacen falta antes de escribir los mapas de `enum`/`flags`: el
+	// tipo es la posicion alfabetica mas uno y la entrada su posicion entre las claves ordenadas
+	idDeRecurso := map[string]uint32{}
+	for i, nombreTipo := range tipos {
+		conjunto := map[string]bool{}
+		for _, r := range recursos {
+			if r.tipo == nombreTipo {
+				conjunto[r.clave] = true
+			}
+		}
+		for _, f := range layouts {
+			if tipoDeRecurso(f.nombre) == nombreTipo {
+				conjunto[claveDeLayout(f.nombre)] = true
+			}
+		}
+		clavesTipo := make([]string, 0, len(conjunto))
+		for k := range conjunto {
+			clavesTipo = append(clavesTipo, k)
+		}
+		sort.Strings(clavesTipo)
+		for j, k := range clavesTipo {
+			idDeRecurso[nombreTipo+"/"+k] = 0x7f000000 | uint32(i+1)<<16 | uint32(j)
+		}
+	}
+
 	// El pool global de aapt2 va por configuraciones: primero la base, ordenada por texto, y después
 	// cada idioma, también ordenado por texto. Medido en el parrafo 94: `Icono`, `Uno` (base) y
 	// `Icono ES` (es); con `Dos`/`Uno` la base sale `Dos`, `Uno`.
@@ -191,6 +216,13 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 				}
 				registros := append([]registroEscribir(nil), r.items...)
 				for i := range registros {
+					if registros[i].nombreId != "" {
+						id, ok := idDeRecurso["id/"+registros[i].nombreId]
+						if !ok {
+							return nil, fmt.Errorf("%s/%s referencia el id %q, que no esta en la tabla", r.tipo, r.clave, registros[i].nombreId)
+						}
+						registros[i].nombre = id
+					}
 					if registros[i].valor.tipo == tipoCadena {
 						indice, ok := indiceGlobal[registros[i].valor.texto]
 						if !ok {
@@ -339,11 +371,15 @@ func recursosYStyleables(f fuenteXML, m *marcoRecursos) ([]recursoEntabla, []sty
 				out = append(out, attrs...)
 				continue
 			}
-			r, err := recursoDeValor(d, el, m)
+			r, ids, err := recursoDeValor(d, el, m)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", el.Name.Local, err)
 			}
 			out = append(out, r)
+			for _, id := range ids {
+				// como un `<item type="id">`: booleano a cero (medido en la variante A del §29)
+				out = append(out, recursoEntabla{tipo: "id", clave: id, valor: valorEscribir{tipo: tipoBooleano}})
+			}
 		}
 	}
 }
@@ -420,6 +456,12 @@ func formatoDeAttr(formato string) (uint32, error) {
 			bits |= 0x40
 		case "fraction":
 			bits |= 0x80
+		// los dos formatos con hijos: el mapa del atributo lleva este bit y después un registro por
+		// hijo con el id de su recurso `id` (§135)
+		case "enum":
+			bits |= 0x00010000
+		case "flags":
+			bits |= 0x00020000
 		default:
 			return 0, fmt.Errorf("el format %q de un attr no esta medido", parte)
 		}
@@ -428,7 +470,60 @@ func formatoDeAttr(formato string) (uint32, error) {
 }
 
 // recursoDeValor lee un elemento hijo de <resources> y devuelve su entrada.
-func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recursoEntabla, error) {
+// hijosDeAttr: los `<enum>`/`<flag>` de un `format="enum"`/`"flags"`. Cada hijo se guarda como
+// registro con el nombre del recurso `id` que lo representa (su numero se resuelve al ordenar la
+// tabla) y el entero como valor; los registros van ordenados por ese nombre, que es el orden de los
+// ids (§135). Un attr sin hijos de esos formatos no consume nada mas.
+func hijosDeAttr(d *xml.Decoder, attr string, bits uint32) ([]registroEscribir, []string, error) {
+	if bits&0x00010000 == 0 && bits&0x00020000 == 0 {
+		return nil, nil, nil
+	}
+	out := []registroEscribir{}
+	ids := []string{}
+	for {
+		tok, err := d.Token()
+		if err != nil {
+			return nil, nil, fmt.Errorf("el attr %s no se cierra: %w", attr, err)
+		}
+		if fin, esFin := tok.(xml.EndElement); esFin && fin.Name.Local == "attr" {
+			break
+		}
+		el, esInicio := tok.(xml.StartElement)
+		if !esInicio {
+			continue
+		}
+		if el.Name.Local != "enum" && el.Name.Local != "flag" {
+			continue
+		}
+		nombre, valor := "", ""
+		for _, a := range el.Attr {
+			switch a.Name.Local {
+			case "name":
+				nombre = a.Value
+			case "value":
+				valor = a.Value
+			}
+		}
+		if nombre == "" {
+			return nil, nil, fmt.Errorf("un %s del attr %s sin nombre", el.Name.Local, attr)
+		}
+		if _, err := textoDeElemento(d, el.Name.Local); err != nil {
+			return nil, nil, err
+		}
+		n, err := strconv.ParseInt(valor, 0, 32)
+		if err != nil {
+			return nil, nil, fmt.Errorf("el valor %q del %s %s no es un entero: %w", valor, el.Name.Local, nombre, err)
+		}
+		out = append(out, registroEscribir{nombreId: nombre,
+			valor: valorEscribir{tipo: tipoEnteroDec, datos: uint32(int32(n))}})
+		ids = append(ids, nombre)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].nombreId < out[j].nombreId })
+	sort.Strings(ids)
+	return out, sinRepetidos(ids), nil
+}
+
+func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recursoEntabla, []string, error) {
 	nombre := ""
 	padre := ""
 	formato := ""
@@ -451,60 +546,67 @@ func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recu
 		}
 	}
 	if nombre == "" {
-		return recursoEntabla{}, fmt.Errorf("un %s sin nombre", el.Name.Local)
+		return recursoEntabla{}, nil, fmt.Errorf("un %s sin nombre", el.Name.Local)
 	}
 	if tipo == "attr" {
 		if formato == "" {
-			return recursoEntabla{}, fmt.Errorf("un attr sin format no esta medido")
+			return recursoEntabla{}, nil, fmt.Errorf("un attr sin format no esta medido")
 		}
 		bits, err := formatoDeAttr(formato)
 		if err != nil {
-			return recursoEntabla{}, err
+			return recursoEntabla{}, nil, err
 		}
-		return recursoEntabla{tipo: "attr", clave: nombre, compleja: true,
-			items: []registroEscribir{{nombre: 0x01000000, valor: valorEscribir{tipo: tipoEnteroDec, datos: bits}}}}, nil
+		items := []registroEscribir{{nombre: 0x01000000, valor: valorEscribir{tipo: tipoEnteroDec, datos: bits}}}
+		// `format="enum"`/`"flags"` con hijos: cada hijo es un recurso `id` y el mapa del atributo
+		// lo referencia, con el entero como valor (medido en el §135 con aapt2)
+		hijos, ids, err := hijosDeAttr(d, nombre, bits)
+		if err != nil {
+			return recursoEntabla{}, nil, err
+		}
+		items = append(items, hijos...)
+		return recursoEntabla{tipo: "attr", clave: nombre, compleja: true, items: items}, ids, nil
 	}
 	if tipo == "style" {
 		items, err := itemsDeEstilo(d, "style", m)
 		if err != nil {
-			return recursoEntabla{}, err
+			return recursoEntabla{}, nil, err
 		}
 		padreId := uint32(0)
 		if padre != "" {
 			id, err := referenciaDeFramework(padre, m)
 			if err != nil {
-				return recursoEntabla{}, fmt.Errorf("el padre %q: %w", padre, err)
+				return recursoEntabla{}, nil, fmt.Errorf("el padre %q: %w", padre, err)
 			}
 			padreId = id
 		}
-		return recursoEntabla{tipo: "style", clave: nombre, compleja: true, padre: padreId, items: items}, nil
+		return recursoEntabla{tipo: "style", clave: nombre, compleja: true, padre: padreId, items: items}, nil, nil
 	}
 
 	if tipo == "string-array" || tipo == "integer-array" {
 		items, err := itemsDeArray(d, el.Name.Local, tipo == "integer-array")
 		if err != nil {
-			return recursoEntabla{}, err
+			return recursoEntabla{}, nil, err
 		}
-		return recursoEntabla{tipo: "array", clave: nombre, compleja: true, items: items}, nil
+		return recursoEntabla{tipo: "array", clave: nombre, compleja: true, items: items}, nil, nil
 	}
 	if tipo == "plurals" {
 		items, err := itemsDePlural(d, el.Name.Local)
 		if err != nil {
-			return recursoEntabla{}, err
+			return recursoEntabla{}, nil, err
 		}
-		return recursoEntabla{tipo: "plurals", clave: nombre, compleja: true, items: items}, nil
+		return recursoEntabla{tipo: "plurals", clave: nombre, compleja: true, items: items}, nil, nil
 	}
 	texto, err := textoDeElemento(d, el.Name.Local)
 	if err != nil {
-		return recursoEntabla{}, err
+		return recursoEntabla{}, nil, err
 	}
 	if tipo == "id" {
 		// medido en la variante A del parrafo 29: el valor de un id es un booleano a cero
-		return recursoEntabla{tipo: "id", clave: nombre, valor: valorEscribir{tipo: tipoBooleano}}, nil
+		return recursoEntabla{tipo: "id", clave: nombre, valor: valorEscribir{tipo: tipoBooleano}}, nil, nil
 	}
 	v, err := valorDeTexto(tipo, nombre, texto, m)
 	if err != nil {
-		return recursoEntabla{}, err
+		return recursoEntabla{}, nil, err
 	}
 	// el fuente declara la forma del recurso, y esa forma se exige: un <color> que no casa como color
 	// es un error del proyecto, no una cadena. Medidos en la variante A del parrafo 29: string sale
@@ -514,25 +616,25 @@ func recursoDeValor(d *xml.Decoder, el xml.StartElement, m *marcoRecursos) (recu
 		v = valorEscribir{tipo: tipoCadena}
 	case "color":
 		if v.tipo != 0x1d {
-			return recursoEntabla{}, fmt.Errorf("%s/%s declara color y el texto %q no lo es", tipo, nombre, texto)
+			return recursoEntabla{}, nil, fmt.Errorf("%s/%s declara color y el texto %q no lo es", tipo, nombre, texto)
 		}
 	case "bool":
 		if v.tipo != tipoBooleano {
-			return recursoEntabla{}, fmt.Errorf("%s/%s declara bool y el texto %q no es true ni false", tipo, nombre, texto)
+			return recursoEntabla{}, nil, fmt.Errorf("%s/%s declara bool y el texto %q no es true ni false", tipo, nombre, texto)
 		}
 	case "integer":
 		if v.tipo != tipoEnteroDec {
-			return recursoEntabla{}, fmt.Errorf("%s/%s declara %s y el texto %q no es un numero", tipo, nombre, tipo, texto)
+			return recursoEntabla{}, nil, fmt.Errorf("%s/%s declara %s y el texto %q no es un numero", tipo, nombre, tipo, texto)
 		}
 	case "fraction":
 		v, err = fraccionDeTexto(texto)
 		if err != nil {
-			return recursoEntabla{}, fmt.Errorf("%s/%s: %w", tipo, nombre, err)
+			return recursoEntabla{}, nil, fmt.Errorf("%s/%s: %w", tipo, nombre, err)
 		}
 	default:
-		return recursoEntabla{}, fmt.Errorf("el tipo %q de %s/%s no esta medido por este enlazador", tipo, tipo, nombre)
+		return recursoEntabla{}, nil, fmt.Errorf("el tipo %q de %s/%s no esta medido por este enlazador", tipo, tipo, nombre)
 	}
-	return recursoEntabla{tipo: tipo, clave: nombre, valor: v, texto: texto}, nil
+	return recursoEntabla{tipo: tipo, clave: nombre, valor: v, texto: texto}, nil, nil
 }
 
 // itemsDeArray: los `<item>` de un `string-array` o `integer-array`. Medido en el parrafo 95: el

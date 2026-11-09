@@ -128,12 +128,10 @@ func TestElInstanceofSeDexaComoJavac(t *testing.T) {
 	}
 }
 
-// TestElInstanceofRechazaLoNoMedido: la forma negada, el arreglo como tipo probado y el `instanceof`
-// sobre un entero salen por su nombre.
+// TestElInstanceofRechazaLoNoMedido: el `instanceof` sobre un entero sale por su nombre (la forma
+// negada y el arreglo como tipo probado están medidos desde el §131).
 func TestElInstanceofRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"negado", "package p;\npublic class A { public static int f(Object x) { if (!(x instanceof String)) { return 1; } return 0; } }\n", "una condicion que no sea una comparacion"},
-		{"tipo arreglo", "package p;\npublic class A { public static int f(Object x) { if (x instanceof String[]) { return 1; } return 0; } }\n", "con un arreglo"},
 		{"sobre un entero", "package p;\npublic class A { public static int f(int n) { if (n instanceof Object) { return 1; } return 0; } }\n", "sobre I"},
 	}
 	for _, c := range casos {

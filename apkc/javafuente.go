@@ -243,7 +243,7 @@ func (jpara) jstmtPuede() {}
 
 // capturaTry: un `catch (T e) { … }` de un `try`.
 type capturaTry struct {
-	tipo   string
+	tipos  []string
 	excep  string
 	atrapa jstmt
 	// lineaAtrapa es el renglon del `catch`: javac lo anota en el pc del handler (medido en el
@@ -283,7 +283,10 @@ type jswitch struct {
 	selector jexpr
 	casos    []jcaso
 	defecto  []jstmt
-	donde    pos
+	// orden es el orden del fuente de los brazos: un indice de `casos`, o -1 para el `default`.
+	// javac emite los cuerpos en ese orden, y la caída al siguiente brazo depende de él.
+	orden []int
+	donde pos
 }
 
 func (jswitch) jstmtPuede() {}
@@ -1290,16 +1293,22 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 			// el último brazo puede acabar sin `break`: cae en el final del switch, que es lo mismo
 			terminado = true
 		}
+		if !terminado && (a.es('k', "case") || a.es('k', "default")) {
+			// caída al siguiente brazo: javac no escribe `goto` y el control sigue en el cuerpo
+			// siguiente, que es el que viene después en el fuente (§129)
+			terminado = true
+		}
 		if !terminado && len(cuerpo) > 0 {
 			if _, esRetorno := cuerpo[len(cuerpo)-1].(jretorno); esRetorno {
 				terminado = true
 			}
 		}
 		if !terminado {
-			return nil, false, fmt.Errorf("linea %d: un `case` que no termina en `break` ni en `return` no esta medido (la caida al siguiente tampoco)", linea)
+			return nil, false, fmt.Errorf("linea %d: un `case` que no termina en `break` ni en `return` no esta medido", linea)
 		}
 		if esDefecto {
 			cam.defecto = cuerpo
+			cam.orden = append(cam.orden, -1)
 			continue
 		}
 		if vistas[valor] {
@@ -1307,6 +1316,7 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 		}
 		vistas[valor] = true
 		cam.casos = append(cam.casos, jcaso{valor: valor, cuerpo: cuerpo, rompe: rompe, donde: pos{linea}})
+		cam.orden = append(cam.orden, len(cam.casos)-1)
 	}
 	if err := a.comerSimbolo("}"); err != nil {
 		return nil, false, err
@@ -1498,8 +1508,16 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
-			if a.es('p', "|") {
-				return nil, false, fmt.Errorf("linea %d: un `catch` con dos tipos separados por `|` no esta medido", linea)
+			// `catch (A | B e)`: javac escribe una fila de la tabla por tipo y un solo manejador,
+			// con la excepcion guardada en el mismo hueco (§132)
+			tipos := []string{tipo}
+			for a.es('p', "|") {
+				a.avanzar()
+				otro, err := a.tipo()
+				if err != nil {
+					return nil, false, err
+				}
+				tipos = append(tipos, otro)
 			}
 			if a.actual().kind != 'i' {
 				return nil, false, fmt.Errorf("linea %d: el catch no nombra su excepcion", linea)
@@ -1512,7 +1530,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
-			atrapas = append(atrapas, capturaTry{tipo: tipo, excep: excep, atrapa: atrapa, lineaAtrapa: lineaAtrapa})
+			atrapas = append(atrapas, capturaTry{tipos: tipos, excep: excep, atrapa: atrapa, lineaAtrapa: lineaAtrapa})
 		}
 		var finalmente jstmt
 		lineaAviso, lineaCierre := 0, 0
