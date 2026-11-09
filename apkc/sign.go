@@ -39,8 +39,10 @@ func sign() {
 	oldPass := set.String("old-storepass", "android", "password of the old keystore")
 	oldAlias := set.String("old-keyalias", "androiddebugkey", "alias in the old keystore")
 	rotMin := set.Int("rotation-min-sdk", rotacionMinSdkPorDef, "first API level that uses the new key in a rotation (33 = v3.1, <=32 = v3.0)")
+	v1Sha1 := set.Bool("v1-sha1", false, "write the JAR signature with SHA-1 (for minSdk < 18)")
 	set.Parse(os.Args[2:])
 	escribirV4 = *v4
+	v1SHA1 = *v1Sha1
 
 	packages := set.Args()
 	if len(packages) == 0 {
@@ -167,6 +169,13 @@ func resignBundleCon(inPath, finalPath string, f *firmante) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if v1SHA1 {
+		digestsV1, err = digestsSHA1DePaquete(inPath, plan)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { digestsV1 = nil }()
+	}
 	if len(plan) == 0 {
 		return 0, fmt.Errorf("%s holds nothing outside its own signature", inPath)
 	}
@@ -240,6 +249,13 @@ func resignWithFirmante(inPath, finalPath string, f *firmante) (int, error) {
 	plan, digests, err := carryPlan(pkg, inPath)
 	if err != nil {
 		return 0, err
+	}
+	if v1SHA1 {
+		digestsV1, err = digestsSHA1DePaquete(inPath, plan)
+		if err != nil {
+			return 0, err
+		}
+		defer func() { digestsV1 = nil }()
 	}
 	if len(plan) == 0 {
 		return 0, fmt.Errorf("%s holds nothing outside its own signature", inPath)

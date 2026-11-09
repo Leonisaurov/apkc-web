@@ -23,8 +23,11 @@ package main
 // here because an asset path longer than 72 bytes is not exotic.
 
 import (
+	"archive/zip"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -56,6 +59,28 @@ const (
 	manifestFoldLimit = 71
 )
 
+// v1SHA1 escribe la firma JAR con SHA-1 en vez de SHA-256: es lo que leen las
+// plataformas con minSdk < 18. Lo enciende `--v1-sha1` (o un build con api < 18).
+var v1SHA1 bool
+
+// digestsV1 lleva los digests SHA-1 de las entradas cuando v1SHA1 está encendido; el
+// mapa normal (`digests`) sigue siendo SHA-256 para v2/v3/v4.
+var digestsV1 map[string]string
+
+func digestAttrV1() string {
+	if v1SHA1 {
+		return "SHA1-Digest"
+	}
+	return attrDigest
+}
+
+func digestMainAttrV1() string {
+	if v1SHA1 {
+		return "SHA1-Digest-Manifest"
+	}
+	return attrDigestMain
+}
+
 // v1File is one packaged file the signature has to cover.
 type v1File struct {
 	name   string
@@ -72,7 +97,7 @@ func jarManifest(files []v1File) []byte {
 
 	for _, f := range sortedFiles(files) {
 		writeAttr(&b, attrName, f.name)
-		writeAttr(&b, attrDigest, f.digest)
+		writeAttr(&b, digestAttrV1(), f.digest)
 		b.WriteString("\r\n")
 	}
 	return []byte(b.String())
@@ -85,8 +110,10 @@ func signatureFile(manifest []byte, schemes []int) []byte {
 	var b strings.Builder
 	writeAttr(&b, attrSignatureVer, "1.0")
 	writeAttr(&b, attrCreatedBy, createdByValue)
-	writeAttr(&b, attrDigestMain, base64SHA256(manifest))
-	writeAttr(&b, attrApkSigned, schemeList(schemes))
+	writeAttr(&b, digestMainAttrV1(), base64DigestV1(manifest))
+	if len(schemes) > 0 {
+		writeAttr(&b, attrApkSigned, schemeList(schemes))
+	}
 	b.WriteString("\r\n")
 
 	// one section per manifest section, digesting the section exactly as the manifest
@@ -97,7 +124,7 @@ func signatureFile(manifest []byte, schemes []int) []byte {
 			continue
 		}
 		writeAttr(&b, attrName, attrValue(section, attrName))
-		writeAttr(&b, attrDigest, base64SHA256([]byte(section)))
+		writeAttr(&b, digestAttrV1(), base64DigestV1([]byte(section)))
 		b.WriteString("\r\n")
 	}
 	return []byte(b.String())
@@ -159,6 +186,71 @@ func base64SHA256(content []byte) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// base64DigestV1 elige SHA-1 o SHA-256 según el modo de la v1.
+func base64DigestV1(content []byte) string {
+	if v1SHA1 {
+		sum := sha1.Sum(content)
+		return base64.StdEncoding.EncodeToString(sum[:])
+	}
+	return base64SHA256(content)
+}
+
+// digestsSHA1DePaquete relee las entradas del paquete de origen para el mapa SHA-1.
+// Solo se llama con v1SHA1 encendido; el mapa normal del plan es SHA-256.
+func digestsSHA1DePaquete(path string, plan []bundleEntry) (map[string]string, error) {
+	zr, err := zip.OpenReader(path)
+	if err != nil {
+		return nil, fmt.Errorf("el paquete de origen no se puede abrir para los digests SHA-1: %w", err)
+	}
+	defer zr.Close()
+	idx := map[string]*zip.File{}
+	for _, f := range zr.File {
+		idx[f.Name] = f
+	}
+	out := make(map[string]string, len(plan))
+	for _, e := range plan {
+		f := idx[e.name]
+		if f == nil {
+			return nil, fmt.Errorf("%s no está en el paquete de origen", e.name)
+		}
+		r, err := f.Open()
+		if err != nil {
+			return nil, err
+		}
+		h := sha1.New()
+		_, err = io.Copy(h, r)
+		r.Close()
+		if err != nil {
+			return nil, err
+		}
+		out[e.name] = base64.StdEncoding.EncodeToString(h.Sum(nil))
+	}
+	return out, nil
+}
+
+// digestsSHA1DeArchivos es lo mismo para un build, donde cada entrada del plan tiene su
+// fichero de origen en `src`.
+func digestsSHA1DeArchivos(plan []bundleEntry) (map[string]string, error) {
+	out := make(map[string]string, len(plan))
+	for _, e := range plan {
+		if strings.HasSuffix(e.name, "/") {
+			continue
+		}
+		f, err := os.Open(e.src)
+		if err != nil {
+			return nil, err
+		}
+		h := sha1.New()
+		_, err = io.Copy(h, f)
+		f.Close()
+		if err != nil {
+			return nil, err
+		}
+		out[e.name] = base64.StdEncoding.EncodeToString(h.Sum(nil))
+	}
+	return out, nil
+}
+
 // sha256File hashes one file of the project into the attribute form the manifest
 // wants. It is the fallback of the digest cache: the packager normally carries the
 // digest of everything it writes, and this runs only for an entry it copied over
@@ -186,8 +278,10 @@ var (
 	oidPKCS7SignedData = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
 	oidPKCS7Data       = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
 	oidSHA256          = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
+	oidSHA1            = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
 	oidRSAEncryption   = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 1, 1}
 	oidECDSAWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 3, 2}
+	oidECDSAWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 10045, 4, 1}
 )
 
 // the structures of RFC 2315, as far as a detached signature over one file needs them.
@@ -230,25 +324,34 @@ func pkcs7Signature(content []byte, f *firmante) ([]byte, error) {
 		return nil, errors.New("the certificate of the keystore carries no issuer, serial or DER")
 	}
 
-	signed, err := f.firmaV1(content)
+	hashV1 := crypto.SHA256
+	oidDigest := oidSHA256
+	oidECDSA := oidECDSAWithSHA256
+	if v1SHA1 {
+		hashV1 = crypto.SHA1
+		oidDigest = oidSHA1
+		oidECDSA = oidECDSAWithSHA1
+	}
+	signed, err := f.firmaV1Con(content, hashV1)
 	if err != nil {
 		return nil, fmt.Errorf("the signing key refused the digest: %w", err)
 	}
-	// RSA firma PKCS#1 v1.5; ECDSA firma DER con ecdsa-with-SHA256. Los parámetros del
-	// algoritmo ECDSA van ausentes, no NULL, que es lo que espera un lector de JAR.
+	// RSA firma PKCS#1 v1.5; ECDSA firma DER con ecdsa-with-SHA256 (o SHA-1). Los
+	// parámetros del algoritmo ECDSA van ausentes, no NULL, que es lo que espera un
+	// lector de JAR.
 	var cifrado pkix.AlgorithmIdentifier
 	switch cert.PublicKey.(type) {
 	case *rsa.PublicKey:
 		cifrado = pkix.AlgorithmIdentifier{Algorithm: oidRSAEncryption, Parameters: asn1.NullRawValue}
 	case *ecdsa.PublicKey:
-		cifrado = pkix.AlgorithmIdentifier{Algorithm: oidECDSAWithSHA256}
+		cifrado = pkix.AlgorithmIdentifier{Algorithm: oidECDSA}
 	default:
 		return nil, fmt.Errorf("the certificate carries a %T and the v1 only writes RSA or ECDSA", cert.PublicKey)
 	}
 
 	data := pkcs7SignedData{
 		Version:          1,
-		DigestAlgorithms: []pkix.AlgorithmIdentifier{{Algorithm: oidSHA256, Parameters: asn1.NullRawValue}},
+		DigestAlgorithms: []pkix.AlgorithmIdentifier{{Algorithm: oidDigest, Parameters: asn1.NullRawValue}},
 		Content:          pkcs7ContentInfo{ContentType: oidPKCS7Data},
 		// [0] IMPLICIT SET OF Certificate: the context tag stands in for the SET, so
 		// the bytes of the certificate follow it directly. Written with a universal
@@ -261,7 +364,7 @@ func pkcs7Signature(content []byte, f *firmante) ([]byte, error) {
 				Issuer:       asn1.RawValue{FullBytes: cert.RawIssuer},
 				SerialNumber: cert.SerialNumber,
 			},
-			DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidSHA256, Parameters: asn1.NullRawValue},
+			DigestAlgorithm:           pkix.AlgorithmIdentifier{Algorithm: oidDigest, Parameters: asn1.NullRawValue},
 			DigestEncryptionAlgorithm: cifrado,
 			EncryptedDigest:           signed,
 		}},
@@ -280,6 +383,10 @@ func pkcs7Signature(content []byte, f *firmante) ([]byte, error) {
 // entry the plan put in it. missing says how many entries had no digest to be handed
 // over, which is what the caller refuses rather than write a manifest that lies.
 func v1FilesOf(plan []bundleEntry, digests map[string]string) ([]v1File, int) {
+	fuente := digests
+	if v1SHA1 && digestsV1 != nil {
+		fuente = digestsV1
+	}
 	files := []v1File{}
 	missing := 0
 	for _, e := range plan {
@@ -297,7 +404,7 @@ func v1FilesOf(plan []bundleEntry, digests map[string]string) ([]v1File, int) {
 			// written by another tool lists its directories.
 			continue
 		}
-		digest, ok := digests[e.name]
+		digest, ok := fuente[e.name]
 		if !ok || digest == "" {
 			missing++
 			continue

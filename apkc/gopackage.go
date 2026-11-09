@@ -116,6 +116,19 @@ func packageWithGo(plan []bundleEntry, recorded map[string]string, keyPath, stor
 	defer out.Close()
 
 	reuse, entries := reusePlan(plan, previous.names, recorded)
+	if v1SHA1 {
+		// el mapa de digests es SHA-1 y la reutilización copia bytes sin releerlos: se
+		// escribe todo otra vez para poder calcularlo
+		for i := range reuse {
+			reuse[i] = false
+		}
+		var e error
+		digestsV1, e = digestsSHA1DeArchivos(plan)
+		if e != nil {
+			return 0, e
+		}
+		defer func() { digestsV1 = nil }()
+	}
 	records, reused, digests, err := writePackageEntries(out, plan, reuse, previous, DataTable.EntrySha256, true)
 	if err != nil {
 		return 0, err
@@ -255,7 +268,7 @@ func writeV1Entries(dst *os.File, plan []bundleEntry, digests map[string]string,
 	}
 
 	manifest := jarManifest(files)
-	sf := signatureFile(manifest, []int{2})
+	sf := signatureFile(manifest, []int{2, 3})
 	block, err := pkcs7Signature(sf, f)
 	if err != nil {
 		return nil, err
@@ -298,7 +311,7 @@ func writeV1EntriesManifestFirst(dst *os.File, plan []bundleEntry, digests map[s
 	}
 
 	manifest := jarManifest(files)
-	sf := signatureFile(manifest, []int{2})
+	sf := signatureFile(manifest, []int{})
 	block, err := pkcs7Signature(sf, f)
 	if err != nil {
 		return nil, err

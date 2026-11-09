@@ -14,7 +14,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	_ "crypto/sha512" // registra SHA-512 para crypto.Hash.New
 	"crypto/x509"
 	"errors"
@@ -66,8 +65,14 @@ func (f *firmante) firma(datos []byte) ([]byte, error) {
 	return f.signer.Sign(rand.Reader, h.Sum(nil), f.hash)
 }
 
-// firmaV1 firma el .SF para el PKCS#7 de la v1, siempre con SHA-256.
+// firmaV1 firma el .SF para el PKCS#7 de la v1. El hash normal es SHA-256; para los
+// paquetes con minSdk < 18 es SHA-1.
 func (f *firmante) firmaV1(datos []byte) ([]byte, error) {
-	h := sha256.Sum256(datos)
-	return f.signer.Sign(rand.Reader, h[:], crypto.SHA256)
+	return f.firmaV1Con(datos, crypto.SHA256)
+}
+
+func (f *firmante) firmaV1Con(datos []byte, hash crypto.Hash) ([]byte, error) {
+	h := hash.New()
+	h.Write(datos)
+	return f.signer.Sign(rand.Reader, h.Sum(nil), hash)
 }

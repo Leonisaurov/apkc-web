@@ -24,9 +24,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"flag"
@@ -197,6 +197,17 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 		return
 	}
 
+	// la v1 puede ser SHA-256 o SHA-1: el nombre del atributo del .SF lo dice. Sin esto,
+	// un paquete de minSdk < 18 se leería con el atributo equivocado.
+	digestAttr := attrDigest
+	mainAttr := attrDigestMain
+	hashV1 := crypto.SHA256
+	if atributoDe(primerSeccion(bytesSF), "SHA1-Digest-Manifest") != "" {
+		digestAttr = "SHA1-Digest"
+		mainAttr = "SHA1-Digest-Manifest"
+		hashV1 = crypto.SHA1
+	}
+
 	// lo que el manifiesto dice de cada entrada tiene que ser el digest de lo que el paquete guarda
 	// bajo ese nombre, y ninguna entrada del paquete puede quedarse fuera del manifiesto
 	listadas := map[string]bool{}
@@ -207,9 +218,9 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 			continue
 		}
 		listadas[nombre] = true
-		dicho := atributoDe(seccion, attrDigest)
+		dicho := atributoDe(seccion, digestAttr)
 		if dicho == "" {
-			v.maloV1("la sección de " + nombre + " no trae " + attrDigest)
+			v.maloV1("la sección de " + nombre + " no trae " + digestAttr)
 			continue
 		}
 		file, err := buscarEntrada(zr, nombre)
@@ -222,8 +233,8 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 			v.maloV1("no se puede leer " + nombre + ": " + err.Error())
 			continue
 		}
-		if obtenido := base64SHA256(contenido); obtenido != dicho {
-			v.maloV1("el " + attrDigest + " de " + nombre + " no es el de sus bytes")
+		if obtenido := base64Con(contenido, hashV1); obtenido != dicho {
+			v.maloV1("el " + digestAttr + " de " + nombre + " no es el de sus bytes")
 			continue
 		}
 		v.entradasFirmas++
@@ -237,11 +248,11 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 	}
 
 	// el .SF digiere el manifiesto entero y cada una de sus secciones, con los bytes tal como están
-	dichoMain := atributoDe(primerSeccion(bytesSF), attrDigestMain)
+	dichoMain := atributoDe(primerSeccion(bytesSF), mainAttr)
 	if dichoMain == "" {
-		v.maloV1("el .SF no trae " + attrDigestMain)
-	} else if obtenido := base64SHA256(manifesto); obtenido != dichoMain {
-		v.maloV1(attrDigestMain + " del .SF no es el digest del manifiesto")
+		v.maloV1("el .SF no trae " + mainAttr)
+	} else if obtenido := base64Con(manifesto, hashV1); obtenido != dichoMain {
+		v.maloV1(mainAttr + " del .SF no es el digest del manifiesto")
 	}
 	for _, seccion := range secciones {
 		nombre := atributoDe(seccion, attrName)
@@ -253,7 +264,7 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 			v.maloV1("el .SF no tiene sección para " + nombre)
 			continue
 		}
-		if dicho := atributoDe(seccionSF, attrDigest); dicho != base64SHA256([]byte(seccion)) {
+		if dicho := atributoDe(seccionSF, digestAttr); dicho != base64Con([]byte(seccion), hashV1) {
 			v.maloV1("el .SF digiere " + nombre + " distinto de lo que el manifiesto guarda")
 		}
 	}
@@ -264,15 +275,17 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 		v.maloV1("el bloque PKCS#7 no se puede leer: " + err.Error())
 		return
 	}
-	resumen := sha256.Sum256(bytesSF)
+	hh := hashV1.New()
+	hh.Write(bytesSF)
+	resumen := hh.Sum(nil)
 	switch clave := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
-		if err := rsa.VerifyPKCS1v15(clave, crypto.SHA256, resumen[:], firma); err != nil {
+		if err := rsa.VerifyPKCS1v15(clave, hashV1, resumen, firma); err != nil {
 			v.maloV1("la firma RSA del .SF no verifica con su propio certificado")
 			return
 		}
 	case *ecdsa.PublicKey:
-		if !ecdsa.VerifyASN1(clave, resumen[:], firma) {
+		if !ecdsa.VerifyASN1(clave, resumen, firma) {
 			v.maloV1("la firma ECDSA del .SF no verifica con su propio certificado")
 			return
 		}
@@ -287,6 +300,12 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 
 func (v *verificacion) maloV1(motivo string) {
 	v.v1Motivos = append(v.v1Motivos, motivo)
+}
+
+func base64Con(content []byte, h crypto.Hash) string {
+	hh := h.New()
+	hh.Write(content)
+	return base64.StdEncoding.EncodeToString(hh.Sum(nil))
 }
 
 func buscarEntrada(zr *zip.Reader, nombre string) (*zip.File, error) {
@@ -380,11 +399,13 @@ func leerPKCS7(b []byte) (*x509.Certificate, []byte, error) {
 		return nil, nil, fmt.Errorf("el bloque trae %d signerInfo y aquí se verifica con uno", len(dentro.SignerInfos))
 	}
 	signer := dentro.SignerInfos[0]
-	if !signer.DigestAlgorithm.Algorithm.Equal(oidSHA256) {
-		return nil, nil, fmt.Errorf("el digest firmado es %s, no SHA-256", signer.DigestAlgorithm.Algorithm.String())
+	if !signer.DigestAlgorithm.Algorithm.Equal(oidSHA256) &&
+		!signer.DigestAlgorithm.Algorithm.Equal(oidSHA1) {
+		return nil, nil, fmt.Errorf("el digest firmado es %s, ni SHA-256 ni SHA-1", signer.DigestAlgorithm.Algorithm.String())
 	}
 	if !signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidRSAEncryption) &&
-		!signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidECDSAWithSHA256) {
+		!signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidECDSAWithSHA256) &&
+		!signer.DigestEncryptionAlgorithm.Algorithm.Equal(oidECDSAWithSHA1) {
 		return nil, nil, fmt.Errorf("la firma no es RSA ni ECDSA, sino %s", signer.DigestEncryptionAlgorithm.Algorithm.String())
 	}
 	if len(dentro.Certificates.Bytes) == 0 {

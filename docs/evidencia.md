@@ -6532,3 +6532,81 @@ Lo que falta para escribirlo: un modo `v1SHA1` que cambie los nombres de atribut
 digest del manifiesto y del `.SF`, el OID y el hash de la firma; los mapas de digests SHA-1
 para las entradas, que en el build tienen que convivir con la reutilización de un paquete
 anterior (hoy el mapa es SHA-256), y la lectura del verificador para el OID SHA-1.
+
+## 126. La v1 con SHA-1, escrita y verificada
+
+El modo `v1SHA1` cambia solo la firma JAR: el manifiesto usa `SHA1-Digest` (sin guion), el
+`.SF` `SHA1-Digest-Manifest`/`SHA1-Digest` y `X-Android-APK-Signed: 2, 3`, y el PKCS#7
+firma el SHA-1 del `.SF` con `sha1`/`rsaEncryption` (o `ecdsa-with-SHA1`). La v2/v3 siguen
+con SHA-256 y el `.idsig` de la v4 no cambia.
+
+```sh
+P=/data/data/com.termux/files/usr
+BT=$HOME/Android/build-tools/34.9.0
+apkc sign --v1-sha1 --keystore "$HOME/.android/debug.keystore" --storepass android \
+  --out "$P/tmp/sha1probe/ours-sha1.apk" "$P/tmp/sha1probe/in.apk"
+"$BT/apksigner" verify --verbose --min-sdk-version 17 "$P/tmp/sha1probe/ours-sha1.apk"
+apkc verify "$P/tmp/sha1probe/ours-sha1.apk"
+```
+
+```text
+Manifest-Version: 1.0
+Name: AndroidManifest.xml
+SHA1-Digest: jKpiXWWzk3Ck8KoIm7/CjVjc/qQ=
+...
+Signature-Version: 1.0
+Created-By: 1.0 (Android)
+SHA1-Digest-Manifest: yQzlWEi2quoIg9IeuGKD47AbJT8=
+X-Android-APK-Signed: 2, 3
+...
+Verified using v1 scheme (JAR signing): true
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+[verify] v1 (JAR signing): ok — 4 entradas con su digest y la firma PKCS#7 verificada
+[verify] v2 (APK Signature Scheme v2): ok — 7 entradas cubiertas por el digest del bloque
+[verify] v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig
+```
+
+Los digests SHA-1 de cada entrada y del manifiesto son **los mismos** que escribe
+`apksigner` para el mismo apk (`jKpi…`, `IP1z…`, `yQzl…`), y `apkc verify` aprueba también
+el sha1.apk que firmó `apksigner` con `--min-sdk-version 17`. En el build, un proyecto con
+`minSdkVersion < 18` enciende `v1SHA1` solo; `--v1-sha1` lo fuerza. Para poder calcular el
+mapa SHA-1, un build en ese modo desactiva la reutilización de entradas (vuelve a escribir
+todas) y un `sign` relee las del paquete de origen; el mapa SHA-256 sigue siendo el de
+v2/v3/v4.
+
+Pruebas: `TestV1SHA1FirmaYVerifica` en `apkc/v1sha1_test.go`; `studio/e2e.sh` firma con
+`--v1-sha1`, exige `SHA1-Digest`/`SHA1-Digest-Manifest`, y coteja v1/v2/v3 con
+`apksigner --min-sdk-version 17` y la v1 con `apkc verify`.
+
+## 127. El `.aab`: qué es lo que `bundletool` añade al `bundle.zip` (5.33, en marcha)
+
+El `bundle.zip` que deja el build con aapt2 ya viene en formato **protobuf**: `manifest/
+AndroidManifest.xml`, `dex/classes.dex`, `resources.pb` y `res/...` (el layout también es
+proto XML). `bundletool build-bundle` solo lo envuelve con `BundleConfig.pb` y el prefijo
+`base/`, y `jarsigner` le pone la firma JAR. Medido:
+
+```sh
+apkc build --aab --keystore "$HOME/.android/debug.keystore"   # camino con aapt2
+unzip -l build/bundle.zip
+unzip -l build/app.aab
+unzip -p build/app.aab BundleConfig.pb | xxd
+java -jar "$HOME/Android/bundletool/bundletool-all-1.18.3.jar" validate --bundle build/app.aab
+```
+
+```text
+bundle.zip: manifest/AndroidManifest.xml 1737 · dex/classes.dex 2844 ·
+            resources.pb 1020 · res/layout/main.xml 1251
+app.aab:    BundleConfig.pb 10 · base/{manifest,dex,res,resources.pb} + META-INF
+BundleConfig.pb: 0a08 1206 312e 3138 2e33        # bundletool 1.18.3
+validate rc=0
+```
+
+El `.aab` no lleva bloque de firmas v2/v3: solo la JAR v1, que ya sabe escribir este fork
+(§118). Por eso 5.33 se puede cerrar en dos piezas: el **empaquetado** (leer el
+`bundle.zip` proto, añadir `BundleConfig.pb` y prefijar `base/`) y la **firma** con
+`resignBundleCon`, sin `bundletool` ni `jarsigner`. Lo que sigue fuera es la generación
+del propio `bundle.zip` protobuf desde el enlazador Go: aapt2 es quien produce
+`resources.pb` y el proto XML; el linker de este fork escribe `resources.arsc`/AXML, y
+convertirlo es una fase aparte. El oráculo del empaquetado es `bundletool validate` y
+`jarsigner -verify`.

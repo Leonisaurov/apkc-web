@@ -501,6 +501,33 @@ PY
       falla "apkc sign no firma con EC $curva"; tail -4 "$TMP/studio-ec-$curva-sign.log"
     fi
   done
+
+  # v1 con SHA-1 para minSdk < 18: atributos SHA1-*, PKCS#7 con sha1 y las mismas
+  # comprobaciones de fuera.
+  sha1apk=$TMP/studio-sha1.apk
+  if "$APKC" sign --v1-sha1 --keystore "${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
+       --storepass android --out "$sha1apk" "$apk_base" >"$TMP/studio-sha1-sign.log" 2>&1; then
+    if "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 17 "$sha1apk" >"$TMP/studio-sha1-verify.log" 2>&1; then
+      for esquema in "v1 scheme (JAR signing)" "v2 scheme (APK Signature Scheme v2)" \
+                     "v3 scheme (APK Signature Scheme v3)"; do
+        grep -q "$esquema: true" "$TMP/studio-sha1-verify.log" ||
+          falla "SHA-1: falta $esquema"
+      done
+    else
+      falla "apksigner no verifica la v1 SHA-1"; head -6 "$TMP/studio-sha1-verify.log"
+    fi
+    unzip -p "$sha1apk" META-INF/MANIFEST.MF | grep -q "^SHA1-Digest:" ||
+      falla "el manifiesto SHA-1 no lleva SHA1-Digest"
+    unzip -p "$sha1apk" META-INF/ANDROID.SF | grep -q "^SHA1-Digest-Manifest:" ||
+      falla "el .SF SHA-1 no lleva SHA1-Digest-Manifest"
+    "$APKC" verify "$sha1apk" >"$TMP/studio-sha1-propio.log" 2>&1 ||
+      falla "apkc verify rechaza la v1 SHA-1"
+    grep -q "v1 (JAR signing): ok" "$TMP/studio-sha1-propio.log" ||
+      falla "apkc verify no aprueba la v1 SHA-1"
+    avisa "SHA-1: v1 SHA1-Digest, PKCS#7 sha1, v2/v3 y apkc verify; apksigner --min-sdk-version 17 lo verifica"
+  else
+    falla "apkc sign no firma con SHA-1"; tail -4 "$TMP/studio-sha1-sign.log"
+  fi
 fi
 
 # 5. el icono de res/drawable (5.16): el PNG viaja literal, su entrada de la tabla es un archivo y
