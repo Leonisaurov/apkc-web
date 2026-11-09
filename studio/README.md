@@ -49,7 +49,10 @@ Qué hace de verdad, y qué no:
   entre sesiones en OPFS, `apkc sign` — una apk firmada v1+v2 que `apksigner`, `zipalign -c -p`,
   `jarsigner` y `zipcheck.py` aceptan por fuera — y **compilar el proyecto entero** con
   `build --linker go --compiler go`: enlazar los recursos, sacar el `.class`, dexar y firmar, todo dentro
-  de la pestaña y sin levantar un proceso. El keystore y el `android.jar` no salen de la pestaña:
+  de la pestaña y sin levantar un proceso. «Compilar debug» no pide keystore: la primera vez
+  genera `/sdk/debug.keystore` con `apkc debug-keystore` (alias `androiddebugkey`, contraseña
+  `android`, `CN=Android Debug`) y reutiliza esa identidad; «Compilar release» sigue usando el
+  keystore elegido. El keystore y el `android.jar` no salen de la pestaña:
   con `servidor.js`, el jar se toma del SDK local y se sirve en `/android-jar`; en una página
   estática, el panel Compilar pide aceptar los términos del SDK y enlaza al paquete oficial de
   Google, y el editor extrae `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Esa
@@ -84,7 +87,7 @@ Qué hace de verdad, y qué no:
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
 | `pestana.js` | editor y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
-| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 62 cosas |
+| `prueba-pestana.js` | chromium por CDP: crea, edita, recarga, firma, compila el proyecto entero con el jar del disco, dictamina el apk con `apkc verify` —también el alterado, el de un fuente escrito a mano y el de la app del contador— y comprueba 63 cosas |
 
 ## Abrir la pestaña en Brave Nightly
 

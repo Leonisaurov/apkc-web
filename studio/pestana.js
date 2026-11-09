@@ -981,24 +981,48 @@ async function decirEstadoJar() {
   return false;
 }
 
-async function compilarDelTodo() {
-  if (!(await decirEstadoJar())) {
-    const entrada = document.getElementById("android-jar");
-    // si la persona ya eligió un fichero, ese manda; si no, solo se prueba el SDK local cuando
-    // el servidor ha dicho que existe (en una página estática ese endpoint no está)
-    if (entrada && entrada.files.length) {
-      if (!(await usarJarElegido())) { nota("no se pudo leer el android.jar elegido"); return; }
-    } else {
-      if (!JAR_SDK.consultado) await consultarJarDelSdk();
-      if (!(JAR_SDK.disponible && await traerJarDelSdk(true))) {
-        nota("hace falta el android.jar: acepta los términos, descarga el paquete oficial y elige el .zip o el .jar en Compilar");
-        mostrarPanel("compilar");
-        return;
-      }
-    }
+async function asegurarJarDelProyecto() {
+  if (await decirEstadoJar()) return true;
+  const entrada = document.getElementById("android-jar");
+  // si la persona ya eligió un fichero, ese manda; si no, solo se prueba el SDK local cuando
+  // el servidor ha dicho que existe (en una página estática ese endpoint no está)
+  if (entrada && entrada.files.length) {
+    if (await usarJarElegido()) return true;
+    nota("no se pudo leer el android.jar elegido");
+    return false;
   }
-  const k = await prepararKeystore(KEYSTORES.compilar);
-  if (!k) return;
+  if (!JAR_SDK.consultado) await consultarJarDelSdk();
+  if (JAR_SDK.disponible && await traerJarDelSdk(true)) return true;
+  nota("hace falta el android.jar: acepta los términos, descarga el paquete oficial y elige el .zip o el .jar en Compilar");
+  mostrarPanel("compilar");
+  return false;
+}
+
+// La clave de depuración vive en OPFS y se crea una sola vez. No es una clave de release:
+// alias androiddebugkey, contraseña android y CN=Android Debug, lo que espera cualquier
+// instalación de desarrollo. Se conserva para que una apk debug se pueda actualizar encima
+// de la anterior.
+const DEBUG_KEY = { ruta: "/sdk/debug.keystore", pass: "android", alias: "androiddebugkey" };
+
+async function asegurarDebugKeystore() {
+  const existente = await hospedador.leer(DEBUG_KEY.ruta);
+  if (existente.bytes) return DEBUG_KEY;
+  nota("creando la clave de depuración en esta pestaña…");
+  const r = await correr(["debug-keystore", "--out", DEBUG_KEY.ruta,
+    "--storepass", DEBUG_KEY.pass, "--keyalias", DEBUG_KEY.alias]);
+  if (!r || r.codigo !== 0) {
+    nota("no se pudo crear la clave de depuración; revisa la salida");
+    return null;
+  }
+  if (!(await hospedador.leer(DEBUG_KEY.ruta)).bytes) {
+    nota("la clave de depuración no quedó en OPFS");
+    return null;
+  }
+  nota("clave de depuración creada: androiddebugkey · CN=Android Debug");
+  return DEBUG_KEY;
+}
+
+async function compilarCon(k, tipo) {
   const v4 = document.getElementById("v4-compilar").checked;
   const version = (document.getElementById("sdk-version").value || "34").trim();
   const codename = (document.getElementById("codename").value || "14").trim();
@@ -1008,11 +1032,27 @@ async function compilarDelTodo() {
     "--keystore", k.ruta, "--storepass", k.pass, "--keyalias", k.alias,
     "--v4=" + (v4 ? "true" : "false")]);
   if (r && r.codigo === 0) {
-    document.getElementById(KEYSTORES.compilar.pass).value = "";
+    if (tipo !== "debug") document.getElementById(KEYSTORES.compilar.pass).value = "";
     await descargar(PROYECTO + "/build/app.apk", "descargar-apk-compilada");
     await ofrecerDescarga(PROYECTO + "/build/app.apk.idsig", "descargar-idsig-compilada");
     await verificarLoCompilado();
   }
+  return r;
+}
+
+async function compilarDebug() {
+  if (!(await asegurarJarDelProyecto())) return;
+  const k = await asegurarDebugKeystore();
+  if (!k) return;
+  nota("compilando debug con la clave de esta pestaña (no hace falta keystore)");
+  return compilarCon(k, "debug");
+}
+
+async function compilarDelTodo() {
+  if (!(await asegurarJarDelProyecto())) return;
+  const k = await prepararKeystore(KEYSTORES.compilar);
+  if (!k) return;
+  return compilarCon(k, "release");
 }
 
 // Verificar lo que se compiló aquí, con el lector de firmas del propio binario: la vuelta al apk se
@@ -1147,6 +1187,7 @@ if (typeof document !== "undefined") {
     en("olvidar-keystore-compilar", () => olvidarKeystore(KEYSTORES.compilar));
     en("usar-android-jar", async () => { await usarJarElegido(); });
     en("traer-android-jar", () => traerJarDelSdk(false));
+    en("compilar-debug", compilarDebug);
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
     en("recargar-arbol", refrescarArbol);

@@ -157,8 +157,13 @@
                     <input type="text" id="codename" value="14" class="ruta"></label>
                   <label><input type="checkbox" id="v4-compilar" checked> escribir el <code>.idsig</code> (firma v4)</label>
                 </details>
+                <p class="nota"><strong>Compilar debug</strong> crea una vez la clave típica
+                  (<code>androiddebugkey</code> / <code>android</code> / <code>CN=Android Debug</code>)
+                  en esta pestaña y firma con ella; no hace falta keystore. <strong>Compilar release</strong>
+                  usa el keystore de abajo.</p>
                 <div class="acciones">
-                  <button id="compilar-apk" class="primario" type="button">Compilar (apkc build)</button>
+                  <button id="compilar-debug" class="primario" type="button">Compilar debug</button>
+                  <button id="compilar-apk" type="button">Compilar release</button>
                   <button id="verificar-apk" type="button">Verificar el apk</button>
                   <a id="descargar-apk-compilada" class="boton-enlace" href="#" download>descargar la apk</a>
                   <a id="descargar-idsig-compilada" class="boton-enlace" href="#" download hidden>descargar el .idsig</a>

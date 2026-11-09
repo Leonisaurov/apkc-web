@@ -751,6 +751,24 @@ async function conductor() {
     fs.writeFileSync(path.join(fuera, "pestanera-contador.apk"), apkContador);
     console.log("  --- el apk de la app del contador, compilado en la pestaña, es " +
       path.join(fuera, "pestanera-contador.apk"));
+
+    // 12b. compilar debug no pide keystore: genera la clave típica en OPFS y firma con ella.
+    const debug = await evaluar(`(async () => {
+      await hospedador.limpiar("/sdk/debug.keystore");
+      await hospedador.limpiar("/sdk/keystore.p12");
+      document.getElementById("storepass-compilar").value = "";
+      await compilarDebug();
+      const ks = await hospedador.bytes("/sdk/debug.keystore");
+      const apk = await hospedador.bytes("/proyecto/build/app.apk");
+      return { ks: ks ? ks.length : 0, apk: apk ? apk.length : 0,
+        codigo: document.getElementById("ultimo-codigo").textContent,
+        consola: String(document.getElementById("consola-pestana").textContent).slice(-1400),
+        veredicto: document.getElementById("estado-verificacion").textContent };
+    })()`);
+    comprueba("compilar debug crea la clave típica y firma sin keystore de release",
+      debug.ks > 1000 && debug.apk > 5000 && debug.codigo === "0" &&
+      /certificado Android Debug/.test(debug.consola),
+      JSON.stringify({ ks: debug.ks, apk: debug.apk, codigo: debug.codigo, veredicto: debug.veredicto }).slice(0, 300));
   } else {
     console.log("  --- sin ANDROID_JAR en el entorno: no se prueba el build completo en la pestaña");
   }

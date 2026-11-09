@@ -7100,7 +7100,7 @@ tools/entorno.sh -- sh -c 'APKC_WASM=$TMP/apkc-wasm.wasm \
   node studio/prueba-pestana.js'
 ```
 
-**Resultado**: `62 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
+**Resultado**: `63 comprobaciones bien, 0 mal`. La comprobación `3b` pone 121 líneas (una de
 ellas de 400 caracteres), baja el textarea 500 px y exige que `#codigo`, `#resalto` y `#numeros`
 tengan el mismo `scrollTop` (`[500,500,500]`) y que el resaltado comparta además el
 `scrollLeft` (`[80,80]`). La `3c` comprueba que Tab sin selección inserta en el cursor, que
@@ -7144,7 +7144,7 @@ tools/entorno.sh -- sh -c 'cd studio && APKC_WASM=$TMP/apkc-wasm.wasm \
 comprobación `el .zip oficial se descomprime y deja el android.jar` construye el zip con
 `makeZip`, lo entrega por el selector y relee `/sdk/android.jar`; y
 `la descarga oficial exige aceptar los términos y apunta a Google` comprueba el `aria-disabled`
-del enlace. **62 comprobaciones bien, 0 mal**.
+del enlace. **63 comprobaciones bien, 0 mal**.
 
 El paquete oficial real también se abrió una vez: `platform-34-ext7_r03.zip` mide
 **63 180 081 bytes** (SHA-1 `1f2e9478d6a7601425ceaa553311dc43191f103d`, el que publica
@@ -7171,7 +7171,40 @@ existía. Ahora `unlink` de un directorio responde `EISDIR` y la limpieza de OPF
 `rmdir` es recursiva, de modo que memoria y disco no se separan.
 
 **Resultado**: con la corrección, la comprobación de la §142 (que compila, borra el jar, vuelve a
-traerlo y compila otra vez sin limpiar `build/`) termina con **62 comprobaciones bien, 0 mal**, y
+traerlo y compila otra vez sin limpiar `build/`) termina con **63 comprobaciones bien, 0 mal**, y
 el segundo `apkc build --linker go --compiler go` sale 0 con `build/res` presente
 (`/proyecto/build/res:dir` en el árbol).
+
+## 144. Compilar debug sin keystore: la clave típica se genera dentro del propio apkc
+
+Medido el 2026-11-09. `apkc debug-keystore` escribe un JKS con alias `androiddebugkey`,
+contraseña `android`, `CN=Android Debug,O=Android,C=US`, RSA 2048 y 10 000 días de validez: el
+mismo perfil que el keystore de depuración de Android. No arranca procesos ni necesita SDK. El
+sobre de la clave es el `KeyProtector` de JKS (OID `1.3.6.1.4.1.42.2.17.1.1`, sal SHA-1, XOR del
+PKCS#8 y digest final de JKS), y el fichero lo leen tanto el lector de este fork como
+`keytool` y `apksigner`.
+
+La pestaña tiene **Compilar debug** y **Compilar release** separados. Debug, si no existe
+`/sdk/debug.keystore`, llama a `apkc debug-keystore`, guarda el fichero en OPFS y firma con él;
+release sigue pidiendo el keystore. El fichero se conserva entre recargas para que una apk debug
+pueda actualizarse encima de la anterior.
+
+**Comando**
+
+```sh
+tools/entorno.sh -- sh -c 'cd apkc && tcr -j 1 -q -- go build -o $TMP/apkc-debug .'
+tools/entorno.sh -- sh -c 'cd $TMP && rm -rf debugks && mkdir debugks && cd debugks && \
+  $TMP/apkc-debug debug-keystore --out debug.keystore && \
+  $TMP/apkc-debug keystore --keystore debug.keystore --storepass android'
+```
+
+**Resultado**: `keystore-json` con `"alias":"androiddebugkey"`,
+`"subject":"CN=Android Debug,O=Android,C=US"` y huella SHA-256; `keytool -list` abre el JKS y
+`apksigner sign --ks debug.keystore --ks-pass pass:android --ks-key-alias androiddebugkey`
+produce un apk que `apksigner verify` acepta con v1, v2 y v3 `true`, firmante
+`CN=Android Debug`. En chromium, la comprobación
+`compilar debug crea la clave típica y firma sin keystore de release` borra
+`/sdk/keystore.p12` y `/sdk/debug.keystore`, deja vacía la contraseña de release, llama a
+`compilarDebug()` y exige `/sdk/debug.keystore`, un apk de más de 5000 bytes, código 0 y
+`certificado Android Debug` en la salida: **63 comprobaciones bien, 0 mal**.
 

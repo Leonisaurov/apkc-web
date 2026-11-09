@@ -211,12 +211,17 @@ el alto; se abre cuando hace falta.
   mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar.
 - `#panel-compilar` conserva los ids del build sin procesos: `#acepto-sdk`, `#descargar-sdk`,
   `#traer-android-jar`, `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`,
-  `#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`, `#compilar-apk`,
-  `#verificar-apk`, `#descargar-apk-compilada`, `#descargar-idsig-compilada` y
-  `#estado-verificacion`. En una página estática, el enlace a Google solo se activa al aceptar
-  los términos y el editor extrae `android-34/android.jar` del `.zip` oficial; el `.jar` suelto
-  también vale. Con `servidor.js`, el botón «Traer el del SDK local» y el primer compilar piden
-  `/android-jar` al mismo origen. El jar nunca se versiona en el repo.
+  `#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`, `#compilar-debug`,
+  `#compilar-apk`, `#verificar-apk`, `#descargar-apk-compilada`,
+  `#descargar-idsig-compilada` y `#estado-verificacion`. En una página estática, el enlace a
+  Google solo se activa al aceptar los términos y el editor extrae `android-34/android.jar` del
+  `.zip` oficial; el `.jar` suelto también vale. Con `servidor.js`, el botón «Traer el del SDK
+  local» y el primer compilar piden `/android-jar` al mismo origen. El jar nunca se versiona en
+  el repo.
+- `#compilar-debug` no lee el keystore de release: la primera vez llama a
+  `apkc debug-keystore`, que escribe `/sdk/debug.keystore` (alias `androiddebugkey`,
+  contraseña `android`, `CN=Android Debug`) y lo reutiliza en las siguientes compilaciones.
+  `#compilar-apk` sigue siendo el camino release con keystore y contraseña.
 - `#panel-firmar` conserva los ids de firma y rotacion: `#keystore`, `#storepass-firmar`,
   `#keyalias-firmar`, `#apk-a-firmar`, `#firmar-aqui`, `#keystore-viejo`, `#storepass-viejo`,
   `#keyalias-viejo`, `#rotation-min-sdk`, `#usar-rotacion`, `#crear-linaje`, `#olvidar-linaje` y
@@ -253,8 +258,8 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` y ahora tambien el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 62 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, firmar, compilar, verificar y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 62 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 63 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, firmar, compilar release, verificar y no pedir nada fuera del origen |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña son 63 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).
