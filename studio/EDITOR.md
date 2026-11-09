@@ -159,13 +159,42 @@ El editor ya no tiene un solo documento. `DOCUMENTOS = { lista, activa }` guarda
 - `#pestanas-archivo` se repinta en `renderPestanas()`. La pestaña activa lleva los ids
   `#fichero-abierto` y `#marca-sucio`; las demás usan `.editor-tab-nombre` y `.marca-sucio`. El
   botón `×` cierra (con confirmación solo si hay cambios) y, si era la activa, abre la vecina.
-- `PERSISTENCIA = "apkc-studio/editor-v1"` guarda en `localStorage` las rutas de las pestañas, la
-  activa y `ARBOL.abiertos`. **No guarda contenido**: al recargar, un fichero sucio se relee de
-  OPFS y `beforeunload` avisa antes.
+- `PERSISTENCIA = "apkc-studio/editor-v1"` guarda en **sessionStorage** las rutas de las pestañas,
+  la activa y `ARBOL.abiertos`: cada ventana tiene su vista y no pisa la de otra. **No guarda
+  contenido**: al recargar, un fichero sucio se relee de OPFS; el undo tree es la red de rescate.
 - `guardarEnMemoria()` conserva texto sucio, cursor y scroll por pestaña; una pestaña limpia se
   puede reconstruir desde OPFS y no ocupa memoria.
 - `activacion` es un contador de turno: si una lectura lenta termina después de que se pulse otra
   pestaña, no pisa el editor.
+- `VENTANA` es un id estable en sessionStorage; indexa el undo tree en IndexedDB.
+
+### Undo tree
+
+`historial.js` guarda un árbol por documento. Cada nodo tiene padre, hijos, autor, selección y
+scroll; el primer nodo guarda el texto completo y los siguientes un **delta** contra el padre
+(`{i, b, s}`), con un **checkpoint** cada 24 niveles o cuando el delta es enorme. Reconstruir un
+nodo es subir hasta el checkpoint y aplicar deltas.
+
+- `Ctrl+Z` va al padre; `Ctrl+Shift+Z`/`Ctrl+Y` al último hijo. Si deshaces y escribes, se crea una
+  rama nueva y la anterior queda en el árbol.
+- Una pausa de tecleo de 500 ms agrupa la edición en un nodo; guardar, cambiar de pestaña, perder
+  el foco o cerrar la página vuelca lo pendiente.
+- `panel-historial` pinta el árbol con hora, autor (`local`/`remoto`), delta y nodo actual. Un clic
+  restaura ese nodo sin borrar los demás. `#historial-deshacer`, `#historial-rehacer` y
+  `#historial-limpiar` son las acciones.
+- Persistencia: IndexedDB `apkc-studio-historial`, clave `VENTANA|ruta`; se guarda con debounce y
+  se carga solo al activar el documento. Límite de 240 nodos y 4 MB; `podar()` quita hojas
+  antiguas y `rebase()` re-enraíza una cadena demasiado larga en un checkpoint.
+- Un fichero que cambió en OPFS desde otra ventana entra como nodo `remoto`; el editor muestra el
+  texto del disco y la rama local queda en el historial.
+
+### Temas
+
+`temas.js` aplica `data-tema` y `data-tema-consola` en `<html>` y guarda la elección en
+`localStorage` (preferencia compartida por las ventanas). `style.css` define las variables por
+tema: Oscuro, Catppuccin Mocha, Rosé Pine, Tokyo Night y Gruvbox; y paletas ANSI Catppuccin,
+Rosé Pine, Gruvbox, Solarized Dark y Dracula. El menú `#menu-apariencia` de la barra de estado
+tiene los dos selectores `#tema-ui` y `#tema-consola`. No hay hojas externas.
 
 ## El editor de codigo
 
@@ -264,6 +293,7 @@ la pestaña activa.
 <div class="panel-inferior" id="panel-inferior" hidden>
   <div class="panel-tabs">
     <button class="panel-tab activo" data-panel="salida">Salida</button>
+    <button class="panel-tab" data-panel="historial">Historial</button>
     <button class="panel-tab" data-panel="compilar">Compilar</button>
     <button class="panel-tab" data-panel="firmar">Firmar otra apk</button>
     <span id="estado-pestana"></span>
@@ -272,6 +302,7 @@ la pestaña activa.
   <div class="panel-descargas" id="panel-descargas" hidden>...</div>
   <div class="panel-cuerpos">
     <div id="panel-salida" class="panel-vista activa"><pre id="consola-pestana"></pre></div>
+    <div id="panel-historial" class="panel-vista">...</div>
     <div id="panel-compilar" class="panel-vista">...</div>
     <div id="panel-firmar" class="panel-vista">...</div>
   </div>
@@ -279,7 +310,10 @@ la pestaña activa.
 ```
 
 - `mostrarPanel(nombre)` quita `hidden`, marca la pestana `data-panel=nombre` y ensena la vista
-  `#panel-nombre`.
+  `#panel-nombre`. Si el nombre es `historial`, llama a `renderHistorial()`.
+- `#panel-historial` pinta el undo tree del documento activo. `#historial-deshacer`,
+  `#historial-rehacer` y `#historial-limpiar` son sus acciones; el menú **Archivo → Historial…**
+  y `#abrir-historial` abren esta pestaña.
 - `alternarPanel()` abre o cierra el panel; si lo abre, vuelve a la pestana activa.
 - `cerrarPanel()` lo esconde y deja `aria-expanded="false"` en el boton `#alternar-panel`.
 - `correr(argv)` abre siempre la pestana Salida, escribe `$ apkc ...`, muestra `#ocupado`
@@ -287,8 +321,8 @@ la pestaña activa.
   consola no usa `textContent` directo: `CONSOLA` guarda el texto y `consolaHtml()` convierte los
   códigos ANSI (`\u001b[34m...\u001b[0m`) en `<span class="consola-fg-4">`; las demás secuencias
   CSI se descartan. Así se ven los colores de `apkc` y no los códigos crudos. La paleta de
-  `.consola` y de `consola-fg-0..15` es la de `~/.termux/colors.properties` (Catppuccin Mocha:
-  fondo `#1e1e2e`, texto `#cdd6f4`, y sus 16 colores), no la de VS Code.
+  `.consola` sale de `--ansi-0..15` y se cambia con `#tema-consola` (Catppuccin por defecto;
+  también Rosé Pine, Gruvbox, Solarized Dark y Dracula).
 - `#panel-descargas` es una barra encima de las vistas, visible en todas las pestanas. `descargar()`
   y `ofrecerDescarga()` ponen allí los enlaces de `app.apk`, su `.idsig` y los de la firma de una
   apk existente, con nombre y tamaño; así la descarga no se queda escondida en Compilar. El enlace
@@ -302,7 +336,9 @@ la pestaña activa.
   oficial, `.zip`/`.jar`, `#acepto-sdk`, `#descargar-sdk`, `#traer-android-jar`,
   `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
   (`#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`) y opciones avanzadas
-  (`#sdk-version`, `#codename`, `#v4-compilar`). En una página estática, el enlace a Google solo
+  (`#api-version`, los ocultos `#sdk-version`/`#codename`, `#v4-compilar`). `#api-version` es el
+  selector visible, 34 por defecto; al cambiar sincroniza los dos campos que lee `apkc build`.
+  En una página estática, el enlace a Google solo
   se activa al aceptar los términos y el editor extrae `android-34/android.jar` del `.zip`
   oficial; el `.jar` suelto también vale. Con `servidor.js`, el botón «Traer el del SDK local» y
   el primer compilar piden `/android-jar` al mismo origen. El jar nunca se versiona en el repo.
@@ -342,9 +378,9 @@ En `@media (max-width: 760px)`:
 
 | Comando | Que cubre |
 | --- | --- |
-| `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`) y el resaltador puro (`resaltar`, `esXml`) |
-| `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage y el diagnóstico sobre una salida real |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas y la persistencia (pestañas, activa y carpetas) tras recargar |
+| `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
+| `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar y el undo tree con ramas y IndexedDB |
 | `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 50 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
@@ -375,10 +411,13 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
 - **No edita binarios.** El contenido se decodifica como UTF-8; un PNG del arbol no se abre en el
   editor.
 - **La consola no es redimensionable con el raton.** Su alto lo fija el CSS (34vh, 42vh en movil).
-- **El contenido sucio no se persiste.** Al recargar vuelven las pestañas y la activa, pero un
-  fichero con cambios sin guardar se relee de OPFS; `beforeunload` avisa antes de perderlos.
-- **El cursor y el scroll se guardan por pestaña** mientras la sesión vive; el árbol guarda sus
-  carpetas abiertas en `localStorage`.
+- **El editor recarga de OPFS, no autosalva.** Al recargar vuelven las pestañas y la activa; un
+  cambio sin guardar queda como rama del undo tree, pero el editor muestra el texto del disco.
+  `beforeunload` avisa antes.
+- **El cursor y el scroll se guardan por pestaña** mientras la sesión vive; la vista (pestañas,
+  activa y `ARBOL.abiertos`) va en `sessionStorage` y el undo tree en IndexedDB por ventana.
+- **El undo tree tiene límites:** 240 nodos y 4 MB por documento; las ramas más antiguas se podan.
+  No hay colaboración en tiempo real ni merge entre ventanas: se avisa y se puede sobrescribir.
 
 Estas fronteras son las de la pagina, no las de `apkc`. Lo que el subconjunto Java acepta o
 rechaza esta en el inventario de la Fase 5 de `docs/plan.md`.

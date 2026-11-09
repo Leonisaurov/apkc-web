@@ -74,6 +74,21 @@ const PERSISTENCIA = "apkc-studio/editor-v1";
 // una activación lenta no puede pisar a la pestaña que se pulsó después
 let activacion = 0;
 
+// Identidad de esta ventana/pestaña del navegador. sessionStorage sobrevive a recargar y no se
+// comparte entre ventanas nuevas; el árbol de deshacer se indexa por ella.
+const VENTANA = (() => {
+  try {
+    let id = sessionStorage.getItem("apkc-studio/ventana");
+    if (!id) {
+      id = "v" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+      sessionStorage.setItem("apkc-studio/ventana", id);
+    }
+    return id;
+  } catch (e) { return "v0"; }
+})();
+
+let temporizadorHistorial = null;
+
 // Mientras una edición programática usa execCommand, el evento input que dispara no debe
 // volver a pintar: la propia edición pinta una sola vez al terminar.
 let silencioInput = 0;
@@ -92,10 +107,25 @@ const EDITOR = {
       EDITOR.sincronizar();
       actualizarCursor();
       marcarSucio(true);
+      programarHistorial();
     });
     area.addEventListener("scroll", EDITOR.sincronizar);
+    area.addEventListener("blur", volcarHistorial);
     area.addEventListener("keydown", (e) => {
       if (e.isComposing) return;
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const tecla = (e.key || "").toLowerCase();
+        if (tecla === "z") {
+          e.preventDefault();
+          if (e.shiftKey) rehacer(); else deshacer();
+          return;
+        }
+        if (tecla === "y") {
+          e.preventDefault();
+          rehacer();
+          return;
+        }
+      }
       if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
         EDITOR.indentar(e.shiftKey ? -1 : 1);
@@ -210,6 +240,7 @@ const EDITOR = {
     EDITOR.sincronizar();
     actualizarCursor();
     marcarSucio(true);
+    programarHistorial();
   },
 
   // Tab y Shift+Tab: con selección indenta o desindenta las líneas; sin selección, Tab
@@ -527,16 +558,26 @@ function hayDocumentosSucios() {
 
 function leerPersistencia() {
   try {
-    const dato = JSON.parse(localStorage.getItem(PERSISTENCIA) || "{}");
+    let propio = sessionStorage.getItem(PERSISTENCIA);
+    if (!propio) {
+      // migración única desde la versión que guardaba la vista en localStorage
+      const viejo = localStorage.getItem(PERSISTENCIA);
+      if (viejo) {
+        sessionStorage.setItem(PERSISTENCIA, viejo);
+        localStorage.removeItem(PERSISTENCIA);
+        propio = viejo;
+      }
+    }
+    const dato = JSON.parse(propio || "{}");
     return dato && typeof dato === "object" ? dato : {};
   } catch (e) { return {}; }
 }
 
-// Solo rutas y estado de vista: el contenido sucio no se persiste. Al recargar, las pestañas
-// vuelven, pero solo se lee de OPFS la activa; las demás se cargan al pulsarlas.
+// Estado de esta ventana, no compartido: pestañas, activa y carpetas abiertas. El proyecto y el
+// árbol de deshacer viven aparte (OPFS e IndexedDB), así dos ventanas no se pisan la vista.
 function guardarPersistencia() {
   try {
-    localStorage.setItem(PERSISTENCIA, JSON.stringify({
+    sessionStorage.setItem(PERSISTENCIA, JSON.stringify({
       tabs: DOCUMENTOS.lista.map((doc) => doc.ruta),
       activa: DOCUMENTOS.activa,
       abiertos: [...ARBOL.abiertos],
@@ -629,6 +670,7 @@ function pintarMarcaSucio() {
 function guardarEnMemoria() {
   const doc = documentoActivo();
   if (!doc) return;
+  volcarHistorial();
   const area = document.getElementById("codigo");
   doc.texto = EDITOR.texto();
   if (area) {
@@ -639,12 +681,167 @@ function guardarEnMemoria() {
   if (!doc.sucio) doc.texto = null;
 }
 
+// --- historial de deshacer ---------------------------------------------------------------
+function historialDe(doc) {
+  return doc && doc.hist ? doc.hist : null;
+}
+
+async function asegurarHistorial(doc, texto) {
+  if (!doc) return null;
+  if (!doc.hist) {
+    let arbol = await Historial.cargar(VENTANA, doc.ruta);
+    if (!arbol) {
+      arbol = Historial.crear(doc.ruta, texto);
+    } else {
+      arbol.cache = Historial.textoDe(arbol, arbol.actual);
+      // el fichero cambió en otra ventana o en OPFS desde la última sesión
+      if (arbol.cache !== texto) {
+        doc.recuperable = arbol.actual;
+        Historial.agregar(arbol, texto, { autor: "remoto" });
+      }
+    }
+    doc.hist = arbol;
+  } else {
+    doc.hist.ruta = doc.ruta;
+    const actual = Historial.textoDe(doc.hist, doc.hist.actual);
+    if (actual !== texto) Historial.agregar(doc.hist, texto, { autor: "remoto" });
+  }
+  return doc.hist;
+}
+
+function volcarHistorial() {
+  if (temporizadorHistorial) {
+    clearTimeout(temporizadorHistorial);
+    temporizadorHistorial = null;
+  }
+  const doc = documentoActivo();
+  const arbol = historialDe(doc);
+  if (!doc || !arbol) return;
+  const area = document.getElementById("codigo");
+  const id = Historial.agregar(arbol, EDITOR.texto(), {
+    seleccion: area ? [area.selectionStart, area.selectionEnd] : [0, 0],
+    scroll: area ? [area.scrollTop, area.scrollLeft] : [0, 0],
+  });
+  if (id) {
+    Historial.guardar(VENTANA, arbol).catch(() => {});
+    renderHistorial();
+  }
+}
+
+function programarHistorial() {
+  if (temporizadorHistorial) clearTimeout(temporizadorHistorial);
+  temporizadorHistorial = setTimeout(volcarHistorial, 500);
+}
+
+function aplicarNodoHistorial(nodo) {
+  const doc = documentoActivo();
+  if (!doc || !doc.hist || !nodo) return;
+  const texto = Historial.textoDe(doc.hist, nodo.id);
+  EDITOR.poner(texto);
+  const area = document.getElementById("codigo");
+  if (area && nodo.a) area.setSelectionRange(nodo.a[0], nodo.a[1]);
+  if (area && nodo.s) {
+    area.scrollTop = nodo.s[0];
+    area.scrollLeft = nodo.s[1];
+    EDITOR.sincronizar();
+  }
+  marcarSucio(true);
+  doc.texto = texto;
+  renderHistorial();
+  Historial.guardar(VENTANA, doc.hist).catch(() => {});
+}
+
+function deshacer() {
+  volcarHistorial();
+  const doc = documentoActivo();
+  if (!doc || !doc.hist) return false;
+  const nodo = Historial.deshacer(doc.hist);
+  if (!nodo) return false;
+  aplicarNodoHistorial(nodo);
+  return true;
+}
+
+function rehacer() {
+  volcarHistorial();
+  const doc = documentoActivo();
+  if (!doc || !doc.hist) return false;
+  const nodo = Historial.rehacer(doc.hist);
+  if (!nodo) return false;
+  aplicarNodoHistorial(nodo);
+  return true;
+}
+
+function restaurarNodoHistorial(id) {
+  volcarHistorial();
+  const doc = documentoActivo();
+  if (!doc || !doc.hist) return;
+  const nodo = Historial.restaurar(doc.hist, id);
+  if (nodo) aplicarNodoHistorial(nodo);
+}
+
+function limpiarHistorial() {
+  const doc = documentoActivo();
+  if (!doc || !doc.hist) return;
+  if (!window.confirm("¿Borrar el historial de " + relativa(doc.ruta) + "?")) return;
+  doc.hist = Historial.crear(doc.ruta, EDITOR.texto());
+  Historial.guardar(VENTANA, doc.hist).catch(() => {});
+  renderHistorial();
+}
+
+function renderHistorial() {
+  const caja = document.getElementById("arbol-historial");
+  const resumen = document.getElementById("historial-resumen");
+  const botonDeshacer = document.getElementById("historial-deshacer");
+  const botonRehacer = document.getElementById("historial-rehacer");
+  if (!caja || !resumen) return;
+  caja.textContent = "";
+  const doc = documentoActivo();
+  const arbol = historialDe(doc);
+  if (!doc || !arbol) {
+    resumen.textContent = "Sin historial";
+    if (botonDeshacer) botonDeshacer.disabled = true;
+    if (botonRehacer) botonRehacer.disabled = true;
+    return;
+  }
+  const nodos = Historial.recorrer(arbol);
+  const actual = arbol.nodos[arbol.actual];
+  resumen.textContent = nodos.length + " versiones · " + relativa(doc.ruta);
+  if (botonDeshacer) botonDeshacer.disabled = !actual || !actual.p;
+  if (botonRehacer) botonRehacer.disabled = !actual || !actual.h.length;
+  for (const nodo of nodos) {
+    const fila = document.createElement("button");
+    fila.type = "button";
+    fila.className = "historial-nodo" + (nodo.id === arbol.actual ? " actual" : "");
+    fila.style.paddingLeft = (8 + nodo.nivel * 16) + "px";
+    fila.dataset.id = nodo.id;
+    fila.setAttribute("role", "treeitem");
+    fila.setAttribute("aria-level", String(nodo.nivel + 1));
+    if (nodo.id === arbol.actual) fila.setAttribute("aria-current", "true");
+
+    const hora = document.createElement("span");
+    hora.className = "historial-hora";
+    const fecha = new Date(nodo.ts);
+    hora.textContent = fecha.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const autor = document.createElement("span");
+    autor.className = "historial-autor";
+    autor.textContent = nodo.au === "remoto" ? "remoto" : "local";
+    const texto = document.createElement("span");
+    texto.className = "historial-resumen";
+    const delta = nodo.d ? " · +" + nodo.d.s.length + "/-" + nodo.d.b : (nodo.p ? " · checkpoint" : "");
+    texto.textContent = (nodo.nivel ? "· " : "● ") + (nodo.p ? delta.replace(/^ · /, "") : "inicio");
+    fila.append(hora, autor, texto);
+    fila.addEventListener("click", () => restaurarNodoHistorial(nodo.id));
+    caja.appendChild(fila);
+  }
+}
+
 function limpiarSinDocumento() {
   DOCUMENTOS.activa = null;
   estadoPestana.ruta = null;
   estadoPestana.sucio = false;
   EDITOR.poner("");
   renderPestanas();
+  renderHistorial();
   actualizarAccionesFichero();
   guardarPersistencia();
 }
@@ -697,6 +894,7 @@ async function activarDocumento(ruta) {
     doc.texto = new TextDecoder().decode(bytes);
   }
 
+  await asegurarHistorial(doc, doc.texto);
   // EDITOR.poner marca limpio; el estado sucio de la pestaña hay que restaurarlo después
   const sucio = doc.sucio;
   EDITOR.poner(doc.texto);
@@ -709,6 +907,11 @@ async function activarDocumento(ruta) {
   }
   marcarSucio(sucio);
   renderPestanas();
+  renderHistorial();
+  if (doc.recuperable) {
+    nota("hay cambios sin guardar de la sesión anterior; ábrelos en Historial");
+    doc.recuperable = null;
+  }
   actualizarAccionesFichero();
   await refrescarArbol();
   guardarPersistencia();
@@ -736,21 +939,33 @@ async function cerrarDocumento(ruta) {
 
 function remapearDocumentos(origen, destino) {
   for (const doc of DOCUMENTOS.lista) {
+    const viejo = doc.ruta;
     if (doc.ruta === origen) doc.ruta = destino;
     else if (doc.ruta.startsWith(origen + "/")) doc.ruta = destino + doc.ruta.slice(origen.length);
+    if (doc.ruta !== viejo && doc.hist) doc.hist.ruta = doc.ruta;
   }
   if (DOCUMENTOS.activa === origen) DOCUMENTOS.activa = destino;
   else if (DOCUMENTOS.activa && DOCUMENTOS.activa.startsWith(origen + "/")) {
     DOCUMENTOS.activa = destino + DOCUMENTOS.activa.slice(origen.length);
   }
   estadoPestana.ruta = DOCUMENTOS.activa;
+  const historiasAbiertas = DOCUMENTOS.lista.filter((doc) => doc.hist).map((doc) => doc.hist);
+  Historial.renombrarBajo(VENTANA, origen, destino)
+    .then(() => Promise.all(historiasAbiertas.map((hist) => Historial.guardar(VENTANA, hist))))
+    .catch(() => {});
   renderPestanas();
+  renderHistorial();
   actualizarAccionesFichero();
   guardarPersistencia();
 }
 
 async function quitarDocumentosBajo(ruta) {
   const indiceActiva = DOCUMENTOS.lista.findIndex((doc) => doc.ruta === DOCUMENTOS.activa);
+  for (const doc of DOCUMENTOS.lista) {
+    if (doc.ruta === ruta || doc.ruta.startsWith(ruta + "/")) {
+      Historial.borrar(VENTANA, doc.ruta).catch(() => {});
+    }
+  }
   DOCUMENTOS.lista = DOCUMENTOS.lista.filter((doc) =>
     !(doc.ruta === ruta || doc.ruta.startsWith(ruta + "/")));
   if (!DOCUMENTOS.lista.some((doc) => doc.ruta === DOCUMENTOS.activa)) {
@@ -767,6 +982,7 @@ async function quitarDocumentosBajo(ruta) {
 
 // crear un proyecto borra /proyecto: las pestañas viejas no pueden quedar apuntando a la nada
 function limpiarEstadoEditor() {
+  Historial.limpiar(VENTANA).catch(() => {});
   DOCUMENTOS.lista = [];
   DOCUMENTOS.activa = null;
   estadoPestana.ruta = null;
@@ -774,6 +990,7 @@ function limpiarEstadoEditor() {
   ARBOL.abiertos.clear();
   EDITOR.poner("");
   renderPestanas();
+  renderHistorial();
   actualizarAccionesFichero();
   guardarPersistencia();
 }
@@ -1155,13 +1372,16 @@ async function guardar() {
     if (!ruta) return false;
     const previo = await hospedador.leer(ruta);
     if (previo && previo.bytes && !window.confirm("Ya existe " + relativa(ruta) + ". ¿Reemplazarlo?")) return false;
-    doc = { ruta, texto: EDITOR.texto(), sucio: true, cursor: null, scroll: null };
+    doc = { ruta, texto: EDITOR.texto(), sucio: true, cursor: null, scroll: null,
+      hist: Historial.crear(ruta, EDITOR.texto()) };
     DOCUMENTOS.lista.push(doc);
     DOCUMENTOS.activa = ruta;
     estadoPestana.ruta = ruta;
     revelarRuta(ruta);
     renderPestanas();
   }
+  if (!doc.hist) doc.hist = Historial.crear(doc.ruta, EDITOR.texto());
+  volcarHistorial();
   const ruta = doc.ruta;
   const guardado = EDITOR.texto();
   try {
@@ -1182,7 +1402,9 @@ async function guardar() {
     if (DOCUMENTOS.activa === ruta) marcarSucio(!!actual.sucio);
   }
   renderPestanas();
+  renderHistorial();
   actualizarAccionesFichero();
+  Historial.guardar(VENTANA, doc.hist).catch(() => {});
   nota("guardado en " + ruta);
   await refrescarArbol();
   guardarPersistencia();
@@ -1258,6 +1480,7 @@ function mostrarPanel(nombre) {
   for (const v of document.querySelectorAll("#panel-inferior .panel-vista")) {
     v.classList.toggle("activa", v.id === "panel-" + nombre);
   }
+  if (nombre === "historial") renderHistorial();
   const alternar = document.getElementById("alternar-panel");
   if (alternar) alternar.setAttribute("aria-expanded", "true");
 }
@@ -1464,6 +1687,26 @@ const RUTA_JAR = "/sdk/android.jar";
 const RUTA_KEYSTORE = "/sdk/keystore.p12";
 const RUTA_VIEJO = "/keystore-viejo";
 const RUTA_LINAJE = "/lineage.bin";
+
+// API de compilación: el selector visible mantiene sincronizados los dos campos que ya usaba
+// `apkc build` (y que las pruebas siguen fijando a mano).
+const API_NOMBRES = {
+  27: "8.1", 28: "9", 29: "10", 30: "11", 31: "12", 32: "12L",
+  33: "13", 34: "14", 35: "15",
+};
+const API_PREF = "apkc-studio/api";
+
+function sincronizarApi(guardar) {
+  const selector = document.getElementById("api-version");
+  const version = document.getElementById("sdk-version");
+  const codename = document.getElementById("codename");
+  if (!selector) return;
+  if (version) version.value = selector.value;
+  if (codename) codename.value = API_NOMBRES[selector.value] || "";
+  if (guardar) {
+    try { localStorage.setItem(API_PREF, selector.value); } catch (e) { /* sin preferencia */ }
+  }
+}
 
 // Lo que el servidor local sabe del SDK. En una página servida de forma estática no hay
 // /android-jar-info: el camino es el paquete oficial de Google, el .zip o el .jar.
@@ -1954,6 +2197,16 @@ if (typeof document !== "undefined") {
       });
     }
 
+    const selectorApi = document.getElementById("api-version");
+    if (selectorApi) {
+      try {
+        const pref = localStorage.getItem(API_PREF);
+        if (pref && API_NOMBRES[pref]) selectorApi.value = pref;
+      } catch (e) { /* sin preferencia */ }
+      selectorApi.addEventListener("change", () => sincronizarApi(true));
+      sincronizarApi(false);
+    }
+
     const menuEditor = document.getElementById("menu-editor");
     if (menuEditor) {
       // cualquier acción del menú lo cierra; el <details> no guarda estado en JS
@@ -2003,6 +2256,10 @@ if (typeof document !== "undefined") {
     }
     en("alternar-panel", () => alternarPanel());
     en("cerrar-panel", cerrarPanel);
+    en("abrir-historial", () => mostrarPanel("historial"));
+    en("historial-deshacer", deshacer);
+    en("historial-rehacer", rehacer);
+    en("historial-limpiar", limpiarHistorial);
     en("guardar-fichero", guardar);
     en("nuevo-fichero", () => nuevoFichero());
     en("subir-ficheros-boton", () => pedirSubida(carpetaActual(), false));
@@ -2059,6 +2316,7 @@ if (typeof document !== "undefined") {
       else if (e.key === "`" || e.code === "Backquote") { e.preventDefault(); alternarPanel(); }
     });
     window.addEventListener("beforeunload", (e) => {
+      volcarHistorial();
       if (!hayDocumentosSucios()) return;
       e.preventDefault();
       e.returnValue = "";

@@ -7,6 +7,7 @@
 <meta name="description" content="Crea, edita, compila y firma apps Android en el navegador. Sin Gradle, sin backend y sin dependencias.">
 <meta name="theme-color" content="#1e1e1e">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23007acc'/%3E%3Cpath d='M9 23V9h7a5 5 0 0 1 0 10h-3v4z' fill='%23fff'/%3E%3C/svg%3E">
+<script src="temas.js"></script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body data-vista="crear">
@@ -127,6 +128,7 @@
                 <button id="nuevo-fichero" type="button" role="menuitem">Nuevo fichero…</button>
                 <button id="subir-ficheros-boton" type="button" role="menuitem">Subir archivos…</button>
                 <a id="descargar-fichero" role="menuitem" href="#" download hidden>Descargar el fichero</a>
+                <button id="abrir-historial" type="button" role="menuitem">Historial…</button>
                 <hr>
                 <button id="renombrar-fichero" type="button" role="menuitem" disabled>Renombrar…</button>
                 <button id="borrar-fichero" type="button" role="menuitem" class="peligro" disabled>Borrar…</button>
@@ -152,6 +154,7 @@
           <div class="panel-inferior" id="panel-inferior" hidden>
             <div class="panel-tabs" role="tablist" aria-label="Panel inferior">
               <button class="panel-tab activo" type="button" role="tab" aria-selected="true" data-panel="salida">Salida</button>
+              <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="historial">Historial</button>
               <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="compilar">Compilar</button>
               <button class="panel-tab" type="button" role="tab" aria-selected="false" data-panel="firmar">Firmar otra apk</button>
               <span class="espacio"></span>
@@ -170,6 +173,17 @@
             <div class="panel-cuerpos">
               <div id="panel-salida" class="panel-vista activa" role="tabpanel">
                 <pre id="consola-pestana" class="consola" aria-live="polite"></pre>
+              </div>
+
+              <div id="panel-historial" class="panel-vista" role="tabpanel">
+                <div class="historial-cab">
+                  <span id="historial-resumen" class="nota">Sin historial</span>
+                  <span class="espacio"></span>
+                  <button id="historial-deshacer" type="button">Deshacer</button>
+                  <button id="historial-rehacer" type="button">Rehacer</button>
+                  <button id="historial-limpiar" type="button">Limpiar</button>
+                </div>
+                <div id="arbol-historial" class="arbol-historial" role="tree" aria-label="Historial del documento"></div>
               </div>
 
               <div id="panel-compilar" class="panel-vista" role="tabpanel">
@@ -226,10 +240,23 @@
                   </div>
                 </details>
 
-                <details>
+                <details id="detalle-avanzado">
                   <summary>Opciones avanzadas</summary>
-                  <label>API <input type="number" id="sdk-version" value="34" class="ruta"> · nombre de la versión
-                    <input type="text" id="codename" value="14" class="ruta"></label>
+                  <label>API de compilación
+                    <select id="api-version" class="ruta">
+                      <option value="27">27 · Android 8.1</option>
+                      <option value="28">28 · Android 9</option>
+                      <option value="29">29 · Android 10</option>
+                      <option value="30">30 · Android 11</option>
+                      <option value="31">31 · Android 12</option>
+                      <option value="32">32 · Android 12L</option>
+                      <option value="33">33 · Android 13</option>
+                      <option value="34" selected>34 · Android 14</option>
+                      <option value="35">35 · Android 15</option>
+                    </select>
+                  </label>
+                  <input type="hidden" id="sdk-version" value="34">
+                  <input type="hidden" id="codename" value="14">
                   <label><input type="checkbox" id="v4-compilar" checked> escribir el <code>.idsig</code> (firma v4)</label>
                 </details>
               </div>
@@ -282,6 +309,14 @@
       <span id="estado-cursor">Ln 1, Col 1</span>
       <span class="separador">·</span>
       <span>último código <code id="ultimo-codigo">—</code></span>
+      <span class="separador">·</span>
+      <details id="menu-apariencia" class="menu-apariencia">
+        <summary title="Cambiar el tema de la interfaz y de la terminal">Tema</summary>
+        <div class="menu-apariencia-lista">
+          <label>Interfaz <select id="tema-ui"></select></label>
+          <label>Terminal <select id="tema-consola"></select></label>
+        </div>
+      </details>
       <span class="separador">·</span><span>apkc.wasm</span>
       <span class="separador">·</span><span>OPFS</span>
       <span class="separador">·</span><span>UTF-8</span>
@@ -299,6 +334,7 @@
 </div>
 
 <script src="app.js"></script>
+<script src="historial.js"></script>
 <script src="pestana.js"></script>
 <script src="vistas.js"></script>
 <script src="diagnostico.js"></script>

@@ -101,7 +101,9 @@ Qué hace de verdad, y qué no:
 | `diagnostico.js` | el panel de diagnóstico de Inicio: pinta las reglas de `app.js` y ofrece el informe |
 | `fs-fragmento.js` | el `fs` con forma de Node que exige `fs_js.go`, con la memoria delante y OPFS detrás |
 | `hospedador.js` | worker de módulo: da `fs`/`path`/`process` a Go y ejecuta un comando por vez |
-| `pestana.js` | editor, árbol y botones de la sección; `resaltar()` es puro y se prueba en node |
+| `pestana.js` | editor, pestañas, árbol y botones de la sección; `resaltar()` es puro y se prueba en node |
+| `historial.js` | undo tree por documento: deltas, checkpoints, poda e IndexedDB por ventana; sus funciones puras se prueban en node |
+| `temas.js` | temas de interfaz y de terminal; solo cambia `data-tema` y variables CSS, sin dependencias |
 | `EDITOR.md` | el detalle del editor: estructura, ids, atajos, pruebas y límites |
 | `AGENTS.md` | lo que un agente necesita saber antes de tocar esta carpeta: comandos, contratos y trampas |
 | `_headers` | COOP/COEP para publicar en un host estático que las respete |
@@ -169,19 +171,24 @@ actividad, explorador del proyecto en la barra lateral, pestañas y barra de est
 solo se piden nombre, package y, si quieres, un icono PNG; al crear, el proyecto se escribe en
 OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor tiene números
 de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y una
-consola inferior con Salida, Compilar y Firmar (cerrada hasta que hace falta; ``Ctrl + ` `` la
-abre). Cada fichero abierto es una **pestaña**; cambiar de pestaña no pierde cambios y al recargar
-vuelven las pestañas, la activa y las carpetas abiertas del árbol. El contenido se lee de OPFS
-solo para la pestaña que se ve: las demás se cargan al pulsarlas. La barra del fichero deja
-**Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
-subir, descargar, renombrar, borrar). El árbol arranca **cerrado** y la cabecera del explorador
+consola inferior con Salida, Historial, Compilar y Firmar (cerrada hasta que hace falta;
+``Ctrl + ` `` la abre). Cada fichero abierto es una **pestaña**; cambiar de pestaña no pierde
+cambios y al recargar vuelven las pestañas, la activa y las carpetas abiertas del árbol. El
+contenido se lee de OPFS solo para la pestaña que se ve: las demás se cargan al pulsarlas. Cada
+documento tiene un **undo tree** con ramas: deshacer y escribir otra cosa no borra la rama
+anterior; el historial se guarda en IndexedDB por ventana y documento, con deltas y checkpoints.
+La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
+subir, descargar, renombrar, borrar, historial). La API de compilación se elige en Opciones
+avanzadas (34 por defecto). El tema de interfaz (oscuro, Catppuccin, Rosé Pine, Tokyo Night,
+Gruvbox) y la paleta de la terminal se eligen en **Tema**, en la barra de estado. El árbol arranca
+**cerrado** y la cabecera del explorador
 tiene botones para contraerlo o desplegarlo entero. El botón de subir escribe en la carpeta del
 fichero abierto; el menú de una carpeta permite subir ahí o una carpeta entera, conservando sus
 subdirectorios. Para mover, se arrastra una fila a otra carpeta con ratón o lápiz, o se usa
 **Mover a…** en el menú de mantener pulsado (la vía fiable en táctil). Todo va directo a OPFS:
 ningún byte sale del navegador.
-`pestana.js` lleva el editor, el árbol y apkc.wasm; `vistas.js` siembra el árbol, cambia de vista
-(también por hash, `index.html#pestana`) y refleja rótulos; `diagnostico.js` explica la salida
-pegada. Las pruebas de navegador, de creación y de la pestaña usan los mismos ids de siempre. El
+`pestana.js` lleva el editor, pestañas, árbol y apkc.wasm; `historial.js` el undo tree; `temas.js`
+aplica la piel; `vistas.js` siembra el árbol, cambia de vista (también por hash,
+`index.html#pestana`) y refleja rótulos; `diagnostico.js` explica la salida pegada. Las pruebas de navegador, de creación y de la pestaña usan los mismos ids de siempre. El
 detalle de la estructura, los ids, los atajos y los límites del editor está en
 `studio/EDITOR.md`.

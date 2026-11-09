@@ -89,11 +89,12 @@
       return "El package tiene que ser minúsculas con al menos dos tramos: com.mi.app";
     }
 
+    const apiElegida = document.getElementById("api-version");
     const estado = {
       name: nombre,
       package: paquete,
       minsdk: "21",
-      targetsdk: "33",
+      targetsdk: apiElegida && apiElegida.value ? apiElegida.value : "34",
       hello: "Hello World!",
       button: false,
       buttonLabel: "Press me",

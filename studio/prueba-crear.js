@@ -145,6 +145,9 @@ async function target() {
   comprueba("el manifiesto lleva el package y el icono",
     /package="com\.creada\.app"/.test(String(crear.codigo)) && /@drawable\/icono/.test(String(crear.codigo)),
     String(crear.codigo).split("\n").filter((l) => /package=|icon=/.test(l)).join(" ").slice(0, 180));
+  comprueba("el proyecto nace con API 34 por defecto",
+    /android:targetSdkVersion="34"/.test(String(crear.codigo)),
+    String(crear.codigo).split("\n").find((l) => /targetSdkVersion/.test(l)) || "sin targetSdkVersion");
   comprueba("el icono está en el árbol", /res\/drawable\/icono\.png/.test(rutasArbol),
     rutasArbol.slice(0, 180));
   comprueba("el árbol empieza cerrado", crear.empiezaCerrado === true,
@@ -267,6 +270,45 @@ async function target() {
     trasRecarga.layoutCerrada === true && trasRecarga.mainSinCargar === true,
     JSON.stringify({ res: trasRecarga.resAbierta, src: trasRecarga.srcAbierta,
       layout: trasRecarga.layoutCerrada, main: trasRecarga.mainSinCargar }));
+
+  // undo tree: dos versiones, deshacer y ramificar; además se persiste en IndexedDB
+  const undo = await evaluar(`(async () => {
+    const doc = documentoActivo();
+    const area = document.getElementById("codigo");
+    const teclear = (texto) => {
+      area.value = texto;
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const esperar = (ms) => new Promise((ok) => setTimeout(ok, ms));
+    teclear("version 1\\n"); await esperar(700);
+    teclear("version 2\\n"); await esperar(700);
+    const antes = Historial.recorrer(doc.hist).length;
+    area.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "z", ctrlKey: true, bubbles: true, cancelable: true,
+    }));
+    const trasDeshacer = area.value;
+    teclear("rama nueva\\n"); await esperar(700);
+    const padre = doc.hist.nodos[doc.hist.nodos[doc.hist.actual].p];
+    const ramas = padre ? padre.h.length : 0;
+    const total = Historial.recorrer(doc.hist).length;
+    mostrarPanel("historial");
+    const filas = document.querySelectorAll("#arbol-historial .historial-nodo").length;
+    await esperar(300);
+    const guardado = await Historial.cargar(VENTANA, doc.ruta);
+    return {
+      antes, trasDeshacer, ramas, total, filas,
+      persistido: guardado ? Historial.recorrer(guardado).length : 0,
+      activo: document.getElementById("historial-resumen").textContent,
+    };
+  })()`);
+  comprueba("deshacer crea un árbol con ramas",
+    undo.antes >= 3 && undo.trasDeshacer === "version 1\n" && undo.ramas === 2,
+    JSON.stringify(undo).slice(0, 260));
+  comprueba("el historial se pinta en su panel",
+    undo.total >= 4 && undo.filas >= 4 && /versiones/.test(String(undo.activo)),
+    JSON.stringify({ total: undo.total, filas: undo.filas, activo: undo.activo }).slice(0, 240));
+  comprueba("el historial queda persistido en IndexedDB",
+    undo.persistido >= 4, String(undo.persistido));
 
   ws.close();
   apagar();

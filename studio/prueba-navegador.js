@@ -82,6 +82,23 @@ const conductor = `(async () => {
   r.diagnosticoVisible = !resultado.hidden;
   r.diagnostico = resultado.textContent;
   r.informe = !document.getElementById("descargar-informe").hidden;
+
+  // temas: el selector cambia data-tema y la paleta del terminal
+  const temaUI = document.getElementById("tema-ui");
+  const temaTerm = document.getElementById("tema-consola");
+  temaUI.value = "catppuccin";
+  temaUI.dispatchEvent(new Event("change", { bubbles: true }));
+  temaTerm.value = "rose-pine";
+  temaTerm.dispatchEvent(new Event("change", { bubbles: true }));
+  CONSOLA.escribir("\u001b[31mrojo\\u001b[0m");
+  const colorTerm = document.querySelector(".consola .consola-fg-1");
+  r.temas = {
+    ui: document.documentElement.dataset.tema,
+    term: document.documentElement.dataset.temaConsola,
+    opcionesUI: temaUI.options.length,
+    opcionesTerm: temaTerm.options.length,
+    colorTerm: colorTerm ? getComputedStyle(colorTerm).color : "sin color",
+  };
   return r;
 })()`;
 
@@ -137,6 +154,12 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
     comprueba(/navegador no puede hablar con un proceso/.test(String(v.diagnostico)),
       "el diagnóstico no dice por qué el build clásico no corre en wasm: " + String(v.diagnostico).slice(0, 160));
     comprueba(v.informe, "el diagnóstico no ofreció el informe descargable");
+    comprueba(v.temas && v.temas.ui === "catppuccin" && v.temas.term === "rose-pine",
+      "los temas no se aplican: " + JSON.stringify(v.temas));
+    comprueba(v.temas && v.temas.opcionesUI >= 4 && v.temas.opcionesTerm >= 4,
+      "faltan temas en los selectores: " + JSON.stringify(v.temas));
+    comprueba(/235, 111, 146/.test(String(v.temas && v.temas.colorTerm)),
+      "el tema de terminal no cambia la paleta ANSI: " + String(v.temas && v.temas.colorTerm));
   }
   ws.close();
   navegador.kill("SIGKILL");

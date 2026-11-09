@@ -100,9 +100,11 @@ for (const m of js.matchAll(/getElementById\("([^"]+)"\)/g))
 const pestana = fs.readFileSync(path.join(__dirname, "pestana.js"), "utf8");
 for (const m of pestana.matchAll(/getElementById\("([^"]+)"\)/g))
   if (!ids.has(m[1])) mal(`pestana.js pide #${m[1]} y index.html no lo tiene`);
-const diagnostico = fs.readFileSync(path.join(__dirname, "diagnostico.js"), "utf8");
-for (const m of diagnostico.matchAll(/getElementById\("([^"]+)"\)/g))
-  if (!ids.has(m[1])) mal(`diagnostico.js pide #${m[1]} y index.html no lo tiene`);
+for (const fichero of ["diagnostico.js", "temas.js", "historial.js"]) {
+  const fuente = fs.readFileSync(path.join(__dirname, fichero), "utf8");
+  for (const m of fuente.matchAll(/getElementById\("([^"]+)"\)/g))
+    if (!ids.has(m[1])) mal(`${fichero} pide #${m[1]} y index.html no lo tiene`);
+}
 for (const m of html.matchAll(/<input[^>]*name="([^"]+)"/g))
   if (!new RegExp(`"(f\\.get|f\\.has)\\(\"${m[1]}\"`).test(js) && !js.includes(`"${m[1]}"`))
     mal(`el formulario tiene ${m[1]} y estado() no lo lee`);
@@ -133,7 +135,28 @@ if (!/class="consola-fg-1">rojo</.test(color) || !/class="consola-fuerte consola
 if (/\u001b/.test(color)) mal("consolaHtml deja códigos de escape en la consola");
 if (!/&lt;b&gt;/.test(pestanaMod.consolaHtml("<b>"))) mal("consolaHtml no escapa el HTML");
 
-// 8. el paquete oficial de la plataforma es un zip con android-34/android.jar: el editor tiene
+// 8. el árbol de deshacer: ramas, reconstrucción y poda sin tocar la rama actual
+const historial = require(path.join(__dirname, "historial.js"));
+const h = historial.crear("/proyecto/A.java", "uno");
+historial.agregar(h, "uno\ndos");
+historial.agregar(h, "uno\ndos\ntres");
+if (historial.textoDe(h, h.actual) !== "uno\ndos\ntres") mal("el árbol no reconstruye el texto actual");
+historial.deshacer(h);
+historial.agregar(h, "uno\nRAMA");
+const raiz = h.nodos[h.raiz];
+const rama = raiz.h[0] ? h.nodos[raiz.h[0]] : null;
+if (!rama || rama.h.length !== 2) mal("deshacer + escribir no creó una rama");
+if (historial.textoDe(h, h.actual) !== "uno\nRAMA") mal("la rama nueva no se lee");
+historial.restaurar(h, h.nodos[raiz.h[0]].h[0]);
+if (historial.textoDe(h, h.actual) !== "uno\ndos\ntres") mal("la rama vieja no se conserva");
+const recorrido = historial.recorrer(h);
+if (recorrido.length !== 4 || recorrido[0].nivel !== 0) mal("recorrer no devuelve el árbol con niveles");
+for (let i = 0; i < 300; i++) historial.agregar(h, "v" + i);
+const nodos = Object.keys(h.nodos).length;
+if (nodos > historial.MAX_NODOS) mal("la poda no respeta MAX_NODOS: " + nodos);
+if (!h.nodos[h.actual]) mal("la poda borró el nodo actual");
+
+// 9. el paquete oficial de la plataforma es un zip con android-34/android.jar: el editor tiene
 // que sacarlo sin depender de un unzip externo. Se prueba con el mismo makeZip de la página.
 (async () => {
   const interior = "PK" + "x".repeat(2048);

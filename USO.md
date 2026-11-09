@@ -79,7 +79,11 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
 4. Edita en el área de código:
    - Cada fichero abierto queda en una **pestaña**; cambia con un clic y ciérrala con `×`. Las
      pestañas, la activa y las carpetas abiertas se recuerdan al recargar.
+   - `Ctrl+Z` deshace y `Ctrl+Shift+Z`/`Ctrl+Y` rehace. El panel **Historial** (en la consola)
+     muestra el árbol con ramas; un clic restaura una versión sin borrar las demás.
    - `Ctrl+S` o **Guardar** salva el fichero.
+   - En **Tema**, en la barra de estado, cambias la interfaz (Catppuccin, Rosé Pine, Tokyo Night,
+     Gruvbox) y la paleta ANSI de la terminal (Catppuccin, Rosé Pine, Gruvbox, Solarized, Dracula).
    - **Archivo** agrupa Nuevo, Subir archivos, Descargar, Renombrar y Borrar.
    - `Tab` / `Shift+Tab` sangran / desangran.
    - `Enter` conserva la sangría y añade un nivel tras `{`.
@@ -91,6 +95,7 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
 
 En **Consola → Compilar**:
 
+0. En **Opciones avanzadas** elige la **API de compilación** (34 por defecto; 27-35).
 1. Elige el `android.jar` del SDK (API 34) y pulsa **Guardar el android.jar elegido**.
 2. Elige el keystore (`.p12` o `.jks`), escribe la contraseña y pulsa **Ver certificado**.
 3. Elige el alias.

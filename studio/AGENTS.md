@@ -83,11 +83,21 @@ define `hospedador` antes de que `vistas.js` cree el proyecto. No pongas `"type"
 - **La barra del fichero es deliberada:** `#guardar-fichero` es la acción primaria y
   `#menu-editor` (un `<details>`) agrupa Nuevo, Subir, Descargar, Renombrar y Borrar. No vuelvas
   a sacar esos botones sueltos a la barra.
-- **Pestañas con carga diferida.** `DOCUMENTOS` guarda `{ruta, texto, sucio}`; una pestaña limpia
-  inactiva tiene `texto = null` y se relee de OPFS al activarla. `PERSISTENCIA`
-  (`apkc-studio/editor-v1`) guarda rutas y `ARBOL.abiertos`, nunca contenido. La activa se
-  restaura al cargar, las demás al pulsarlas; `activacion` evita que una lectura lenta pise otra
-  pestaña.
+- **Pestañas con carga diferida.** `DOCUMENTOS` guarda `{ruta, texto, sucio, hist}`; una pestaña
+  limpia inactiva tiene `texto = null` y se relee de OPFS al activarla. `PERSISTENCIA`
+  (`apkc-studio/editor-v1`) va en **sessionStorage** (vista por ventana, no compartida) y guarda
+  rutas y `ARBOL.abiertos`, nunca contenido. La activa se restaura al cargar, las demás al
+  pulsarlas; `activacion` evita que una lectura lenta pise otra pestaña.
+- **Undo tree persistente.** `historial.js` guarda deltas, checkpoints cada 24 niveles y poda
+  (240 nodos / 4 MB). Se hidrata por documento al activarlo y se guarda en IndexedDB con clave
+  `VENTANA|ruta`; `VENTANA` sale de sessionStorage. No persistas `cache` (se reconstruye). Las
+  ramas antiguas se pueden podar, pero nunca la raíz ni los ancestros del nodo actual; si la
+  cadena es demasiado larga, `rebase()` re-enraíza en un checkpoint.
+- **Temas sin dependencias.** `temas.js` solo pone `data-tema`/`data-tema-consola` en `<html>` y
+  `style.css` resuelve las variables. No metas colores nuevos a mano fuera de un bloque de tema;
+  la paleta ANSI se cambia con `--ansi-0..15`.
+- **API de compilación.** `#api-version` es el selector visible (34 por defecto) y sincroniza los
+  ocultos `#sdk-version`/`#codename` que lee `apkc build`; las pruebas siguen usando los ocultos.
 - **Nada fuera del origen.** Sin CDN, fuentes, telemetría ni runtimes de terceros. El favicon es
   un `data:` y el informe se descarga como `blob:`.
 - **`apkc build` clásico no corre en wasm.** `js` no tiene `fork/exec`; el botón «Probar el build
