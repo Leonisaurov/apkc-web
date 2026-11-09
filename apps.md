@@ -4,6 +4,7 @@
 **Aparato:** MEGA 3, Android 15 (SDK 35), kernel `5.10.226-android12`, aarch64
 **Sesión medida:** Arch Linux ARM aarch64, `HOME=/home/leonisauro`, uid `10237`,
 contexto SELinux `u:r:magisk:s0`, raíz `/data/data/com.termux/files/home/archlinux-chroot/rootfs`
+(el fix de `enter.sh` ya está aplicado; el fallo de `am` sin entorno se midió antes del fix)
 **Pregunta:** ¿por qué no se pueden ejecutar apps Android fácilmente; es culpa del chroot?
 
 ## Veredicto corto
@@ -17,7 +18,9 @@ contexto SELinux `u:r:magisk:s0`, raíz `/data/data/com.termux/files/home/archli
 - **El fallo de `am` no es del chroot.** `am start` aborta con
   `BOOTCLASSPATH and DEX2OATBOOTCLASSPATH must not be empty` porque `app_process` no hereda el
   entorno de Android, no porque esté enjaulado. El mismo `am`, dentro del chroot, funciona en
-  cuanto se copian esas dos variables del `environ` de `zygote64`.
+  cuanto se copian esas dos variables del `environ` de `zygote64`; `enter.sh` ya lo hace desde el
+  fix del 2026-11-09, y el bloque manual de este informe queda como fallback para sesiones
+  anteriores.
 - **Lo que sí es del chroot:** un `chroot` sin los montajes de `enter.sh` ve `/system`, `/apex` y
   `/vendor` como directorios vacíos y no tiene `am`, `cmd` ni `app_process`. Hay que entrar con el
   lanzador (o replicar sus `--bind`).
@@ -25,9 +28,10 @@ contexto SELinux `u:r:magisk:s0`, raíz `/data/data/com.termux/files/home/archli
   de actividades lo rechaza por uid; `input` necesita `INJECT_EVENTS`. Eso es el modelo de
   permisos de Android, no el aislamiento del chroot.
 
-La ruta que funciona para abrir apps y URLs es el `am` de Termux con el `BOOTCLASSPATH` copiado
-de `zygote64`. El comando exacto que abrió Brave Nightly está también en
-`docs/evidencia.md` §140.
+La ruta que funciona para abrir apps y URLs es el `am` de Termux. En una sesión nueva de
+`enter.sh` el `BOOTCLASSPATH` y el `DEX2OATBOOTCLASSPATH` ya están puestos; el bloque manual de
+más abajo es el fallback para una sesión abierta antes del fix. El comando exacto que abrió Brave
+Nightly está también en `docs/evidencia.md` §140.
 
 ## El entorno medido
 
@@ -81,10 +85,11 @@ para el chroot.
 
 | Comando | Desde | Resultado | Motivo |
 | --- | --- | --- | --- |
-| `am start ...` | Termux/chroot | aborta, rc 134 | `app_process` sin `BOOTCLASSPATH` ni `DEX2OATBOOTCLASSPATH` |
-| `am start ...` con el entorno copiado | Termux/chroot | funciona | `termux-am` llama a `startActivity` con el uid de Termux |
-| `termux-open-url URL` con el entorno | Termux/chroot | funciona | el script usa el mismo `am` |
+| `am start ...` | Termux/chroot, sesión anterior al fix | aborta, rc 134 | `app_process` sin `BOOTCLASSPATH` ni `DEX2OATBOOTCLASSPATH` |
+| `am start ...` | Termux/chroot, sesión nueva de `enter.sh` | funciona | `enter.sh` ya copia el entorno; `termux-am` llama a `startActivity` con el uid de Termux |
+| `termux-open-url URL` | Termux/chroot, sesión nueva | funciona | el script usa el mismo `am` |
 | `cmd package list packages` | Termux/chroot | funciona | el servicio de paquetes no comprueba el paquete llamante |
+| `pm list packages` | Termux/chroot | `Failed transaction (2147483646)` | `pm` es un script `cmd package "$@"`; falla en esta sesión |
 | `cmd package resolve-activity --user 0 ...` | Termux/chroot | funciona | lectura, con `--user 0` |
 | `cmd activity start ...` | Termux/chroot | `Permission Denial: package=com.android.shell does not belong to uid=10237` | `cmd` se identifica como la shell de Android, no como Termux |
 | `sudo cmd activity start-activity ...` | chroot | `Failed transaction (2147483646)` | el `cmd` de root no puede usar el servicio de actividades en este aparato |
@@ -217,27 +222,44 @@ En un `chroot` a pelo (sin `enter.sh`), `/system` y `/apex` son directorios vac�
 
 ## Recomendaciones
 
+0. **En una sesión nueva de `enter.sh` no hay que exportar nada.** El lanzador copia
+   `BOOTCLASSPATH` y `DEX2OATBOOTCLASSPATH` de `zygote64` y los deja en el entorno; `sudo` los
+   conserva por `env_keep`. Se comprueba así:
+
+   ```sh
+   printf '%s\n' "${BOOTCLASSPATH:+BOOTCLASSPATH puesto}" \
+                 "${DEX2OATBOOTCLASSPATH:+DEX2OATBOOTCLASSPATH puesto}"
+   /usr/sbin/sudo sh -c 'echo "${BOOTCLASSPATH:+sudo tambien lo conserva}"'
+   ```
+
 1. **Abrir una URL** desde la sesión actual:
 
    ```sh
-   zygote=$(/usr/sbin/sudo sh -c 'pidof zygote64 2>/dev/null || pidof zygote 2>/dev/null' | tr -d '\r')
-   eval "$(/usr/sbin/sudo sh -c "tr '\0' '\n' < /proc/$zygote/environ" |
-     grep -E '^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH)=' | sed 's/^/export /')"
    termux-open-url 'http://127.0.0.1:8787/'
    ```
 
    `termux-open-url` usa el navegador predeterminado; en este aparato es Brave Nightly. Para
-   forzar el paquete, usa el `am start -n ...` de arriba.
+   forzar el paquete, usa el `am start -n ...` de más abajo.
 
-2. **Abrir una app** con componente explícito y el mismo entorno:
+2. **Abrir una app** con componente explícito:
 
    ```sh
    am start --user 0 -n com.android.settings/.Settings
    ```
 
-   No hace falta `sudo`; el uid de Termux puede lanzar actividades exportadas.
+   No hace falta `sudo`; el uid de Termux puede lanzar actividades exportadas. El mismo patrón
+   sirve para `org.smart.connection/.MainActivity`.
 
-3. **Leer el estado** (pantalla, actividades, servicios) con `sudo`:
+3. **Fallback para una sesión anterior al fix** (o abierta fuera de `enter.sh`): copiar el
+   entorno de `zygote64` a mano antes de usar `am`.
+
+   ```sh
+   zygote=$(/usr/sbin/sudo sh -c 'pidof zygote64 2>/dev/null || pidof zygote 2>/dev/null' | tr -d '\r')
+   eval "$(/usr/sbin/sudo sh -c "tr '\0' '\n' < /proc/$zygote/environ" |
+     grep -E '^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH)=' | sed 's/^/export /')"
+   ```
+
+4. **Leer el estado** (pantalla, actividades, servicios) con `sudo`:
 
    ```sh
    /usr/sbin/sudo dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'
@@ -245,15 +267,15 @@ En un `chroot` a pelo (sin `enter.sh`), `/system` y `/apex` son directorios vac�
    /usr/sbin/sudo /system/bin/service list | head
    ```
 
-4. **No usar** `sudo am`, `sudo cmd` ni `sudo input` para lanzar o tocar. Si se necesita
+5. **No usar** `sudo am`, `sudo cmd` ni `sudo input` para lanzar o tocar. Si se necesita
    inyección de eventos, hace falta `INJECT_EVENTS` (Shizuku/`rish` o un mecanismo de root con el
    uid/contexto adecuado); este `sudo` no lo da.
 
-5. **Si se entra a un chroot nuevo**, usar `archlinux-chroot/enter.sh`, no un `chroot` directo.
+6. **Si se entra a un chroot nuevo**, usar `archlinux-chroot/enter.sh`, no un `chroot` directo.
    El lanzador monta `/system`, `/system_ext`, `/vendor`, `/product`, `/odm`, `/apex`, `/data`,
    `/dev` con binderfs, `/proc` y `/sys`, y escribe `/run/android-native` con el estado de binder.
 
-6. **Fijar el `HOME` de Termux** cuando un guion busque el SDK o el keystore:
+7. **Fijar el `HOME` de Termux** cuando un guion busque el SDK o el keystore:
    `HOME=/data/data/com.termux/files/home`. El `HOME` de esta sesión es `/home/leonisauro` (Arch)
    y no tiene `Android/`.
 
@@ -265,11 +287,15 @@ id
 cat /proc/self/attr/current
 awk '$5=="/"{print $4}' /proc/self/mountinfo
 
-# 2. fallo sin entorno
+# 2. fallo historico sin entorno (solo en sesiones anteriores al fix)
 am start -a android.intent.action.VIEW -d 'http://127.0.0.1:8787/'   # rc 134
 logcat -d -t 80 | grep 'BOOTCLASSPATH and DEX2OATBOOTCLASSPATH'
 
-# 3. el entorno que falta
+# 3. en una sesion nueva de enter.sh esto ya viene puesto:
+printf '%s\n' "${BOOTCLASSPATH:+BOOTCLASSPATH puesto}" \
+              "${DEX2OATBOOTCLASSPATH:+DEX2OATBOOTCLASSPATH puesto}"
+
+# 3b. fallback si la sesion es anterior al fix: copiar el entorno de zygote64
 zygote=$(/usr/sbin/sudo sh -c 'pidof zygote64 2>/dev/null || pidof zygote 2>/dev/null' | tr -d '\r')
 eval "$(/usr/sbin/sudo sh -c "tr '\0' '\n' < /proc/$zygote/environ" |
   grep -E '^(BOOTCLASSPATH|DEX2OATBOOTCLASSPATH)=' | sed 's/^/export /')"
@@ -293,7 +319,53 @@ input tap 10 10
 
 El chroot es real y hay que tenerlo en cuenta: sin los montajes de `enter.sh` no hay `/system`,
 `/apex`, `/vendor` ni `am`. Pero el problema que impedía abrir apps "fácilmente" no era el chroot
-por sí solo: era el `BOOTCLASSPATH` que `app_process` no hereda. Copiado el entorno de `zygote64`,
-el `am` de Termux lanza apps y URLs con normalidad. `cmd` e `input` fallan por uid/contexto y
-permisos de Android; para eso no hay atajo con este `sudo`, y el informe lo deja medido para no
-volver a intentarlo a ciegas.
+por sí solo: era el `BOOTCLASSPATH` que `app_process` no hereda. `enter.sh` ya lo copia desde
+`zygote64`, así que en una sesión nueva el `am` de Termux lanza apps y URLs sin exportar nada a
+mano; el bloque de copia manual queda para sesiones anteriores al fix. `cmd` e `input` siguen
+fallando por uid/contexto y permisos de Android; para eso no hay atajo con este `sudo`, y el
+informe lo deja medido para no volver a intentarlo a ciegas.
+
+---
+
+## Fix aplicado (verificado el 2026-11-09)
+
+`enter.sh` copia automáticamente `BOOTCLASSPATH` y `DEX2OATBOOTCLASSPATH` del `environ` de
+`zygote64` (líneas 197-207), los exporta al entrar en el chroot (líneas 476 y 493) y añade ambos
+a `env_keep` del `sudoers` del chroot (línea 440), así que el usuario normal y root los conservan.
+
+Comprobado en esta sesión, como uid 10237 y sin exportar nada a mano:
+
+```sh
+printf '%s\n' "${BOOTCLASSPATH:+BOOTCLASSPATH puesto}" \
+              "${DEX2OATBOOTCLASSPATH:+DEX2OATBOOTCLASSPATH puesto}"
+/usr/sbin/sudo sh -c 'echo "${BOOTCLASSPATH:+sudo tambien lo conserva}"'
+
+am start --user 0 -n com.android.settings/.Settings
+am start --user 0 -n org.smart.connection/.MainActivity
+```
+
+```text
+BOOTCLASSPATH puesto
+DEX2OATBOOTCLASSPATH puesto
+sudo tambien lo conserva
+Starting: Intent { cmp=com.android.settings/.Settings }
+Starting: Intent { cmp=org.smart.connection/.MainActivity }
+Warning: Activity not started, its current task has been brought to the front
+```
+
+`org.smart.connection` existe (`cmd package list packages` lo lista) y su `MainActivity` resolvió
+con `cmd package resolve-activity --user 0 --brief -n org.smart.connection/.MainActivity`; la
+segunda llamada trajo la tarea al frente y devolvió 0. `sudo` conserva las dos variables
+(`len_boot=2624`, `len_dex=899`), pero `sudo am` sigue fallando con `Failed transaction` porque
+resuelve el `/system/bin/am` de Android, no el `am` de Termux.
+
+Lo que sigue funcionando como usuario: `cmd package list packages`, `cmd package path android`,
+`logcat -d`, `wm size` y `getprop`. Lo que **no** funciona: `pm list packages`
+(`cmd: Failure calling service package: Failed transaction (2147483646)`), `cmd activity start`
+(`Permission Denial: package=com.android.shell does not belong to uid=10237`), `input keyevent`
+(`INJECT_EVENTS`), y con `sudo`: `sudo am`, `sudo cmd activity` y `sudo input` (todos
+`Failed transaction`). `sudo dumpsys activity`, `sudo screencap` y `sudo /system/bin/service list`
+sí funcionan.
+
+La ruta para abrir apps es el `am` de Termux con el entorno que ya pone `enter.sh`: no `sudo am`,
+no `sudo cmd activity`, no `pm`.
