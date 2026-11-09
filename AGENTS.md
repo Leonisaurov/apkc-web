@@ -13,6 +13,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
 | `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco` y `doctor` | `tools/entorno.sh doctor` |
+| `tools/progreso.py` | genera el JSON del panel de progreso (ítems y estados) desde el inventario y las fronteras de `docs/plan.md`; lo consume el panel de `virtual_screen` | `python3 tools/progreso.py /tmp/tareas.json` |
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
 | `studio/` | apkc-studio: genera proyectos apkc, traduce su salida para medir fricción **y hace correr `apkc.wasm` en la pestaña** (OPFS + worker) | `cd studio && APKC=<binario> sh e2e.sh`; la pestaña: `APKC_WASM=… node studio/prueba-pestana.js` |
