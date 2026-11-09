@@ -100,9 +100,11 @@ correr la prueba, no al usar la página.
 ## La piel
 
 La página tiene un marco de editor ligero, sin dependencias: barra de título, barra de
-actividad, explorador y dos vistas (Inicio y Editor). En Inicio solo se piden nombre, package y,
-si quieres, un icono PNG; al crear, el proyecto se escribe en OPFS y el manifiesto se abre en el
-editor, donde están todos los ficheros generados. `pestana.js` sigue llevando el editor, el árbol
-y apkc.wasm; `vistas.js` solo siembra el árbol, cambia de vista (también por hash,
-`index.html#pestana`) y refleja rótulos. Las pruebas de navegador, de creación y de la pestaña
-usan los mismos ids de siempre.
+actividad, explorador del proyecto en la barra lateral, pestañas y barra de estado. En Inicio
+solo se piden nombre, package y, si quieres, un icono PNG; al crear, el proyecto se escribe en
+OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor tiene números
+de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y un panel
+inferior con Salida, Compilar y Firmar (cerrado hasta que hace falta; ``Ctrl + ` `` lo abre).
+`pestana.js` lleva el editor, el árbol y apkc.wasm; `vistas.js` siembra el árbol, cambia de vista
+(también por hash, `index.html#pestana`) y refleja rótulos. Las pruebas de navegador, de creación
+y de la pestaña usan los mismos ids de siempre.

@@ -15,10 +15,14 @@
       if (boton.classList.contains("pestana-vista")) boton.classList.toggle("activa", activo);
       else boton.classList.toggle("activo", activo);
     }
+    document.body.dataset.vista = vista;
     const estado = document.getElementById("estado-general");
     if (estado) estado.textContent = NOMBRES[vista] || vista;
     const vistas = document.getElementById("vistas");
-    if (vistas) vistas.scrollTop = 0;
+    if (vistas) {
+      vistas.classList.toggle("modo-editor", vista === "pestana");
+      vistas.scrollTop = 0;
+    }
   }
 
   for (const boton of document.querySelectorAll("[data-vista]")) {
@@ -29,7 +33,7 @@
   }
 
   const inicial = (location.hash || "").replace(/^#/, "");
-  if (inicial) mostrar(inicial);
+  mostrar(inicial || "crear");
   window.addEventListener("hashchange", () => mostrar((location.hash || "").replace(/^#/, "")));
 
   // el nombre de la app en la barra de título y el package en el explorador

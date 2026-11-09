@@ -72,31 +72,44 @@ const estadoPestana = { ruta: null, nodo: null };
 const EDITOR = {
   inicializar() {
     const area = document.getElementById("codigo");
-    const resaltado = document.getElementById("resalto");
-    const numeros = document.getElementById("numeros");
     if (!area) return;
     area.addEventListener("input", () => { EDITOR.pintar(); EDITOR.sincronizar(); marcarSucio(true); });
     area.addEventListener("scroll", EDITOR.sincronizar);
     area.addEventListener("keydown", (e) => {
-      if (e.key === "Tab") {
+      if (e.isComposing) return;
+      if (e.key === "Tab" && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault();
-        const i = area.selectionStart, j = area.selectionEnd;
-        area.value = area.value.slice(0, i) + "    " + area.value.slice(j);
-        area.selectionStart = area.selectionEnd = i + 4;
-        EDITOR.pintar(); marcarSucio(true);
+        EDITOR.indentar(e.shiftKey ? -1 : 1);
+        return;
+      }
+      if (e.key === "Enter" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        EDITOR.entrar();
+        return;
       }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); guardar(); }
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); ejecutarUltimo(); }
+      if ((e.ctrlKey || e.metaKey) && (e.key === "`" || e.code === "Backquote")) { e.preventDefault(); alternarPanel(); }
     });
     EDITOR.pintar();
   },
 
   texto() { return document.getElementById("codigo").value; },
-  poner(texto) { document.getElementById("codigo").value = texto; EDITOR.pintar(); marcarSucio(false); },
+
+  poner(texto) {
+    const area = document.getElementById("codigo");
+    area.value = texto;
+    area.scrollTop = 0;
+    area.scrollLeft = 0;
+    EDITOR.pintar();
+    EDITOR.sincronizar();
+    marcarSucio(false);
+  },
 
   pintar() {
     const area = document.getElementById("codigo");
     const resaltado = document.getElementById("resalto");
+    if (!area || !resaltado) return;
     const valor = area.value;
     resaltado.innerHTML = resaltar(valor, esXml(valor) ? "xml" : "java") + "\n";
     EDITOR.numeros(valor);
@@ -104,18 +117,73 @@ const EDITOR = {
 
   numeros(valor) {
     const lineas = valor.split("\n").length;
-    const ancho = String(lineas).length;
+    const ancho = Math.max(3, String(lineas).length);
     const cuadro = document.getElementById("numeros");
+    if (!cuadro) return;
     let fuera = "";
     for (let i = 1; i <= lineas; i++) fuera += String(i).padStart(ancho, " ") + "\n";
     cuadro.textContent = fuera;
+    cuadro.style.width = "calc(" + ancho + "ch + 18px)";
   },
 
   sincronizar() {
     const area = document.getElementById("codigo");
-    document.getElementById("resalto").style.transform =
-      `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
-    document.getElementById("numeros").style.transform = `translateY(${-area.scrollTop}px)`;
+    const resaltado = document.getElementById("resalto");
+    const numeros = document.getElementById("numeros");
+    if (!area) return;
+    if (resaltado) resaltado.style.transform = `translate(${-area.scrollLeft}px, ${-area.scrollTop}px)`;
+    if (numeros) numeros.style.transform = `translateY(${-area.scrollTop}px)`;
+  },
+
+  // Tab y Shift+Tab sobre una o varias líneas: es lo mínimo que se espera de un editor de
+  // código y lo que el textarea no trae de fábrica.
+  indentar(delta) {
+    const area = document.getElementById("codigo");
+    const v = area.value;
+    const a = area.selectionStart, b = area.selectionEnd;
+    const ini = v.lastIndexOf("\n", a - 1) + 1;
+    let fin = v.indexOf("\n", b);
+    if (fin === -1) fin = v.length;
+    const lineas = v.slice(ini, fin).split("\n");
+    let cambio = 0;
+    const nuevas = lineas.map((linea) => {
+      if (delta > 0) {
+        cambio += 4;
+        return "    " + linea;
+      }
+      const m = /^( {1,4}|\t)/.exec(linea);
+      if (!m) return linea;
+      cambio -= m[0].length;
+      return linea.slice(m[0].length);
+    });
+    if (!cambio) return;
+    area.value = v.slice(0, ini) + nuevas.join("\n") + v.slice(fin);
+    if (a === b) {
+      area.selectionStart = area.selectionEnd = Math.max(ini, a + cambio);
+    } else {
+      area.selectionStart = Math.max(ini, a + (delta > 0 ? 4 : 0));
+      area.selectionEnd = Math.max(area.selectionStart, b + cambio);
+    }
+    EDITOR.pintar();
+    EDITOR.sincronizar();
+    marcarSucio(true);
+  },
+
+  // Enter conserva la sangría de la línea y añade un nivel si se acaba de abrir una llave.
+  entrar() {
+    const area = document.getElementById("codigo");
+    const v = area.value;
+    const a = area.selectionStart, b = area.selectionEnd;
+    const ini = v.lastIndexOf("\n", a - 1) + 1;
+    const linea = v.slice(ini, a);
+    const sangria = (/^[ \t]*/.exec(linea) || [""])[0];
+    const extra = /\{[ \t]*$/.test(linea) ? "    " : "";
+    const insertar = "\n" + sangria + extra;
+    area.value = v.slice(0, a) + insertar + v.slice(b);
+    area.selectionStart = area.selectionEnd = a + insertar.length;
+    EDITOR.pintar();
+    EDITOR.sincronizar();
+    marcarSucio(true);
   },
 };
 
@@ -158,26 +226,95 @@ function textoHtml(s) {
 }
 
 // --- el árbol y los ficheros --------------------------------------------------------------
+const ARBOL = { plegados: new Set() };
+
+function relativa(ruta) {
+  return ruta === PROYECTO ? "" : (ruta.startsWith(PROYECTO + "/") ? ruta.slice(PROYECTO.length + 1) : ruta);
+}
+
 async function refrescarArbol() {
-  const r = await hospedador.arbol();
   const fuera = document.getElementById("arbol-pestana");
-  const prefijo = PROYECTO + "/";
-  const nodos = (r.nodos || []).filter((n) => n.ruta.startsWith(prefijo) || n.ruta === PROYECTO);
+  if (!fuera) return;
+  let r;
+  try {
+    r = await hospedador.arbol();
+  } catch (e) {
+    r = { nodos: [] };
+  }
+  const nodos = (r.nodos || []).filter((n) => n.ruta.startsWith(PROYECTO + "/"));
+  const scroll = fuera.scrollTop;
   fuera.textContent = "";
   if (!nodos.length) {
-    fuera.appendChild(document.createTextNode("(vacío: crea el proyecto o escribe un fuente nuevo)"));
+    const vacio = document.createElement("div");
+    vacio.className = "vacio";
+    vacio.append("El proyecto está vacío. ");
+    const ir = document.createElement("a");
+    ir.href = "#crear";
+    ir.textContent = "Crea uno en Inicio";
+    ir.onclick = (e) => {
+      e.preventDefault();
+      const boton = document.querySelector('[data-vista="crear"]');
+      if (boton) boton.click();
+    };
+    vacio.appendChild(ir);
+    vacio.append(".");
+    fuera.appendChild(vacio);
+    fuera.scrollTop = 0;
     return;
   }
+
+  // agrupa por carpeta: el explorador tiene que leerse como un árbol, no como una lista de rutas
+  const hijos = new Map();
   for (const n of nodos) {
-    const nombre = n.ruta === PROYECTO ? PROYECTO : n.ruta.slice(prefijo.length);
-    const item = document.createElement("a");
-    item.href = "#";
-    item.textContent = nombre + (n.dir ? "/" : " (" + n.bytes + " b)");
-    item.className = n.dir ? "dir" : "";
-    item.onclick = (e) => { e.preventDefault(); if (!n.dir) abrir(n.ruta); };
-    fuera.appendChild(item);
-    fuera.appendChild(document.createElement("br"));
+    const partes = relativa(n.ruta).split("/");
+    const padre = partes.length > 1 ? PROYECTO + "/" + partes.slice(0, -1).join("/") : PROYECTO;
+    if (!hijos.has(padre)) hijos.set(padre, []);
+    hijos.get(padre).push({ ...n, nombre: partes[partes.length - 1] });
   }
+  for (const lista of hijos.values()) {
+    lista.sort((x, y) => (Number(y.dir) - Number(x.dir)) || x.nombre.localeCompare(y.nombre));
+  }
+
+  const pintar = (padre, profundidad) => {
+    for (const n of hijos.get(padre) || []) {
+      const fila = document.createElement("a");
+      fila.href = "#";
+      fila.dataset.ruta = n.ruta;
+      fila.title = relativa(n.ruta);
+      fila.style.paddingLeft = (8 + profundidad * 12) + "px";
+      fila.className = n.dir ? "dir" : "archivo";
+      if (n.ruta === estadoPestana.ruta) fila.classList.add("activo");
+
+      const flecha = document.createElement("span");
+      flecha.className = "arbol-flecha " +
+        (n.dir ? (ARBOL.plegados.has(n.ruta) ? "" : "abierta") : "hoja");
+      fila.appendChild(flecha);
+
+      const icono = document.createElement("span");
+      icono.className = "arbol-icono " + (n.dir ? "dir" : "archivo");
+      fila.appendChild(icono);
+
+      const nombre = document.createElement("span");
+      nombre.className = "nombre";
+      nombre.textContent = n.nombre;
+      fila.appendChild(nombre);
+
+      if (n.dir) {
+        fila.onclick = (e) => {
+          e.preventDefault();
+          if (ARBOL.plegados.has(n.ruta)) ARBOL.plegados.delete(n.ruta);
+          else ARBOL.plegados.add(n.ruta);
+          refrescarArbol();
+        };
+      } else {
+        fila.onclick = (e) => { e.preventDefault(); abrir(n.ruta); };
+      }
+      fuera.appendChild(fila);
+      if (n.dir && !ARBOL.plegados.has(n.ruta)) pintar(n.ruta, profundidad + 1);
+    }
+  };
+  pintar(PROYECTO, 0);
+  fuera.scrollTop = scroll;
 }
 
 async function abrir(ruta) {
@@ -187,10 +324,19 @@ async function abrir(ruta) {
   const texto = bytes ? new TextDecoder().decode(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)) : "";
   estadoPestana.ruta = ruta;
   EDITOR.poner(texto);
-  document.getElementById("fichero-abierto").textContent = ruta;
+  const nombre = document.getElementById("fichero-abierto");
+  if (nombre) {
+    nombre.textContent = relativa(ruta) || ruta;
+    nombre.title = ruta;
+  }
+  await refrescarArbol();
 }
 
-function marcarSucio(v) { estadoPestana.sucio = v; }
+function marcarSucio(v) {
+  estadoPestana.sucio = v;
+  const marca = document.getElementById("marca-sucio");
+  if (marca) marca.hidden = !v;
+}
 function estaSucio() { return !!estadoPestana.sucio; }
 function confirmarDescartes() { return window.confirm("Hay cambios sin guardar. ¿Descartarlos?"); }
 
@@ -202,6 +348,11 @@ async function guardar() {
   }
   await hospedador.escribir(estadoPestana.ruta, new TextEncoder().encode(EDITOR.texto()));
   marcarSucio(false);
+  const abierto = document.getElementById("fichero-abierto");
+  if (abierto) {
+    abierto.textContent = relativa(estadoPestana.ruta);
+    abierto.title = estadoPestana.ruta;
+  }
   nota("guardado en " + estadoPestana.ruta);
   await refrescarArbol();
 }
@@ -209,6 +360,41 @@ async function guardar() {
 async function nuevoNombre() {
   const entrada = prompt("Ruta dentro del proyecto", PROYECTO + "/src/com/hola/MainActivity.java");
   return entrada || null;
+}
+
+// --- el panel inferior -------------------------------------------------------------------
+function mostrarPanel(nombre) {
+  const panel = document.getElementById("panel-inferior");
+  if (!panel) return;
+  panel.hidden = false;
+  for (const b of document.querySelectorAll(".panel-tab")) b.classList.toggle("activo", b.dataset.panel === nombre);
+  for (const v of document.querySelectorAll("#panel-inferior .panel-vista")) {
+    v.classList.toggle("activa", v.id === "panel-" + nombre);
+  }
+  const alternar = document.getElementById("alternar-panel");
+  if (alternar) alternar.setAttribute("aria-expanded", "true");
+  const activa = document.getElementById("panel-" + nombre);
+  if (activa) activa.scrollTop = 0;
+}
+
+function alternarPanel(nombre) {
+  const panel = document.getElementById("panel-inferior");
+  if (!panel) return;
+  if (nombre) { mostrarPanel(nombre); return; }
+  panel.hidden = !panel.hidden;
+  const alternar = document.getElementById("alternar-panel");
+  if (alternar) alternar.setAttribute("aria-expanded", String(!panel.hidden));
+  if (!panel.hidden) {
+    const activa = document.querySelector(".panel-tab.activo");
+    if (activa) mostrarPanel(activa.dataset.panel);
+  }
+}
+
+function cerrarPanel() {
+  const panel = document.getElementById("panel-inferior");
+  if (panel) panel.hidden = true;
+  const alternar = document.getElementById("alternar-panel");
+  if (alternar) alternar.setAttribute("aria-expanded", "false");
 }
 
 // --- los comandos ------------------------------------------------------------------------
@@ -219,6 +405,7 @@ async function ejecutarUltimo() { await correr(ULTIMO.argv); }
 async function correr(argv) {
   ULTIMO.argv = argv;
   const consola = document.getElementById("consola-pestana");
+  mostrarPanel("salida");
   consola.textContent += "$ apkc " + argv.join(" ") + "\n";
   document.getElementById("ocupado").hidden = false;
   const r = await hospedador.ejecutar(argv);
@@ -470,10 +657,16 @@ async function usarJarElegido() {
 
 async function decirEstadoJar() {
   const aviso = document.getElementById("estado-jar");
-  const r = await hospedador.leer(RUTA_JAR);
-  if (r.bytes) {
-    aviso.textContent = "hay un android.jar de " + r.bytes.length + " bytes en esta pestaña (" + RUTA_JAR + ")";
-    return true;
+  if (!aviso) return false;
+  try {
+    const r = await hospedador.leer(RUTA_JAR);
+    if (r.bytes) {
+      aviso.textContent = "hay un android.jar de " + r.bytes.length + " bytes en esta pestaña (" + RUTA_JAR + ")";
+      return true;
+    }
+  } catch (e) {
+    aviso.textContent = "no se puede leer OPFS en este contexto: " + (e && e.message ? e.message : e);
+    return false;
   }
   aviso.textContent = "sin android.jar en esta pestaña todavía";
   return false;
@@ -521,13 +714,33 @@ async function verificarLoCompilado() {
 // --- arranque ----------------------------------------------------------------------------
 let listo = false;
 async function iniciarPestana() {
-  const r = await hospedador.arbol();
-  listo = true;
-  document.getElementById("aislacion").textContent = r.aislada ? "sí" : "no (hay que servir por http con COOP/COEP)";
-  await refrescarArbol();
-  const manifest = (r.nodos || []).find((n) => n.ruta === PROYECTO + "/AndroidManifest.xml");
-  if (manifest) await abrir(PROYECTO + "/AndroidManifest.xml");
-  else EDITOR.poner("// Escribe aquí MainActivity.java y pulsa guardar,\n// o crea el proyecto con apkc en el botón de arriba.\n");
+  try {
+    const r = await hospedador.arbol();
+    listo = true;
+    const aislacion = document.getElementById("aislacion");
+    if (aislacion) aislacion.textContent = r.aislada ? "sí" : "no (hay que servir por http con COOP/COEP)";
+    await refrescarArbol();
+    const manifest = (r.nodos || []).find((n) => n.ruta === PROYECTO + "/AndroidManifest.xml");
+    if (manifest) {
+      await abrir(PROYECTO + "/AndroidManifest.xml");
+      // si ya había proyecto en OPFS, se entra directamente al editor en vez de dejar a la
+      // persona en Inicio mirando una pantalla que ya no le toca
+      const editor = document.querySelector('[data-vista="pestana"]');
+      if (editor) editor.click();
+    } else {
+      EDITOR.poner("");
+      const abierto = document.getElementById("fichero-abierto");
+      if (abierto) abierto.textContent = "Sin fichero";
+      const codigo = document.getElementById("codigo");
+      if (codigo) codigo.placeholder = "Abre un fichero del explorador o crea un proyecto en Inicio.";
+    }
+  } catch (e) {
+    const aislacion = document.getElementById("aislacion");
+    if (aislacion) aislacion.textContent = "no disponible";
+    const abierto = document.getElementById("fichero-abierto");
+    if (abierto) abierto.textContent = "Sin fichero";
+    nota("sin OPFS: " + (e && e.message ? e.message : e));
+  }
 }
 
 if (typeof document !== "undefined") {
@@ -539,10 +752,25 @@ if (typeof document !== "undefined") {
       if (el) el.addEventListener("click", fn);
     };
     EDITOR.inicializar();
+    for (const boton of document.querySelectorAll(".panel-tab")) {
+      boton.addEventListener("click", () => mostrarPanel(boton.dataset.panel));
+    }
+    en("alternar-panel", () => alternarPanel());
+    en("cerrar-panel", cerrarPanel);
     en("guardar-fichero", guardar);
     en("nuevo-fichero", async () => {
       const nombre = await nuevoNombre();
-      if (nombre) { estadoPestana.ruta = nombre; EDITOR.poner(""); document.getElementById("fichero-abierto").textContent = nombre; }
+      if (!nombre) return;
+      estadoPestana.ruta = nombre;
+      EDITOR.poner("");
+      const abierto = document.getElementById("fichero-abierto");
+      if (abierto) {
+        abierto.textContent = relativa(nombre);
+        abierto.title = nombre;
+      }
+      const codigo = document.getElementById("codigo");
+      if (codigo) codigo.focus();
+      await refrescarArbol();
     });
     en("firmar-aqui", firmar);
     en("crear-linaje", crearLinaje);

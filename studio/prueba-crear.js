@@ -113,6 +113,7 @@ async function target() {
       editor: document.getElementById("pestana").classList.contains("activa"),
       abierto: document.getElementById("fichero-abierto").textContent,
       arbol: document.getElementById("arbol-pestana").textContent,
+      rutas: [...document.querySelectorAll("#arbol-pestana a")].map((a) => a.dataset.ruta || ""),
       codigo: document.getElementById("codigo").value,
       titulo: document.getElementById("titulo-proyecto").textContent,
     };
@@ -121,12 +122,14 @@ async function target() {
   comprueba("el botón crea el proyecto", /proyecto creado/.test(String(crear.aviso)), String(crear.aviso).slice(0, 160));
   comprueba("la pestaña Editor queda delante", crear.editor === true, String(crear.editor));
   comprueba("el manifiesto se abre en el editor", /AndroidManifest\.xml$/.test(String(crear.abierto)), String(crear.abierto));
+  const rutasArbol = (crear.rutas || []).join(" ");
   comprueba("el árbol trae el package pedido", String(crear.arbol).includes("MainActivity.java") &&
-    String(crear.arbol).includes("/com/creada/app"), String(crear.arbol).replace(/\n/g, " ").slice(0, 180));
+    /\/com\/creada\/app/.test(rutasArbol), rutasArbol.replace(/ /g, " ").slice(0, 180));
   comprueba("el manifiesto lleva el package y el icono",
     /package="com\.creada\.app"/.test(String(crear.codigo)) && /@drawable\/icono/.test(String(crear.codigo)),
     String(crear.codigo).split("\n").filter((l) => /package=|icon=/.test(l)).join(" ").slice(0, 180));
-  comprueba("el icono está en el árbol", String(crear.arbol).includes("res/drawable/icono.png"));
+  comprueba("el icono está en el árbol", /res\/drawable\/icono\.png/.test(rutasArbol),
+    rutasArbol.slice(0, 180));
 
   ws.close();
   apagar();
