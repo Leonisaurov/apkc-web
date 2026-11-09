@@ -72,6 +72,13 @@ define `hospedador` antes de que `vistas.js` cree el proyecto. No pongas `"type"
   `apkc/*.go`; `prueba.js` lo verifica. Una regla sin `lit:` o sin evidencia es un fallo.
 - **Las contraseñas se limpian** de los campos después de firmar o compilar, también cuando
   falla; `prueba-pestana.js` lo comprueba.
+- **Subir escribe en OPFS, no en un servidor.** El botón del explorador usa la carpeta del
+  fichero abierto; el menú de una carpeta fija el destino. La subida de carpeta conserva
+  `webkitRelativePath` y descarta los tramos `..`; `prueba-crear.js` conduce el input con
+  `DataTransfer`.
+- **La barra del fichero es deliberada:** `#guardar-fichero` es la acción primaria y
+  `#menu-editor` (un `<details>`) agrupa Nuevo, Subir, Descargar, Renombrar y Borrar. No vuelvas
+  a sacar esos botones sueltos a la barra.
 - **Nada fuera del origen.** Sin CDN, fuentes, telemetría ni runtimes de terceros. El favicon es
   un `data:` y el informe se descarga como `blob:`.
 - **`apkc build` clásico no corre en wasm.** `js` no tiene `fork/exec`; el botón «Probar el build

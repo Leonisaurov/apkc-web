@@ -33,9 +33,14 @@
     <aside class="lateral" aria-label="Explorador del proyecto">
       <div class="lateral-cab">
         <span>Explorador</span>
-        <button id="recargar-arbol" class="icono-boton" type="button" title="Recargar el árbol" aria-label="Recargar el árbol">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
-        </button>
+        <span class="lateral-acciones">
+          <button id="subir-arbol" class="icono-boton" type="button" title="Subir archivos a la carpeta actual" aria-label="Subir archivos a la carpeta actual">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 16v3h16v-3"/></svg>
+          </button>
+          <button id="recargar-arbol" class="icono-boton" type="button" title="Recargar el árbol" aria-label="Recargar el árbol">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg>
+          </button>
+        </span>
       </div>
       <div class="lateral-proyecto" id="lateral-proyecto">MI APP</div>
       <div id="arbol-pestana" class="arbol-pestana" role="tree" aria-label="Ficheros del proyecto">
@@ -105,13 +110,25 @@
               <span id="fichero-abierto">Sin fichero</span>
               <span id="marca-sucio" class="marca-sucio" hidden aria-label="cambios sin guardar">●</span>
             </div>
-            <span class="espacio"></span>
             <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
-            <button id="nuevo-fichero" type="button" title="Crear un fichero nuevo">Nuevo</button>
+            <span class="espacio"></span>
             <button id="guardar-fichero" type="button" class="primario" title="Guardar (Ctrl+S)">Guardar</button>
-            <a id="descargar-fichero" class="boton-enlace" href="#" download hidden title="Descargar el fichero abierto">Descargar</a>
-            <button id="alternar-panel" type="button" title="Mostrar u ocultar el panel (Ctrl+`)"
-                    aria-expanded="false" aria-controls="panel-inferior">Panel</button>
+            <details id="menu-editor" class="menu-editor">
+              <summary title="Nuevo, subir, descargar, renombrar o borrar">Archivo</summary>
+              <div class="menu-editor-lista" role="menu">
+                <button id="nuevo-fichero" type="button" role="menuitem">Nuevo fichero…</button>
+                <button id="subir-ficheros-boton" type="button" role="menuitem">Subir archivos…</button>
+                <a id="descargar-fichero" role="menuitem" href="#" download hidden>Descargar el fichero</a>
+                <hr>
+                <button id="renombrar-fichero" type="button" role="menuitem" disabled>Renombrar…</button>
+                <button id="borrar-fichero" type="button" role="menuitem" class="peligro" disabled>Borrar…</button>
+              </div>
+            </details>
+            <button id="alternar-panel" type="button" title="Mostrar u ocultar Salida, Compilar y Firmar (Ctrl+`)"
+                    aria-expanded="false" aria-controls="panel-inferior">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16v12H4z"/><path d="M7 10l3 2-3 2"/></svg>
+              Consola
+            </button>
           </div>
 
           <div class="editor">
@@ -263,6 +280,9 @@
     </span>
   </footer>
 </div>
+
+<input type="file" id="subir-ficheros" multiple hidden aria-label="Subir archivos al proyecto">
+<input type="file" id="subir-carpeta" webkitdirectory hidden aria-label="Subir una carpeta al proyecto">
 
 <div id="menu-archivo" class="menu-archivo" role="menu" aria-label="Acciones del fichero" hidden></div>
 

@@ -61,15 +61,16 @@ Qué hace de verdad, y qué no:
   `android`, `CN=Android Debug`) y reutiliza esa identidad; «Compilar release» sigue usando el
   keystore elegido. El keystore y el `android.jar` no salen de la pestaña:
   con `servidor.js`, el jar se toma del SDK local y se sirve en `/android-jar`; en una página
-  estática, el panel Compilar pide aceptar los términos del SDK y enlaza al paquete oficial de
+  estática, la pestaña Compilar de la consola pide aceptar los términos del SDK y enlaza al paquete oficial de
   Google, y el editor extrae `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Esa
   descarga es una navegación que pulsa la persona, no una petición de la página: la pestaña sigue
   sin pedir nada fuera de su origen. En
   ambos casos se guarda una vez en OPFS y sobrevive a recargar. `tools/entorno.sh jar` instala
-  `platforms;android-34` con el `sdkmanager` oficial si falta. La salida del panel traduce los
+  `platforms;android-34` con el `sdkmanager` oficial si falta. La salida de la consola traduce los
   colores ANSI de `apkc` (nada de `\u001b[34m` crudo) y la barra de descargas deja a la vista el
-  `app.apk`, su `.idsig` y la apk firmada; el fichero abierto se descarga desde su pestaña y
-  cada fila del explorador tiene menú de mantener pulsado (abrir, descargar, renombrar, borrar).
+  `app.apk`, su `.idsig` y la apk firmada; el fichero abierto se descarga desde el menú **Archivo**
+  y cada fila del explorador tiene menú de mantener pulsado (abrir, descargar, renombrar, borrar;
+  en una carpeta, además, nuevo fichero y subir archivos o una carpeta entera).
   La consola usa la paleta de `~/.termux/colors.properties` y un velo de carga para las
   operaciones lentas de OPFS. Medido en `docs/evidencia.md` §45 y
   §46: el apk que sale es **igual entrada por entrada** al del mismo comando en el binario nativo, y `d8`
@@ -167,9 +168,14 @@ La página tiene un marco de editor ligero, sin dependencias: barra de título, 
 actividad, explorador del proyecto en la barra lateral, pestañas y barra de estado. En Inicio
 solo se piden nombre, package y, si quieres, un icono PNG; al crear, el proyecto se escribe en
 OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor tiene números
-de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y un panel
-inferior con Salida, Compilar y Firmar (cerrado hasta que hace falta; ``Ctrl + ` `` lo abre).
+de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y una
+consola inferior con Salida, Compilar y Firmar (cerrada hasta que hace falta; ``Ctrl + ` `` la
+abre). La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
+subir, descargar, renombrar, borrar). El botón de subir del explorador escribe en la carpeta del
+fichero abierto; el menú de una carpeta permite subir ahí o una carpeta entera, conservando sus
+subdirectorios. Todo va directo a OPFS: ningún byte sale del navegador.
 `pestana.js` lleva el editor, el árbol y apkc.wasm; `vistas.js` siembra el árbol, cambia de vista
 (también por hash, `index.html#pestana`) y refleja rótulos; `diagnostico.js` explica la salida
-pegada. Las pruebas de navegador, de creación y de la pestaña usan los mismos ids de siempre. El detalle de la estructura, los ids, los atajos y
-los límites del editor está en `studio/EDITOR.md`.
+pegada. Las pruebas de navegador, de creación y de la pestaña usan los mismos ids de siempre. El
+detalle de la estructura, los ids, los atajos y los límites del editor está en
+`studio/EDITOR.md`.

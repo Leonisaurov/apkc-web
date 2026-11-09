@@ -131,6 +131,32 @@ async function target() {
   comprueba("el icono está en el árbol", /res\/drawable\/icono\.png/.test(rutasArbol),
     rutasArbol.slice(0, 180));
 
+  // subir un archivo del dispositivo: el mismo camino que usa el botón del explorador, sin
+  // pasar por ningún servidor. Con el manifiesto abierto, el destino es /proyecto.
+  const subida = await evaluar(`(async () => {
+    const entrada = document.getElementById("subir-ficheros");
+    const dt = new DataTransfer();
+    dt.items.add(new File(["hola desde el dispositivo\\n"], "nota.txt", { type: "text/plain" }));
+    entrada.files = dt.files;
+    entrada.dispatchEvent(new Event("change", { bubbles: true }));
+    for (let i = 0; i < 100; i++) {
+      if (/archivo subido/.test(document.getElementById("estado-pestana").textContent)) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    const bytes = await hospedador.bytes("/proyecto/nota.txt");
+    return {
+      aviso: document.getElementById("estado-pestana").textContent,
+      texto: bytes ? new TextDecoder().decode(bytes) : null,
+      abierto: document.getElementById("fichero-abierto").textContent,
+      rutas: [...document.querySelectorAll("#arbol-pestana a")].map((a) => a.dataset.ruta || ""),
+    };
+  })()`);
+  comprueba("subir un archivo lo escribe en OPFS",
+    subida.texto === "hola desde el dispositivo\n", JSON.stringify(subida).slice(0, 220));
+  comprueba("el archivo subido aparece en el árbol y se abre",
+    /nota\.txt$/.test(String(subida.abierto)) && subida.rutas.includes("/proyecto/nota.txt"),
+    JSON.stringify({ abierto: subida.abierto, rutas: subida.rutas }).slice(0, 220));
+
   ws.close();
   apagar();
   console.log(fallos ? "crear: " + fallos + " problemas" : "crear: todo en orden (" + hechos + " comprobaciones)");

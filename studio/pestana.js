@@ -429,6 +429,72 @@ function relativa(ruta) {
   return ruta === PROYECTO ? "" : (ruta.startsWith(PROYECTO + "/") ? ruta.slice(PROYECTO.length + 1) : ruta);
 }
 
+// --- subir ficheros del dispositivo ---------------------------------------------------------
+// El botón del explorador y el del menú Archivo usan la carpeta del fichero abierto; el menú de
+// una carpeta del árbol permite elegir otra. Los bytes van directos a OPFS: no pasan por ningún
+// servidor, igual que el resto del proyecto.
+const SUBIDA = { destino: null };
+
+function carpetaDe(ruta) {
+  const i = String(ruta || "").lastIndexOf("/");
+  return i <= 0 ? "/" : ruta.slice(0, i);
+}
+
+function carpetaActual() {
+  return estadoPestana.ruta ? carpetaDe(estadoPestana.ruta) : PROYECTO;
+}
+
+// webkitRelativePath existe cuando se elige una carpeta: conserva los subdirectorios y descarta
+// los tramos que intentarían salir del proyecto.
+function nombreDeSubida(archivo) {
+  const original = String(archivo.webkitRelativePath || archivo.name || "archivo").replace(/\\/g, "/");
+  const partes = original.split("/").filter((p) => p && p !== "." && p !== "..");
+  return partes.length ? partes.join("/") : "archivo";
+}
+
+function pedirSubida(destino, esCarpeta) {
+  SUBIDA.destino = destino || carpetaActual();
+  const entrada = document.getElementById(esCarpeta ? "subir-carpeta" : "subir-ficheros");
+  if (!entrada) { nota("este navegador no expone el selector de archivos"); return; }
+  entrada.value = "";
+  entrada.click();
+}
+
+async function subirSeleccion(entrada) {
+  const archivos = [...(entrada.files || [])];
+  if (!archivos.length) return;
+  const destino = SUBIDA.destino || carpetaActual();
+  const rutas = archivos.map((archivo) => destino + "/" + nombreDeSubida(archivo));
+  const choques = [];
+  for (const ruta of rutas) {
+    const r = await hospedador.leer(ruta);
+    if (r && r.bytes) choques.push(ruta);
+  }
+  const donde = relativa(destino) || "la raíz del proyecto";
+  if (choques.length && !window.confirm("Ya existen " + choques.length + " archivo(s) en " +
+      donde + ". ¿Reemplazarlos?")) return;
+
+  try {
+    await conCarga("Subiendo " + archivos.length + " archivo(s)…", async () => {
+      for (let i = 0; i < archivos.length; i++) {
+        const datos = new Uint8Array(await archivos[i].arrayBuffer());
+        await hospedador.escribir(rutas[i], datos);
+      }
+    });
+  } finally {
+    SUBIDA.destino = null;
+  }
+  await refrescarArbol();
+  nota(archivos.length + (archivos.length === 1 ? " archivo subido a " : " archivos subidos a ") + donde);
+  // con un solo fichero de texto, dejarlo abierto ahorra el paso de buscarlo en el árbol
+  if (rutas.length === 1 && !estaSucio()) {
+    if (await abrir(rutas[0])) {
+      const vista = document.querySelector('[data-vista="pestana"]');
+      if (vista && document.body.dataset.vista !== "pestana") vista.click();
+    }
+  }
+}
+
 function cerrarMenuArchivo() {
   const menu = document.getElementById("menu-archivo");
   if (menu) menu.hidden = true;
@@ -455,6 +521,10 @@ function abrirMenuArchivo(x, y, nodo) {
       }
     });
     añadir("Descargar", () => descargarRuta(nodo.ruta));
+  } else {
+    añadir("Nuevo fichero aquí", () => nuevoFichero(nodo.ruta));
+    añadir("Subir archivos aquí", () => pedirSubida(nodo.ruta, false));
+    añadir("Subir carpeta aquí", () => pedirSubida(nodo.ruta, true));
   }
   añadir("Renombrar", () => renombrarRuta(nodo.ruta));
   añadir("Borrar", () => borrarRuta(nodo.ruta), true);
@@ -517,6 +587,7 @@ async function renombrarRuta(ruta) {
     const abierto = document.getElementById("fichero-abierto");
     if (abierto) { abierto.textContent = relativa(estadoPestana.ruta); abierto.title = estadoPestana.ruta; }
   }
+  actualizarAccionesFichero();
   await refrescarArbol();
   nota("renombrado a " + relativa(destino));
 }
@@ -530,8 +601,7 @@ async function borrarRuta(ruta) {
     EDITOR.poner("");
     const abierto = document.getElementById("fichero-abierto");
     if (abierto) { abierto.textContent = "Sin fichero"; abierto.removeAttribute("title"); }
-    const descargarFichero = document.getElementById("descargar-fichero");
-    if (descargarFichero) descargarFichero.hidden = true;
+    actualizarAccionesFichero();
   }
   await refrescarArbol();
   nota("borrado " + relativa(ruta));
@@ -680,8 +750,7 @@ async function abrir(ruta, yaConfirmado) {
     nombre.textContent = relativa(ruta) || ruta;
     nombre.title = ruta;
   }
-  const descargarFichero = document.getElementById("descargar-fichero");
-  if (descargarFichero) descargarFichero.hidden = false;
+  actualizarAccionesFichero();
   await refrescarArbol();
   return true;
 }
@@ -692,6 +761,18 @@ function marcarSucio(v) {
   if (marca) marca.hidden = !v;
 }
 function estaSucio() { return !!estadoPestana.sucio; }
+
+// Las acciones del menú Archivo que necesitan un fichero abierto se deshabilitan en vez de
+// contestar «abre uno primero» cuando no lo hay.
+function actualizarAccionesFichero() {
+  const hay = !!estadoPestana.ruta;
+  for (const id of ["renombrar-fichero", "borrar-fichero"]) {
+    const boton = document.getElementById(id);
+    if (boton) boton.disabled = !hay;
+  }
+  const descargar = document.getElementById("descargar-fichero");
+  if (descargar) descargar.hidden = !hay;
+}
 function confirmarDescartes() { return window.confirm("Hay cambios sin guardar. ¿Descartarlos?"); }
 
 async function guardar() {
@@ -724,8 +805,7 @@ async function guardar() {
     abierto.textContent = relativa(estadoPestana.ruta);
     abierto.title = estadoPestana.ruta;
   }
-  const descargarFichero = document.getElementById("descargar-fichero");
-  if (descargarFichero) descargarFichero.hidden = false;
+  actualizarAccionesFichero();
   nota("guardado en " + estadoPestana.ruta);
   await refrescarArbol();
   return true;
@@ -749,15 +829,50 @@ function normalizarRuta(ruta) {
   return "/" + partes.join("/");
 }
 
-async function nuevoNombre() {
-  const sugerida = PROYECTO + "/src/" + paqueteDelFormulario().replace(/\./g, "/") + "/MainActivity.java";
+async function nuevoNombre(carpeta) {
+  const base = carpeta || (PROYECTO + "/src/" + paqueteDelFormulario().replace(/\./g, "/"));
+  const sugerida = base + "/" + (carpeta ? "nuevo.txt" : "MainActivity.java");
   const entrada = prompt("Ruta dentro del proyecto", sugerida);
   if (entrada === null) return null;
   let ruta = entrada.trim().replace(/\\/g, "/").replace(/\/{2,}/g, "/");
   if (!ruta.startsWith("/")) ruta = PROYECTO + "/" + ruta;
   ruta = normalizarRuta(ruta);
-  if (!ruta.startsWith(PROYECTO + "/")) return null;
+  if (!ruta.startsWith(PROYECTO + "/")) {
+    nota("la ruta tiene que quedar dentro de /proyecto");
+    return null;
+  }
   return ruta;
+}
+
+// Crear un fichero desde el menú Archivo o desde el menú de una carpeta del árbol. La ruta se
+// pide siempre, pero el valor por defecto cambia: MainActivity.java en el package del formulario,
+// o nuevo.txt dentro de la carpeta sobre la que se pulsó.
+async function nuevoFichero(carpeta) {
+  if (estaSucio() && !(await confirmarDescartes())) return;
+  const nombre = await nuevoNombre(carpeta);
+  if (!nombre) return;
+  const previo = await hospedador.leer(nombre);
+  if (previo && previo.bytes && !window.confirm("Ya existe " + relativa(nombre) + ". ¿Reemplazarlo?")) return;
+  // el fichero nace vacío en OPFS para que el explorador y el estado «sin cambios» digan
+  // la verdad: un buffer suelto que no está en el árbol confunde más que ayuda
+  try {
+    await hospedador.escribir(nombre, new Uint8Array(0));
+  } catch (e) {
+    nota("no se pudo crear " + relativa(nombre) + ": " + (e && e.message ? e.message : e));
+    return;
+  }
+  estadoPestana.ruta = nombre;
+  EDITOR.poner("");
+  const abierto = document.getElementById("fichero-abierto");
+  if (abierto) {
+    abierto.textContent = relativa(nombre);
+    abierto.title = nombre;
+  }
+  actualizarAccionesFichero();
+  const codigo = document.getElementById("codigo");
+  if (codigo) codigo.focus();
+  await refrescarArbol();
+  nota("creado " + relativa(nombre));
 }
 
 // --- el panel inferior -------------------------------------------------------------------
@@ -1421,13 +1536,25 @@ if (typeof document !== "undefined") {
       });
     };
     EDITOR.inicializar();
+    actualizarAccionesFichero();
 
+    const menuEditor = document.getElementById("menu-editor");
+    if (menuEditor) {
+      // cualquier acción del menú lo cierra; el <details> no guarda estado en JS
+      menuEditor.addEventListener("click", (e) => {
+        if (e.target.closest(".menu-editor-lista")) menuEditor.open = false;
+      });
+    }
     document.addEventListener("pointerdown", (e) => {
       const menu = document.getElementById("menu-archivo");
       if (menu && !menu.hidden && !menu.contains(e.target)) cerrarMenuArchivo();
+      if (menuEditor && menuEditor.open && !menuEditor.contains(e.target)) menuEditor.open = false;
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") cerrarMenuArchivo();
+      if (e.key === "Escape") {
+        cerrarMenuArchivo();
+        if (menuEditor) menuEditor.open = false;
+      }
     });
     window.addEventListener("scroll", cerrarMenuArchivo, true);
     window.addEventListener("resize", cerrarMenuArchivo);
@@ -1461,28 +1588,24 @@ if (typeof document !== "undefined") {
     en("alternar-panel", () => alternarPanel());
     en("cerrar-panel", cerrarPanel);
     en("guardar-fichero", guardar);
-    en("nuevo-fichero", async () => {
-      if (estaSucio() && !(await confirmarDescartes())) return;
-      const nombre = await nuevoNombre();
-      if (!nombre) return;
-      const previo = await hospedador.bytes(nombre);
-      if (previo !== null && !window.confirm("Ya existe " + relativa(nombre) + ". ¿Reemplazarlo?")) return;
-      // el fichero nace vacío en OPFS para que el explorador y el estado «sin cambios» digan
-      // la verdad: un buffer suelto que no está en el árbol confunde más que ayuda
-      await hospedador.escribir(nombre, new Uint8Array(0));
-      estadoPestana.ruta = nombre;
-      EDITOR.poner("");
-      const abierto = document.getElementById("fichero-abierto");
-      if (abierto) {
-        abierto.textContent = relativa(nombre);
-        abierto.title = nombre;
-      }
-      const descargarFichero = document.getElementById("descargar-fichero");
-      if (descargarFichero) descargarFichero.hidden = false;
-      const codigo = document.getElementById("codigo");
-      if (codigo) codigo.focus();
-      await refrescarArbol();
-    });
+    en("nuevo-fichero", () => nuevoFichero());
+    en("subir-ficheros-boton", () => pedirSubida(carpetaActual(), false));
+    en("subir-arbol", () => pedirSubida(carpetaActual(), false));
+    en("renombrar-fichero", () => estadoPestana.ruta
+      ? renombrarRuta(estadoPestana.ruta)
+      : nota("abre un fichero antes de renombrarlo"));
+    en("borrar-fichero", () => estadoPestana.ruta
+      ? borrarRuta(estadoPestana.ruta)
+      : nota("abre un fichero antes de borrarlo"));
+
+    // los dos selectores de archivo: uno normal y otro de carpeta (webkitdirectory conserva
+    // los subdirectorios en webkitRelativePath)
+    for (const id of ["subir-ficheros", "subir-carpeta"]) {
+      const entrada = document.getElementById(id);
+      if (entrada) entrada.addEventListener("change", () => {
+        subirSeleccion(entrada).catch(mostrarFallo);
+      });
+    }
     en("firmar-aqui", firmar);
     en("crear-linaje", crearLinaje);
     en("olvidar-linaje", olvidarLinaje);

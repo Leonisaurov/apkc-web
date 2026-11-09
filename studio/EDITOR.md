@@ -28,12 +28,12 @@ No se copia ninguna pieza de VS Code ni se carga ningún editor de terceros.
 +------+-------------------+-----------------------------------------------+
 | act. | EXPLORADOR        | pestanas de vista: Inicio | Editor            |
 |      | COM.MI.APP        +-----------------------------------------------+
-|      | arbol del         | pestana del fichero   Nuevo  Guardar  Panel   |
+|      | arbol del         | fichero  [Guardar] [Archivo v] [Consola]      |
 |      | proyecto          +-----------------------------------------------+
 |      |                   | numeros | editor (textarea + pre resaltado)   |
 |      |                   +-----------------------------------------------+
-|      |                   | panel: Salida | Compilar | Firmar             |
-|      |                   |         (cerrado hasta que hace falta)        |
+|      |                   | consola: Salida | Compilar | Firmar otra apk|
+|      |                   |         (cerrada hasta que hace falta)         |
 +------+-------------------+-----------------------------------------------+
 | barra de estado: main | Editor | ultimo codigo - | apkc.wasm | OPFS      |
 +--------------------------------------------------------------------------+
@@ -74,7 +74,12 @@ El arbol vive en la barra lateral, no dentro del area de codigo:
 
 ```html
 <aside class="lateral">
-  <div class="lateral-cab">Explorador <button id="recargar-arbol">...</button></div>
+  <div class="lateral-cab">Explorador
+    <span class="lateral-acciones">
+      <button id="subir-arbol">...</button>
+      <button id="recargar-arbol">...</button>
+    </span>
+  </div>
   <div class="lateral-proyecto" id="lateral-proyecto">MI APP</div>
   <div id="arbol-pestana" class="arbol-pestana" role="tree"></div>
   <div class="lateral-pie">/proyecto · OPFS <span id="aislacion">?</span></div>
@@ -99,8 +104,16 @@ abrirla, también si es binaria. Las carpetas se pliegan con `ARBOL.plegados`, u
 que sobrevive a los refrescos. Pulsar una carpeta alterna el `Set` y vuelve a pintar; pulsar un
 fichero llama a `abrir(ruta)`.
 
+`#subir-arbol` pide archivos con `#subir-ficheros` y los escribe en la carpeta del fichero
+abierto, o en `/proyecto` si no hay ninguno. En el menú de una carpeta, **Subir archivos aquí** y
+**Subir carpeta aquí** fijan el destino; el segundo usa el input `#subir-carpeta` con
+`webkitdirectory` y conserva los subdirectorios vía `webkitRelativePath`. `subirSeleccion()`
+pregunta una sola vez antes de reemplazar archivos existentes, escribe los bytes directamente en
+OPFS y abre el resultado si solo se subió un fichero de texto y no había cambios pendientes.
+
 Con el botón derecho o manteniendo pulsada una fila aparece `#menu-archivo`, un menú con
-**Abrir** y **Descargar** (ficheros), **Renombrar** y **Borrar**. Renombrar cambia el nombre en
+**Abrir** y **Descargar** (ficheros), **Nuevo fichero aquí**, **Subir archivos aquí** y **Subir
+carpeta aquí** (carpetas), **Renombrar** y **Borrar**. Renombrar cambia el nombre en
 la misma carpeta con `hospedador.renombrar` (host `renombrar` → `fs.rename`, sin copiar bytes) y
 actualiza la pestaña si el fichero abierto es el renombrado o está dentro de la carpeta
 renombrada. Borrar usa `hospedador.limpiar`; si se borra el fichero abierto, el editor vuelve a
@@ -109,6 +122,19 @@ renombrada. Borrar usa `hospedador.limpiar`; si se borra el fichero abierto, el 
 Si `/proyecto` esta vacio, el arbol pinta un estado vacio con un enlace a Inicio. Si OPFS no esta
 disponible (por ejemplo, `file://`), `refrescarArbol()` captura el error y deja el estado vacio en
 vez de reventar la pagina. `#recargar-arbol` vuelve a pedir el arbol sin recargar la pagina.
+
+## Barra del fichero
+
+La fila superior del editor separa la acción principal de las de mantenimiento:
+
+- `#guardar-fichero` es el único botón primario y guarda con `Ctrl+S`.
+- `#menu-editor` es un `<details>` con `#nuevo-fichero`, `#subir-ficheros-boton`,
+  `#descargar-fichero`, `#renombrar-fichero` y `#borrar-fichero`. Se cierra al pulsar una acción,
+  al hacer clic fuera o con `Escape`; no guarda estado propio.
+- `#alternar-panel` se llama **Consola** y sigue mostrando u ocultando `#panel-inferior` con
+  ``Ctrl + ` ``.
+- `#descargar-fichero` sigue oculto hasta que hay un fichero abierto; descarga el buffer del
+  editor (aunque tenga cambios sin guardar), no solo lo último guardado.
 
 ## El editor de codigo
 
@@ -165,7 +191,7 @@ limpio. `EDITOR.texto()` devuelve el valor actual.
 | `Enter` | conserva la sangría de la línea; si la línea termina en `{`, añade 4 espacios |
 | `Ctrl+S` / `Cmd+S` | guarda el fichero abierto, tenga el foco donde tenga |
 | `Ctrl+Enter` / `Cmd+Enter` | repite el último comando de `apkc` |
-| ``Ctrl + ` `` | abre o cierra el panel inferior |
+| ``Ctrl + ` `` | abre o cierra la consola inferior |
 
 Las tres ediciones programáticas (Tab, Shift+Tab y Enter) pasan por `EDITOR.cambiar()`, que usa
 `execCommand("insertText")` cuando existe para que entren en el historial nativo de deshacer
@@ -199,8 +225,9 @@ ningun servidor.
 
 ## Panel inferior
 
-El panel es la zona de salida y de acciones pesadas. Empieza cerrado para que el editor ocupe todo
-el alto; se abre cuando hace falta.
+La **Consola** (`#panel-inferior`) es la zona de salida y de acciones pesadas. Empieza cerrada
+para que el editor ocupe todo el alto; el botón `#alternar-panel` la abre o la cierra y conserva
+la pestaña activa.
 
 ```html
 <div class="panel-inferior" id="panel-inferior" hidden>
@@ -277,8 +304,7 @@ En `@media (max-width: 760px)`:
   el resto). La barra de actividad ocupa las dos filas.
 - El explorador queda como una tira superior con scroll propio; el pie del explorador se oculta.
 - El panel inferior pasa a `42vh`.
-- La pestaña del fichero se limita a `22ch` para que los botones Nuevo/Guardar/Panel sigan
-  cabiendo.
+- La pestaña del fichero se limita a `22ch` para que Guardar, Archivo y Consola sigan cabiendo.
 - La barra de titulo oculta el estado de la derecha.
 
 ## Pruebas
@@ -287,7 +313,7 @@ En `@media (max-width: 760px)`:
 | --- | --- |
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`) y el resaltador puro (`resaltar`, `esXml`) |
 | `node studio/prueba-navegador.js` | `file://`: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage y el diagnóstico sobre una salida real |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol y el icono |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono y subir un archivo del dispositivo hasta OPFS |
 | `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | más de 50 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
@@ -310,6 +336,8 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
 - **Sin buscar ni reemplazar.** `Ctrl+F` es el del navegador, no el del editor.
 - **Sin mover ficheros entre carpetas.** El menú del explorador permite renombrar y borrar, pero
   no arrastrar ni cortar y pegar.
+- **Sin arrastrar y soltar.** Los archivos se suben con el botón del explorador o con el menú de
+  la carpeta de destino.
 - **Sin autosave.** El guardado es explicito (`Ctrl+S` o el boton).
 - **Sin plegado de codigo, minimapa, multicursor ni diff.**
 - **El resaltado es lexico.** No entiende de tipos, scopes ni errores; no sustituye a un LSP.
@@ -317,7 +345,7 @@ estan en `studio/README.md` y en `docs/evidencia.md` §140. En resumen: se copia
   fichero.
 - **No edita binarios.** El contenido se decodifica como UTF-8; un PNG del arbol no se abre en el
   editor.
-- **El panel no es redimensionable con el raton.** Su alto lo fija el CSS (34vh, 42vh en movil).
+- **La consola no es redimensionable con el raton.** Su alto lo fija el CSS (34vh, 42vh en movil).
 - **El estado de scroll del arbol se conserva, el del editor no** entre ficheros: `EDITOR.poner`
   vuelve a 0,0 a proposito.
 
