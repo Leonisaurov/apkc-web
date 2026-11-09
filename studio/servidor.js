@@ -56,8 +56,11 @@ function jarDelSdk() {
 const MIME = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8", ".json": "application/json; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8",
   ".wasm": "application/wasm", ".apk": "application/vnd.android.package-archive",
-  ".png": "image/png", ".ico": "image/x-icon",
+  ".aab": "application/octet-stream", ".idsig": "application/octet-stream",
+  ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon",
+  ".webmanifest": "application/manifest+json",
 };
 
 if (!WASM || !fs.existsSync(WASM)) {
@@ -75,9 +78,20 @@ const servidor = http.createServer((req, res) => {
   // dos cabeceras la página carga, el worker arranca y el fs se cae en el primer handle
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
   res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("Cache-Control", "no-store");
 
-  const ruta = decodeURIComponent((req.url || "/").split("?")[0]);
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.writeHead(405, { Allow: "GET, HEAD" });
+    return void res.end("método no permitido\n");
+  }
+  let ruta;
+  try { ruta = decodeURIComponent((req.url || "/").split("?")[0]); }
+  catch (e) {
+    res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+    return void res.end("URL mal formada\n");
+  }
   let fichero = null, cuerpo = null;
   if (ruta === "/apkc.wasm") {
     fichero = WASM;
@@ -109,13 +123,22 @@ const servidor = http.createServer((req, res) => {
     fichero = jar;                                          // el jar del SDK, por su origen: la pestaña no habla con nadie más
   } else {
     const dentro = path.normalize(path.join(AQUI, ruta === "/" ? "index.html" : ruta));
-    if (!dentro.startsWith(AQUI)) { res.writeHead(403); return void res.end("fuera\n"); }
-    if (!fs.existsSync(dentro) || fs.statSync(dentro).isDirectory()) { res.writeHead(404); return void res.end("no existe\n"); }
+    // startsWith(AQUI) dejaría pasar un hermano como /studio-viejo; con el separador, no
+    if (dentro !== AQUI && !dentro.startsWith(AQUI + path.sep)) {
+      res.writeHead(403); return void res.end("fuera\n");
+    }
+    if (!fs.existsSync(dentro) || fs.statSync(dentro).isDirectory()) {
+      res.writeHead(404); return void res.end("no existe\n");
+    }
     fichero = dentro;
   }
-  cuerpo = fs.readFileSync(fichero);
+  try { cuerpo = fs.readFileSync(fichero); }
+  catch (e) {
+    res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    return void res.end("no se pudo leer " + path.basename(fichero) + "\n");
+  }
   res.writeHead(200, { "Content-Type": MIME[path.extname(fichero)] || "application/octet-stream" });
-  res.end(cuerpo);
+  res.end(req.method === "HEAD" ? undefined : cuerpo);
 });
 
 servidor.listen(PUERTO, "127.0.0.1", () => {

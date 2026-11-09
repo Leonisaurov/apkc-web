@@ -1,0 +1,9 @@
+# Cabeceras para publicar apkc studio en un host estático que las respete (Netlify, Cloudflare
+# Pages). Sin COOP/COEP el worker no consigue handles síncronos de OPFS y el editor no arranca;
+# `file://` no aísla el origen y GitHub Pages no permite fijar estas cabeceras.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
