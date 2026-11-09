@@ -22,11 +22,25 @@ APKC_WASM=… APK_EJEMPLO=… KS_EJEMPLO=… node prueba-pestana.js
 APKC="$PREFIX/tmp/apkc-gate" APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" sh e2e.sh
 ```
 
+`npm start` es `node servidor.js` y exige `APKC_WASM` y un `wasm_exec.js` en
+`$(go env GOROOT)/lib/wasm`; sin uno de los dos sale con código 2. `e2e.sh` llama a `tcr` para
+los `apkc build` nativos: tiene que estar en el PATH. No hay lint, typecheck ni formatter; para
+una comprobación rápida de sintaxis, `node --check <fichero>`.
+`prueba-pestana.js` exige `APKC_WASM`, `APK_EJEMPLO` y `KS_EJEMPLO`; con `KS_RELEASE` y
+`AAB_EJEMPLO` añade release, v4, `.aab` y rotación (es lo que le pasa `e2e.sh`). `prueba.js`
+compara las plantillas contra `APKC_REPO` (`~/Develop/Go/apkc` por defecto): si el repo no está,
+omite la comparación y **no falla**, así que no confundas «reglas: 24» con «plantillas iguales».
+
 Desde la raíz del repo, `tools/entorno.sh gate` construye los binarios y lanza `e2e.sh` con
 `HOME`/`PREFIX`/`ANDROID_HOME` correctos (el shell puede arrancar con otro `HOME`). No declares
 la página terminada con `prueba.js` ni con `prueba-navegador.js`: solo `e2e.sh` descomprime el
 zip y compila con `apksigner`, `zipalign` y `zipcheck.py`. `prueba-pestana.js` cuenta las
 peticiones y falla si la página pide algo fuera de su origen.
+
+**`e2e.sh` puede decir «todo en orden» con la pestaña omitida**: sin `chromium-browser`, sin
+`APKC_WASM` o sin el apk de fixtures, esas secciones se saltan con un aviso, no fallan. Antes de
+dar el editor por probado, comprueba en la salida `pestaña: N comprobaciones` y que no aparezca
+`sin chromium` ni `sin APKC_WASM`.
 
 ## Mapa y orden de carga
 
