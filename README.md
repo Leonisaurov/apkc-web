@@ -31,6 +31,8 @@ página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** 
 
 | Fichero | Qué es |
 | --- | --- |
+| [LICENSE](LICENSE) | MIT del código propio |
+| [NOTICE.md](NOTICE.md) | qué es de terceros: el fork `apkc`, Go/`wasm_exec.js`, el SDK de Android y el navegador de las pruebas |
 | [AGENTS.md](AGENTS.md) | reglas del repo, entorno de Termux y el gate que hay que pasar antes de dar nada por hecho |
 | [USO.md](USO.md) | uso concreto: construir, arrancar, abrir en Brave Nightly, editar, compilar, firmar y pasar el gate |
 | [docs/plan.md](docs/plan.md) | el plan detallado: fases, tareas con su criterio de aceptación, y lo que abandona cada una |
