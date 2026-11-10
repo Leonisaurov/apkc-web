@@ -16,6 +16,7 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
 PLAN = RAIZ / "docs" / "plan.md"
+PRODUCTO = RAIZ / ".hermes" / "plans" / "2026-11-09_212209-apkc-studio-producto.md"
 ACTUAL = Path("/data/data/com.termux/files/usr/tmp/apkc-progreso/actual.txt")
 
 # Fronteras que el inventario marca como hechas pero el usuario pidió cerrar. Se marcan
@@ -64,12 +65,37 @@ def filas_del_inventario(texto: str) -> list[dict]:
     return filas
 
 
+def filas_del_producto(texto: str) -> list[dict]:
+    """Lee la tabla de estado de la cabecera del plan de producto.
+
+    Cada fila es `> | fase | estado | dónde |`. Solo se pinta si el plan existe: vive en
+    `.hermes/`, que está ignorado por git, y el panel no puede depender de un fichero local.
+    """
+    filas = []
+    for linea in texto.splitlines():
+        if not linea.startswith("> |"):
+            continue
+        c = celdas(linea[1:])
+        if len(c) < 3 or c[1] in ("Fase", "---") or set(c[1]) <= set("-: "):
+            continue
+        estado = re.sub(r"[*`]", "", c[2]).strip()
+        hecho = estado.startswith("hecha") and "en parte" not in estado
+        filas.append({
+            "text": "Producto · " + re.sub(r"[*`]", "", c[1]).strip(),
+            "done": hecho,
+            "detail": estado,
+        })
+    return filas
+
+
 def main() -> int:
     salida = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/data/data/com.termux/files/usr/tmp/apkc-progreso/tareas.json")
     texto = PLAN.read_text(encoding="utf-8")
     items = filas_del_inventario(texto)
     for numero, texto_item, detalle, hecho in EXTRAS:
         items.append({"text": f"{numero} · {texto_item}", "done": hecho, "detail": detalle})
+    if PRODUCTO.exists():
+        items.extend(filas_del_producto(PRODUCTO.read_text(encoding="utf-8")))
     actual = ACTUAL.read_text(encoding="utf-8").strip() if ACTUAL.exists() else ""
     salida.parent.mkdir(parents=True, exist_ok=True)
     temporal = salida.with_suffix(salida.suffix + ".tmp")

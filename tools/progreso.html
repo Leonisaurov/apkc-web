@@ -105,11 +105,12 @@
   }
 
   function pintar(items, actualTexto) {
-    const idActual = String(actualTexto || "").split(" · ")[0].trim();
     const pendientes = items.filter((i) => !i.done);
     const hechos = items.filter((i) => i.done);
-    // el que está en la caja de arriba no se repite en la lista; la cuenta lo sigue contando
-    const resto = pendientes.filter((i) => !(idActual && String(i.text).startsWith(idActual + " ·")));
+    // el que está en la caja de arriba no se repite en la lista; la cuenta lo sigue contando.
+    // Se compara el texto entero: con el primer tramo, «Producto · A1 …» ocultaba todos los
+    // pendientes que empezaban por «Producto».
+    const resto = pendientes.filter((i) => String(i.text) !== String(actualTexto || ""));
     cuenta.textContent = String(pendientes.length);
     resumen.textContent = "pendientes · " + hechos.length + " hechos";
     barra.style.width = (items.length ? (100 * hechos.length) / items.length : 0) + "%";
