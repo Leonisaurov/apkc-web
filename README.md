@@ -27,6 +27,18 @@ y hay que emitir en Go el bytecode, el `classes.dex` y los recursos. Se midió e
 del studio son **2844 bytes de dex y 217 objetos** ([docs/evidencia.md](docs/evidencia.md) §13), y la
 página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** (§15).
 
+## Repositorios
+
+- [`apkc-web`](https://github.com/Leonisaurov/apkc-web): este repo. El fork de apkc, el banco, la
+  documentación medida, el gate y el sitio publicado.
+- [`apkc-studio`](https://github.com/Leonisaurov/apkc-studio): el editor web, montado aquí como
+  **submódulo** en [`studio/`](studio/). Sus cambios se commitean allí y el puntero se actualiza en
+  este repo.
+
+```sh
+git clone --recurse-submodules https://github.com/Leonisaurov/apkc-web.git
+```
+
 ## Qué hay aquí
 
 | Fichero | Qué es |
