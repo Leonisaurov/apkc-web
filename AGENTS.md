@@ -67,11 +67,18 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
    `tareas.json` **no basta**: hay que copiarlo a `~/.cache/pantalla-secundaria/www/` y comprobar que el
    panel lo pinta. La página no se recarga: si el JSON no se copia, sigue enseñando lo anterior durante
    horas y el usuario trabaja con datos falsos.
-10. **El estado sigue a la prueba, no al impulso.** Una fase pasa a «hecha» solo cuando la prueba
-   que su propia fila cita ha pasado sobre el árbol final; hasta entonces se queda «en verificación».
-   Y una verificación tiene **el alcance del cambio**: relanzar el gate por un módulo no pone «en
-   verificación» fases que no dependen de él ni cambia su estado. Lo ya verificado se queda como
-   estaba; no se extiende la duda a todo el plan por un cambio local.
+10. **El estado es evidencia propia, y solo propia.** Antes de cambiar una fila del plan, responder
+    estas cuatro preguntas:
+    (1) ¿qué comando prueba **esa** fase? (2) ¿lo he ejecutado **después** del último cambio que la
+    afecta? (3) ¿la evidencia es suya o de otra fase? (4) ¿el panel dice lo mismo que el plan?
+    Si falta una, la fila se queda **pendiente** o **en verificación**; nunca «hecha» por analogía,
+    por «debería funcionar» ni porque el cambio sea pequeño. Corolarios que ya fallaron:
+    - **CI escrito no es CI verde**, y un workflow en el repo no verifica nada hasta que el job pasa.
+    - **Empaquetar no es publicar**: si el sitio no está accesible en un host, la fase sigue pendiente.
+    - **El alcance es el cambio**: relanzar el gate por un módulo no revalida ni invalida las demás
+      fases; cada una conserva su estado y su prueba.
+    - **No se anuncia «0 pendientes» ni «terminado»** hasta que la última fila tenga su prueba en
+      verde sobre el árbol final.
 
 ## Entorno (Termux/Android aarch64)
 
