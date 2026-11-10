@@ -63,7 +63,9 @@ Qué hace de verdad, y qué no:
   con `servidor.js`, el jar se toma del SDK local y se sirve en `/android-jar`; en una página
   estática, la pestaña Compilar abre un diálogo que aclara que el `android.jar` es de Google, exige un
   acuse y enlaza a sus términos y a la descarga oficial; el editor extrae
-  `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Esa
+  `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Cuando el jar ya está en OPFS,
+  la sección **SDK y android.jar** queda plegada, gris y con la etiqueta **listo**; el botón pasa a
+  **Cambiar android.jar** y deja de pedirlo en cada visita. Esa
   descarga es una navegación que pulsa la persona, no una petición de la página: la pestaña sigue
   sin pedir nada fuera de su origen. En
   ambos casos se guarda una vez en OPFS y sobrevive a recargar. `tools/entorno.sh jar` instala

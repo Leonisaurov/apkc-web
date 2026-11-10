@@ -2270,19 +2270,40 @@ async function usarJarElegido() {
   });
 }
 
+function actualizarEstadoSdk(tiene, bytes) {
+  const detalle = document.getElementById("detalle-sdk");
+  const badge = document.getElementById("sdk-badge");
+  const boton = document.getElementById("abrir-dialogo-sdk");
+  if (detalle) {
+    detalle.classList.toggle("jar-listo", !!tiene);
+    if (tiene) detalle.open = false;          // ya está: que no siga llamando la atención
+  }
+  if (badge) {
+    badge.hidden = !tiene;
+    badge.textContent = tiene ? "listo" : "";
+  }
+  if (boton) {
+    boton.textContent = tiene ? "Cambiar android.jar" : "Obtener el android.jar";
+    boton.classList.toggle("primario", !tiene);
+  }
+}
+
 async function decirEstadoJar() {
   const aviso = document.getElementById("estado-jar");
   if (!aviso) return false;
   try {
     const r = await hospedador.leer(RUTA_JAR);
     if (r.bytes) {
-      aviso.textContent = "hay un android.jar de " + r.bytes.length + " bytes en esta pestaña (" + RUTA_JAR + ")";
+      actualizarEstadoSdk(true, r.bytes.length);
+      aviso.textContent = "android.jar listo en esta pestaña (" + r.bytes.length + " bytes)";
       return true;
     }
   } catch (e) {
+    actualizarEstadoSdk(false);
     aviso.textContent = "no se puede leer OPFS en este contexto: " + (e && e.message ? e.message : e);
     return false;
   }
+  actualizarEstadoSdk(false);
   aviso.textContent = "sin android.jar en esta pestaña todavía";
   return false;
 }

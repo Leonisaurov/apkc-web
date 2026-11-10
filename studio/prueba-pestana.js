@@ -615,11 +615,23 @@ async function conductor() {
         if (/26361808/.test(aviso.textContent)) break;
         await new Promise((r) => setTimeout(r, 500));
       }
-      return { aviso: aviso.textContent, guardado: !!(await hospedador.leer("/sdk/android.jar")).bytes };
+      const detalle = document.getElementById("detalle-sdk");
+      return {
+        aviso: aviso.textContent,
+        guardado: !!(await hospedador.leer("/sdk/android.jar")).bytes,
+        listo: detalle.classList.contains("jar-listo"),
+        badge: !document.getElementById("sdk-badge").hidden,
+        boton: document.getElementById("abrir-dialogo-sdk").textContent,
+        cerrado: detalle.open === false,
+      };
     })()`);
     const peticionesNuevo = peticiones.slice(antesDelPicker);
     comprueba("el jar elegido de disco queda en OPFS con su tamano", /26361808 bytes/.test(desdeDisco.aviso) && desdeDisco.guardado,
       JSON.stringify(desdeDisco.aviso));
+    comprueba("con el jar cargado la sección se marca lista y no llama la atención",
+      desdeDisco.listo === true && desdeDisco.badge === true &&
+      /Cambiar android\.jar/.test(String(desdeDisco.boton)) && desdeDisco.cerrado === true,
+      JSON.stringify({ listo: desdeDisco.listo, badge: desdeDisco.badge, boton: desdeDisco.boton, cerrado: desdeDisco.cerrado }));
     comprueba("entrar el jar desde el disco no hace ni una peticion",
       !peticionesNuevo.some((u) => new URL(u).pathname === "/android-jar"),
       peticionesNuevo.length + " peticiones en el tramo: " + peticionesNuevo.slice(0, 3).join(", "));

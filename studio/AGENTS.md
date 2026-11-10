@@ -111,6 +111,9 @@ los imports y no debe depender de ese puente.
   cambios locales recarga, sin cambios remotos conserva, cambios separados se combinan y los que
   tocan la misma línea abren `#conflicto-aviso`. No hay CRDT ni servidor; la base es la última
   versión de OPFS y los ficheros de más de 2000 líneas caen a conflicto explícito.
+- **El jar listo no se reclama.** Si `/sdk/android.jar` existe en OPFS, `decirEstadoJar()` deja
+  `#detalle-sdk` plegado con `.jar-listo`, muestra `#sdk-badge`, y convierte `#abrir-dialogo-sdk`
+  en «Cambiar android.jar». No vuelvas a abrir el desplegable ni mantengas el botón primario.
 - **Service worker.** `sw.js` cachea el shell e intenta cachear `apkc.wasm`/`wasm_exec.js`; nunca
   `/android-jar`, keystores ni OPFS. `offline.js` lo registra solo por http(s). Las respuestas
   cacheadas deben conservar COOP/COEP; `prueba-pestana.js` prueba la recarga offline.

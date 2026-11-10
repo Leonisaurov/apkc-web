@@ -574,6 +574,23 @@ details[open] > summary::before { transform: rotate(90deg); }
 details > summary:hover { color: var(--blanco); }
 details > :not(summary) { margin-left: 12px; margin-right: 12px; }
 details details { margin-left: 0; margin-right: 0; }
+.badge-sdk {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--superficie3);
+  color: var(--texto-tenue);
+  font-size: 10px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+details.jar-listo {
+  background: var(--superficie);
+  border-color: var(--borde);
+}
+details.jar-listo > summary { color: var(--texto-tenue); }
+details.jar-listo .badge-sdk { background: #1f3a2a; color: var(--ok); }
 
 pre {
   background: var(--superficie);
