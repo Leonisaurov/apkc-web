@@ -67,6 +67,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
    `tareas.json` **no basta**: hay que copiarlo a `~/.cache/pantalla-secundaria/www/` y comprobar que el
    panel lo pinta. La página no se recarga: si el JSON no se copia, sigue enseñando lo anterior durante
    horas y el usuario trabaja con datos falsos.
+10. **El estado sigue a la prueba, no al impulso.** Una fase pasa a «hecha» solo cuando la prueba
+   que su propia fila cita ha pasado sobre el árbol final; hasta entonces se queda «en verificación».
+   Y una verificación tiene **el alcance del cambio**: relanzar el gate por un módulo no pone «en
+   verificación» fases que no dependen de él ni cambia su estado. Lo ya verificado se queda como
+   estaba; no se extiende la duda a todo el plan por un cambio local.
 
 ## Entorno (Termux/Android aarch64)
 
