@@ -166,6 +166,16 @@ No hay QR: el `blob:` de la descarga vive en el navegador y no es accesible desd
 la instalación dice `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, la app instalada está firmada con otra
 clave: desinstala la anterior o vuelve a la clave con la que se instaló.
 
+## 6.6 Empaquetar el sitio para publicar
+
+```sh
+sh -c 'APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm sh tools/sitio.sh $PREFIX/tmp/apkc-sitio'
+```
+
+Deja `apkc-sitio/` y `apkc-sitio.zip` con los ficheros versionados de `studio/`, `apkc.wasm` y
+`wasm_exec.js`, y falla si `_headers` no declara COOP/COEP. No incluye el `android.jar`, keystores
+ni OPFS.
+
 ## 7. Errores típicos
 
 - **El servidor no arranca**: falta `APKC_WASM` o el binario no existe. Repite el paso 2.

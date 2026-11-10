@@ -95,14 +95,13 @@ jobs:
             ${{ runner.temp }}/tmp/*.log
           if-no-files-found: ignore
       - name: preparar el sitio estático
-        run: |
-          mkdir -p sitio
-          cp -r studio/. sitio/
-          cp "$RUNNER_TEMP/apkc-wasm.wasm" sitio/apkc.wasm
+        env:
+          APKC_WASM: ${{ runner.temp }}/apkc-wasm.wasm
+        run: sh tools/sitio.sh "$RUNNER_TEMP/sitio"
       - uses: actions/upload-artifact@v4
         with:
           name: sitio
-          path: sitio
+          path: ${{ runner.temp }}/sitio
 
   # El release no puede saltarse el gate: si el pesado falla, este job no arranca. Publica el
   # sitio empaquetado como artefacto de la release; el host definitivo sigue sin decidirse.
