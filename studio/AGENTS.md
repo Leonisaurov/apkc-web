@@ -138,7 +138,7 @@ los imports y no debe depender de ese puente.
 `_headers` cubre Netlify y Cloudflare Pages. GitHub Pages no permite fijar COOP/COEP, así que
 allí el editor no arranca. El `android.jar` y el keystore no se versionan ni se empaquetan: la
 página los pide al SDK local (mismo origen) o al selector de fichero, y el paquete oficial de
-Google se descarga como navegación del usuario tras aceptar los términos.
+Google se descarga como navegación del usuario: el diálogo exige un acuse y los términos se aceptan en el sitio de Google, no aquí.
 
 ## Documentos gemelos
 

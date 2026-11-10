@@ -879,16 +879,28 @@ async function conductor() {
     paquete.largo === 2050 && paquete.cabecera === "PK", JSON.stringify(paquete));
 
   const terminos = await evaluar(`(() => {
-    const c = document.getElementById("acepto-sdk"), a = document.getElementById("descargar-sdk");
-    const antes = a.getAttribute("aria-disabled");
-    c.checked = true; c.dispatchEvent(new Event("change", { bubbles: true }));
-    const despues = a.getAttribute("aria-disabled");
-    c.checked = false; c.dispatchEvent(new Event("change", { bubbles: true }));
-    return { antes, despues, href: a.href };
+    document.getElementById("abrir-dialogo-sdk").click();
+    const dialogo = document.getElementById("dialogo-sdk");
+    const enlace = document.getElementById("sdk-terminos");
+    const acuse = document.getElementById("sdk-entiendo");
+    const abierto = dialogo.open === true;
+    const bloqueado = enlace.getAttribute("aria-disabled") === "true";
+    acuse.checked = true; acuse.dispatchEvent(new Event("change", { bubbles: true }));
+    const habilitado = enlace.getAttribute("aria-disabled") === "false";
+    acuse.checked = false; acuse.dispatchEvent(new Event("change", { bubbles: true }));
+    const otraVez = enlace.getAttribute("aria-disabled") === "true";
+    document.getElementById("sdk-cerrar").click();
+    return {
+      abierto, bloqueado, habilitado, otraVez,
+      terminos: enlace.href,
+      descarga: document.getElementById("sdk-descarga").href,
+    };
   })()`);
-  comprueba("la descarga oficial exige aceptar los términos y apunta a Google",
-    terminos.antes === "true" && terminos.despues === "false" &&
-    /^https:\/\/dl\.google\.com\//.test(terminos.href), JSON.stringify(terminos));
+  comprueba("el diálogo del SDK exige acuse y enlaza a Google",
+    terminos.abierto === true && terminos.bloqueado === true &&
+    terminos.habilitado === true && terminos.otraVez === true &&
+    /^https:\/\/developer\.android\.com\/studio\/terms/.test(terminos.terminos) &&
+    /^https:\/\/dl\.google\.com\//.test(terminos.descarga), JSON.stringify(terminos));
 
   // 14. recarga sin red: el service worker sirve el shell y conserva el aislamiento
   const sw = await evaluar(`(async () => {

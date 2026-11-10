@@ -984,6 +984,29 @@ pre {
 
 /* ---- pantalla de carga ---------------------------------------------------- */
 
+.dialogo-sdk {
+  width: min(620px, calc(100vw - 32px));
+  padding: 18px 20px;
+  border: 1px solid var(--borde2);
+  border-radius: 6px;
+  background: var(--superficie2);
+  color: var(--texto);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, .55);
+}
+.dialogo-sdk::backdrop { background: rgba(0, 0, 0, .62); }
+.dialogo-sdk h2 { margin: 0 0 10px; font-size: 16px; }
+.dialogo-sdk p { margin: 8px 0; color: var(--texto-medio); font-size: 12px; line-height: 1.55; }
+.dialogo-sdk code { color: var(--sintaxis-cadena); }
+.dialogo-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0;
+  color: var(--texto);
+  font-size: 12px;
+}
+.dialogo-check input { margin-top: 2px; }
+
 .cargando {
   position: fixed;
   inset: 0;

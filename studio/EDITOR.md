@@ -362,15 +362,16 @@ la pestaña activa.
   fichero grande o descargar el jar del SDK. Solo aparece si la tarea pasa de 120 ms, y se retira
   en `finally`, también cuando falla.
 - `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
-  `#verificar-apk`, `#probar-build-clasico`) y deja el resto en tres desplegables: `#detalle-sdk` (términos, descarga
-  oficial, `.zip`/`.jar`, `#acepto-sdk`, `#descargar-sdk`, `#traer-android-jar`,
+  `#verificar-apk`, `#probar-build-clasico`) y deja el resto en tres desplegables: `#detalle-sdk`
+  (`#abrir-dialogo-sdk`, `#dialogo-sdk`, `#sdk-entiendo`, `#sdk-terminos`, `#sdk-descarga`,
+  `#sdk-elegir-archivo`, `#sdk-usar-servidor`, `#sdk-cerrar`, `#traer-android-jar`,
   `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
   (`#keystore-compilar`, `#storepass-compilar`, `#keyalias-compilar`) y opciones avanzadas
   (`#api-version`, los ocultos `#sdk-version`/`#codename`, `#v4-compilar`). `#api-version` es el
   selector visible, 34 por defecto; al cambiar sincroniza los dos campos que lee `apkc build`.
-  En una página estática, el enlace a Google solo
-  se activa al aceptar los términos y el editor extrae `android-34/android.jar` del `.zip`
-  oficial; el `.jar` suelto también vale. Con `servidor.js`, el botón «Traer el del SDK local» y
+  En una página estática, el diálogo exige marcar el acuse antes de habilitar los enlaces a los
+  términos y a la descarga oficial de Google; no descarga nada por su cuenta y el editor extrae
+  `android-34/android.jar` del `.zip`. El `.jar` suelto también vale. Con `servidor.js`, el botón «Traer el del SDK local» y
   el primer compilar piden `/android-jar` al mismo origen. El jar nunca se versiona en el repo.
 - `#compilar-debug` no lee el keystore de release: la primera vez llama a
   `apkc debug-keystore`, que escribe `/sdk/debug.keystore` (alias `androiddebugkey`,

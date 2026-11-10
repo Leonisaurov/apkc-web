@@ -61,8 +61,9 @@ Qué hace de verdad, y qué no:
   `android`, `CN=Android Debug`) y reutiliza esa identidad; «Compilar release» sigue usando el
   keystore elegido. El keystore y el `android.jar` no salen de la pestaña:
   con `servidor.js`, el jar se toma del SDK local y se sirve en `/android-jar`; en una página
-  estática, la pestaña Compilar de la consola pide aceptar los términos del SDK y enlaza al paquete oficial de
-  Google, y el editor extrae `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Esa
+  estática, la pestaña Compilar abre un diálogo que aclara que el `android.jar` es de Google, exige un
+  acuse y enlaza a sus términos y a la descarga oficial; el editor extrae
+  `android-34/android.jar` del `.zip` (o acepta el `.jar` suelto). Esa
   descarga es una navegación que pulsa la persona, no una petición de la página: la pestaña sigue
   sin pedir nada fuera de su origen. En
   ambos casos se guarda una vez en OPFS y sobrevive a recargar. `tools/entorno.sh jar` instala
@@ -146,7 +147,7 @@ Además:
   `apkc.wasm` construido en `/apkc.wasm`; ninguno de los dos se versiona.
 - el `android.jar` y los keystores no viajan con la página: salen del SDK local (mismo origen) o
   del selector de fichero, y el paquete oficial de Google es una navegación del usuario tras
-  aceptar los términos.
+  el acuse y la aceptación de los términos en el sitio de Google.
 
 ## Abrir la pestaña en Brave Nightly
 

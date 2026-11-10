@@ -2251,6 +2251,8 @@ async function consultarJarDelSdk() {
   } finally {
     JAR_SDK.consultado = true;
     if (boton) boton.hidden = !JAR_SDK.disponible;
+    const usar = document.getElementById("sdk-usar-servidor");
+    if (usar) usar.hidden = !JAR_SDK.disponible;
   }
 }
 
@@ -2519,27 +2521,60 @@ if (typeof document !== "undefined") {
     window.addEventListener("scroll", cerrarMenuArchivo, true);
     window.addEventListener("resize", cerrarMenuArchivo);
 
-    // La descarga del paquete oficial es una navegación del usuario a Google, no una petición
-    // de la página: por eso sigue funcionando servida de forma estática. Sin aceptar los
-    // términos, el enlace no sale.
-    const acepto = document.getElementById("acepto-sdk");
-    const enlaceSdk = document.getElementById("descargar-sdk");
-    if (acepto && enlaceSdk) {
-      const reflejarAcepto = () => {
-        const listo = !!acepto.checked;
-        enlaceSdk.setAttribute("aria-disabled", String(!listo));
-        if (listo) enlaceSdk.removeAttribute("tabindex");
-        else enlaceSdk.tabIndex = -1;
-      };
-      acepto.addEventListener("change", reflejarAcepto);
-      enlaceSdk.addEventListener("click", (e) => {
-        if (!acepto.checked) {
-          e.preventDefault();
-          nota("acepta los términos del SDK de Android antes de descargar");
-          acepto.focus();
+    // El jar es de Google: no lo distribuimos ni lo descargamos por el usuario. El diálogo es un
+    // acuse informado; los términos se aceptan en el sitio de Google al abrir sus enlaces.
+    const dialogoSdk = document.getElementById("dialogo-sdk");
+    const entiendo = document.getElementById("sdk-entiendo");
+    const enlaceTerminos = document.getElementById("sdk-terminos");
+    const enlaceDescarga = document.getElementById("sdk-descarga");
+    const usarServidor = document.getElementById("sdk-usar-servidor");
+    if (dialogoSdk && entiendo) {
+      const reflejarAcuse = () => {
+        const listo = !!entiendo.checked;
+        for (const enlace of [enlaceTerminos, enlaceDescarga]) {
+          if (!enlace) continue;
+          enlace.setAttribute("aria-disabled", String(!listo));
+          if (listo) enlace.removeAttribute("tabindex");
+          else enlace.tabIndex = -1;
         }
+      };
+      const abrirDialogo = () => {
+        entiendo.checked = false;
+        reflejarAcuse();
+        if (usarServidor) usarServidor.hidden = !JAR_SDK.disponible;
+        if (typeof dialogoSdk.showModal === "function") dialogoSdk.showModal();
+        else dialogoSdk.hidden = false;
+        entiendo.focus();
+      };
+      const cerrarDialogo = () => {
+        if (typeof dialogoSdk.close === "function") dialogoSdk.close();
+        else dialogoSdk.hidden = true;
+      };
+      entiendo.addEventListener("change", reflejarAcuse);
+      for (const enlace of [enlaceTerminos, enlaceDescarga]) {
+        if (!enlace) continue;
+        enlace.addEventListener("click", (e) => {
+          if (!entiendo.checked) {
+            e.preventDefault();
+            nota("marca el acuse del SDK antes de abrir la página de Google");
+            entiendo.focus();
+          }
+        });
+      }
+      en("abrir-dialogo-sdk", abrirDialogo);
+      en("sdk-cerrar", cerrarDialogo);
+      en("sdk-elegir-archivo", () => {
+        cerrarDialogo();
+        const entrada = document.getElementById("android-jar");
+        if (entrada) entrada.click();
       });
-      reflejarAcepto();
+      if (usarServidor) {
+        en("sdk-usar-servidor", () => {
+          cerrarDialogo();
+          Promise.resolve(traerJarDelSdk(false)).catch((e) => nota(String(e && e.message || e)));
+        });
+      }
+      reflejarAcuse();
     }
 
     for (const boton of document.querySelectorAll(".panel-tab")) {

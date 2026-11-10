@@ -228,12 +228,8 @@
                     <code>.zip</code>. También puedes elegir el <code>.jar</code> suelto. Se guarda una
                     vez en OPFS y no sale de la pestaña.</p>
                   <div class="panel-form">
-                    <label><input type="checkbox" id="acepto-sdk"> Acepto los
-                      <a href="https://developer.android.com/studio/terms" target="_blank" rel="noopener">términos del SDK de Android</a>.</label>
                     <div class="acciones">
-                      <a id="descargar-sdk" class="boton-enlace" aria-disabled="true"
-                         href="https://dl.google.com/android/repository/platform-34-ext7_r03.zip"
-                         download="platform-34-ext7_r03.zip" target="_blank" rel="noopener">Descargar el paquete oficial (zip, ~63 MB)</a>
+                      <button id="abrir-dialogo-sdk" class="primario" type="button">Obtener el android.jar</button>
                       <button id="traer-android-jar" type="button" hidden>Traer el del SDK local</button>
                     </div>
                     <p class="nota" id="estado-jar-sdk">mirando si el servidor tiene un SDK local…</p>
@@ -347,6 +343,32 @@
 <input type="file" id="subir-carpeta" webkitdirectory hidden aria-label="Subir una carpeta al proyecto">
 
 <div id="menu-archivo" class="menu-archivo" role="menu" aria-label="Acciones del fichero" hidden></div>
+
+<dialog id="dialogo-sdk" class="dialogo-sdk" aria-labelledby="dialogo-sdk-titulo">
+  <h2 id="dialogo-sdk-titulo">El <code>android.jar</code> es del SDK de Android de Google</h2>
+  <p>apkc studio no distribuye ni versiona el SDK. Solo enlaza a la página oficial. Al descargarlo,
+    los términos de Google se aceptan en su sitio, no aquí: este diálogo es un acuse de que lo
+    entiendes, no una aceptación en nombre de Google.</p>
+  <p class="nota">Si ya tienes el SDK instalado, puedes usar su <code>android.jar</code> o el
+    <code>.zip</code> oficial sin descargar nada desde esta página.</p>
+  <label class="dialogo-check">
+    <input type="checkbox" id="sdk-entiendo">
+    Entiendo que el SDK es de Google y que sus términos se aceptan en su sitio.
+  </label>
+  <div class="acciones">
+    <a id="sdk-terminos" class="boton-enlace" href="https://developer.android.com/studio/terms"
+       target="_blank" rel="noopener" aria-disabled="true">Leer los términos de Google</a>
+    <a id="sdk-descarga" class="boton-enlace"
+       href="https://dl.google.com/android/repository/platform-34-ext7_r03.zip"
+       target="_blank" rel="noopener" aria-disabled="true">Descargar el paquete oficial (zip, ~63 MB)</a>
+  </div>
+  <div class="acciones">
+    <button id="sdk-elegir-archivo" type="button">Ya tengo el .jar o el .zip</button>
+    <button id="sdk-usar-servidor" type="button" hidden>Usar el SDK local</button>
+    <button id="sdk-cerrar" type="button">Cerrar</button>
+  </div>
+  <p class="nota">No se descarga nada automáticamente al abrir este diálogo.</p>
+</dialog>
 
 <div id="cargando" class="cargando" role="status" aria-live="polite" hidden>
   <div class="cargando-caja"><span class="cargando-rueda" aria-hidden="true"></span><span id="cargando-texto">Cargando…</span></div>
