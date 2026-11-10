@@ -33,9 +33,6 @@ jobs:
     needs: rapido
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      ANDROID_HOME: ${{ runner.temp }}/android-sdk
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,8 +48,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "21"
-      - name: SDK y build-tools
+      - name: SDK limpio con solo la plataforma 34
         run: |
+          echo "ANDROID_HOME=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
+          export ANDROID_HOME="$RUNNER_TEMP/android-sdk"
           mkdir -p "$ANDROID_HOME"
           SDKM=$(ls -d /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
           echo "sdkmanager: $SDKM"
