@@ -8,6 +8,25 @@
 
 set -eu
 
+# En Termux, tcr limita CPU y memoria; en un runner Linux se ejecuta directo. TCR="" fuerza la
+# ejecución directa y TCR=<ruta> elige un ejecutor concreto (es lo que pide docs/plan.md, E1).
+if [ -n "${TCR:-}" ]; then
+  ejecutar() { "$TCR" -j 1 -q -- "$@"; }
+elif command -v tcr >/dev/null 2>&1; then
+  ejecutar() { tcr -j 1 -q -- "$@"; }
+else
+  ejecutar() { "$@"; }
+fi
+
+# El navegador no se llama igual en todas partes: CHROME_BIN manda y, si falta, se busca.
+CHROME=${CHROME_BIN:-}
+if [ -z "$CHROME" ]; then
+  for candidato in chromium-browser chromium google-chrome google-chrome-stable; do
+    if command -v "$candidato" >/dev/null 2>&1; then CHROME=$candidato; break; fi
+  done
+fi
+export CHROME_BIN="$CHROME"
+
 AQUI=$(cd "$(dirname "$0")" && pwd)
 TMP=${PREFIX:-/data/data/com.termux/files/usr}/tmp
 APKC=${APKC:?faltan las ganas y la variable APKC con el binario}
@@ -16,7 +35,14 @@ BUILD_TOOLS=$(ls -d "$SDK"/build-tools/* 2>/dev/null | sort -V | tail -1)
 # el android.jar sirve también para la pestaña: `apkc build --linker go --compiler go` compila Java
 # contra el SDK dentro de chromium, así que la prueba puede pedir el apk entero del navegador
 ANDROID_JAR=${ANDROID_JAR:-$(ls -d "$SDK"/platforms/*/android.jar 2>/dev/null | sort -V | tail -1)}
-ZIPCHECK="$HOME/Develop/Go/apkc-harness/zipcheck.py"
+ZIPCHECK="${APKC_HARNESS:-$HOME/Develop/Go/apkc-harness}/zipcheck.py"
+# El oráculo de zip vive en el repo del harness. En un runner que no lo tenga (CI) se omite con
+# aviso, no se finge que pasó: las demás comprobaciones siguen siendo obligatorias.
+if [ ! -f "$ZIPCHECK" ]; then
+  echo "  (sin zipcheck.py en $ZIPCHECK: se omite ese oráculo)"
+  ZIPCHECK=""
+fi
+zipcheck() { [ -n "$ZIPCHECK" ] || return 0; python3 "$ZIPCHECK" "$@"; }
 FALLOS=0
 
 # El keystore de release de la prueba: se genera uno de usar y tirar con keytool, con contraseña
@@ -85,7 +111,7 @@ variancia() { # $1 nombre, $2 kotlin (0/1)
     cp "$stdlib" jar/
   fi
 
-  if ! tcr -j 1 -q -- "$APKC" build >"$TMP/studio-$nombre-build.log" 2>&1; then
+  if ! ejecutar "$APKC" build >"$TMP/studio-$nombre-build.log" 2>&1; then
     falla "$nombre no compila"; tail -12 "$TMP/studio-$nombre-build.log"; return
   fi
   [ -f build/app.apk ] || { falla "$nombre: no hay build/app.apk"; return; }
@@ -97,8 +123,8 @@ variancia() { # $1 nombre, $2 kotlin (0/1)
   grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v1"
   grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v2"
   grep -q 'v3 scheme (APK Signature Scheme v3): true' "$TMP/studio-$nombre-verify.log" || falla "$nombre: sin firma v3"
-  if ! python3 "$ZIPCHECK" build/app.apk >/dev/null 2>&1; then
-    falla "$nombre: zipcheck rechaza el paquete"; python3 "$ZIPCHECK" build/app.apk | head -5
+  if ! zipcheck build/app.apk >/dev/null 2>&1; then
+    falla "$nombre: zipcheck rechaza el paquete"; zipcheck build/app.apk | head -5
   fi
   if unzip -l build/app.apk | grep -q 'LEEME'; then
     falla "$nombre: un LEEME de la página acabó dentro del apk"
@@ -109,7 +135,7 @@ variancia() { # $1 nombre, $2 kotlin (0/1)
   # jarsigner. bundletool validate y jarsigner son los oráculos de fuera.
   if [ "$kotlin" = 0 ]; then
     rm -f build/app.aab
-    if tcr -j 1 -q -- "$APKC" build --aab >"$TMP/studio-$nombre-aab.log" 2>&1; then
+    if ejecutar "$APKC" build --aab >"$TMP/studio-$nombre-aab.log" 2>&1; then
       if [ -f build/app.aab ]; then
         bundletool_jar=$(ls "$HOME"/Android/bundletool/bundletool-*.jar 2>/dev/null | sort -V | tail -1)
         if [ -n "$bundletool_jar" ]; then
@@ -145,7 +171,7 @@ variancia kotlin 1
 
 # 3. el navegador real, si esta y si no se pidio omitirlo: el DOM, el click de descarga y el
 #    localStorage bajo file:// son justo lo que node no puede ejercitar
-if [ -z "${STUDIO_NO_BROWSER:-}" ] && command -v chromium-browser >/dev/null 2>&1; then
+if [ -z "${STUDIO_NO_BROWSER:-}" ] && [ -n "$CHROME" ]; then
   if ! node "$AQUI/prueba-navegador.js" >"$TMP/studio-navegador.log" 2>&1; then
     falla "la pagina en chromium"; tail -8 "$TMP/studio-navegador.log"
   else
@@ -157,7 +183,7 @@ fi
 
 # 3b. el flujo nuevo de la página: crear desde el formulario (nombre, package, icono) y quedar
 #     editando el manifiesto. Necesita OPFS y el wasm, así que va por http como la pestaña.
-if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && command -v chromium-browser >/dev/null 2>&1; then
+if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$CHROME" ]; then
   if ! APKC_WASM="$APKC_WASM" node "$AQUI/prueba-crear.js" >"$TMP/studio-crear.log" 2>&1; then
     falla "crear el proyecto desde el formulario"; tail -10 "$TMP/studio-crear.log"
   else
@@ -168,7 +194,7 @@ fi
 # 4. la pestaña con apkc.wasm dentro de chromium: crea, edita en OPFS, sobrevive a recargar y
 #    firma. Solo se prueba si hay binario wasm; sin él esta parte queda avisada, no dada por buena.
 APK_FIXTURE=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1)
-if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && command -v chromium-browser >/dev/null 2>&1; then
+if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && [ -n "$CHROME" ]; then
   if ! APKC_WASM="$APKC_WASM" APK_EJEMPLO="$APK_FIXTURE" KS_EJEMPLO="${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
        KS_RELEASE="$KS_RELEASE" AAB_EJEMPLO="$AAB_EJEMPLO" \
        ANDROID_JAR="${ANDROID_JAR:-}" node "$AQUI/prueba-pestana.js" >"$TMP/studio-pestana.log" 2>&1; then
@@ -180,7 +206,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
     fi
     grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-verify.log" || falla "apk de pestaña sin v1"
     grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-verify.log" || falla "apk de pestaña sin v2"
-    if ! python3 "$ZIPCHECK" "$firmada" >/dev/null 2>&1; then falla "zipcheck rechaza la apk de la pestaña"; fi
+    if ! zipcheck "$firmada" >/dev/null 2>&1; then falla "zipcheck rechaza la apk de la pestaña"; fi
     avisa "pestaña: $(grep -c '^  ok' "$TMP/studio-pestana.log") comprobaciones, apk firmada dentro de chromium de $(wc -c <"$firmada" | tr -d ' ') bytes y verificada"
 
     # 4a-bis. el apk firmado en la pestaña con el keystore de release: apksigner tiene que leer el
@@ -194,7 +220,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         falla "el apk de release no lleva el certificado elegido en la pestaña"
       grep -q 'v3 scheme (APK Signature Scheme v3): true' "$TMP/studio-pestana-release.log" ||
         falla "el apk de release no lleva v3"
-      if ! python3 "$ZIPCHECK" "$release" >/dev/null 2>&1; then falla "zipcheck rechaza el apk de release"; fi
+      if ! zipcheck "$release" >/dev/null 2>&1; then falla "zipcheck rechaza el apk de release"; fi
       avisa "pestaña release: apk de $(wc -c <"$release" | tr -d ' ') bytes firmado con CN=Release de prueba y verificado por apksigner (v1+v2+v3)"
       idsig="$release.idsig"
       if [ -f "$idsig" ]; then
@@ -273,7 +299,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-completa.log" || falla "apk compilado en pestaña sin v1"
       grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-completa.log" || falla "apk compilado en pestaña sin v2"
       "$BUILD_TOOLS/zipalign" -c -p 4 "$compilado" || falla "zipalign rechaza el apk compilado en la pestaña"
-      if ! python3 "$ZIPCHECK" "$compilado" >/dev/null 2>&1; then falla "zipcheck rechaza el apk compilado en la pestaña"; fi
+      if ! zipcheck "$compilado" >/dev/null 2>&1; then falla "zipcheck rechaza el apk compilado en la pestaña"; fi
       # y aapt2, que es quien lee la tabla de recursos, tiene que entenderlo
       "$BUILD_TOOLS/aapt2" dump badging "$compilado" >"$TMP/studio-pestana-badging.log" 2>&1 || falla "aapt2 no entiende el apk de la pestaña"
       grep -q "package: name='com.myapp'" "$TMP/studio-pestana-badging.log" || falla "el apk de la pestaña no trae el package que creo"
@@ -311,7 +337,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         }'
       proyecto=$base/proyecto
       cd "$proyecto"
-      if ! tcr -j 1 -q -- "$APKC" build --linker go --compiler go --android-jar "$ANDROID_JAR" \
+      if ! ejecutar "$APKC" build --linker go --compiler go --android-jar "$ANDROID_JAR" \
            --sdk-version 34 --codename 14 --keystore "${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
            >"$TMP/studio-e46-build.log" 2>&1; then
         falla "el proyecto generado no compila en nativo"; tail -8 "$TMP/studio-e46-build.log"
@@ -335,7 +361,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
         fi
         grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-e46-verify.log" || falla "apk generado sin v1"
         grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-e46-verify.log" || falla "apk generado sin v2"
-        if ! python3 "$ZIPCHECK" "$estudio" >/dev/null 2>&1; then falla "zipcheck rechaza el apk del proyecto generado"; fi
+        if ! zipcheck "$estudio" >/dev/null 2>&1; then falla "zipcheck rechaza el apk del proyecto generado"; fi
         "$BUILD_TOOLS/aapt2" dump badging "$estudio" >"$TMP/studio-e46-badging.log" 2>&1 || falla "aapt2 no entiende el apk del proyecto generado"
         grep -q "package: name='com.hola.apkcstudio'" "$TMP/studio-e46-badging.log" || falla "el apk generado no trae el package de la pagina"
         # en este proyecto hay clase anonima: la interfaz del framework contra la que enlaza tiene
@@ -361,7 +387,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-escrita.log" || falla "apk escrito a mano sin v1"
       grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-escrita.log" || falla "apk escrito a mano sin v2"
       "$BUILD_TOOLS/zipalign" -c -p 4 "$escrita" || falla "zipalign rechaza el apk del fuente escrito a mano"
-      python3 "$ZIPCHECK" "$escrita" >/dev/null 2>&1 || falla "zipcheck rechaza el apk del fuente escrito a mano"
+      zipcheck "$escrita" >/dev/null 2>&1 || falla "zipcheck rechaza el apk del fuente escrito a mano"
       "$BUILD_TOOLS/aapt2" dump badging "$escrita" >"$TMP/studio-pestana-escrita-badging.log" 2>&1 ||
         falla "aapt2 no entiende el apk del fuente escrito a mano"
       lanzable=$(sed -n "s/^launchable-activity: name='\([^']*\)'.*\$/\1/p" "$TMP/studio-pestana-escrita-badging.log" | head -1)
@@ -393,7 +419,7 @@ if [ -n "${APKC_WASM:-}" ] && [ -f "$APKC_WASM" ] && [ -n "$APK_FIXTURE" ] && co
       grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-pestana-contador.log" || falla "apk del contador sin v1"
       grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-pestana-contador.log" || falla "apk del contador sin v2"
       "$BUILD_TOOLS/zipalign" -c -p 4 "$contador" || falla "zipalign rechaza el apk del contador"
-      python3 "$ZIPCHECK" "$contador" >/dev/null 2>&1 || falla "zipcheck rechaza el apk del contador"
+      zipcheck "$contador" >/dev/null 2>&1 || falla "zipcheck rechaza el apk del contador"
       "$BUILD_TOOLS/aapt2" dump badging "$contador" >"$TMP/studio-pestana-contador-badging.log" 2>&1 ||
         falla "aapt2 no entiende el apk del contador"
       lanzable=$(sed -n "s/^launchable-activity: name='\([^']*\)'.*\$/\1/p" "$TMP/studio-pestana-contador-badging.log" | head -1)
