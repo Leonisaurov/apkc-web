@@ -151,6 +151,21 @@ tools/entorno.sh -- sh -c 'cd studio && node prueba-navegador.js'
 tools/entorno.sh -- sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" node prueba-crear.js'
 ```
 
+## 6.5 Instalar la apk en el teléfono
+
+La descarga de la pestaña es un apk firmado. Sin `adb`, se instala desde el propio Android:
+
+```sh
+# con Shizuku (rish); el archivo tiene que estar accesible desde el shell de Android
+rish -c 'pm install -r /sdcard/Download/app.apk'
+# o con el sudo del sistema
+/usr/sbin/sudo sh -c 'pm install -r /sdcard/Download/app.apk'
+```
+
+No hay QR: el `blob:` de la descarga vive en el navegador y no es accesible desde otro equipo. Si
+la instalación dice `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, la app instalada está firmada con otra
+clave: desinstala la anterior o vuelve a la clave con la que se instaló.
+
 ## 7. Errores típicos
 
 - **El servidor no arranca**: falta `APKC_WASM` o el binario no existe. Repite el paso 2.
