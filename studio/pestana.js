@@ -251,6 +251,9 @@ const EDITOR = {
   cambiar(desde, hasta, texto, seleccion) {
     const area = document.getElementById("codigo");
     let hecho = false;
+    // execCommand actúa sobre el elemento con foco: si la barra de búsqueda lo tiene, el texto
+    // se perdía sin error y el reemplazo decía «3 reemplazadas» sin cambiar nada.
+    if (document.activeElement !== area) area.focus();
     if (typeof document.execCommand === "function") {
       if (area.selectionStart !== desde || area.selectionEnd !== hasta) {
         area.setSelectionRange(desde, hasta);
@@ -1780,6 +1783,99 @@ async function saltarALinea(ruta, numero) {
   irALinea(numero);
 }
 
+// --- buscar, reemplazar e ir a línea --------------------------------------------------------
+// La barra es del editor, no del navegador: buscar dentro de un fuente no puede abrir el panel
+// de búsqueda de la página, que no conoce el resaltado ni el undo tree.
+function abrirBusqueda(reemplazo) {
+  const barra = document.getElementById("buscar-barra");
+  if (!barra) return;
+  barra.hidden = false;
+  const campo = document.getElementById("buscar-texto");
+  const area = document.getElementById("codigo");
+  for (const id of ["reemplazar-texto", "reemplazar-uno", "reemplazar-todos"]) {
+    const el = document.getElementById(id);
+    if (el) el.hidden = !reemplazo;
+  }
+  if (campo) {
+    if (area && area.selectionEnd > area.selectionStart) {
+      const elegido = area.value.slice(area.selectionStart, area.selectionEnd);
+      if (elegido && !elegido.includes("\n")) campo.value = elegido;
+    }
+    campo.focus();
+    campo.select();
+  }
+}
+
+function cerrarBusqueda() {
+  const barra = document.getElementById("buscar-barra");
+  if (barra) barra.hidden = true;
+  const area = document.getElementById("codigo");
+  if (area) area.focus();
+}
+
+function buscarSiguiente(atras) {
+  const area = document.getElementById("codigo");
+  const campo = document.getElementById("buscar-texto");
+  const estado = document.getElementById("buscar-estado");
+  if (!area || !campo) return false;
+  const aguja = campo.value;
+  if (!aguja) return false;
+  const pajar = area.value.toLowerCase();
+  const busca = aguja.toLowerCase();
+  const desde = atras ? Math.max(0, area.selectionStart - 1) : area.selectionEnd;
+  let i = atras ? pajar.lastIndexOf(busca, desde) : pajar.indexOf(busca, desde);
+  if (i < 0) i = atras ? pajar.lastIndexOf(busca) : pajar.indexOf(busca);
+  if (i < 0) {
+    if (estado) estado.textContent = "sin coincidencias";
+    return false;
+  }
+  area.focus();
+  area.setSelectionRange(i, i + aguja.length);
+  const linea = area.value.slice(0, i).split("\n").length;
+  const alto = parseFloat(getComputedStyle(area).lineHeight) || 18;
+  area.scrollTop = Math.max(0, (linea - 3) * alto);
+  EDITOR.sincronizar();
+  actualizarCursor();
+  if (estado) estado.textContent = "línea " + linea;
+  return true;
+}
+
+function reemplazarUno() {
+  const area = document.getElementById("codigo");
+  const aguja = (document.getElementById("buscar-texto") || {}).value || "";
+  const nuevo = (document.getElementById("reemplazar-texto") || {}).value || "";
+  if (!area || !aguja) return;
+  const elegido = area.value.slice(area.selectionStart, area.selectionEnd);
+  if (elegido.toLowerCase() !== aguja.toLowerCase()) {
+    if (!buscarSiguiente(false)) return;
+  }
+  const desde = area.selectionStart, hasta = area.selectionEnd;
+  EDITOR.cambiar(desde, hasta, nuevo, [desde + nuevo.length, desde + nuevo.length]);
+  buscarSiguiente(false);
+}
+
+function reemplazarTodos() {
+  const area = document.getElementById("codigo");
+  const aguja = (document.getElementById("buscar-texto") || {}).value || "";
+  const nuevo = (document.getElementById("reemplazar-texto") || {}).value || "";
+  const estado = document.getElementById("buscar-estado");
+  if (!area || !aguja) return;
+  const patron = new RegExp(aguja.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const cuantos = (area.value.match(patron) || []).length;
+  if (!cuantos) {
+    if (estado) estado.textContent = "sin coincidencias";
+    return;
+  }
+  EDITOR.cambiar(0, area.value.length, area.value.replace(patron, nuevo));
+  if (estado) estado.textContent = cuantos + " reemplazadas";
+  actualizarCursor();
+}
+
+function irALineaDesdeCuadro() {
+  const n = window.prompt("Ir a la línea", "1");
+  if (n && /^\d+$/.test(n.trim())) irALinea(Number(n));
+}
+
 function marcarSucio(v) {
   const doc = documentoActivo();
   if (doc) doc.sucio = !!v;
@@ -2803,8 +2899,12 @@ async function guardarAjustes() {
     }
     await refrescarArbol();
     publicar({ tipo: "mutacion", accion: "guardar", rutas: [RUTA_MANIFIESTO] });
-    if (aviso) aviso.textContent = "guardado en AndroidManifest.xml";
-    nota("ajustes guardados en el manifiesto");
+    const target = Number(valor("ajustes-targetsdk"));
+    const politica = target < 34
+      ? " · targetSdk " + target + " está por detrás de la política actual de Google Play"
+      : "";
+    if (aviso) aviso.textContent = "guardado en AndroidManifest.xml" + politica;
+    nota("ajustes guardados en el manifiesto" + politica);
   } catch (e) {
     if (aviso) aviso.textContent = "no se pudo guardar: " + (e && e.message ? e.message : e);
   }
@@ -3101,6 +3201,17 @@ if (typeof document !== "undefined") {
     if (filtroArbol) {
       filtroArbol.addEventListener("input", () => { refrescarArbol().catch(() => {}); });
     }
+    en("buscar-siguiente", () => buscarSiguiente(false));
+    en("buscar-anterior", () => buscarSiguiente(true));
+    en("reemplazar-uno", reemplazarUno);
+    en("reemplazar-todos", reemplazarTodos);
+    en("buscar-cerrar", cerrarBusqueda);
+    const campoBuscar = document.getElementById("buscar-texto");
+    if (campoBuscar) {
+      campoBuscar.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); buscarSiguiente(e.shiftKey); }
+      });
+    }
     const detalleAjustes = document.getElementById("detalle-ajustes");
     if (detalleAjustes) {
       detalleAjustes.addEventListener("toggle", () => {
@@ -3132,8 +3243,16 @@ if (typeof document !== "undefined") {
         const filtro = document.getElementById("filtro-arbol");
         if (filtro) { filtro.focus(); filtro.select(); }
       }
+      else if (tecla === "f") { e.preventDefault(); abrirBusqueda(false); }
+      else if (tecla === "h") { e.preventDefault(); abrirBusqueda(true); }
+      else if (tecla === "g") { e.preventDefault(); irALineaDesdeCuadro(); }
       else if (e.key === "Enter") { e.preventDefault(); Promise.resolve(ejecutarUltimo()).catch(mostrarFallo); }
       else if (e.key === "`" || e.code === "Backquote") { e.preventDefault(); alternarPanel(); }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      const barra = document.getElementById("buscar-barra");
+      if (barra && !barra.hidden) { e.preventDefault(); cerrarBusqueda(); }
     });
     window.addEventListener("beforeunload", (e) => {
       volcarHistorial();
@@ -3170,7 +3289,8 @@ export {
   actualizarEstadoClave, abrirDialogoClave, generarClaveRelease,
   exportarProyecto, importarProyecto, descargarBytes,
   leerAjustes, guardarAjustes, irALinea, saltarALinea, detener, enlazarSalidas,
-  decirEstadoDepuracion,
+  decirEstadoDepuracion, abrirBusqueda, cerrarBusqueda, buscarSiguiente,
+  reemplazarUno, reemplazarTodos, irALineaDesdeCuadro,
 };
 
 // Puente de compatibilidad para las pruebas de navegador y la consola de desarrollo.
@@ -3196,7 +3316,8 @@ if (typeof window !== "undefined") {
     decirEstadoClave, actualizarEstadoClave, abrirDialogoClave, generarClaveRelease,
     exportarProyecto, importarProyecto, descargarBytes,
     leerAjustes, guardarAjustes, irALinea, saltarALinea, detener, enlazarSalidas,
-    decirEstadoDepuracion,
+    decirEstadoDepuracion, abrirBusqueda, cerrarBusqueda, buscarSiguiente,
+    reemplazarUno, reemplazarTodos, irALineaDesdeCuadro,
   });
   // Superficie completa para las pruebas CDP, que evalúan los nombres antiguos. No se usa desde
   // el código de la página; los imports son la vía normal.

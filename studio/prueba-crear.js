@@ -387,6 +387,18 @@ async function target() {
     debugKey.alias === "androiddebugkey" && debugKey.bytes > 1000 && debugKey.visible === true,
     JSON.stringify(debugKey));
 
+  const politica = await evaluar(`(async () => {
+    document.getElementById("ajustes-targetsdk").value = "30";
+    await guardarAjustes();
+    return {
+      aviso: document.getElementById("estado-ajustes").textContent,
+      texto: await hospedador.texto("/proyecto/AndroidManifest.xml"),
+    };
+  })()`);
+  comprueba("bajar targetSdk avisa de la política de Google Play",
+    /Google Play/.test(String(politica.aviso)) && /android:targetSdkVersion="30"/.test(politica.texto),
+    JSON.stringify(politica).slice(0, 260));
+
   // varias pestañas: abrir otro fichero no cierra el anterior, y al volver se relee de OPFS
   const pestanas = await evaluar(`(async () => {
     await abrir("/proyecto/res/layout/main.xml");
@@ -569,6 +581,33 @@ async function target() {
   comprueba("se puede elegir la versión remota del conflicto",
     resuelto.texto === "remoto B\n" && resuelto.aviso === false, JSON.stringify(resuelto));
   segunda.ws.close();
+
+  // plantilla Contador: se crea desde el formulario y deja el layout y la actividad que el
+  // compilador del subconjunto ya sabe leer (campo, anónima y concatenación)
+  const contador = await evaluar(`(async () => {
+    document.querySelector('[data-vista="crear"]').click();
+    document.getElementById("plantilla").value = "contador";
+    const confirmar = window.confirm;
+    window.confirm = () => true;
+    document.getElementById("crear-proyecto").click();
+    for (let i = 0; i < 120; i++) {
+      if (/proyecto creado/.test(document.getElementById("estado-crear").textContent)) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    window.confirm = confirmar;
+    const arbol = await hospedador.arbol();
+    const java = (arbol.nodos || []).find((n) => /MainActivity\\.java$/.test(n.ruta));
+    const layout = (arbol.nodos || []).find((n) => /res\\/layout\\/main\\.xml$/.test(n.ruta));
+    return {
+      java: java ? await hospedador.texto(java.ruta) : "",
+      layout: layout ? await hospedador.texto(layout.ruta) : "",
+      aviso: document.getElementById("estado-crear").textContent,
+    };
+  })()`);
+  comprueba("la plantilla Contador crea su actividad y su layout",
+    /TextView total;/.test(contador.java) && /Pulsos: /.test(contador.java) &&
+    /@\+id\/total/.test(contador.layout) && /@\+id\/pulsar/.test(contador.layout),
+    JSON.stringify({ java: contador.java.slice(0, 60), layout: contador.layout.slice(0, 60), aviso: contador.aviso }));
 
   ws.close();
   apagar();

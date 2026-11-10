@@ -93,6 +93,12 @@
             <label>Package <input name="package" value="com.mi.app" required autocomplete="off"
                    pattern="[a-z][a-z0-9_]*(\.[a-z0-9_]+)+" title="minúsculas, dos tramos como mínimo"></label>
             <label>Icono (opcional, PNG) <input type="file" id="icono" accept="image/png"></label>
+            <label>Plantilla
+              <select id="plantilla">
+                <option value="hola" selected>Hola mundo</option>
+                <option value="contador">Contador (botón y cuenta)</option>
+              </select>
+            </label>
             <div class="acciones">
               <button id="crear-proyecto" class="primario" type="button">Crear proyecto y editar</button>
               <span id="estado-crear" class="nota"></span>
@@ -177,6 +183,17 @@
             <button id="conflicto-marcas" type="button">Marcar conflicto</button>
           </div>
 
+          <div id="buscar-barra" class="buscar-barra" hidden role="search" aria-label="Buscar en el fichero">
+            <input id="buscar-texto" type="search" placeholder="Buscar" aria-label="Buscar en el fichero" autocomplete="off">
+            <input id="reemplazar-texto" type="text" placeholder="Reemplazar" aria-label="Reemplazar en el fichero" autocomplete="off" hidden>
+            <button id="buscar-anterior" type="button" title="Anterior (Shift+Enter)">Anterior</button>
+            <button id="buscar-siguiente" type="button" title="Siguiente (Enter)">Siguiente</button>
+            <button id="reemplazar-uno" type="button" hidden>Reemplazar</button>
+            <button id="reemplazar-todos" type="button" hidden>Todo</button>
+            <button id="buscar-cerrar" type="button" title="Cerrar (Esc)" aria-label="Cerrar la búsqueda">×</button>
+            <span id="buscar-estado" class="nota" role="status" aria-live="polite"></span>
+          </div>
+
           <div class="editor">
             <pre id="numeros" class="numeros" aria-hidden="true"></pre>
             <div class="capas">
@@ -249,6 +266,8 @@
                       <button id="guardar-ajustes" class="primario" type="button">Guardar en el manifiesto</button>
                     </div>
                     <p class="nota" id="estado-ajustes">sin leer todavía</p>
+                    <p class="nota">Google Play pide un <code>targetSdk</code> reciente. Aquí el
+                      recomendado es 34; si lo bajas, se avisa al guardar.</p>
                   </div>
                 </details>
 

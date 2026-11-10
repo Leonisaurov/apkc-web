@@ -7403,3 +7403,44 @@ directo. El navegador sale de `CHROME_BIN` y, si falta, se busca entre `chromium
 `.github/workflows/gate.yml` ejecuta el job rápido en cada push y el pesado (SDK 34, build-tools
 34.0.0, Chrome) con `e2e.sh`, y sube los logs si falla. **No se ha ejecutado todavía en GitHub**:
 eso queda como la frontera de esta fase, no como una medición.
+
+## 149. Plantillas, buscar/reemplazar, aviso de targetSdk y el gate que ya se paga solo
+
+Medido el 2026-11-10. Cierra H3, J (la parte de buscar/reemplazar e ir a línea), B3 y deja E/12.5
+en «hecho en parte» con la frontera escrita.
+
+**1. Plantilla Contador.** `#plantilla` elige `hola` o `contador`; la segunda sustituye el layout
+(`@+id/total`, `@+id/pulsar`) y la actividad por una con campo `TextView total`, listener anónimo
+sobre un campo del exterior y `setText("Pulsos: " + pulsos)`. `prueba.js` comprueba el fuente y el
+layout, `prueba-crear.js` la crea desde el formulario y `e2e.sh` la compila de verdad:
+
+```sh
+tools/entorno.sh -- sh -c 'cd studio && APKC=$TMP/apkc-gate APKC_WASM=$TMP/apkc-wasm.wasm \
+  ANDROID_HOME=$HOME/Android CHROME_BIN=chromium-browser sh e2e.sh'
+```
+
+**Resultado**: `plantilla Contador: apk de 10086 bytes, firmada y alineada`, y el `e2e` entero
+`e2e: todo en orden`. En chromium, `crear: todo en orden (35 comprobaciones)`.
+
+**2. Buscar y reemplazar.** `#buscar-barra` es del editor: `Ctrl+F`, `Ctrl+H`, `Ctrl+G`, `Enter`,
+`Shift+Enter` y `Esc`. Reemplazar pasa por `EDITOR.cambiar()`, así que entra en el undo tree. La
+prueba destapó un defecto real: `execCommand("insertText")` actúa sobre el elemento con foco y la
+barra se lo quitaba al textarea, de modo que el reemplazo decía «3 reemplazadas» sin cambiar nada;
+`cambiar()` ahora enfoca el área antes. **Resultado**:
+`{"primero":true,"seleccion":"uno","texto":"cero dos cero\ndos cero\n","aviso":"3 reemplazadas"}`
+y `Ctrl+G salta a la línea pedida — {"linea":5}`. **83 comprobaciones bien, 0 mal**.
+
+**3. Aviso de targetSdk.** Guardar un `targetSdk` menor que 34 deja
+`guardado en AndroidManifest.xml · targetSdk 30 está por detrás de la política actual de Google
+Play` en `#estado-ajustes`, y el manifiesto lleva `android:targetSdkVersion="30"`. El selector de
+API sigue ofreciendo 27-35 con 34 por defecto.
+
+**4. El gate ya se paga solo.** `e2e.sh` generaba el proyecto Java de la pestaña solo si ya existía
+de una sesión anterior: en un runner limpio esa sección se omitía en silencio. Ahora `sembrar_proyecto`
+usa el propio `buildProject` y `compilar_fixture` lo compila con `--linker go --compiler go`; lo
+mismo con el Contador. La prueba imprime las dos compilaciones en el log del gate.
+
+**5. Publicación.** `.github/workflows/gate.yml` añade un job `publicar` con `needs: pesado` y
+`if: startsWith(github.ref, 'refs/tags/')`: si el gate falla, no hay release; si pasa, el sitio
+(copiado de `studio/` con `apkc.wasm` y `wasm_exec.js`) viaja como `apkc-studio.zip` en la release
+de GitHub. El host definitivo sigue sin decidirse; esto no lo elige.

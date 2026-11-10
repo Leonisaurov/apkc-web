@@ -490,6 +490,50 @@ async function conductor() {
     /MainActivity\.java$/.test(String(saltar.activo)),
     JSON.stringify(saltar).slice(0, 240));
 
+  // buscar y reemplazar dentro del editor, con el undo tree detrás; se hace en un fichero
+  // aparte para no tocar el fuente que luego se compila
+  const buscar = await evaluar(`(async () => {
+    await hospedador.escribir("/proyecto/scratch.txt",
+      new TextEncoder().encode("uno dos uno\\ndos uno\\n"));
+    await abrir("/proyecto/scratch.txt");
+    abrirBusqueda(false);
+    const campo = document.getElementById("buscar-texto");
+    campo.value = "uno";
+    const primero = buscarSiguiente(false);
+    const area = document.getElementById("codigo");
+    const seleccion = area.value.slice(area.selectionStart, area.selectionEnd);
+    abrirBusqueda(true);
+    campo.value = "uno";
+    document.getElementById("reemplazar-texto").value = "cero";
+    reemplazarTodos();
+    const texto = area.value;
+    const aviso = document.getElementById("buscar-estado").textContent;
+    cerrarBusqueda();
+    const confirmar = window.confirm;
+    window.confirm = () => true;
+    try { await cerrarDocumento("/proyecto/scratch.txt"); }
+    finally { window.confirm = confirmar; }
+    await hospedador.limpiar("/proyecto/scratch.txt");
+    return { primero, seleccion, texto, aviso };
+  })()`);
+  comprueba("buscar y reemplazar todo dentro del editor",
+    buscar.primero === true && buscar.seleccion === "uno" &&
+    buscar.texto === "cero dos cero\ndos cero\n" && /3 reemplazadas/.test(String(buscar.aviso)),
+    JSON.stringify(buscar).slice(0, 240));
+
+  const irA = await evaluar(`(async () => {
+    await abrir("/proyecto/AndroidManifest.xml");
+    const original = window.prompt;
+    window.prompt = () => "5";
+    document.dispatchEvent(new KeyboardEvent("keydown", {
+      key: "g", ctrlKey: true, bubbles: true,
+    }));
+    window.prompt = original;
+    const area = document.getElementById("codigo");
+    return { linea: area.value.slice(0, area.selectionStart).split("\\n").length };
+  })()`);
+  comprueba("Ctrl+G salta a la línea pedida", irA.linea === 5, JSON.stringify(irA));
+
   const cancelado = await evaluar(`(async () => {
     const primero = hospedador.cancelar();
     const r = await hospedador.ejecutar(["version"]);

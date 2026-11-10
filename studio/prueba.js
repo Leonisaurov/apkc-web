@@ -66,6 +66,20 @@ const salida = path.join(tmp, process.env.STUDIO_OUT || "studio-test.zip");
 fs.writeFileSync(salida, buf);
 console.log("zip:", salida, buf.length, "bytes,", entradas.length, "entradas");
 
+// 2b. la plantilla Contador no puede ser un adorno: cambia el layout y la actividad, y conserva
+// el package y el manifiesto. Se comprueba en node y e2e la compila de verdad.
+const contador = a.buildProject({ ...estado, template: "contador", kotlin: false, libs: false,
+  native: false, assets: false, device: false });
+const actContador = contador.files["src/" + estado.package.split(".").join("/") + "/MainActivity.java"];
+const layContador = contador.files["res/layout/main.xml"];
+if (!/TextView total;/.test(actContador) || !/total\.setText\("Pulsos: " \+ pulsos\)/.test(actContador)) {
+  mal("la plantilla Contador no escribe el campo y la cuenta");
+}
+if (!/@\+id\/total/.test(layContador) || !/@\+id\/pulsar/.test(layContador)) {
+  mal("la plantilla Contador no declara los ids que usa la actividad");
+}
+if (/Hello World!/.test(layContador)) mal("la plantilla Contador conserva el texto de Hola mundo");
+
 // 3. el EOCD y los modos: un lector estricto (zipcheck.py) es el que ve lo que zipfile tolera
 const eocd = buf.readUInt16LE(buf.lastIndexOf(Buffer.from("PK\x05\x06", "latin1")) + 8);
 if (eocd !== entradas.length) mal(`el EOCD anuncia ${eocd} entradas y hay ${entradas.length}`);

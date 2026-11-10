@@ -68,7 +68,8 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
 
 ## 4. Crear y editar
 
-1. En **Inicio**, escribe el nombre, el package (`com.mi.app`) y, si quieres, un icono PNG.
+1. En **Inicio**, escribe el nombre, el package (`com.mi.app`), elige la plantilla
+   (**Hola mundo** o **Contador**) y, si quieres, un icono PNG.
 2. Pulsa **Crear proyecto y editar**. El proyecto se escribe en OPFS y se abre
    `AndroidManifest.xml` en el **Editor**.
 3. El proyecto vive en el **almacenamiento de este navegador** (OPFS), en este origen. Cambiar de
@@ -85,7 +86,8 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
      pestañas, la activa y las carpetas abiertas se recuerdan al recargar.
    - `Ctrl+Z` deshace y `Ctrl+Shift+Z`/`Ctrl+Y` rehace. El panel **Historial** (en la consola)
      muestra el árbol con ramas; un clic restaura una versión sin borrar las demás.
-   - `Ctrl+S` o **Guardar** salva el fichero.
+   - `Ctrl+S` o **Guardar** salva el fichero. `Ctrl+F` busca, `Ctrl+H` busca y reemplaza,
+     `Ctrl+G` va a una línea y `Ctrl+P` salta al filtro del árbol.
    - En **Tema**, en la barra de estado, cambias la interfaz (Catppuccin, Rosé Pine, Tokyo Night,
      Gruvbox), la paleta ANSI de la terminal (Catppuccin, Rosé Pine, Gruvbox, Solarized, Dracula)
      y **Solo iconos en la barra del editor** para dejar Guardar, Archivo y Compilar como iconos.

@@ -57,7 +57,9 @@ Qué hace de verdad, y qué no:
   v1+v2 que `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` aceptan por fuera — y
   **compilar el proyecto entero** con
   `build --linker go --compiler go`: enlazar los recursos, sacar el `.class`, dexar y firmar, todo dentro
-  de la pestaña y sin levantar un proceso. La consola pinta la salida mientras corre, convierte
+  de la pestaña y sin levantar un proceso. En Inicio eliges la plantilla **Hola mundo** o
+  **Contador** (botón, campo y listener); la segunda la compila `e2e.sh` de verdad. La consola
+  pinta la salida mientras corre, convierte
   `ruta:línea` en un enlace al fuente y **Detener** termina el worker si un comando se atasca.
   «Compilar debug» no pide keystore: la primera vez
   genera `/sdk/debug.keystore` con `apkc debug-keystore` (alias `androiddebugkey`, contraseña
@@ -211,7 +213,8 @@ anterior; el historial se guarda en IndexedDB por ventana y documento, con delta
 La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
 subir, **exportar/importar el proyecto en `.zip`**, descargar, renombrar, borrar, historial); el
 botón **Compilar** abre el panel en su
-pestaña de compilación. El proyecto se exporta con rutas, carpetas y binarios, y al importarlo se
+pestaña de compilación. `Ctrl+F` abre buscar, `Ctrl+H` buscar y reemplazar, `Ctrl+G` va a una
+línea y `Ctrl+P` al filtro del árbol. El proyecto se exporta con rutas, carpetas y binarios, y al importarlo se
 reemplaza `/proyecto` después de confirmar. En **Tema** puedes activar **Solo iconos en la barra del editor** para
 quedarte con los iconos y sus tooltips. La API de compilación se elige en Opciones
 avanzadas (34 por defecto); **Ajustes del proyecto** lee y guarda `minSdk`, `targetSdk`,

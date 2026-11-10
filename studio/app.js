@@ -80,6 +80,54 @@ public class MainActivity extends Activity {
         return true;
     }
 `,
+  // Plantilla «Contador»: el campo y el listener son el mismo patrón que se midió contra ART
+  // (campo privado, anónima que toca un campo del exterior y concatenación de cadenas).
+  activityContador: `package {{pkgname}};
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    int pulsos = 0;
+    TextView total;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pulsos = pulsos + 1;
+                total.setText("Pulsos: " + pulsos);
+            }
+        });
+    }
+}
+`,
+  layoutContador: `<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:gravity="center">
+
+    <TextView
+        android:id="@+id/total"
+        style="@android:style/TextAppearance.Large"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Pulsos: 0"/>
+
+    <Button
+        android:id="@+id/pulsar"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Pulsar"/>
+</LinearLayout>
+`,
   kotlinActivity: `package {{pkgname}}
 
 import android.app.Activity
@@ -149,6 +197,13 @@ function buildProject(state) {
       TEMPLATES.kotlinActivity.replace(/\{\{pkgname\}\}/g, pkg);
   } else {
     files["src/" + pkg.split(".").join("/") + "/MainActivity.java"] = activityBody;
+  }
+  // la plantilla Contador sustituye el layout y la actividad; el manifiesto y los recursos son
+  // los mismos, y el botón no necesita el bloque de menú de `activityButton`
+  if (state.template === "contador" && !state.kotlin) {
+    files["res/layout/main.xml"] = TEMPLATES.layoutContador;
+    files["src/" + pkg.split(".").join("/") + "/MainActivity.java"] =
+      TEMPLATES.activityContador.replace(/\{\{pkgname\}\}/g, pkg);
   }
   // un LEEME dentro de jar/, assets/ o lib/<abi>/ no es inocente: apkc mete lo que hay en
   // assets/ y en lib/ en el apk, y un .txt en lib/arm64-v8a/ viaja como si fuera una .so. La

@@ -51,6 +51,7 @@ dar el editor por probado, comprueba en la salida `pestaña: N comprobaciones` y
 | `pestana.js` | editor, pestañas, árbol de OPFS, comandos y el puente `hospedador`; `export` de lo que consumen `vistas.js`, `main.js` y las pruebas. |
 | `historial.js` | undo tree por documento: deltas, checkpoints, poda, IndexedDB por ventana. |
 | `fusion.js` | fusión de tres vías (base/local/remoto) por líneas; conflicto explícito si se pisan. |
+| `proyecto.js` | zip de exportar/importar (STORE/DEFLATE, CRC y rutas seguras) y ajustes leídos/escritos en el manifiesto. |
 | `temas.js` | temas de interfaz y terminal; cambia `data-tema` y variables CSS. Se carga como módulo en el `<head>`. |
 | `vistas.js` | cambio de vista, reflejo nombre/package y creación del proyecto desde el formulario. |
 | `diagnostico.js` | panel de Inicio que pinta `analyze()`; solo DOM, sin reglas propias. |
@@ -99,6 +100,11 @@ los imports y no debe depender de ese puente.
   resuelve rutas relativas contra `/proyecto`.
 - **El árbol filtra y marca lo generado.** `#filtro-arbol` conserva padres; `build/` lleva
   `generado` y la etiqueta, pero se puede abrir. `Ctrl+P` enfoca el filtro.
+- **Las plantillas no son decoración.** `#plantilla` elige `hola` o `contador`; la segunda cambia
+  el layout y la actividad en `app.js` y `e2e.sh` la compila y la verifica con los oráculos. Si
+  tocas una plantilla, añade su comprobación en `prueba.js` y su build en `e2e.sh`.
+- **La búsqueda es del editor, no del navegador.** `#buscar-barra` la controla `abrirBusqueda()`;
+  reemplazar usa `EDITOR.cambiar()` para no perder el undo tree. No vuelvas a un `window.find`.
 - **El árbol empieza cerrado.** `ARBOL.abiertos` vacío significa todo plegado; no lo vuelvas a
   invertir a `plegados`. Mover es `hospedador.renombrar` a través de `moverRuta`, que remapea
   `ARBOL.abiertos` y la ruta del fichero abierto. El arrastre solo se activa con puntero fino;

@@ -375,7 +375,8 @@ o lo cierra, y ``Ctrl + ` `` conserva la pestaña activa.
 - `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
   `#verificar-apk`, `#descargar-debug-keystore`) y deja el resto en desplegables:
   `#detalle-ajustes` (`#ajustes-minsdk`, `#ajustes-targetsdk`, `#ajustes-versioncode`,
-  `#ajustes-versionname`, `#leer-ajustes`, `#guardar-ajustes`, `#estado-ajustes`), `#detalle-sdk`
+  `#ajustes-versionname`, `#leer-ajustes`, `#guardar-ajustes`, `#estado-ajustes`; avisa si
+  targetSdk < 34), `#detalle-sdk`
   (`#abrir-dialogo-sdk`, `#dialogo-sdk`, `#sdk-entiendo`, `#sdk-terminos`, `#sdk-descarga`,
   `#sdk-elegir-archivo`, `#sdk-usar-servidor`, `#sdk-cerrar`, `#traer-android-jar`,
   `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
@@ -389,6 +390,11 @@ o lo cierra, y ``Ctrl + ` `` conserva la pestaña activa.
 - `decirEstadoJar()` marca `#detalle-sdk` con `.jar-listo`, muestra `#sdk-badge` como **listo**,
   cambia `#abrir-dialogo-sdk` a **Cambiar android.jar** y pliega el desplegable cuando el jar ya
   está en OPFS. Así la sección no vuelve a pedir atención en cada visita.
+- `#buscar-barra` es del editor: `#buscar-texto`, `#reemplazar-texto`, `#buscar-anterior`,
+  `#buscar-siguiente`, `#reemplazar-uno`, `#reemplazar-todos`, `#buscar-cerrar` y
+  `#buscar-estado`. `Ctrl+F`/`Ctrl+H` la abren, `Enter`/`Shift+Enter` recorren y `Esc` la cierra;
+  reemplazar pasa por `EDITOR.cambiar`, así que entra en el undo tree.
+- `Ctrl+G` pide una línea y llama a `irALinea()`; `Ctrl+P` enfoca `#filtro-arbol`.
 - `#compilar-debug` no lee el keystore de release: la primera vez llama a
   `apkc debug-keystore`, que escribe `/sdk/debug.keystore` (alias `androiddebugkey`,
   contraseña `android`, `CN=Android Debug`) y lo reutiliza en las siguientes compilaciones.
@@ -435,8 +441,8 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
 | `node studio/prueba-navegador.js` | `http` sin COOP/COEP: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, que `build/` se vea como generado y que el filtro conserve las carpetas, subir un archivo, moverlo de carpeta, exportar/importar el `.zip` (con binario), leer y guardar los ajustes en el manifiesto, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB, dos ventanas que se pasan guardados por BroadcastChannel y la fusión/conflicto de la misma línea |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 81 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red, no pedir nada fuera del origen, la salida por trozos, el enlace `ruta:línea`, Detener y la fase en la barra |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, 81 comprobaciones |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 83 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red, no pedir nada fuera del origen, la salida por trozos, el enlace `ruta:línea`, Detener y la fase en la barra |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos y la plantilla Contador; en la pestaña, 83 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).
