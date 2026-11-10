@@ -174,13 +174,26 @@
 
   function pantallaCompleta() {
     const el = document.documentElement;
-    if (!document.fullscreenElement) {
-      const p = el.requestFullscreen && el.requestFullscreen({ navigationUI: "hide" });
-      if (p && p.catch) p.catch(() => {});
-    } else if (document.exitFullscreen) {
-      document.exitFullscreen();
+    if (document.fullscreenElement) {
+      if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      return;
     }
+    const p = el.requestFullscreen && el.requestFullscreen({ navigationUI: "hide" });
+    if (p && p.catch) p.catch(() => {
+      // sin gesto del usuario el navegador lo rechaza: se reintenta con el primer toque
+    });
   }
+
+  // Android exige un gesto para entrar en pantalla completa. El primer toque en cualquier sitio
+  // la pide una vez; el botón ⛶ sigue ahí para alternar cuando ya se está dentro.
+  let pedida = false;
+  const pedirConGesto = () => {
+    if (pedida || document.fullscreenElement) return;
+    pedida = true;
+    pantallaCompleta();
+  };
+  document.addEventListener("pointerdown", pedirConGesto, { once: true });
+  document.addEventListener("keydown", pedirConGesto, { once: true });
   document.getElementById("fs").addEventListener("click", pantallaCompleta);
   // Chrome exige un gesto; si el navegador lo permite al cargar, entra solo. Si no, el
   // botón ⛶ de la esquina queda para un toque desde la pantalla secundaria.
