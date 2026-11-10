@@ -81,6 +81,61 @@ printf 'dex' >"$TMP/studio-aab-src/base/dex/classes.dex"
 avisa() { printf '  %s\n' "$*"; }
 falla() { FALLOS=$((FALLOS + 1)); avisa "FALLO: $*"; }
 
+# 0. fixtures que antes se esperaban de una sesión anterior. En un runner limpio no existen y
+# la pestaña se omitía en silencio; aquí se generan con el mismo buildProject de la página.
+sembrar_proyecto() { # $1 carpeta, $2 package, $3 plantilla
+  rm -rf "$1"; mkdir -p "$1"
+  (cd "$AQUI/.." && FIXTURE_DIR="$1" FIXTURE_PKG="$2" FIXTURE_TEMPLATE="$3" \
+    node --input-type=module -e '
+      import { buildProject } from "./studio/app.js";
+      import fs from "node:fs"; import path from "node:path";
+      const dir = process.env.FIXTURE_DIR;
+      const p = buildProject({ name: "Hola apkc", package: process.env.FIXTURE_PKG,
+        minsdk: "21", targetsdk: "34", hello: "Hello World!", template: process.env.FIXTURE_TEMPLATE,
+        button: false, kotlin: false, libs: false, native: false, assets: false, device: false });
+      for (const [ruta, texto] of Object.entries(p.files)) {
+        const f = path.join(dir, ruta); fs.mkdirSync(path.dirname(f), { recursive: true });
+        fs.writeFileSync(f, texto);
+      }
+      for (const d of p.dirs) fs.mkdirSync(path.join(dir, d), { recursive: true });
+    ') || falla "no se pudo escribir el fixture $3"
+}
+
+compilar_fixture() { # $1 carpeta
+  (cd "$1" && ejecutar "$APKC" build --linker go --compiler go \
+    --android-jar "$ANDROID_JAR" --sdk-version 34 --codename 14 \
+    --keystore "${KS_EJEMPLO:-$HOME/.android/debug.keystore}" >"$TMP/studio-fixture-$(basename "$1").log" 2>&1) ||
+    falla "no se pudo compilar $1: $(tail -2 "$TMP/studio-fixture-$(basename "$1").log" | tr '\n' ' ')"
+}
+
+FIXTURE="$TMP/studio-e2e-java/com.hola.apkcstudio"
+if [ ! -f "$FIXTURE/build/app.apk" ]; then
+  sembrar_proyecto "$FIXTURE" com.hola.apkcstudio hola
+  compilar_fixture "$FIXTURE"
+fi
+
+CONTADOR="$TMP/studio-e2e-contador/com.hola.contador"
+if [ ! -f "$CONTADOR/build/app.apk" ]; then
+  sembrar_proyecto "$CONTADOR" com.hola.contador contador
+  compilar_fixture "$CONTADOR"
+fi
+if [ -f "$CONTADOR/build/app.apk" ] && [ -n "$BUILD_TOOLS" ]; then
+  if ! "$BUILD_TOOLS/apksigner" verify --verbose --min-sdk-version 21 "$CONTADOR/build/app.apk" \
+       >"$TMP/studio-contador-verify.log" 2>&1; then
+    falla "la apk de la plantilla Contador no verifica"
+  fi
+  grep -q 'v1 scheme (JAR signing): true' "$TMP/studio-contador-verify.log" ||
+    falla "la apk de la plantilla Contador no lleva v1"
+  grep -q 'v2 scheme (APK Signature Scheme v2): true' "$TMP/studio-contador-verify.log" ||
+    falla "la apk de la plantilla Contador no lleva v2"
+  "$BUILD_TOOLS/zipalign" -c -p 4 "$CONTADOR/build/app.apk" ||
+    falla "zipalign rechaza la apk de la plantilla Contador"
+  "$BUILD_TOOLS/aapt2" dump badging "$CONTADOR/build/app.apk" >"$TMP/studio-contador-badging.log" 2>&1 &&
+    grep -q "com.hola.contador" "$TMP/studio-contador-badging.log" ||
+    falla "aapt2 no entiende la apk de la plantilla Contador"
+  avisa "plantilla Contador: apk de $(wc -c <"$CONTADOR/build/app.apk" | tr -d ' ') bytes, firmada y alineada"
+fi
+
 # 1. el test propio de la página
 if ! node "$AQUI/prueba.js" >"$TMP/studio-prueba.log" 2>&1; then
   falla "prueba.js"; cat "$TMP/studio-prueba.log"
