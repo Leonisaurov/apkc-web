@@ -130,6 +130,10 @@ const conductor = `(async () => {
   };
   compacto.checked = false;
   compacto.dispatchEvent(new Event("change", { bubbles: true }));
+  const fuente = document.getElementById("fuente-editor");
+  fuente.value = "16";
+  fuente.dispatchEvent(new Event("change", { bubbles: true }));
+  r.fuente = getComputedStyle(document.getElementById("codigo")).fontSize;
   r.avisoAlmacenamiento = (document.getElementById("aviso-almacenamiento") || {}).textContent || "";
   return r;
 })()`;
@@ -194,6 +198,7 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
       "el tema de terminal no cambia la paleta ANSI: " + String(v.temas && v.temas.colorTerm));
     comprueba(v.temas && v.temas.botones === "iconos" && v.temas.oculto === "none",
       "el modo solo iconos no oculta el texto: " + JSON.stringify(v.temas));
+    comprueba(v.fuente === "16px", "el tamaño del editor no llega al código: " + String(v.fuente));
     comprueba(/OPFS/.test(String(v.avisoAlmacenamiento)) &&
       /Exportar proyecto/.test(String(v.avisoAlmacenamiento)),
       "falta el aviso de que el proyecto vive en este navegador: " + String(v.avisoAlmacenamiento).slice(0, 160));

@@ -202,6 +202,7 @@ async function target() {
     await hospedador.escribir("/proyecto/build/app.apk", new Uint8Array([1, 2, 3]));
     await refrescarArbol();
     const build = document.querySelector('#arbol-pestana a[data-ruta="/proyecto/build"]');
+    const java = document.querySelector('#arbol-pestana a[data-ruta$="MainActivity.java"]');
     const generado = build ? { clase: build.className, texto: build.textContent } : null;
     const filtro = document.getElementById("filtro-arbol");
     filtro.value = "MainActivity";
@@ -222,7 +223,7 @@ async function target() {
     }
     await hospedador.limpiar("/proyecto/build");
     await refrescarArbol();
-    return { generado, rutas, manifiesto, valor };
+    return { generado, rutas, manifiesto, valor, tipoJava: java ? java.className : "" };
   })()`);
   comprueba("build/ se ve atenuado y con la etiqueta generado",
     filtroArbol.generado && /generado/.test(String(filtroArbol.generado.clase)) &&

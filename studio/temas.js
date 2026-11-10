@@ -4,6 +4,8 @@
   const CLAVE_UI = "apkc-studio/tema";
   const CLAVE_TERM = "apkc-studio/tema-consola";
   const CLAVE_BOTONES = "apkc-studio/botones-iconos";
+  const CLAVE_FUENTE = "apkc-studio/fuente-editor";
+  const FUENTES = { "12": 1, "13": 1, "14": 1, "16": 1 };
 
   const UI = {
     apkc: "Oscuro",
@@ -29,6 +31,10 @@
     }
   }
 
+  function aplicarFuente(px) {
+    document.documentElement.style.setProperty("--ed-fuente", px + "px/1.5 var(--mono)");
+  }
+
   function aplicar() {
     const ui = leer(CLAVE_UI, UI, "apkc");
     const term = leer(CLAVE_TERM, TERM, "catppuccin");
@@ -38,6 +44,7 @@
     try { iconos = localStorage.getItem(CLAVE_BOTONES) === "1"; } catch (e) { /* sin preferencia */ }
     if (iconos) document.documentElement.dataset.botones = "iconos";
     else delete document.documentElement.dataset.botones;
+    aplicarFuente(leer(CLAVE_FUENTE, FUENTES, "13"));
   }
 
   aplicar();
@@ -59,6 +66,17 @@
       document.documentElement.dataset.temaConsola = selTerm.value;
       try { localStorage.setItem(CLAVE_TERM, selTerm.value); } catch (e) { /* sin persistencia */ }
     });
+
+    const fuente = document.getElementById("fuente-editor");
+    if (fuente) {
+      const guardada = leer(CLAVE_FUENTE, FUENTES, "13");
+      fuente.value = guardada;
+      aplicarFuente(guardada);
+      fuente.addEventListener("change", () => {
+        aplicarFuente(fuente.value);
+        try { localStorage.setItem(CLAVE_FUENTE, fuente.value); } catch (e) { /* sin persistencia */ }
+      });
+    }
 
     const iconos = document.getElementById("botones-iconos");
     if (iconos) {

@@ -216,7 +216,7 @@ botón **Compilar** abre el panel en su
 pestaña de compilación. `Ctrl+F` abre buscar, `Ctrl+H` buscar y reemplazar, `Ctrl+G` va a una
 línea y `Ctrl+P` al filtro del árbol. El proyecto se exporta con rutas, carpetas y binarios, y al importarlo se
 reemplaza `/proyecto` después de confirmar. En **Tema** puedes activar **Solo iconos en la barra del editor** para
-quedarte con los iconos y sus tooltips. La API de compilación se elige en Opciones
+quedarte con los iconos y sus tooltips; también eliges el **tamaño del editor** (12-16 px). La API de compilación se elige en Opciones
 avanzadas (34 por defecto); **Ajustes del proyecto** lee y guarda `minSdk`, `targetSdk`,
 `versionCode` y `versionName` en el propio `AndroidManifest.xml` (sin fichero paralelo y sin
 `maxSdkVersion`). El tema de interfaz (oscuro, Catppuccin, Rosé Pine, Tokyo Night,

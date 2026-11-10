@@ -7444,3 +7444,26 @@ mismo con el Contador. La prueba imprime las dos compilaciones en el log del gat
 `if: startsWith(github.ref, 'refs/tags/')`: si el gate falla, no hay release; si pasa, el sitio
 (copiado de `studio/` con `apkc.wasm` y `wasm_exec.js`) viaja como `apkc-studio.zip` en la release
 de GitHub. El host definitivo sigue sin decidirse; esto no lo elige.
+
+## 150. Tamaño del editor, iconos por tipo y `consola.js` fuera del orquestador
+
+Medido el 2026-11-10. Cierra la parte de J que faltaba del editor y avanza G.
+
+`#fuente-editor` escribe `--ed-fuente` (12, 13, 14 o 16 px) y lo persiste en
+`apkc-studio/fuente-editor`; las tres capas del editor leen esa variable. `prueba-navegador.js`
+elige 16 px y exige `getComputedStyle(#codigo).fontSize === "16px"`; el resto de la suite sigue en
+`navegador: todo en orden`. Las filas del árbol llevan `tipo-java`, `tipo-kt`, `tipo-xml` y
+`tipo-png` para colorear el icono; `prueba-crear.js` exige `tipo-java` en `MainActivity.java`
+dentro de la misma comprobación del filtro.
+
+La consola (ANSI, enlaces `ruta:línea`, buffer y velo de carga) salió de `pestana.js` a
+`consola.js`: 106 líneas con su propio `export`, y `pestana.js` las importa. El orquestador sigue
+grande; la extracción se hizo sin tocar comportamiento y el gate entero pasó:
+
+```sh
+tools/entorno.sh -- sh -c 'cd studio && APKC=$TMP/apkc-gate APKC_WASM=$TMP/apkc-wasm.wasm \
+  ANDROID_HOME=$HOME/Android CHROME_BIN=chromium-browser sh e2e.sh'
+```
+
+**Resultado**: `crear: todo en orden (35 comprobaciones)`, `pestaña: 83 comprobaciones` y
+`e2e: todo en orden`, sin ninguna línea `FALLA`.

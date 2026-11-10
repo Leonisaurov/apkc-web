@@ -395,6 +395,9 @@ o lo cierra, y ``Ctrl + ` `` conserva la pestaña activa.
   `#buscar-estado`. `Ctrl+F`/`Ctrl+H` la abren, `Enter`/`Shift+Enter` recorren y `Esc` la cierra;
   reemplazar pasa por `EDITOR.cambiar`, así que entra en el undo tree.
 - `Ctrl+G` pide una línea y llama a `irALinea()`; `Ctrl+P` enfoca `#filtro-arbol`.
+- `#fuente-editor` cambia `--ed-fuente` (12, 13, 14 o 16 px) y lo guarda en
+  `apkc-studio/fuente-editor`. Las filas del árbol llevan `tipo-java`, `tipo-kt`, `tipo-xml` o
+  `tipo-png`, que colorean el icono.
 - `#compilar-debug` no lee el keystore de release: la primera vez llama a
   `apkc debug-keystore`, que escribe `/sdk/debug.keystore` (alias `androiddebugkey`,
   contraseña `android`, `CN=Android Debug`) y lo reutiliza en las siguientes compilaciones.

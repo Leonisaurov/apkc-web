@@ -296,6 +296,15 @@ kbd {
   background: #7d8590;
   box-shadow: 0 3px 0 #7d8590;
 }
+/* el color del icono dice de qué tipo es el fichero sin una leyenda */
+.arbol-pestana a.tipo-java .arbol-icono::before { border-color: #e5b567; }
+.arbol-pestana a.tipo-java .arbol-icono::after { background: #e5b567; box-shadow: 0 3px 0 #e5b567; }
+.arbol-pestana a.tipo-kt .arbol-icono::before { border-color: #a97bf0; }
+.arbol-pestana a.tipo-kt .arbol-icono::after { background: #a97bf0; box-shadow: 0 3px 0 #a97bf0; }
+.arbol-pestana a.tipo-xml .arbol-icono::before { border-color: #6cb6ff; }
+.arbol-pestana a.tipo-xml .arbol-icono::after { background: #6cb6ff; box-shadow: 0 3px 0 #6cb6ff; }
+.arbol-pestana a.tipo-png .arbol-icono::before { border-color: #b392f0; }
+.arbol-pestana a.tipo-png .arbol-icono::after { background: #b392f0; box-shadow: 0 3px 0 #b392f0; }
 .arbol-icono.dir::before {
   content: "";
   position: absolute;
