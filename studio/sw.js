@@ -1,7 +1,7 @@
 // Service worker de apkc studio: cachea el shell para recargar sin red. No cachea el jar del SDK,
 // los keystores ni el proyecto (OPFS no pasa por HTTP). El binario wasm y wasm_exec.js se intentan
 // cachear en la instalación; si el host no los sirve, se cachean la primera vez que se usan.
-const VERSION = "apkc-studio-v1";
+const VERSION = "apkc-studio-v2";
 const CACHE = VERSION;
 
 const SHELL = [
@@ -39,17 +39,23 @@ self.addEventListener("fetch", (evento) => {
   if (url.origin !== self.location.origin) return;
   if (SOLO_RED.some((patron) => patron.test(url.pathname))) return;
 
-  if (peticion.mode === "navigate") {
+  // El shell y los módulos van a la red primero: así una actualización no se queda servida por
+  // una caché vieja. La caché es el respaldo para cuando no hay red. El wasm y las imágenes sí
+  // son cache-first porque son grandes y cambian poco.
+  const redPrimero = peticion.mode === "navigate" || /\.(?:html|js|css|json)$/.test(url.pathname);
+  if (redPrimero) {
     evento.respondWith(
       fetch(peticion)
         .then((respuesta) => {
           if (respuesta && respuesta.ok) {
             const copia = respuesta.clone();
-            caches.open(CACHE).then((cache) => cache.put("./index.html", copia)).catch(() => {});
+            const clave = peticion.mode === "navigate" ? "./index.html" : peticion;
+            caches.open(CACHE).then((cache) => cache.put(clave, copia)).catch(() => {});
           }
           return respuesta;
         })
-        .catch(() => caches.match("./index.html"))
+        .catch(() => caches.match(peticion, { ignoreSearch: true })
+          .then((cacheada) => cacheada || caches.match("./index.html")))
     );
     return;
   }
