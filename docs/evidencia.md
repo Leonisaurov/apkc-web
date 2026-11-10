@@ -2972,7 +2972,7 @@ Con las palabras crudas delante (`0f 00 0e 39 4d 4b 00`, `06 02 00 00 0e 1e 2d 3
   `-parameters`, el área de debug sale **idéntica byte a byte** y lo único que cambia en el fichero es que
   aparece la anotación `Ldalvik/annotation/MethodParameters;`. Con `-g` sí cambian (ahí van los
   `DBG_START_LOCAL`), y ese caso no se emite aquí.
-- **la posición se marca con el opcode especial** `0x0a + 15·Δpc + (Δlínea + 4)`, cuyo rango es Δlínea en
+- **la posición se marca con el opcode especial** `0x0a + 15·delta_pc + (delta_linea + 4)`, cuyo rango es delta_linea en
   [-4, +10]; cerrar es `0x00`, y no hace falta `SET_FILE` porque el nombre del fichero ya está en
   `class_def_item.source_file_idx`.
 
@@ -7260,4 +7260,71 @@ era el borrado. Las operaciones lentas que no son compilar (leer un apk para el 
 `el menú del fichero ofrece abrir, descargar, renombrar y borrar` y
 `la pantalla de carga aparece en las operaciones lentas`
 (`{"visible":true,"texto":"probando…","oculto":true}`) pasan: **70 comprobaciones bien, 0 mal**.
+
+## 147. La clave de release se crea en la pestaña y la barra se puede dejar en iconos
+
+Medido el 2026-11-10. Tres cambios de producto que no tocan el motor de formatos.
+
+**1. `apkc create-keystore`.** El escritor JKS de `debug-keystore` toma un sujeto parametrizado
+(alias, contraseña, CN, O y C) y un comando nuevo lo expone. No arranca procesos ni necesita SDK:
+entra en la lista de comandos que `main.go` no manda a `findSDKs`, igual que `debug-keystore`.
+Se niega a sobrescribir un fichero existente salvo `--force`, porque reemplazar la clave de
+release deja las instalaciones anteriores sin poder actualizarse.
+
+```sh
+tools/entorno.sh -- sh -c 'cd apkc && go build -o $TMP/apkc-doc .'
+tools/entorno.sh -- sh -c 'rm -rf $TMP/doc-ks && mkdir -p $TMP/doc-ks && cd $TMP/doc-ks && \
+  $TMP/apkc-doc create-keystore --out release.jks --storepass doc-pass-123 \
+    --keyalias apkc-doc --common-name Documentación --organization "apkc studio" --country ES && \
+  $TMP/apkc-doc keystore --keystore release.jks --storepass doc-pass-123'
+```
+
+**Resultado**: `keystore-json` con
+`"subject":"CN=Documentación,O=apkc studio,C=ES"`, `"notAfter":"2054-03-28"` y la huella
+SHA-256; `keytool -list` abre el JKS y declara `PrivateKeyEntry` con esa misma huella. En el
+hospedador de navegador, el mismo comando sobre el binario `GOOS=js` escribe el fichero sin
+proceso:
+
+```sh
+tools/entorno.sh -- sh -c 'cd shim && node navegador-sim.js \
+  --exportar "/release.jks:$TMP/doc-ks/wasm-release.jks" "$TMP/apkc-wasm.wasm" \
+  create-keystore --out /release.jks --storepass wasm-pass-123 --keyalias wasm-doc \
+    --common-name "Wasm Doc" --organization "apkc studio" --country ES'
+```
+
+**Resultado**: `[shim] exportado /release.jks … (2165 bytes)`, un JKS que el lector de este fork
+vuelve a abrir con la contraseña y el alias elegidos.
+
+**2. El diálogo de la pestaña.** `#crear-clave-release`, en **Firma release**, abre
+`#dialogo-clave`: alias, CN, organización, país, contraseña y confirmación, más un aviso
+obligatorio de que perder la clave impide actualizar la app. Al generar, la página corre
+`create-keystore`, guarda `/sdk/release.keystore` (la ruta que antes era `/sdk/keystore.p12`),
+descarga `<alias>.jks`, rellena la contraseña y el alias del formulario de compilación y pasa al
+paso **Clave creada**, que no deja cerrar hasta marcar que se guardó una copia fuera del
+navegador. La contraseña no se persiste. Si el fichero ya existe, `decirEstadoClave()` deja
+`#detalle-release` plegado con `.jar-listo`, muestra `#clave-badge` y el botón pasa a
+**Cambiar clave de release**, el mismo patrón que la sección del jar (comprobación
+`con el jar cargado la sección se marca lista y no llama la atención`).
+
+**Comando**: `prueba-pestana.js` con `APKC_WASM`, `APK_EJEMPLO`, `KS_EJEMPLO` y `ANDROID_JAR`
+(los de `studio/README.md`) y, para las comprobaciones de release, `KS_RELEASE` y `AAB_EJEMPLO`.
+
+**Resultado**: `se crea una clave de release y se ofrece para descargar` deja
+`{"creada":true,"bytes":2190,"descarga":"clave-navegador.jks","blob":true,"seccionLista":true,"badge":true,"cerrarDeshabilitado":true}`,
+`la clave creada deja la sección lista y exige confirmar que se guardó` exige los dos pasos, y
+`la clave generada se puede inspeccionar con apkc` abre el fichero con `apkc keystore` y lee el
+alias `clave-navegador`: **77 comprobaciones bien, 0 mal**.
+
+**3. La barra.** El botón `#alternar-panel` pasa a llamarse **Compilar** y abre el panel en esa
+pestaña; la pestaña de salida pasa de **Salida** a **Consola** con el icono de terminal. El botón
+del build clásico se retira: en wasm no puede funcionar y ya estaba medido (§4), así que la
+prueba baja de 78 a 77 comprobaciones. **Tema → Solo iconos en la barra del editor** pone
+`data-botones="iconos"` en `<html>`, oculta `.texto-boton` y guarda la preferencia en
+`localStorage`; `title` y `aria-label` se quedan para que el botón siga teniendo nombre accesible.
+
+**Comando**: `tools/entorno.sh -- node studio/prueba-navegador.js`.
+
+**Resultado**: la comprobación nueva exige `{"botones":"iconos","oculto":"none"}` al marcar la
+casilla y `navegador: todo en orden`; al desmarcarla, el texto vuelve. El resto del gate no
+cambia: `e2e: todo en orden`.
 
