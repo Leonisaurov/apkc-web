@@ -203,7 +203,8 @@ async function target() {
     entrada.files = dt.files;
     entrada.dispatchEvent(new Event("change", { bubbles: true }));
     for (let i = 0; i < 100; i++) {
-      if (/archivo subido/.test(document.getElementById("estado-pestana").textContent)) break;
+      if (/archivo subido/.test(document.getElementById("estado-pestana").textContent) &&
+          /nota\.txt/.test(document.getElementById("fichero-abierto").textContent)) break;
       await new Promise((ok) => setTimeout(ok, 100));
     }
     const bytes = await hospedador.bytes("/proyecto/nota.txt");
