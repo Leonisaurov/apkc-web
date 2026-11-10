@@ -21,7 +21,7 @@ func main() {
 	// verify reads one package and starts nothing either, for the same reason: it is the
 	// stage the tab needs to say something about the apk it just wrote.
 	switch os.Args[1] {
-	case "dex", "link", "compile", "verify", "keystore", "rotate", "debug-keystore":
+	case "dex", "link", "compile", "verify", "keystore", "rotate", "debug-keystore", "create-keystore":
 	case "build":
 		// `apkc build --linker go --compiler go` starts no process either: it is the whole build of
 		// the tab, and there is no SDK to find in there (§44)
@@ -51,6 +51,8 @@ func main() {
 		keystore()
 	case "debug-keystore":
 		comandoDebugKeystore()
+	case "create-keystore":
+		comandoCreateKeystore()
 	case "rotate":
 		rotar()
 	case "dex":
@@ -88,6 +90,9 @@ keystore - list the signing identities of a keystore (alias, subject, SHA-256 an
          as one line of JSON, with no process and no JVM (--keystore, --storepass)
 debug-keystore - write the typical JKS debug key (androiddebugkey / android / CN=Android
          Debug) with no process and no JVM (--out, --storepass, --keyalias, --validity-days)
+create-keystore - write a JKS release key with a custom subject, no process and no JVM
+         (--out, --storepass, --keyalias, --common-name, --organization, --country,
+         --validity-days, --force)
 rotate - write the SigningCertificateLineage linking an old key to a new one, in the format
          apksigner --lineage reads (--old-keystore/--old-storepass/--old-keyalias,
          --new-keystore/--new-storepass/--new-keyalias, --out)

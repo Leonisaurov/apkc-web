@@ -48,6 +48,38 @@ func TestDebugKeystoreSeEscribeYFirma(t *testing.T) {
 	}
 }
 
+func TestCreateKeystoreConSujeto(t *testing.T) {
+	ruta := filepath.Join(t.TempDir(), "release.jks")
+	if err := escribirKeystore(datosKeystore{
+		ruta: ruta, password: "release-pass", alias: "lanzable", dias: 3650,
+		commonName: "Release de prueba", organization: "apkc studio", country: "ES",
+	}); err != nil {
+		t.Fatalf("escribirKeystore: %v", err)
+	}
+	firmante, cert, err := signingKey(ruta, "release-pass", "lanzable")
+	if err != nil {
+		t.Fatalf("signingKey no abre la clave creada: %v", err)
+	}
+	if cert.Subject.CommonName != "Release de prueba" ||
+		len(cert.Subject.Organization) != 1 || cert.Subject.Organization[0] != "apkc studio" ||
+		len(cert.Subject.Country) != 1 || cert.Subject.Country[0] != "ES" {
+		t.Fatalf("sujeto inesperado: %v", cert.Subject)
+	}
+	pub, ok := cert.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("la clave pública no es RSA: %T", cert.PublicKey)
+	}
+	datos := []byte("release")
+	digest := sha256.Sum256(datos)
+	firma, err := firmante.Sign(rand.Reader, digest[:], crypto.SHA256)
+	if err != nil {
+		t.Fatalf("la clave creada no firma: %v", err)
+	}
+	if err := rsa.VerifyPKCS1v15(pub, crypto.SHA256, digest[:], firma); err != nil {
+		t.Fatalf("la firma no verifica: %v", err)
+	}
+}
+
 func TestDebugKeystoreRechazaOtraContrasena(t *testing.T) {
 	ruta := filepath.Join(t.TempDir(), "debug.keystore")
 	if err := escribirDebugKeystore(ruta, "android", "androiddebugkey", 30); err != nil {

@@ -68,7 +68,71 @@ It starts no process and needs no SDK. Refuses to overwrite an existing file unl
 	LogI("debug-keystore", "wrote", *out, "alias", *alias, "subject CN=Android Debug")
 }
 
+type datosKeystore struct {
+	ruta, password, alias, commonName, organization, country string
+	dias                                                     int
+}
+
+func comandoCreateKeystore() {
+	set := flag.NewFlagSet("create-keystore", flag.ExitOnError)
+	set.Usage = func() {
+		fmt.Print(`usage: apkc create-keystore --out release.jks --storepass <pass> --keyalias <alias>
+       [--common-name <CN>] [--organization <O>] [--country <C>] [--validity-days 10000] [--force]
+
+Writes a JKS keystore for release signing, with no process and no JVM. The certificate is
+self-signed and valid for 10000 days by default. Refuses to overwrite unless --force is passed:
+replacing a release key makes previous installs unupdatable.
+`)
+	}
+	out := set.String("out", "", "where to write the JKS keystore")
+	storepass := set.String("storepass", "", "store and key password (required)")
+	alias := set.String("keyalias", "release", "alias of the generated private key")
+	commonName := set.String("common-name", "", "certificate CN; defaults to the alias")
+	organization := set.String("organization", "apkc studio", "certificate O")
+	country := set.String("country", "ES", "certificate C")
+	days := set.Int("validity-days", 10000, "validity of the self-signed certificate")
+	force := set.Bool("force", false, "overwrite an existing keystore")
+	if err := set.Parse(os.Args[2:]); err != nil {
+		LogF("create-keystore", err.Error())
+	}
+	if *out == "" {
+		LogF("create-keystore", "--out is required")
+	}
+	if *storepass == "" {
+		LogF("create-keystore", "--storepass is required")
+	}
+	if _, err := os.Stat(*out); err == nil && !*force {
+		LogF("create-keystore", *out, "already exists; use --force to replace it")
+	}
+	if err := escribirKeystore(datosKeystore{
+		ruta: *out, password: *storepass, alias: *alias, dias: *days,
+		commonName: *commonName, organization: *organization, country: *country,
+	}); err != nil {
+		LogF("create-keystore", err.Error())
+	}
+	LogI("create-keystore", "wrote", *out, "alias", *alias, "subject CN="+*commonName)
+}
+
 func escribirDebugKeystore(ruta, password, alias string, dias int) error {
+	return escribirKeystore(datosKeystore{
+		ruta: ruta, password: password, alias: alias, dias: dias,
+		commonName: "Android Debug", organization: "Android", country: "US",
+	})
+}
+
+func escribirKeystore(d datosKeystore) error {
+	if d.password == "" {
+		return fmt.Errorf("la contraseña del keystore no puede estar vacía")
+	}
+	if d.alias == "" {
+		return fmt.Errorf("el alias no puede estar vacío")
+	}
+	if d.dias <= 0 {
+		d.dias = 10000
+	}
+	if d.commonName == "" {
+		d.commonName = d.alias
+	}
 	clave, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return fmt.Errorf("no se pudo generar la clave RSA: %w", err)
@@ -81,15 +145,18 @@ func escribirDebugKeystore(ruta, password, alias string, dias int) error {
 		serial.SetInt64(1)
 	}
 	ahora := time.Now()
+	sujeto := pkix.Name{CommonName: d.commonName}
+	if d.organization != "" {
+		sujeto.Organization = []string{d.organization}
+	}
+	if d.country != "" {
+		sujeto.Country = []string{d.country}
+	}
 	plantilla := &x509.Certificate{
-		SerialNumber: serial,
-		Subject: pkix.Name{
-			CommonName:   "Android Debug",
-			Organization: []string{"Android"},
-			Country:      []string{"US"},
-		},
+		SerialNumber:          serial,
+		Subject:               sujeto,
 		NotBefore:             ahora.Add(-time.Hour),
-		NotAfter:              ahora.Add(time.Duration(dias) * 24 * time.Hour),
+		NotAfter:              ahora.Add(time.Duration(d.dias) * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
 		BasicConstraintsValid: true,
@@ -102,15 +169,15 @@ func escribirDebugKeystore(ruta, password, alias string, dias int) error {
 	if err != nil {
 		return fmt.Errorf("no se pudo serializar la clave: %w", err)
 	}
-	sealed, err := sellarClaveJKS(claveDER, password)
+	sealed, err := sellarClaveJKS(claveDER, d.password)
 	if err != nil {
 		return err
 	}
-	blob := jksConClave(alias, sealed, certDER, password)
-	if err := os.MkdirAll(filepath.Dir(ruta), 0o755); err != nil {
+	blob := jksConClave(d.alias, sealed, certDER, d.password)
+	if err := os.MkdirAll(filepath.Dir(d.ruta), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(ruta, blob, 0o600)
+	return os.WriteFile(d.ruta, blob, 0o600)
 }
 
 func sellarClaveJKS(claveDER []byte, password string) ([]byte, error) {
