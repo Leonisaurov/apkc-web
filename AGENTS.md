@@ -56,6 +56,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
    cambia el estado de una fase). Este fichero **no admite bullets de hallazgos**: reglas, mapa, entorno,
    gate y la tabla de áreas — y no pasa de ~130 líneas, porque se lee entero en cada sesión. Lo ya escrito
    no se copia aquí: `docs/situacion.md` es el recap de las mediciones.
+8. **Si el usuario pidió abrir el panel de progreso, se actualiza al cerrar cada tarea.** Marcar la fila
+   en la tabla del plan (o el `actual.txt` de `$PREFIX/tmp/apkc-progreso/`) y regenerar
+   `tareas.json` **no basta**: hay que copiarlo a `~/.cache/pantalla-secundaria/www/` y comprobar que el
+   panel lo pinta. La página no se recarga: si el JSON no se copia, sigue enseñando lo anterior durante
+   horas y el usuario trabaja con datos falsos.
 
 ## Entorno (Termux/Android aarch64)
 
