@@ -108,6 +108,11 @@ todas las carpetas del proyecto; `revelarRuta()` abre los ancestros del fichero 
 mueve. Pulsar una carpeta alterna el `Set` y vuelve a pintar; pulsar un fichero llama a
 `abrir(ruta)`.
 
+`#filtro-arbol` filtra por subcadena (sin distinguir mayúsculas) y conserva la cadena de carpetas
+del fichero que coincide; mientras hay filtro, las carpetas se pintan abiertas. `Ctrl+P` enfoca el
+campo. `build/` y sus hijos llevan la clase `generado`, el color atenuado y la etiqueta
+`generado` en la carpeta raíz: se puede abrir, pero se regenera en cada compilación.
+
 `#subir-arbol` pide archivos con `#subir-ficheros` y los escribe en la carpeta del fichero
 abierto, o en `/proyecto` si no hay ninguno. En el menú de una carpeta, **Subir archivos aquí** y
 **Subir carpeta aquí** fijan el destino; el segundo usa el input `#subir-carpeta` con
@@ -139,6 +144,7 @@ La fila superior del editor separa la acción principal de las de mantenimiento:
 
 - `#guardar-fichero` es el único botón primario y guarda con `Ctrl+S`.
 - `#menu-editor` es un `<details>` con `#nuevo-fichero`, `#subir-ficheros-boton`,
+  `#exportar-proyecto`, `#importar-proyecto` (y su `#importar-archivo` oculto),
   `#descargar-fichero`, `#renombrar-fichero` y `#borrar-fichero`. Se cierra al pulsar una acción,
   al hacer clic fuera o con `Escape`; no guarda estado propio.
 - `#alternar-panel` se llama **Compilar**: abre `#panel-inferior` en la pestaña Compilar y lo
@@ -347,11 +353,15 @@ o lo cierra, y ``Ctrl + ` `` conserva la pestaña activa.
   y `#abrir-historial` abren esta pestaña.
 - `alternarPanel()` abre o cierra el panel; si lo abre, vuelve a la pestana activa.
 - `cerrarPanel()` lo esconde y deja `aria-expanded="false"` en el boton `#alternar-panel`.
-- `correr(argv)` abre siempre la pestaña Consola, escribe `$ apkc ...`, muestra `#ocupado`
-  mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar. La
+- `correr(argv)` abre siempre la pestaña Consola, escribe `$ apkc ...`, muestra `#ocupado` y
+  `#detener-comando` mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al
+  terminar. La salida llega por trozos (`hospedador.escucharSalida`), así que se pinta mientras el
+  comando corre y la última línea se enseña como fase en `#ocupado`; **Detener** termina el worker
+  (`hospedador.cancelar`) y el siguiente comando arranca otro. La
   consola no usa `textContent` directo: `CONSOLA` guarda el texto y `consolaHtml()` convierte los
   códigos ANSI (`\u001b[34m...\u001b[0m`) en `<span class="consola-fg-4">`; las demás secuencias
-  CSI se descartan. Así se ven los colores de `apkc` y no los códigos crudos. La paleta de
+  CSI se descartan. `enlazarSalidas()` convierte `ruta:línea` en un `<a class="salto">` que
+  `saltarALinea()` resuelve abriendo el fichero e `irALinea()` seleccionando esa línea. Así se ven los colores de `apkc` y no los códigos crudos. La paleta de
   `.consola` sale de `--ansi-0..15` y se cambia con `#tema-consola` (Catppuccin por defecto;
   también Rosé Pine, Gruvbox, Solarized Dark y Dracula).
 - `#panel-descargas` es una barra encima de las vistas, visible en todas las pestanas. `descargar()`
@@ -363,7 +373,9 @@ o lo cierra, y ``Ctrl + ` `` conserva la pestaña activa.
   fichero grande o descargar el jar del SDK. Solo aparece si la tarea pasa de 120 ms, y se retira
   en `finally`, también cuando falla.
 - `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
-  `#verificar-apk`) y deja el resto en tres desplegables: `#detalle-sdk`
+  `#verificar-apk`, `#descargar-debug-keystore`) y deja el resto en desplegables:
+  `#detalle-ajustes` (`#ajustes-minsdk`, `#ajustes-targetsdk`, `#ajustes-versioncode`,
+  `#ajustes-versionname`, `#leer-ajustes`, `#guardar-ajustes`, `#estado-ajustes`), `#detalle-sdk`
   (`#abrir-dialogo-sdk`, `#dialogo-sdk`, `#sdk-entiendo`, `#sdk-terminos`, `#sdk-descarga`,
   `#sdk-elegir-archivo`, `#sdk-usar-servidor`, `#sdk-cerrar`, `#traer-android-jar`,
   `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
@@ -422,9 +434,9 @@ En `@media (max-width: 760px)`:
 | --- | --- |
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
 | `node studio/prueba-navegador.js` | `http` sin COOP/COEP: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
-| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB, dos ventanas que se pasan guardados por BroadcastChannel y la fusión/conflicto de la misma línea |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 77 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
-| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
+| `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, que `build/` se vea como generado y que el filtro conserve las carpetas, subir un archivo, moverlo de carpeta, exportar/importar el `.zip` (con binario), leer y guardar los ajustes en el manifiesto, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB, dos ventanas que se pasan guardados por BroadcastChannel y la fusión/conflicto de la misma línea |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 81 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red, no pedir nada fuera del origen, la salida por trozos, el enlace `ruta:línea`, Detener y la fase en la barra |
+| `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, 81 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la
 pagina funciona. Los comandos de entorno estan en `tools/entorno.sh` (`test`, `wasm`, `gate`).

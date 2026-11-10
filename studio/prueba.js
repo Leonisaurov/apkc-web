@@ -3,13 +3,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildProject, makeZip, analyze, RULES } from "./app.js";
+import { buildProject, makeZip, analyze, RULES, crc32 } from "./app.js";
 import * as pestanaMod from "./pestana.js";
 import { Historial } from "./historial.js";
 import { fusionar } from "./fusion.js";
+import { leerZip, zipDelArbol, paqueteDelManifiesto, nombreDeZip, rutaSegura,
+  ajustesDelManifiesto, conAjustes } from "./proyecto.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const a = { buildProject, makeZip, analyze, RULES };
+const a = { buildProject, makeZip, analyze, RULES, crc32 };
 
 const estado = {
   name: "Hola apkc", package: "com.hola.apkcstudio", minsdk: "21", targetsdk: "33",
@@ -51,7 +53,10 @@ for (const [ruta] of Object.entries(plantillas)) {
   if (!fs.existsSync(origen)) { console.log("  (sin repo en", origen, ": comparacion omitida)"); continue; }
   const esperado = new Set(token(fs.readFileSync(origen, "utf8")));
   const obtenido = new Set(token(p.files[ruta]));
-  const faltan = [...esperado].filter((t) => !obtenido.has(t) && !t.startsWith("<?") && t !== "</manifest>");
+  // maxSdkVersion se omite a propósito: fijar la API máxima en el manifiesto generado deja la
+  // app sin poder instalarse en versiones futuras (docs/plan.md, B1)
+  const faltan = [...esperado].filter((t) => !obtenido.has(t) && !t.startsWith("<?") &&
+    t !== "</manifest>" && t !== "android:maxSdkVersion");
   if (faltan.length) mal(`${ruta} no tiene ${faltan.join(", ")} como en ${origen}`);
 }
 
@@ -140,6 +145,12 @@ if (!/class="consola-fg-1">rojo</.test(color) || !/class="consola-fuerte consola
   mal("consolaHtml no traduce los colores ANSI");
 if (/\u001b/.test(color)) mal("consolaHtml deja códigos de escape en la consola");
 if (!/&lt;b&gt;/.test(pestanaMod.consolaHtml("<b>"))) mal("consolaHtml no escapa el HTML");
+// una salida `ruta:línea` se convierte en un enlace que abre el fichero
+const conSalto = pestanaMod.consolaHtml("src/com/x/Main.java:7: error: falta ;");
+if (!/<a href="#" class="salto" data-ruta="src\/com\/x\/Main\.java" data-linea="7">src\/com\/x\/Main\.java:7<\/a>/.test(conSalto)) {
+  mal("consolaHtml no enlaza ruta:línea: " + conSalto);
+}
+if (/class="salto"[^>]*>.*&lt;/.test(conSalto)) mal("el enlace de la consola se come el texto escapado");
 
 // 8. el árbol de deshacer: ramas, reconstrucción y poda sin tocar la rama actual
 const historial = Historial;
@@ -178,6 +189,77 @@ if (fusionar(baseFusion, "uno\nDOS\ntres\n", baseFusion).estado !== "nuestro") m
   const zip = a.makeZip([["android-34/android.jar", interior]]);
   const jar = await pestanaMod.jarDeSeleccion(zip);
   if (new TextDecoder().decode(jar) !== interior) mal("jarDeSeleccion no extrae android.jar del .zip oficial");
+
+  // 10. exportar e importar el proyecto: binarios intactos, carpetas, y rutas que no salen
+  const icono = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 255, 1, 254]);
+  const zipProyecto = zipDelArbol([
+    ["AndroidManifest.xml", '<manifest package="com.hola.apkcstudio"/>'],
+    ["res/drawable/icono.png", icono],
+    ["res/drawable/", new Uint8Array(0)],
+  ]);
+  const vuelta = await leerZip(zipProyecto);
+  const png = vuelta.find((e) => e.ruta === "res/drawable/icono.png");
+  if (!png || png.datos.length !== icono.length || png.datos.some((b, i) => b !== icono[i])) {
+    mal("leerZip no devuelve el PNG byte a byte");
+  }
+  if (!vuelta.some((e) => e.ruta === "res/drawable/" && e.dir)) mal("leerZip pierde las carpetas");
+
+  // un zip hecho con DEFLATE (lo normal fuera de esta página) también entra
+  const texto = "package x;\nclass X {}\n";
+  const crudo = Buffer.from(texto);
+  const comprimido = new Uint8Array(await new Response(
+    new Blob([crudo]).stream().pipeThrough(new CompressionStream("deflate-raw"))).arrayBuffer());
+  const nombre = Buffer.from("src/x/X.java");
+  const local = Buffer.alloc(30);
+  local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6);
+  local.writeUInt16LE(8, 8); local.writeUInt32LE(a.crc32(crudo), 14);
+  local.writeUInt32LE(comprimido.length, 18); local.writeUInt32LE(crudo.length, 22);
+  local.writeUInt16LE(nombre.length, 26);
+  const centralD = Buffer.alloc(46);
+  centralD.writeUInt32LE(0x02014b50, 0); centralD.writeUInt16LE(20, 4); centralD.writeUInt16LE(20, 6);
+  centralD.writeUInt16LE(0x0800, 8); centralD.writeUInt16LE(8, 10);
+  centralD.writeUInt32LE(a.crc32(crudo), 16); centralD.writeUInt32LE(comprimido.length, 20);
+  centralD.writeUInt32LE(crudo.length, 24); centralD.writeUInt16LE(nombre.length, 28);
+  centralD.writeUInt32LE(0, 42);
+  const fin = Buffer.alloc(22);
+  fin.writeUInt32LE(0x06054b50, 0); fin.writeUInt16LE(1, 8); fin.writeUInt16LE(1, 10);
+  fin.writeUInt32LE(46 + nombre.length, 12); fin.writeUInt32LE(30 + nombre.length + comprimido.length, 16);
+  const zipDeflate = Buffer.concat([local, nombre, comprimido, centralD, nombre, fin]);
+  const deflate = await leerZip(new Uint8Array(zipDeflate));
+  if (deflate.length !== 1 || new TextDecoder().decode(deflate[0].datos) !== texto) {
+    mal("leerZip no infla una entrada DEFLATE");
+  }
+
+  if (rutaSegura("../fuera.txt") || rutaSegura("/abs.txt") || rutaSegura("a\\b.txt") || !rutaSegura("a/b.txt")) {
+    mal("rutaSegura no filtra las rutas que salen del proyecto");
+  }
+  if (paqueteDelManifiesto('<manifest package="com.x.y">') !== "com.x.y") mal("no lee el paquete del manifiesto");
+  if (nombreDeZip("com.x.y") !== "com.x.y.zip" || nombreDeZip("") !== "proyecto.zip") mal("nombreDeZip no nombra el zip");
+
+  // 11. los ajustes se escriben en el manifiesto y no en un fichero paralelo
+  const manifiesto = p.files["AndroidManifest.xml"];
+  if (/maxSdkVersion/.test(manifiesto)) mal("la plantilla sigue fijando maxSdkVersion");
+  const ajustado = conAjustes(manifiesto, { minSdk: 24, targetSdk: 35, versionCode: 7, versionName: "1.0" });
+  const leidos = ajustesDelManifiesto(ajustado);
+  if (leidos.minSdk !== "24" || leidos.targetSdk !== "35" || leidos.versionCode !== "7" ||
+      leidos.versionName !== "1.0") mal("conAjustes no escribe los cuatro valores: " + JSON.stringify(leidos));
+  if (/maxSdkVersion/.test(ajustado)) mal("conAjustes no quita maxSdkVersion");
+  if ((ajustado.match(/<uses-sdk/g) || []).length !== 1) mal("conAjustes duplica el bloque uses-sdk");
+  // sin uses-sdk se añade, y los atributos que ya estaban no se pierden
+  const sinUsos = conAjustes('<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.x">\n</manifest>',
+    { minSdk: 21, targetSdk: 34, versionCode: 1, versionName: "0.1" });
+  if (!/<uses-sdk[^>]*android:minSdkVersion="21"/.test(sinUsos) || !/package="com.x"/.test(sinUsos)) {
+    mal("conAjustes no añade uses-sdk cuando falta");
+  }
+  let rechazo = "";
+  try { conAjustes(manifiesto, { minSdk: 34, targetSdk: 21, versionCode: 1, versionName: "1" }); }
+  catch (e) { rechazo = e.message; }
+  if (!/targetSdk no puede ser menor/.test(rechazo)) mal("conAjustes acepta targetSdk menor que minSdk");
+  let rechazoNombre = "";
+  try { conAjustes(manifiesto, { minSdk: 21, targetSdk: 34, versionCode: 1, versionName: "1<2" }); }
+  catch (e) { rechazoNombre = e.message; }
+  if (!/versionName/.test(rechazoNombre)) mal("conAjustes acepta un versionName con <");
+
   console.log(fallos ? `PRUEBA FALLA: ${fallos} problemas` : "prueba: todo en orden");
   process.exit(fallos ? 1 : 0);
 })();

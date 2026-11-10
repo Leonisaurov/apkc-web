@@ -61,6 +61,7 @@
         </span>
       </div>
       <div class="lateral-proyecto" id="lateral-proyecto">MI APP</div>
+      <label class="filtro-arbol"><input id="filtro-arbol" type="search" placeholder="Filtrar ficheros (Ctrl+P)" aria-label="Filtrar ficheros del proyecto" autocomplete="off"></label>
       <div id="arbol-pestana" class="arbol-pestana" role="tree" aria-label="Ficheros del proyecto">
         <div class="vacio">El proyecto está vacío. Se crea desde <strong>Inicio</strong>.</div>
       </div>
@@ -98,6 +99,13 @@
             </div>
           </form>
 
+          <p class="nota aviso-almacenamiento" id="aviso-almacenamiento">
+            El proyecto vive en el almacenamiento de <strong>este navegador</strong> (OPFS), en este
+            origen y en este dispositivo. Cambiar de puerto o dominio, abrirlo en otro navegador o
+            borrar los datos del sitio lo elimina. Usa <strong>Archivo → Exportar proyecto (.zip)</strong>
+            para guardar una copia y poder importarla después.
+          </p>
+
           <div class="atajos">
             <div><kbd>Ctrl</kbd> + <kbd>S</kbd> guarda el fichero abierto</div>
             <div><kbd>Ctrl</kbd> + <kbd>Enter</kbd> repite el último comando</div>
@@ -131,6 +139,7 @@
               </div>
             </div>
             <span id="ocupado" class="nota" hidden>apkc trabajando…</span>
+            <button id="detener-comando" class="nota" type="button" hidden>Detener</button>
             <span class="espacio"></span>
             <button id="guardar-fichero" type="button" class="primario" title="Guardar (Ctrl+S)" aria-label="Guardar">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v6h7V4"/><path d="M8 14h8"/></svg>
@@ -144,6 +153,8 @@
               <div class="menu-editor-lista" role="menu">
                 <button id="nuevo-fichero" type="button" role="menuitem">Nuevo fichero…</button>
                 <button id="subir-ficheros-boton" type="button" role="menuitem">Subir archivos…</button>
+                <button id="exportar-proyecto" type="button" role="menuitem">Exportar proyecto (.zip)</button>
+                <button id="importar-proyecto" type="button" role="menuitem">Importar proyecto (.zip)…</button>
                 <a id="descargar-fichero" role="menuitem" href="#" download hidden>Descargar el fichero</a>
                 <button id="abrir-historial" type="button" role="menuitem">Historial…</button>
                 <hr>
@@ -222,8 +233,24 @@
                   <button id="compilar-debug" class="primario" type="button">Compilar debug</button>
                   <button id="compilar-apk" type="button">Compilar release</button>
                   <button id="verificar-apk" type="button">Verificar el apk</button>
+                  <button id="descargar-debug-keystore" type="button" hidden>Descargar la clave de depuración</button>
                 </div>
                 <p class="nota" id="estado-verificacion">sin verificar todavía</p>
+
+                <details id="detalle-ajustes">
+                  <summary>Ajustes del proyecto (versión y API)</summary>
+                  <div class="panel-form">
+                    <label>minSdk <input type="number" id="ajustes-minsdk" min="21" max="35" step="1"></label>
+                    <label>targetSdk <input type="number" id="ajustes-targetsdk" min="21" max="35" step="1"></label>
+                    <label>versionCode <input type="number" id="ajustes-versioncode" min="1" step="1"></label>
+                    <label>versionName <input type="text" id="ajustes-versionname" autocomplete="off"></label>
+                    <div class="acciones">
+                      <button id="leer-ajustes" type="button">Leer del manifiesto</button>
+                      <button id="guardar-ajustes" class="primario" type="button">Guardar en el manifiesto</button>
+                    </div>
+                    <p class="nota" id="estado-ajustes">sin leer todavía</p>
+                  </div>
+                </details>
 
                 <details id="detalle-sdk">
                   <summary>SDK y android.jar <span id="sdk-badge" class="badge-sdk" hidden>listo</span></summary>
@@ -350,6 +377,7 @@
 
 <input type="file" id="subir-ficheros" multiple hidden aria-label="Subir archivos al proyecto">
 <input type="file" id="subir-carpeta" webkitdirectory hidden aria-label="Subir una carpeta al proyecto">
+<input type="file" id="importar-archivo" accept=".zip,application/zip,application/x-zip-compressed" hidden aria-label="Importar un proyecto desde un zip">
 
 <div id="menu-archivo" class="menu-archivo" role="menu" aria-label="Acciones del fichero" hidden></div>
 

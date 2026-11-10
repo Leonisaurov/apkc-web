@@ -12,8 +12,7 @@ const TEMPLATES = {
     android:versionName="0.1">
 
     <uses-sdk android:minSdkVersion="{{minsdk}}"
-          android:targetSdkVersion="{{targetsdk}}"
-          android:maxSdkVersion="{{targetsdk}}" />
+          android:targetSdkVersion="{{targetsdk}}" />
 
     <application android:label="{{appname}}"{{extras}}>
 
@@ -185,15 +184,16 @@ function crc32(buf) {
 // Solo entradas guardadas (STORE): lo que se guarda es texto pequeño, y así el lector del
 // zip no necesita nada para abrirlo. El campo de descriptor de datos se deja sin poner a
 // propósito, que es justo el error que zipcheck.py caza en un apk.
+// Acepta texto o bytes: exportar el proyecto tiene que copiar un PNG o un .apk sin tocarlo.
 function makeZip(entries) {
   const enc = new TextEncoder();
   const parts = [];
   const central = [];
   let offset = 0;
 
-  for (const [name, text] of entries) {
+  for (const [name, contenido] of entries) {
     const nameBytes = enc.encode(name);
-    const data = enc.encode(text);
+    const data = contenido instanceof Uint8Array ? contenido : enc.encode(contenido);
     const crc = crc32(data);
 
     const local = new DataView(new ArrayBuffer(30));

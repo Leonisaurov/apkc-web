@@ -7,8 +7,10 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { leerZip, ajustesDelManifiesto } from "./proyecto.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CHROME = process.env.CHROME_BIN || "chromium-browser";
 
 const TMP = process.env.PREFIX ? process.env.PREFIX + "/tmp" : "/tmp";
 const WASM = process.env.APKC_WASM || "";
@@ -39,7 +41,7 @@ servidor.stderr.on("data", (d) => { salidaServidor += d; });
 
 const PERFIL = path.join(TMP, "crear-chrome-perfil");
 fs.rmSync(PERFIL, { recursive: true, force: true });
-const navegador = spawn("chromium-browser", [
+const navegador = spawn(CHROME, [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
   "--no-first-run", "--disable-extensions", "--disable-sync",
   "--user-data-dir=" + PERFIL, "--remote-debugging-port=" + CDP, URL_PAGINA,
@@ -194,6 +196,43 @@ async function target() {
   comprueba("el botón contraer las vuelve a cerrar", crear.plegado === true,
     String(crear.plegado));
 
+  // build/ se ve, pero atenuado y etiquetado: es salida de apkc y se regenera. El filtro deja
+  // el fichero buscado y la cadena de carpetas que lo contiene.
+  const filtroArbol = await evaluar(`(async () => {
+    await hospedador.escribir("/proyecto/build/app.apk", new Uint8Array([1, 2, 3]));
+    await refrescarArbol();
+    const build = document.querySelector('#arbol-pestana a[data-ruta="/proyecto/build"]');
+    const generado = build ? { clase: build.className, texto: build.textContent } : null;
+    const filtro = document.getElementById("filtro-arbol");
+    filtro.value = "MainActivity";
+    filtro.dispatchEvent(new Event("input", { bubbles: true }));
+    await refrescarArbol();
+    for (let i = 0; i < 40; i++) {
+      if (document.querySelector('#arbol-pestana a[data-ruta$="MainActivity.java"]')) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    const rutas = [...document.querySelectorAll("#arbol-pestana a")].map((a) => a.dataset.ruta || "");
+    const manifiesto = rutas.includes("/proyecto/AndroidManifest.xml");
+    const valor = filtro.value;
+    filtro.value = "";
+    filtro.dispatchEvent(new Event("input", { bubbles: true }));
+    for (let i = 0; i < 40; i++) {
+      if (document.querySelector('#arbol-pestana a[data-ruta="/proyecto/build"]')) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    await hospedador.limpiar("/proyecto/build");
+    await refrescarArbol();
+    return { generado, rutas, manifiesto, valor };
+  })()`);
+  comprueba("build/ se ve atenuado y con la etiqueta generado",
+    filtroArbol.generado && /generado/.test(String(filtroArbol.generado.clase)) &&
+    /generado/.test(String(filtroArbol.generado.texto)),
+    JSON.stringify(filtroArbol.generado));
+  comprueba("el filtro deja el fichero buscado y sus carpetas, no el resto",
+    filtroArbol.rutas.some((r) => /\/MainActivity\.java$/.test(r)) &&
+    filtroArbol.rutas.includes("/proyecto/src") && filtroArbol.manifiesto === false,
+    JSON.stringify(filtroArbol.rutas).slice(0, 260));
+
   // subir un archivo del dispositivo: el mismo camino que usa el botón del explorador, sin
   // pasar por ningún servidor. Con el manifiesto abierto, el destino es /proyecto.
   const subida = await evaluar(`(async () => {
@@ -240,6 +279,113 @@ async function target() {
   comprueba("la pestaña y el árbol siguen al archivo movido",
     movimiento.abierto === "res/nota.txt" && movimiento.rutas.includes("/proyecto/res/nota.txt"),
     JSON.stringify({ abierto: movimiento.abierto, rutas: movimiento.rutas }).slice(0, 220));
+
+  // exportar e importar: el zip sale con el manifiesto y un binario intacto, y al importarlo
+  // se repone lo que se había borrado. Es la prueba de que el proyecto no depende del navegador.
+  const exportado = await evaluar(`(async () => {
+    const bin = new Uint8Array([137, 80, 78, 71, 0, 255, 10, 20, 30]);
+    await hospedador.escribir("/proyecto/res/icono-prueba.png", bin);
+    let blob = null;
+    const crear = URL.createObjectURL;
+    const clic = HTMLAnchorElement.prototype.click;
+    URL.createObjectURL = (b) => { blob = b; return "blob:prueba"; };
+    HTMLAnchorElement.prototype.click = function () {};
+    try {
+      await exportarProyecto();
+    } finally {
+      URL.createObjectURL = crear;
+      HTMLAnchorElement.prototype.click = clic;
+    }
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    await hospedador.limpiar("/proyecto/res/nota.txt");
+    await hospedador.limpiar("/proyecto/res/icono-prueba.png");
+    return {
+      zip: btoa(String.fromCharCode(...bytes)),
+      antes: {
+        nota: !!(await hospedador.bytes("/proyecto/res/nota.txt")),
+        png: !!(await hospedador.bytes("/proyecto/res/icono-prueba.png")),
+      },
+    };
+  })()`);
+  const entradasZip = await leerZip(new Uint8Array(Buffer.from(exportado.zip, "base64")));
+  const pngZip = entradasZip.find((e) => e.ruta === "res/icono-prueba.png");
+  comprueba("exportar el proyecto produce un zip con manifiesto y binarios",
+    entradasZip.some((e) => e.ruta === "AndroidManifest.xml") &&
+    pngZip && Array.from(pngZip.datos).join(",") === "137,80,78,71,0,255,10,20,30" &&
+    exportado.antes.nota === false && exportado.antes.png === false,
+    JSON.stringify({ entradas: entradasZip.length, png: pngZip ? pngZip.datos.length : 0,
+      antes: exportado.antes }));
+
+  const importado = await evaluar(`(async () => {
+    const bytes = Uint8Array.from(atob(${JSON.stringify(exportado.zip)}), (c) => c.charCodeAt(0));
+    const confirmar = window.confirm;
+    window.confirm = () => true;
+    try {
+      await importarProyecto(new File([bytes], "proyecto.zip", { type: "application/zip" }));
+    } finally {
+      window.confirm = confirmar;
+    }
+    const nota = await hospedador.bytes("/proyecto/res/nota.txt");
+    const png = await hospedador.bytes("/proyecto/res/icono-prueba.png");
+    const aviso = document.getElementById("estado-pestana").textContent;
+    // la importación cierra las pestañas del proyecto anterior; se dejan las dos que tenía la
+    // prueba para que las comprobaciones siguientes midan lo mismo que antes
+    limpiarEstadoEditor();
+    await abrir("/proyecto/AndroidManifest.xml");
+    await abrir("/proyecto/res/nota.txt");
+    return {
+      nota: nota ? new TextDecoder().decode(nota) : null,
+      png: png ? Array.from(png) : null,
+      aviso,
+    };
+  })()`);
+  comprueba("importar el zip repone los ficheros y los binarios del proyecto",
+    importado.nota === "hola desde el dispositivo\n" &&
+    importado.png && importado.png.join(",") === "137,80,78,71,0,255,10,20,30" &&
+    /proyecto importado/.test(String(importado.aviso)),
+    JSON.stringify(importado).slice(0, 260));
+
+  // ajustes: se leen del manifiesto y se guardan en el propio XML, sin fichero paralelo
+  const ajustes = await evaluar(`(async () => {
+    await leerAjustes(true);
+    const antes = {
+      min: document.getElementById("ajustes-minsdk").value,
+      target: document.getElementById("ajustes-targetsdk").value,
+      code: document.getElementById("ajustes-versioncode").value,
+      nombre: document.getElementById("ajustes-versionname").value,
+    };
+    document.getElementById("ajustes-minsdk").value = "24";
+    document.getElementById("ajustes-targetsdk").value = "35";
+    document.getElementById("ajustes-versioncode").value = "7";
+    document.getElementById("ajustes-versionname").value = "1.0";
+    await guardarAjustes();
+    return {
+      antes,
+      texto: await hospedador.texto("/proyecto/AndroidManifest.xml"),
+      aviso: document.getElementById("estado-ajustes").textContent,
+    };
+  })()`);
+  const leidos = ajustesDelManifiesto(ajustes.texto);
+  comprueba("los ajustes se leen del manifiesto y se guardan en él",
+    ajustes.antes.min === "21" && ajustes.antes.target === "34" &&
+    leidos.minSdk === "24" && leidos.targetSdk === "35" &&
+    leidos.versionCode === "7" && leidos.versionName === "1.0" &&
+    !/maxSdkVersion/.test(ajustes.texto) && /guardado/.test(String(ajustes.aviso)),
+    JSON.stringify({ antes: ajustes.antes, leidos, aviso: ajustes.aviso }));
+
+  // la clave de depuración se crea en la pestaña y se puede descargar, igual que la de release
+  const debugKey = await evaluar(`(async () => {
+    const k = await asegurarDebugKeystore();
+    const bytes = await hospedador.bytes("/sdk/debug.keystore");
+    return {
+      alias: k && k.alias,
+      bytes: bytes ? bytes.length : 0,
+      visible: !document.getElementById("descargar-debug-keystore").hidden,
+    };
+  })()`);
+  comprueba("la clave de depuración se genera y se ofrece para descargar",
+    debugKey.alias === "androiddebugkey" && debugKey.bytes > 1000 && debugKey.visible === true,
+    JSON.stringify(debugKey));
 
   // varias pestañas: abrir otro fichero no cierra el anterior, y al volver se relee de OPFS
   const pestanas = await evaluar(`(async () => {

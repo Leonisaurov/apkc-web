@@ -82,6 +82,23 @@ los imports y no debe depender de ese puente.
   fichero abierto; el menú de una carpeta fija el destino. La subida de carpeta conserva
   `webkitRelativePath` y descarta los tramos `..`; `prueba-crear.js` conduce el input con
   `DataTransfer`.
+- **El proyecto se exporta e importa en `.zip`.** `proyecto.js` escribe con `makeZip` (ahora
+  acepta `Uint8Array`) y lee STORE y DEFLATE con CRC; rechaza `..`, rutas absolutas, `\` y ZIP64.
+  Importar reemplaza `/proyecto` **solo tras confirmar**. No metas el zip en OPFS sin pasar por
+  `leerZip`.
+- **Los ajustes viven en el manifiesto.** `conAjustes()` toca `versionCode`, `versionName`,
+  `minSdkVersion` y `targetSdkVersion`, añade `<uses-sdk>` si falta y quita `maxSdkVersion`; no
+  crea un fichero paralelo. La plantilla de `app.js` tampoco escribe `maxSdkVersion`.
+- **La salida se pinta mientras corre.** Go escribe en el fd 1 del fs, no en `process.stdout`;
+  `hospedador.js` envuelve `consola.escribir` y manda `{tipo:"salida"}`. `correr()` la pinta al
+  llegar, usa la última línea como fase en `#ocupado` y no inventa porcentajes. **Detener** llama a
+  `hospedador.cancelar()`: termina el worker, resuelve lo pendiente con error y el siguiente
+  comando crea otra instancia (el fs sigue en OPFS).
+- **La consola enlaza `ruta:línea`.** `enlazarSalidas()` corre sobre el texto ya escapado; no
+  vuelvas a aplicarlo al HTML final. El clic se delega en `#consola-pestana` y `saltarALinea()`
+  resuelve rutas relativas contra `/proyecto`.
+- **El árbol filtra y marca lo generado.** `#filtro-arbol` conserva padres; `build/` lleva
+  `generado` y la etiqueta, pero se puede abrir. `Ctrl+P` enfoca el filtro.
 - **El árbol empieza cerrado.** `ARBOL.abiertos` vacío significa todo plegado; no lo vuelvas a
   invertir a `plegados`. Mover es `hospedador.renombrar` a través de `moverRuta`, que remapea
   `ARBOL.abiertos` y la ruta del fichero abierto. El arrastre solo se activa con puntero fino;

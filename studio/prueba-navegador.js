@@ -11,6 +11,7 @@ import http from "node:http";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CHROME = process.env.CHROME_BIN || "chromium-browser";
 
 const PUERTO = process.env.STUDIO_PORT || "9333";
 const HTTP_PORT = Number(process.env.STUDIO_NAV_PORT || 8789);
@@ -38,7 +39,7 @@ servidor.listen(HTTP_PORT, "127.0.0.1");
 const PERFIL = path.join(process.env.PREFIX || "/data/data/com.termux/files/usr", "tmp", "studio-chrome-perfil");
 fs.rmSync(PERFIL, { recursive: true, force: true });
 
-const navegador = spawn("chromium-browser", [
+const navegador = spawn(CHROME, [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
   "--no-first-run", "--disable-extensions", "--disable-sync", "--user-data-dir=" + PERFIL,
   "--remote-debugging-port=" + PUERTO, URL_PAGINA,
@@ -129,6 +130,7 @@ const conductor = `(async () => {
   };
   compacto.checked = false;
   compacto.dispatchEvent(new Event("change", { bubbles: true }));
+  r.avisoAlmacenamiento = (document.getElementById("aviso-almacenamiento") || {}).textContent || "";
   return r;
 })()`;
 
@@ -192,6 +194,9 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
       "el tema de terminal no cambia la paleta ANSI: " + String(v.temas && v.temas.colorTerm));
     comprueba(v.temas && v.temas.botones === "iconos" && v.temas.oculto === "none",
       "el modo solo iconos no oculta el texto: " + JSON.stringify(v.temas));
+    comprueba(/OPFS/.test(String(v.avisoAlmacenamiento)) &&
+      /Exportar proyecto/.test(String(v.avisoAlmacenamiento)),
+      "falta el aviso de que el proyecto vive en este navegador: " + String(v.avisoAlmacenamiento).slice(0, 160));
   }
   ws.close();
   navegador.kill("SIGKILL");

@@ -1,5 +1,7 @@
 import { Historial } from "./historial.js";
 import { fusionar } from "./fusion.js";
+import { leerZip, zipDelArbol, paqueteDelManifiesto, nombreDeZip,
+  ajustesDelManifiesto, conAjustes } from "./proyecto.js";
 
 // La pestaña que hace: editor de fuente + un arbol en OPFS + los comandos de apkc.wasm.
 //
@@ -13,12 +15,16 @@ const PROYECTO = "/proyecto";
 const hospedador = (() => {
   // el worker se crea al primer uso, no al cargar el fichero: la prueba de node exige estas
   // funciones puras (el resaltador) y no tiene Worker ni document
-  let worker = null, próximo = 1;
+  let worker = null, próximo = 1, alSalir = null;
   const pendientes = new Map();
   const asegurar = () => {
     if (worker) return worker;
     worker = new Worker("hospedador.js", { type: "module" });   // module: el hospedador importa su fs con import
     worker.onmessage = (e) => {
+      if (e.data && e.data.tipo === "salida") {
+        if (alSalir) alSalir(String(e.data.texto || ""));
+        return;
+      }
       const resolver = pendientes.get(e.data.id);
       if (resolver) { pendientes.delete(e.data.id); resolver(e.data); }
     };
@@ -54,6 +60,20 @@ const hospedador = (() => {
     renombrar: async (de, a) => { await bajarRaiz(); return pedir({ tipo: "renombrar", de, a }); },
     cwd: async (ruta) => { await bajarRaiz(); return pedir({ tipo: "cwd", ruta }); },
     sondear: async () => { await bajarRaiz(); return pedir({ tipo: "sondeo" }); },
+    // la salida llega por trozos mientras el comando corre; `correr` la pinta sin esperar al final
+    escucharSalida(fn) { alSalir = fn; },
+    // Go wasm no tiene kill: se termina el worker entero y se recrea en el siguiente comando. El
+    // fs vive en OPFS, así que lo escrito hasta aquí no se pierde; el build puede quedar a medias.
+    cancelar() {
+      if (!worker) return false;
+      try { worker.terminate(); } catch (e) { /* ya estaba muerto */ }
+      worker = null;
+      raizPedida = null;
+      for (const [id, resolver] of pendientes) {
+        if (pendientes.delete(id)) resolver({ tipo: "error", error: "comando detenido por el usuario", consola: "" });
+      }
+      return true;
+    },
     // leer con el error nombrado: si el fs falla, la página tiene que decir qué falló y no
     // dejar que un objeto de error se cuele como si fueran bytes
     async bytes(ruta) {
@@ -372,6 +392,15 @@ function textoHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Una salida de javac o del compilador trae `ruta:línea:`; en la consola es un enlace que abre
+// el fichero y selecciona esa línea. Se aplica al texto ya escapado, así que las comillas de
+// los atributos van como &quot; y no pueden romper el HTML.
+const RE_SALTO = /\b([A-Za-z0-9_][A-Za-z0-9_./-]*\.(?:java|kt|xml)):(\d+)\b/g;
+function enlazarSalidas(html) {
+  return html.replace(RE_SALTO, (todo, ruta, linea) =>
+    '<a href="#" class="salto" data-ruta="' + ruta + '" data-linea="' + linea + '">' + todo + "</a>");
+}
+
 // La consola de apkc escribe colores ANSI (`\u001b[34m...\u001b[0m`). En un <pre> se veían
 // los códigos crudos; aquí se convierten en spans con clase y el resto de secuencias CSI
 // (borrar línea, mover cursor) se descartan. Es puro para poder probarlo en node.
@@ -388,7 +417,7 @@ function consolaHtml(texto) {
   };
   const envolver = (trozo) => {
     if (!trozo) return "";
-    const html = textoHtml(trozo);
+    const html = enlazarSalidas(textoHtml(trozo));
     return clases.length ? '<span class="' + clases.join(" ") + '">' + html + "</span>" : html;
   };
   let m;
@@ -548,6 +577,87 @@ async function subirSeleccion(entrada) {
       if (vista && document.body.dataset.vista !== "pestana") vista.click();
     }
   }
+}
+
+// --- exportar e importar el proyecto ---------------------------------------------------------
+// El zip conserva rutas y bytes tal cual. Al importar se reemplaza `/proyecto` entero, así que
+// la confirmación dice cuántos ficheros entran y si hay cambios sin guardar.
+function descargarBytes(nombre, bytes, tipo) {
+  const enlace = document.createElement("a");
+  const url = URL.createObjectURL(new Blob([bytes], { type: tipo || "application/octet-stream" }));
+  enlace.href = url;
+  enlace.download = nombre;
+  enlace.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+async function exportarProyecto() {
+  return conCarga("Empaquetando el proyecto…", async () => {
+    try {
+      const arbol = await hospedador.arbol();
+      const nodos = (arbol.nodos || []).filter(
+        (n) => n.ruta === PROYECTO || n.ruta.startsWith(PROYECTO + "/"));
+      const manifiesto = await hospedador.texto(PROYECTO + "/AndroidManifest.xml");
+      if (!manifiesto) {
+        nota("no hay proyecto que exportar: crea uno en Inicio");
+        return;
+      }
+      const entradas = [];
+      for (const n of nodos) {
+        if (n.ruta === PROYECTO) continue;
+        const rel = n.ruta.slice(PROYECTO.length + 1);
+        if (n.dir) {
+          entradas.push([rel + "/", new Uint8Array(0)]);
+          continue;
+        }
+        const bytes = await hospedador.bytes(n.ruta);
+        if (bytes) entradas.push([rel, bytes]);
+      }
+      const zip = zipDelArbol(entradas);
+      descargarBytes(nombreDeZip(paqueteDelManifiesto(manifiesto)), zip, "application/zip");
+      nota("proyecto exportado: " + entradas.filter((e) => !e[0].endsWith("/")).length +
+        " ficheros, " + zip.length + " bytes");
+    } catch (e) {
+      nota("no se pudo exportar: " + (e && e.message ? e.message : e));
+    }
+  });
+}
+
+async function importarProyecto(archivo) {
+  if (!archivo) return;
+  return conCarga("Leyendo " + archivo.name + "…", async () => {
+    try {
+      const entradas = await leerZip(new Uint8Array(await archivo.arrayBuffer()));
+      const manifiesto = entradas.find((e) => !e.dir && e.ruta === "AndroidManifest.xml");
+      if (!manifiesto) throw new Error("el zip no trae AndroidManifest.xml en la raíz");
+      const ficheros = entradas.filter((e) => !e.dir);
+      const sucios = hayDocumentosSucios();
+      if (!window.confirm("Importar «" + archivo.name + "» reemplaza el proyecto actual (" +
+          ficheros.length + " ficheros)" + (sucios ? " y hay cambios sin guardar" : "") +
+          ". Exporta antes si quieres conservarlo. ¿Seguir?")) return;
+      await conBloqueo(async () => {
+        await hospedador.limpiar(PROYECTO);
+        for (const entrada of entradas) {
+          if (entrada.dir) continue;
+          const ruta = PROYECTO + "/" + entrada.ruta;
+          const r = await hospedador.escribir(ruta, entrada.datos);
+          if (r && r.tipo === "error") throw new Error(r.error);
+          try { localStorage.setItem(claveRevision(ruta), nuevaRevision()); } catch (e) { /* sin revisión */ }
+        }
+      });
+      limpiarEstadoEditor();
+      await refrescarArbol();
+      publicar({ tipo: "proyecto", accion: "importar" });
+      nota("proyecto importado: " + ficheros.length + " ficheros");
+      const primerJava = ficheros.find((e) => /\.java$/.test(e.ruta));
+      if (primerJava && await abrir(PROYECTO + "/" + primerJava.ruta)) {
+        const vista = document.querySelector('[data-vista="pestana"]');
+        if (vista && document.body.dataset.vista !== "pestana") vista.click();
+      }
+    } catch (e) {
+      nota("no se pudo importar: " + (e && e.message ? e.message : e));
+    }
+  });
 }
 
 // --- documentos abiertos -------------------------------------------------------------------
@@ -1487,8 +1597,33 @@ async function refrescarArbol() {
     r = { nodos: [] };
   }
   const nodos = (r.nodos || []).filter((n) => n.ruta.startsWith(PROYECTO + "/"));
+  const entradaFiltro = document.getElementById("filtro-arbol");
+  const filtro = entradaFiltro ? entradaFiltro.value.trim().toLowerCase() : "";
+  let visibles = null;
+  if (filtro) {
+    // se queda lo que coincide y la cadena de padres, para que el árbol siga teniendo forma
+    visibles = new Set();
+    for (const n of nodos) {
+      if (!relativa(n.ruta).toLowerCase().includes(filtro)) continue;
+      visibles.add(n.ruta);
+      let padre = n.ruta;
+      while (padre.includes("/")) {
+        padre = padre.slice(0, padre.lastIndexOf("/"));
+        if (padre === PROYECTO || padre.length <= PROYECTO.length) break;
+        visibles.add(padre);
+      }
+    }
+  }
+  const mostrados = filtro ? nodos.filter((n) => visibles.has(n.ruta)) : nodos;
   const scroll = fuera.scrollTop;
   fuera.textContent = "";
+  if (!mostrados.length && filtro) {
+    const vacio = document.createElement("div");
+    vacio.className = "vacio";
+    vacio.textContent = "Ningún fichero coincide con «" + entradaFiltro.value.trim() + "».";
+    fuera.appendChild(vacio);
+    return;
+  }
   if (!nodos.length) {
     const vacio = document.createElement("div");
     vacio.className = "vacio";
@@ -1510,7 +1645,7 @@ async function refrescarArbol() {
 
   // agrupa por carpeta: el explorador tiene que leerse como un árbol, no como una lista de rutas
   const hijos = new Map();
-  for (const n of nodos) {
+  for (const n of mostrados) {
     const partes = relativa(n.ruta).split("/");
     const padre = partes.length > 1 ? PROYECTO + "/" + partes.slice(0, -1).join("/") : PROYECTO;
     if (!hijos.has(padre)) hijos.set(padre, []);
@@ -1522,15 +1657,18 @@ async function refrescarArbol() {
 
   const pintar = (padre, profundidad) => {
     for (const n of hijos.get(padre) || []) {
+      const rel = relativa(n.ruta);
+      const generado = rel === "build" || rel.startsWith("build/");
+      const abierta = n.dir && (filtro ? true : ARBOL.abiertos.has(n.ruta));
       const fila = document.createElement("a");
       fila.href = "#";
       fila.dataset.ruta = n.ruta;
-      fila.title = relativa(n.ruta);
+      fila.title = rel + (generado ? " · generado por apkc; se regenera en cada compilación" : "");
       fila.style.paddingLeft = (8 + profundidad * 12) + "px";
-      fila.className = n.dir ? "dir" : "archivo";
+      fila.className = (n.dir ? "dir" : "archivo") + (generado ? " generado" : "");
       fila.setAttribute("role", "treeitem");
       fila.setAttribute("aria-level", String(profundidad + 1));
-      if (n.dir) fila.setAttribute("aria-expanded", String(ARBOL.abiertos.has(n.ruta)));
+      if (n.dir) fila.setAttribute("aria-expanded", String(abierta));
       if (n.ruta === estadoPestana.ruta) {
         fila.classList.add("activo");
         fila.setAttribute("aria-selected", "true");
@@ -1538,7 +1676,7 @@ async function refrescarArbol() {
 
       const flecha = document.createElement("span");
       flecha.className = "arbol-flecha " +
-        (n.dir ? (ARBOL.abiertos.has(n.ruta) ? "abierta" : "") : "hoja");
+        (n.dir ? (abierta ? "abierta" : "") : "hoja");
       fila.appendChild(flecha);
 
       const icono = document.createElement("span");
@@ -1549,6 +1687,12 @@ async function refrescarArbol() {
       nombre.className = "nombre";
       nombre.textContent = n.nombre;
       fila.appendChild(nombre);
+      if (generado && rel === "build") {
+        const etiqueta = document.createElement("span");
+        etiqueta.className = "arbol-generado";
+        etiqueta.textContent = "generado";
+        fila.appendChild(etiqueta);
+      }
 
       if (!n.dir) {
         const bajar = document.createElement("span");
@@ -1585,7 +1729,7 @@ async function refrescarArbol() {
       }
       conectarMenu(fila, n);
       fuera.appendChild(fila);
-      if (n.dir && ARBOL.abiertos.has(n.ruta)) pintar(n.ruta, profundidad + 1);
+      if (n.dir && abierta) pintar(n.ruta, profundidad + 1);
     }
   };
   pintar(PROYECTO, 0);
@@ -1609,6 +1753,31 @@ async function abrir(ruta, yaConfirmado) {
   DOCUMENTOS.lista.push({ ruta, texto: null, sucio: false, cursor: null, scroll: null });
   renderPestanas();
   return activarDocumento(ruta);
+}
+
+// Selecciona una línea del fichero abierto. El número viene de la consola (`ruta:línea`) y se
+// limita al tamaño real: un enlace no puede dejar el cursor fuera del texto.
+function irALinea(numero) {
+  const area = document.getElementById("codigo");
+  if (!area) return;
+  const lineas = area.value.split("\n");
+  const n = Math.max(1, Math.min(Number(numero) || 1, lineas.length));
+  let desde = 0;
+  for (let i = 0; i < n - 1; i++) desde += lineas[i].length + 1;
+  area.focus();
+  area.setSelectionRange(desde, desde + lineas[n - 1].length);
+  const alto = parseFloat(getComputedStyle(area).lineHeight) || 18;
+  area.scrollTop = Math.max(0, (n - 3) * alto);
+  EDITOR.sincronizar();
+  actualizarCursor();
+}
+
+async function saltarALinea(ruta, numero) {
+  const limpia = String(ruta || "").replace(/^\.\//, "");
+  if (!limpia) return;
+  const absoluta = limpia.startsWith("/") ? limpia : PROYECTO + "/" + limpia;
+  if (!(await abrir(absoluta))) return;
+  irALinea(numero);
 }
 
 function marcarSucio(v) {
@@ -1809,23 +1978,51 @@ async function correr(argv) {
   mostrarPanel("salida");
   CONSOLA.escribir("$ apkc " + argv.join(" ") + "\n");
   const ocupado = document.getElementById("ocupado");
-  if (ocupado) ocupado.hidden = false;
+  const botonDetener = document.getElementById("detener-comando");
+  if (ocupado) { ocupado.hidden = false; ocupado.textContent = "apkc trabajando…"; }
+  if (botonDetener) botonDetener.hidden = false;
   let r;
+  let recibido = 0;
+  // la salida llega trozo a trozo: se pinta ya y la última línea hace de fase en la barra, sin
+  // inventar porcentajes que apkc no imprime
+  hospedador.escucharSalida((texto) => {
+    recibido += texto.length;
+    CONSOLA.escribir(texto);
+    const lineas = texto.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "").split("\n").filter((l) => l.trim());
+    const ultima = lineas[lineas.length - 1];
+    if (ocupado && ultima) ocupado.textContent = "apkc: " + ultima.trim().slice(0, 70);
+  });
   try {
     r = await hospedador.ejecutar(argv);
   } catch (e) {
     // si el worker no arranca, el aviso de «trabajando» no puede quedarse para siempre
     r = { tipo: "error", error: String((e && e.message) || e), consola: "" };
   } finally {
+    hospedador.escucharSalida(null);
     if (ocupado) ocupado.hidden = true;
+    if (botonDetener) botonDetener.hidden = true;
   }
-  CONSOLA.escribir((r.consola || "") + (r.error ? "FALLO DEL HOSPEDADOR: " + r.error + "\n" : ""));
+  const completa = String(r.consola || "");
+  CONSOLA.escribir(completa.slice(recibido) + (r.error ? "FALLO DEL HOSPEDADOR: " + r.error + "\n" : ""));
   if (r.tipo === "terminado") {
     const codigo = document.getElementById("ultimo-codigo");
     if (codigo) codigo.textContent = String(r.codigo);
   }
   await refrescarArbol();
   return r;
+}
+
+// Go wasm no se puede matar por dentro: se termina el worker y el siguiente comando arranca
+// otro. Es honesto avisar de que el build puede quedar a medias.
+function detener() {
+  if (!hospedador.cancelar()) return;
+  CONSOLA.escribir("\ncomando detenido; el build puede quedar a medias (apkc clean para empezar de cero).\n");
+  const codigo = document.getElementById("ultimo-codigo");
+  if (codigo) codigo.textContent = "(detenido)";
+  const ocupado = document.getElementById("ocupado");
+  if (ocupado) ocupado.hidden = true;
+  const boton = document.getElementById("detener-comando");
+  if (boton) boton.hidden = true;
 }
 
 function nota(texto) {
@@ -2461,7 +2658,7 @@ const DEBUG_KEY = { ruta: "/sdk/debug.keystore", pass: "android", alias: "androi
 
 async function asegurarDebugKeystore() {
   const existente = await hospedador.leer(DEBUG_KEY.ruta);
-  if (existente.bytes) return DEBUG_KEY;
+  if (existente.bytes) { decirEstadoDepuracion(); return DEBUG_KEY; }
   nota("creando la clave de depuración en esta pestaña…");
   const r = await correr(["debug-keystore", "--out", DEBUG_KEY.ruta,
     "--storepass", DEBUG_KEY.pass, "--keyalias", DEBUG_KEY.alias]);
@@ -2473,8 +2670,25 @@ async function asegurarDebugKeystore() {
     nota("la clave de depuración no quedó en OPFS");
     return null;
   }
+  decirEstadoDepuracion();
   nota("clave de depuración creada: androiddebugkey · CN=Android Debug");
   return DEBUG_KEY;
+}
+
+// La clave de depuración también se puede sacar de la pestaña: es la misma que usa Android
+// (`androiddebugkey` / `android`) y sirve para actualizar una instalación de prueba.
+async function decirEstadoDepuracion() {
+  const boton = document.getElementById("descargar-debug-keystore");
+  if (!boton) return false;
+  try {
+    const r = await hospedador.leer(DEBUG_KEY.ruta);
+    const hay = !!(r && r.bytes);
+    boton.hidden = !hay;
+    return hay;
+  } catch (e) {
+    boton.hidden = true;
+    return false;
+  }
 }
 
 async function compilarCon(k, tipo) {
@@ -2531,6 +2745,69 @@ async function verificarLoCompilado() {
       l.startsWith("certificado") || l.startsWith("par desconocido"));
   if (aviso) aviso.textContent = lineas.length ? lineas.join(" · ") : "apkc no devolvió ningún veredicto";
   return r;
+}
+
+// --- ajustes del proyecto ------------------------------------------------------------------
+const RUTA_MANIFIESTO = PROYECTO + "/AndroidManifest.xml";
+
+async function leerAjustes(silencioso) {
+  const aviso = document.getElementById("estado-ajustes");
+  const texto = await hospedador.texto(RUTA_MANIFIESTO);
+  if (!texto) {
+    if (aviso) aviso.textContent = "no hay AndroidManifest.xml todavía";
+    return null;
+  }
+  const a = ajustesDelManifiesto(texto);
+  const poner = (id, valor) => {
+    const campo = document.getElementById(id);
+    if (campo && valor !== undefined && valor !== "") campo.value = valor;
+  };
+  poner("ajustes-minsdk", a.minSdk || "21");
+  poner("ajustes-targetsdk", a.targetSdk || "34");
+  poner("ajustes-versioncode", a.versionCode || "1");
+  poner("ajustes-versionname", a.versionName || "0.1");
+  if (aviso && !silencioso) {
+    aviso.textContent = "leído del manifiesto: minSdk " + (a.minSdk || "?") +
+      " · targetSdk " + (a.targetSdk || "?") + " · " + (a.versionName || "?") +
+      " (" + (a.versionCode || "?") + ")";
+  }
+  return a;
+}
+
+async function guardarAjustes() {
+  const valor = (id) => {
+    const campo = document.getElementById(id);
+    return campo ? campo.value : "";
+  };
+  const aviso = document.getElementById("estado-ajustes");
+  try {
+    const texto = await hospedador.texto(RUTA_MANIFIESTO);
+    if (!texto) { nota("no hay AndroidManifest.xml que ajustar"); return; }
+    const nuevo = conAjustes(texto, {
+      minSdk: valor("ajustes-minsdk"),
+      targetSdk: valor("ajustes-targetsdk"),
+      versionCode: valor("ajustes-versioncode"),
+      versionName: valor("ajustes-versionname"),
+    });
+    await conBloqueo(async () => {
+      const r = await hospedador.escribir(RUTA_MANIFIESTO, new TextEncoder().encode(nuevo));
+      if (r && r.tipo === "error") throw new Error(r.error);
+    });
+    try { localStorage.setItem(claveRevision(RUTA_MANIFIESTO), nuevaRevision()); } catch (e) { /* sin revisión */ }
+    const doc = documentoDe(RUTA_MANIFIESTO);
+    if (doc) {
+      doc.texto = nuevo;
+      doc.sucio = false;
+      if (DOCUMENTOS.activa === RUTA_MANIFIESTO) EDITOR.poner(nuevo);
+      renderPestanas();
+    }
+    await refrescarArbol();
+    publicar({ tipo: "mutacion", accion: "guardar", rutas: [RUTA_MANIFIESTO] });
+    if (aviso) aviso.textContent = "guardado en AndroidManifest.xml";
+    nota("ajustes guardados en el manifiesto");
+  } catch (e) {
+    if (aviso) aviso.textContent = "no se pudo guardar: " + (e && e.message ? e.message : e);
+  }
 }
 
 // --- arranque ----------------------------------------------------------------------------
@@ -2766,6 +3043,19 @@ if (typeof document !== "undefined") {
     en("guardar-fichero", guardar);
     en("nuevo-fichero", () => nuevoFichero());
     en("subir-ficheros-boton", () => pedirSubida(carpetaActual(), false));
+    en("exportar-proyecto", exportarProyecto);
+    en("importar-proyecto", () => {
+      const entrada = document.getElementById("importar-archivo");
+      if (!entrada) { nota("este navegador no expone el selector de archivos"); return; }
+      entrada.value = "";
+      entrada.click();
+    });
+    const importarEntrada = document.getElementById("importar-archivo");
+    if (importarEntrada) {
+      importarEntrada.addEventListener("change", () => {
+        importarProyecto(importarEntrada.files && importarEntrada.files[0]).catch(mostrarFallo);
+      });
+    }
     en("subir-arbol", () => pedirSubida(carpetaActual(), false));
     en("renombrar-fichero", () => estadoPestana.ruta
       ? renombrarRuta(estadoPestana.ruta)
@@ -2794,6 +3084,29 @@ if (typeof document !== "undefined") {
     en("compilar-debug", compilarDebug);
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
+    en("descargar-debug-keystore", () => descargarRuta(DEBUG_KEY.ruta));
+    en("leer-ajustes", () => leerAjustes());
+    en("guardar-ajustes", guardarAjustes);
+    en("detener-comando", detener);
+    const consolaPestana = document.getElementById("consola-pestana");
+    if (consolaPestana) {
+      consolaPestana.addEventListener("click", (e) => {
+        const enlace = e.target && e.target.closest ? e.target.closest("a.salto") : null;
+        if (!enlace) return;
+        e.preventDefault();
+        saltarALinea(enlace.dataset.ruta, enlace.dataset.linea).catch(mostrarFallo);
+      });
+    }
+    const filtroArbol = document.getElementById("filtro-arbol");
+    if (filtroArbol) {
+      filtroArbol.addEventListener("input", () => { refrescarArbol().catch(() => {}); });
+    }
+    const detalleAjustes = document.getElementById("detalle-ajustes");
+    if (detalleAjustes) {
+      detalleAjustes.addEventListener("toggle", () => {
+        if (detalleAjustes.open) leerAjustes(true).catch(() => {});
+      });
+    }
     en("plegar-arbol", plegarTodo);
     en("desplegar-arbol", desplegarTodo);
     en("recargar-arbol", refrescarArbol);
@@ -2814,6 +3127,11 @@ if (typeof document !== "undefined") {
       if (e.isComposing || !(e.ctrlKey || e.metaKey) || e.altKey) return;
       const tecla = (e.key || "").toLowerCase();
       if (tecla === "s") { e.preventDefault(); Promise.resolve(guardar()).catch(mostrarFallo); }
+      else if (tecla === "p") {
+        e.preventDefault();
+        const filtro = document.getElementById("filtro-arbol");
+        if (filtro) { filtro.focus(); filtro.select(); }
+      }
       else if (e.key === "Enter") { e.preventDefault(); Promise.resolve(ejecutarUltimo()).catch(mostrarFallo); }
       else if (e.key === "`" || e.code === "Backquote") { e.preventDefault(); alternarPanel(); }
     });
@@ -2826,6 +3144,7 @@ if (typeof document !== "undefined") {
 
     decirEstadoJar();
     decirEstadoClave();
+    decirEstadoDepuracion();
     consultarJarDelSdk();
     iniciarPestana();
   });
@@ -2849,6 +3168,9 @@ export {
   consultarJarDelSdk, traerJarDelSdk, asegurarJarDelProyecto,
   conBloqueo, publicar, recibirRemoto, decirEstadoClave,
   actualizarEstadoClave, abrirDialogoClave, generarClaveRelease,
+  exportarProyecto, importarProyecto, descargarBytes,
+  leerAjustes, guardarAjustes, irALinea, saltarALinea, detener, enlazarSalidas,
+  decirEstadoDepuracion,
 };
 
 // Puente de compatibilidad para las pruebas de navegador y la consola de desarrollo.
@@ -2872,6 +3194,9 @@ if (typeof window !== "undefined") {
     borrarRuta, abrirMenuArchivo, decirEstadoJar, consultarJarDelSdk,
     traerJarDelSdk, asegurarJarDelProyecto, conBloqueo, publicar, recibirRemoto,
     decirEstadoClave, actualizarEstadoClave, abrirDialogoClave, generarClaveRelease,
+    exportarProyecto, importarProyecto, descargarBytes,
+    leerAjustes, guardarAjustes, irALinea, saltarALinea, detener, enlazarSalidas,
+    decirEstadoDepuracion,
   });
   // Superficie completa para las pruebas CDP, que evalúan los nombres antiguos. No se usa desde
   // el código de la página; los imports son la vía normal.

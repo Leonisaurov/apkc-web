@@ -79,7 +79,7 @@ def filas_del_producto(texto: str) -> list[dict]:
         if len(c) < 3 or c[1] in ("Fase", "---") or set(c[1]) <= set("-: "):
             continue
         estado = re.sub(r"[*`]", "", c[2]).strip()
-        hecho = estado.startswith("hecha") and "en parte" not in estado
+        hecho = (estado.startswith("hecha") and "en parte" not in estado) or estado.startswith("descartada")
         filas.append({
             "text": "Producto · " + re.sub(r"[*`]", "", c[1]).strip(),
             "done": hecho,

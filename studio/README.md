@@ -53,10 +53,13 @@ sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" \
 Qué hace de verdad, y qué no:
 
 - **hace**: `apkc create`, editar el fuente (con resaltado propio, sin dependencias), conservarlo
-  entre sesiones en OPFS, `apkc sign` — una apk firmada v1+v2 que `apksigner`, `zipalign -c -p`,
-  `jarsigner` y `zipcheck.py` aceptan por fuera — y **compilar el proyecto entero** con
+  entre sesiones en OPFS, **exportarlo e importarlo en un `.zip`**, `apkc sign` — una apk firmada
+  v1+v2 que `apksigner`, `zipalign -c -p`, `jarsigner` y `zipcheck.py` aceptan por fuera — y
+  **compilar el proyecto entero** con
   `build --linker go --compiler go`: enlazar los recursos, sacar el `.class`, dexar y firmar, todo dentro
-  de la pestaña y sin levantar un proceso. «Compilar debug» no pide keystore: la primera vez
+  de la pestaña y sin levantar un proceso. La consola pinta la salida mientras corre, convierte
+  `ruta:línea` en un enlace al fuente y **Detener** termina el worker si un comando se atasca.
+  «Compilar debug» no pide keystore: la primera vez
   genera `/sdk/debug.keystore` con `apkc debug-keystore` (alias `androiddebugkey`, contraseña
   `android`, `CN=Android Debug`) y reutiliza esa identidad; «Compilar release» sigue usando el
   keystore elegido. **Crear clave de release** genera un JKS en la pestaña con
@@ -112,6 +115,7 @@ Qué hace de verdad, y qué no:
 | `pestana.js` | editor, pestañas, árbol y botones de la sección; `resaltar()` es puro y se prueba en node |
 | `historial.js` | undo tree por documento: deltas, checkpoints, poda e IndexedDB por ventana; sus funciones puras se prueban en node |
 | `fusion.js` | fusión de tres vías (base, local, remoto) para resolver cambios de dos ventanas sin perder ramas |
+| `proyecto.js` | exportar/importar el proyecto en `.zip` (STORE y DEFLATE, con CRC y rutas seguras) y leer/escribir los ajustes en el manifiesto |
 | `temas.js` | temas de interfaz y de terminal; solo cambia `data-tema` y variables CSS, sin dependencias |
 | `offline.js` | registra el service worker cuando la página se sirve por http(s) |
 | `sw.js` | service worker: cachea el shell y `apkc.wasm`/`wasm_exec.js`; no cachea jar, keystores ni OPFS |
@@ -205,12 +209,17 @@ contenido se lee de OPFS solo para la pestaña que se ve: las demás se cargan a
 documento tiene un **undo tree** con ramas: deshacer y escribir otra cosa no borra la rama
 anterior; el historial se guarda en IndexedDB por ventana y documento, con deltas y checkpoints.
 La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
-subir, descargar, renombrar, borrar, historial); el botón **Compilar** abre el panel en su
-pestaña de compilación. En **Tema** puedes activar **Solo iconos en la barra del editor** para
+subir, **exportar/importar el proyecto en `.zip`**, descargar, renombrar, borrar, historial); el
+botón **Compilar** abre el panel en su
+pestaña de compilación. El proyecto se exporta con rutas, carpetas y binarios, y al importarlo se
+reemplaza `/proyecto` después de confirmar. En **Tema** puedes activar **Solo iconos en la barra del editor** para
 quedarte con los iconos y sus tooltips. La API de compilación se elige en Opciones
-avanzadas (34 por defecto). El tema de interfaz (oscuro, Catppuccin, Rosé Pine, Tokyo Night,
+avanzadas (34 por defecto); **Ajustes del proyecto** lee y guarda `minSdk`, `targetSdk`,
+`versionCode` y `versionName` en el propio `AndroidManifest.xml` (sin fichero paralelo y sin
+`maxSdkVersion`). El tema de interfaz (oscuro, Catppuccin, Rosé Pine, Tokyo Night,
 Gruvbox) y la paleta de la terminal se eligen en **Tema**, en la barra de estado. El árbol arranca
-**cerrado** y la cabecera del explorador
+**cerrado**; el campo de filtro deja el fichero buscado y sus carpetas (`Ctrl+P` lleva al campo) y
+`build/` se ve atenuado con la etiqueta **generado**. La cabecera del explorador
 tiene botones para contraerlo o desplegarlo entero. El botón de subir escribe en la carpeta del
 fichero abierto; el menú de una carpeta permite subir ahí o una carpeta entera, conservando sus
 subdirectorios. Para mover, se arrastra una fila a otra carpeta con ratón o lápiz, o se usa

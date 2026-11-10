@@ -184,6 +184,29 @@ kbd {
   color: var(--texto-fuerte);
   text-transform: uppercase;
 }
+.filtro-arbol { display: block; padding: 0 10px 6px; }
+.filtro-arbol input {
+  width: 100%;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid var(--borde);
+  border-radius: 3px;
+  background: var(--fondo);
+  color: var(--texto);
+}
+.filtro-arbol input::placeholder { color: var(--tenue); }
+.arbol-pestana a.generado { color: var(--tenue); }
+.arbol-pestana a.generado .nombre { font-style: italic; }
+.arbol-generado {
+  margin-left: 6px;
+  padding: 0 3px;
+  border: 1px solid var(--borde);
+  border-radius: 2px;
+  font-size: 9px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  color: var(--tenue);
+}
 .arbol-pestana {
   flex: 1 1 auto;
   min-height: 0;
@@ -469,6 +492,14 @@ button:focus-visible { outline: 1px solid var(--foco); outline-offset: 1px; }
 .crear-minimo label { display: grid; gap: 5px; font-size: 12px; color: var(--texto-medio); }
 .crear-minimo label input:not([type=file]) { width: 100%; }
 .crear-minimo .acciones { margin-top: 4px; }
+.aviso-almacenamiento {
+  max-width: 620px;
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--borde-fuerte, var(--borde));
+  background: var(--fondo-suave, transparent);
+  line-height: 1.5;
+}
 .atajos {
   display: grid;
   gap: 6px;
@@ -685,6 +716,15 @@ pre {
 #fichero-abierto { overflow: hidden; text-overflow: ellipsis; }
 .marca-sucio { color: #d7ba7d; font-size: 11px; line-height: 1; }
 .editor-tabs .nota { margin: 0 6px; align-self: center; }
+#detener-comando {
+  border: 1px solid var(--borde);
+  border-radius: 3px;
+  padding: 1px 8px;
+  background: var(--boton);
+  color: var(--texto-fuerte);
+  cursor: pointer;
+}
+#detener-comando:hover { border-color: var(--acento); }
 .editor-tabs button { align-self: center; height: 26px; padding: 0 10px; }
 .editor-tabs .boton-enlace { align-self: center; height: 26px; padding: 0 10px; line-height: 24px; }
 .editor-tabs button.primario { background: var(--acento); }
@@ -963,6 +1003,19 @@ pre {
   overflow: auto;
   font: 12px/1.55 ui-monospace, Menlo, Consolas, monospace;
   padding: 10px 12px;
+}
+/* una salida `ruta:línea` abre el fichero; se subraya solo al pasar por encima para no llenar
+   la consola de subrayados */
+.consola a.salto {
+  color: inherit;
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  cursor: pointer;
+}
+.consola a.salto:hover,
+.consola a.salto:focus-visible {
+  color: var(--acento, #89b4fa);
+  border-bottom-style: solid;
 }
 /* colores ANSI de la consola, con la paleta del terminal de VS Code */
 .consola .consola-fuerte { font-weight: 700; }

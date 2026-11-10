@@ -44,6 +44,13 @@ async function hacerIniciar() {
   // mango de OPFS y nos lo pasa por mensaje, que es lo que permite espejar los bytes
   const raiz = await raizPrometida;
   const nuevo = crearFs(raiz);
+  // Go escribe en el fd 1 del fs, no en process.stdout: la consola del fs es el único punto por
+  // el que pasa toda la salida. Se envuelve aquí para que la página la pinte mientras corre.
+  const escribirConsola = nuevo.consola.escribir;
+  nuevo.consola.escribir = (trozo) => {
+    escribirConsola(trozo);
+    postMessage({ tipo: "salida", texto: String(trozo) });
+  };
 
   // el fs y el process que Go consulta: hay que sustituirlos antes de ejecutar nada
   globalThis.fs = nuevo.fs;

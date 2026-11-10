@@ -7328,3 +7328,78 @@ prueba baja de 78 a 77 comprobaciones. **Tema → Solo iconos en la barra del ed
 casilla y `navegador: todo en orden`; al desmarcarla, el texto vuelve. El resto del gate no
 cambia: `e2e: todo en orden`.
 
+
+## 148. Propiedad de los datos, ajustes y una consola que se puede seguir
+
+Medido el 2026-11-10. Cierra las fases A1, A2, A3, A4, B1, D1-D4, H1 y H2 del plan de producto, y
+deja escrito por qué B2 no se puede hacer en la pestaña.
+
+**1. Exportar e importar el proyecto.** `studio/proyecto.js` escribe el zip con el mismo `makeZip`
+de `app.js` (que ahora acepta `Uint8Array`) y lo vuelve a leer del directorio central: admite STORE
+y DEFLATE (`DecompressionStream("deflate-raw")`), comprueba CRC y tamaño, y rechaza rutas
+absolutas, `..`, `\`, entradas cifradas y ZIP64. Al importar, `/proyecto` se reemplaza solo después
+de la confirmación.
+
+**Comando**: `APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm node studio/prueba-crear.js` (el mismo de la
+§145, con `HOME`/`PREFIX` del repo).
+
+**Resultado**: `exportar el proyecto produce un zip con manifiesto y binarios` con
+`{"entradas":21,"png":9,"antes":{"nota":false,"png":false}}`; el PNG de prueba sale byte a byte
+(`137,80,78,71,0,255,10,20,30`) y al importar el zip vuelve `{"nota":"hola desde el
+dispositivo\n","png":[...],"aviso":"proyecto importado: 8 ficheros"}`. `prueba.js` cubre además un
+zip con una entrada DEFLATE construida con `CompressionStream`, y que `../fuera.txt`, `/abs.txt` y
+`a\b.txt` se rechazan. **33 comprobaciones bien, 0 mal** en la prueba de creación.
+
+**2. Ajustes en el manifiesto.** `conAjustes()` escribe `versionCode`, `versionName`,
+`minSdkVersion` y `targetSdkVersion` en el XML, añade `<uses-sdk>` si falta y quita
+`maxSdkVersion`; la plantilla nueva ya no lo escribe. `prueba.js` comprueba los cuatro valores, la
+inserción del bloque, que no se duplica y que se rechazan `targetSdk < minSdk` y un `versionName`
+con `<`. En chromium, `leerAjustes()`/`guardarAjustes()` dejan
+`{"antes":{"min":"21","target":"34","code":"1","nombre":"0.1"},"leidos":{"versionCode":"7","versionName":"1.0","minSdk":"24","targetSdk":"35"}}`.
+
+**3. El aviso de almacenamiento.** `#aviso-almacenamiento`, en Inicio, dice que el proyecto vive
+en OPFS de ese origen y remite a **Archivo → Exportar proyecto (.zip)**. `prueba-navegador.js`
+exige que el texto nombre OPFS y la exportación; `navegador: todo en orden`.
+
+**4. La consola.** Go escribe en el fd 1 del fs, no en `process.stdout`: `hospedador.js` envuelve
+`consola.escribir` y manda `{tipo:"salida"}`. `correr()` pinta cada trozo, usa la última línea como
+fase en `#ocupado` y **Detener** (`hospedador.cancelar`) termina el worker y lo recrea en el
+siguiente comando. `enlazarSalidas()` convierte `ruta:línea` en un enlace que abre el fichero y
+selecciona la línea.
+
+**Resultado**: `la salida de apkc llega por trozos antes de terminar` con `{"trozos":3,...}`;
+`un enlace ruta:línea de la consola abre el fichero en esa línea` deja
+`{"activo":"src/com/myapp/MainActivity.java","linea":3,"seleccion":"import android.app.*;"}`;
+`Detener termina el worker y el siguiente comando arranca otro` con
+`{"primero":true,"codigo":0}`; y `la barra de trabajo enseña la fase que imprime apkc` con
+`{"texto":"apkc: [apkc] finished in 38.595072ms","oculto":true}`. **81 comprobaciones bien, 0 mal**.
+
+**5. El árbol.** `#filtro-arbol` conserva la cadena de padres y `Ctrl+P` lo enfoca; `build/` lleva
+la clase `generado`, el color atenuado y la etiqueta. Medido:
+`{"clase":"dir generado","texto":"buildgenerado"}` y el filtro por `MainActivity` deja
+`["/proyecto/src","/proyecto/src/com","/proyecto/src/creada","/proyecto/src/com/creada/app","/proyecto/src/com/creada/app/MainActivity.java"]`.
+
+**6. La clave de depuración también se descarga.** Al generarla con `apkc debug-keystore`, el botón
+`#descargar-debug-keystore` aparece y baja el JKS: `{"alias":"androiddebugkey","bytes":2173,"visible":true}`.
+
+**7. B2 no se puede hacer en la pestaña.** `--compiler go` rechaza los bundles con su propio
+texto:
+
+```sh
+cd "$PREFIX/tmp/studio-e2e-java/com.hola.apkcstudio" && \
+  "$PREFIX/tmp/apkc-gate" build --linker go --compiler go --aab \
+    --android-jar "$HOME/Android/platforms/android-34/android.jar" \
+    --sdk-version 34 --codename 14 --keystore "$HOME/.android/debug.keystore"
+# [build] --compiler go no escribe bundles: d8 es quien produce el .aar de las dependencias
+```
+
+Firmar un `.aab` que ya existe sí funciona (§128 y la comprobación `la pestaña firma un .aab con el
+keystore de release`, 2321 bytes); ensamblarlo no. La casilla del bundle se retiró de la interfaz
+para no ofrecer un botón que no puede funcionar, igual que se hizo con el build clásico.
+
+**8. CI.** `studio/e2e.sh` ya no depende de `tcr`: usa `TCR` si está, o `tcr` del PATH, o ejecuta
+directo. El navegador sale de `CHROME_BIN` y, si falta, se busca entre `chromium-browser`,
+`chromium`, `google-chrome` y `google-chrome-stable`; los tres `prueba-*.js` leen `CHROME_BIN`.
+`.github/workflows/gate.yml` ejecuta el job rápido en cada push y el pesado (SDK 34, build-tools
+34.0.0, Chrome) con `e2e.sh`, y sube los logs si falla. **No se ha ejecutado todavía en GitHub**:
+eso queda como la frontera de esta fase, no como una medición.

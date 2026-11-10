@@ -71,12 +71,16 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
 1. En **Inicio**, escribe el nombre, el package (`com.mi.app`) y, si quieres, un icono PNG.
 2. Pulsa **Crear proyecto y editar**. El proyecto se escribe en OPFS y se abre
    `AndroidManifest.xml` en el **Editor**.
-3. En el **Explorador**, pulsa un fichero para abrirlo. El árbol empieza **cerrado**; los botones
+3. El proyecto vive en el **almacenamiento de este navegador** (OPFS), en este origen. Cambiar de
+   puerto o dominio, abrirlo en otro navegador o borrar los datos del sitio lo elimina: usa
+   **Archivo → Exportar proyecto (.zip)** para guardar una copia. **Importar proyecto (.zip)**
+   reemplaza el proyecto actual después de confirmar. El zip conserva rutas, carpetas y binarios.
+4. En el **Explorador**, pulsa un fichero para abrirlo. El árbol empieza **cerrado**; los botones
    **−** y **+** de la cabecera lo contraen o lo despliegan entero. El botón de subir escribe
    archivos en la carpeta del fichero abierto; el menú de una carpeta permite **Subir archivos
    aquí** o **Subir carpeta aquí**, conservando subdirectorios. Para mover, arrastra una fila a
    otra carpeta (ratón o lápiz) o usa **Mover a…** en el menú de mantener pulsado.
-4. Edita en el área de código:
+5. Edita en el área de código:
    - Cada fichero abierto queda en una **pestaña**; cambia con un clic y ciérrala con `×`. Las
      pestañas, la activa y las carpetas abiertas se recuerdan al recargar.
    - `Ctrl+Z` deshace y `Ctrl+Shift+Z`/`Ctrl+Y` rehace. El panel **Historial** (en la consola)
@@ -91,11 +95,14 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
      mío**, **Usar el remoto** o **Marcar conflicto**.
    - El service worker cachea la página; una vez cargada, puedes recargarla sin red (el primer
      acceso y la descarga del `android.jar` sí necesitan conexión).
-   - **Archivo** agrupa Nuevo, Subir archivos, Descargar, Renombrar y Borrar.
+   - **Archivo** agrupa Nuevo, Subir archivos, Exportar/Importar proyecto, Descargar,
+     Renombrar y Borrar.
+   - El campo de filtro del explorador deja el fichero buscado y sus carpetas; `Ctrl+P` lleva al
+     campo. `build/` se ve atenuado y con la etiqueta **generado** porque se regenera.
    - `Tab` / `Shift+Tab` sangran / desangran.
    - `Enter` conserva la sangría y añade un nivel tras `{`.
    - El punto amarillo de la pestaña indica cambios sin guardar.
-5. El panel inferior está cerrado por defecto. Ábrelo con **Compilar** o ``Ctrl + ` ``. Sus
+6. El panel inferior está cerrado por defecto. Ábrelo con **Compilar** o ``Ctrl + ` ``. Sus
    pestañas son **Consola**, **Historial**, **Compilar** y **Firmar otra apk**.
 
 ## 5. Compilar, firmar y verificar
@@ -113,7 +120,14 @@ En la pestaña **Compilar** del panel:
 4. Pulsa **Compilar debug** (clave de depuración generada en la pestaña) o **Compilar release**
    (el keystore de arriba).
 5. Pulsa **Verificar el apk** para leer el veredicto de `apkc verify`.
-6. Descarga el apk (y el `.idsig` si se generó) con los enlaces del panel.
+6. Descarga el apk (y el `.idsig` si se generó) con los enlaces del panel. La consola pinta la
+   salida mientras compila, enlaza `ruta:línea` al fuente y **Detener** corta un comando atascado
+   (el worker se reinicia; el build puede quedar a medias).
+
+En **Ajustes del proyecto** (dentro de Compilar) lees y guardas `minSdk`, `targetSdk`,
+`versionCode` y `versionName` en el propio `AndroidManifest.xml`. Un `.aab` no se puede construir
+aquí: `--compiler go` no escribe bundles; la sección **Firmar otra apk** sí firma uno que ya
+tengas.
 
 En **Firmar otra apk** puedes firmar una apk o un `.aab`, y crear un linaje de rotación
 v3.1. Todo ocurre en la pestaña: el fuente, el keystore y el `android.jar` no salen de OPFS.

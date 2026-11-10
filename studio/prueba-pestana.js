@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CHROME = process.env.CHROME_BIN || "chromium-browser";
 
 const TMP = process.env.PREFIX ? process.env.PREFIX + "/tmp" : "/tmp";
 const WASM = process.env.APKC_WASM || "";
@@ -58,7 +59,7 @@ servidor.stderr.on("data", (d) => { salidaServidor += d; });
 
 const PERFIL = path.join(TMP, "pestana-chrome-perfil");
 fs.rmSync(PERFIL, { recursive: true, force: true });
-const navegador = spawn("chromium-browser", [
+const navegador = spawn(CHROME, [
   "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
   "--no-first-run", "--disable-extensions", "--disable-sync",
   "--user-data-dir=" + PERFIL, "--remote-debugging-port=" + CDP, URL_PAGINA,
@@ -456,6 +457,57 @@ async function conductor() {
   comprueba("apkc build en wasm dice el motivo, no se calla", build.codigo !== 0 &&
     /never started|not implemented on js/.test(String(build.consola)),
     JSON.stringify(build).slice(0, 320));
+
+  // 6a. la consola enlaza ruta:línea, la salida llega por trozos y Detener reinicia el worker
+  const salida = await evaluar(`(async () => {
+    let trozos = 0, texto = "";
+    hospedador.escucharSalida((t) => { trozos++; texto += t; });
+    const r = await hospedador.ejecutar(["version"]);
+    hospedador.escucharSalida(null);
+    return { trozos, texto, consola: String(r.consola || ""), codigo: r.codigo };
+  })()`);
+  comprueba("la salida de apkc llega por trozos antes de terminar",
+    salida.trozos > 0 && salida.texto.length > 0 &&
+    salida.consola.includes(salida.texto.trim()) && salida.codigo === 0,
+    JSON.stringify(salida).slice(0, 240));
+
+  const saltar = await evaluar(`(async () => {
+    const arbol = await hospedador.arbol();
+    const nodo = (arbol.nodos || []).find((n) => /MainActivity\\.java$/.test(n.ruta));
+    if (!nodo) return { error: "sin MainActivity.java" };
+    await saltarALinea(nodo.ruta.slice("/proyecto/".length), 3);
+    const area = document.getElementById("codigo");
+    const antes = area.value.slice(0, area.selectionStart).split("\\n");
+    return {
+      activo: document.getElementById("fichero-abierto").textContent,
+      linea: antes.length,
+      seleccion: area.value.slice(area.selectionStart, area.selectionEnd),
+      tercera: area.value.split("\\n")[2],
+    };
+  })()`);
+  comprueba("un enlace ruta:línea de la consola abre el fichero en esa línea",
+    saltar.linea === 3 && saltar.seleccion === saltar.tercera &&
+    /MainActivity\.java$/.test(String(saltar.activo)),
+    JSON.stringify(saltar).slice(0, 240));
+
+  const cancelado = await evaluar(`(async () => {
+    const primero = hospedador.cancelar();
+    const r = await hospedador.ejecutar(["version"]);
+    return { primero, codigo: r.codigo, consola: String(r.consola || "") };
+  })()`);
+  comprueba("Detener termina el worker y el siguiente comando arranca otro",
+    cancelado.primero === true && cancelado.codigo === 0 && /apkc/.test(cancelado.consola),
+    JSON.stringify(cancelado).slice(0, 240));
+
+  // D4: la barra enseña la última línea que imprimió apkc mientras corre, sin porcentajes
+  const fase = await evaluar(`(async () => {
+    await correr(["version"]);
+    return { texto: document.getElementById("ocupado").textContent,
+      oculto: document.getElementById("ocupado").hidden };
+  })()`);
+  comprueba("la barra de trabajo enseña la fase que imprime apkc",
+    /^apkc: /.test(String(fase.texto)) && fase.oculto === true,
+    JSON.stringify(fase).slice(0, 200));
 
   // 7. el proyecto entero, compilado DENTRO de la pestaña: recursos, Java, dex y firma, sin que
   // el navegador arranque un solo proceso. El jar llega por fetch del propio origen y se guarda
