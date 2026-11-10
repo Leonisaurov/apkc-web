@@ -1,0 +1,3 @@
+[submodule "studio"]
+	path = studio
+	url = https://github.com/Leonisaurov/apkc-studio.git
