@@ -10,6 +10,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  APKC_REPO: ${{ github.workspace }}/apkc
+
 jobs:
   rapido:
     runs-on: ubuntu-latest
