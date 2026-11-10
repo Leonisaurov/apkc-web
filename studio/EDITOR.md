@@ -28,11 +28,11 @@ No se copia ninguna pieza de VS Code ni se carga ningún editor de terceros.
 +------+-------------------+-----------------------------------------------+
 | act. | EXPLORADOR        | pestanas de vista: Inicio | Editor            |
 |      | COM.MI.APP        +-----------------------------------------------+
-|      | arbol del         | fichero  [Guardar] [Archivo v] [Consola]      |
+|      | arbol del         | fichero  [Guardar] [Archivo v] [Compilar]     |
 |      | proyecto          +-----------------------------------------------+
 |      |                   | numeros | editor (textarea + pre resaltado)   |
 |      |                   +-----------------------------------------------+
-|      |                   | consola: Salida | Compilar | Firmar otra apk|
+|      |                   | Consola | Historial | Compilar | Firmar       |
 |      |                   |         (cerrada hasta que hace falta)         |
 +------+-------------------+-----------------------------------------------+
 | barra de estado: main | Editor | ultimo codigo - | apkc.wasm | OPFS      |
@@ -141,8 +141,9 @@ La fila superior del editor separa la acción principal de las de mantenimiento:
 - `#menu-editor` es un `<details>` con `#nuevo-fichero`, `#subir-ficheros-boton`,
   `#descargar-fichero`, `#renombrar-fichero` y `#borrar-fichero`. Se cierra al pulsar una acción,
   al hacer clic fuera o con `Escape`; no guarda estado propio.
-- `#alternar-panel` se llama **Consola** y sigue mostrando u ocultando `#panel-inferior` con
-  ``Ctrl + ` ``.
+- `#alternar-panel` se llama **Compilar**: abre `#panel-inferior` en la pestaña Compilar y lo
+  cierra si ya está abierto. ``Ctrl + ` `` sigue alternando el panel y conserva la pestaña activa.
+  La pestaña de salida se llama **Consola** y lleva el icono de terminal.
 - `#descargar-fichero` sigue oculto hasta que hay un fichero abierto; descarga el buffer del
   editor (aunque tenga cambios sin guardar), no solo lo último guardado.
 
@@ -315,14 +316,14 @@ ningun servidor.
 
 ## Panel inferior
 
-La **Consola** (`#panel-inferior`) es la zona de salida y de acciones pesadas. Empieza cerrada
-para que el editor ocupe todo el alto; el botón `#alternar-panel` la abre o la cierra y conserva
-la pestaña activa.
+El **panel inferior** (`#panel-inferior`) es la zona de salida, historial y acciones pesadas.
+Empieza cerrado para que el editor ocupe todo el alto; `#alternar-panel` lo abre en **Compilar**
+o lo cierra, y ``Ctrl + ` `` conserva la pestaña activa.
 
 ```html
 <div class="panel-inferior" id="panel-inferior" hidden>
   <div class="panel-tabs">
-    <button class="panel-tab activo" data-panel="salida">Salida</button>
+    <button class="panel-tab activo" data-panel="salida">Consola</button>
     <button class="panel-tab" data-panel="historial">Historial</button>
     <button class="panel-tab" data-panel="compilar">Compilar</button>
     <button class="panel-tab" data-panel="firmar">Firmar otra apk</button>
@@ -346,7 +347,7 @@ la pestaña activa.
   y `#abrir-historial` abren esta pestaña.
 - `alternarPanel()` abre o cierra el panel; si lo abre, vuelve a la pestana activa.
 - `cerrarPanel()` lo esconde y deja `aria-expanded="false"` en el boton `#alternar-panel`.
-- `correr(argv)` abre siempre la pestana Salida, escribe `$ apkc ...`, muestra `#ocupado`
+- `correr(argv)` abre siempre la pestaña Consola, escribe `$ apkc ...`, muestra `#ocupado`
   mientras el worker trabaja, actualiza `#ultimo-codigo` y refresca el arbol al terminar. La
   consola no usa `textContent` directo: `CONSOLA` guarda el texto y `consolaHtml()` convierte los
   códigos ANSI (`\u001b[34m...\u001b[0m`) en `<span class="consola-fg-4">`; las demás secuencias
@@ -362,7 +363,7 @@ la pestaña activa.
   fichero grande o descargar el jar del SDK. Solo aparece si la tarea pasa de 120 ms, y se retira
   en `finally`, también cuando falla.
 - `#panel-compilar` empieza por las acciones (`#compilar-debug`, `#compilar-apk`,
-  `#verificar-apk`, `#probar-build-clasico`) y deja el resto en tres desplegables: `#detalle-sdk`
+  `#verificar-apk`) y deja el resto en tres desplegables: `#detalle-sdk`
   (`#abrir-dialogo-sdk`, `#dialogo-sdk`, `#sdk-entiendo`, `#sdk-terminos`, `#sdk-descarga`,
   `#sdk-elegir-archivo`, `#sdk-usar-servidor`, `#sdk-cerrar`, `#traer-android-jar`,
   `#estado-jar-sdk`, `#android-jar`, `#usar-android-jar`, `#estado-jar`), `#detalle-release`
@@ -412,7 +413,7 @@ En `@media (max-width: 760px)`:
   el resto). La barra de actividad ocupa las dos filas.
 - El explorador queda como una tira superior con scroll propio; el pie del explorador se oculta.
 - El panel inferior pasa a `42vh`.
-- La pestaña del fichero se limita a `22ch` para que Guardar, Archivo y Consola sigan cabiendo.
+- La pestaña del fichero se limita a `22ch` para que Guardar, Archivo y Compilar sigan cabiendo.
 - La barra de titulo oculta el estado de la derecha.
 
 ## Pruebas
@@ -422,7 +423,7 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
 | `node studio/prueba-navegador.js` | `http` sin COOP/COEP: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB, dos ventanas que se pasan guardados por BroadcastChannel y la fusión/conflicto de la misma línea |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 78 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 77 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la

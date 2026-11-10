@@ -101,7 +101,11 @@ los imports y no debe depender de ese puente.
   cadena es demasiado larga, `rebase()` re-enraíza en un checkpoint.
 - **Temas sin dependencias.** `temas.js` solo pone `data-tema`/`data-tema-consola` en `<html>` y
   `style.css` resuelve las variables. No metas colores nuevos a mano fuera de un bloque de tema;
-  la paleta ANSI se cambia con `--ansi-0..15`.
+  la paleta ANSI se cambia con `--ansi-0..15`. El modo **Solo iconos** pone `data-botones="iconos"`
+  y oculta `.texto-boton`; los botones deben conservar `title`/`aria-label`.
+- **La barra separa consola de compilación.** El botón `#alternar-panel` se llama **Compilar** y
+  abre la pestaña Compilar; la pestaña de salida se llama **Consola** y lleva el icono de terminal.
+  No vuelvas a poner «Salida» ni un botón de build clásico: ese build no corre en wasm.
 - **API de compilación.** `#api-version` es el selector visible (34 por defecto) y sincroniza los
   ocultos `#sdk-version`/`#codename` que lee `apkc build`; las pruebas siguen usando los ocultos.
 - **Varias ventanas sin pisarse.** Las escrituras pasan por `conBloqueo()` (Web Locks); la revisión
@@ -123,9 +127,9 @@ los imports y no debe depender de ese puente.
   cacheadas deben conservar COOP/COEP; `prueba-pestana.js` prueba la recarga offline.
 - **Nada fuera del origen.** Sin CDN, fuentes, telemetría ni runtimes de terceros. El favicon es
   un `data:` y el informe se descarga como `blob:`.
-- **`apkc build` clásico no corre en wasm.** `js` no tiene `fork/exec`; el botón «Probar el build
-  clásico» existe para enseñar el muro real (`aapt2 compile never started: pipe: not implemented
-  on js`), no para arreglarlo. Lo que sí compila es `build --linker go --compiler go`.
+- **`apkc build` clásico no corre en wasm.** `js` no tiene `fork/exec`; la interfaz no ofrece ese
+  botón porque ya sabemos que falla (`aapt2 compile never started: pipe: not implemented on js`).
+  Lo que sí compila es `build --linker go --compiler go`.
 
 ## Trampas de OPFS y wasm ya pagadas
 

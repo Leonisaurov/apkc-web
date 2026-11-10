@@ -83,7 +83,8 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
      muestra el árbol con ramas; un clic restaura una versión sin borrar las demás.
    - `Ctrl+S` o **Guardar** salva el fichero.
    - En **Tema**, en la barra de estado, cambias la interfaz (Catppuccin, Rosé Pine, Tokyo Night,
-     Gruvbox) y la paleta ANSI de la terminal (Catppuccin, Rosé Pine, Gruvbox, Solarized, Dracula).
+     Gruvbox), la paleta ANSI de la terminal (Catppuccin, Rosé Pine, Gruvbox, Solarized, Dracula)
+     y **Solo iconos en la barra del editor** para dejar Guardar, Archivo y Compilar como iconos.
    - Puedes abrir otra pestaña del navegador con el mismo proyecto: comparten OPFS y se avisan de
      los guardados. Si la otra ventana guardó algo que tienes sucio, se fusionan los cambios que
      no se pisan; si tocan la misma línea aparece una banda de conflicto para elegir **Mantener el
@@ -94,12 +95,12 @@ funcionan en esta sesión. El detalle está en [`apps.md`](apps.md).
    - `Tab` / `Shift+Tab` sangran / desangran.
    - `Enter` conserva la sangría y añade un nivel tras `{`.
    - El punto amarillo de la pestaña indica cambios sin guardar.
-5. La consola inferior está cerrada por defecto. Ábrela con **Consola** o ``Ctrl + ` ``. Sus
-   pestañas son **Salida**, **Compilar** y **Firmar otra apk**.
+5. El panel inferior está cerrado por defecto. Ábrelo con **Compilar** o ``Ctrl + ` ``. Sus
+   pestañas son **Consola**, **Historial**, **Compilar** y **Firmar otra apk**.
 
 ## 5. Compilar, firmar y verificar
 
-En **Consola → Compilar**:
+En la pestaña **Compilar** del panel:
 
 0. En **Opciones avanzadas** elige la **API de compilación** (34 por defecto; 27-35).
 1. Elige el `android.jar` del SDK (API 34) y pulsa **Guardar el android.jar elegido**. Si ya
@@ -114,7 +115,7 @@ En **Consola → Compilar**:
 5. Pulsa **Verificar el apk** para leer el veredicto de `apkc verify`.
 6. Descarga el apk (y el `.idsig` si se generó) con los enlaces del panel.
 
-En **Consola → Firmar otra apk** puedes firmar una apk o un `.aab`, y crear un linaje de rotación
+En **Firmar otra apk** puedes firmar una apk o un `.aab`, y crear un linaje de rotación
 v3.1. Todo ocurre en la pestaña: el fuente, el keystore y el `android.jar` no salen de OPFS.
 
 ## 6. Pruebas y gate
@@ -141,7 +142,7 @@ tools/entorno.sh -- sh -c 'cd studio && APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" n
   `http://127.0.0.1:8790/`.
 - **No hay OPFS / el worker no arranca / la página está muda**: los ES modules no cargan por
   `file://`; abre la página por `http://` con `servidor.js`.
-- **Compilar pide el `android.jar`**: elígelo en **Consola → Compilar**; se guarda en OPFS y
+- **Compilar pide el `android.jar`**: elígelo en la pestaña **Compilar**; se guarda en OPFS y
   sobrevive a recargar.
 - **`am` falla al abrir Brave**: usa `termux-open-url` o el `am start` del paso 3. No uses
   `sudo`/`cmd`/`input`/`pm`.

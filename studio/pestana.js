@@ -1958,21 +1958,6 @@ async function ofrecerDescarga(ruta, ancla) {
   });
 }
 
-async function intentarCompilar() {
-  // build no toma ruta: trabaja en el directorio del proceso, así que hay que meterse en el
-  // proyecto antes; si no, apkc contesta "esto no es un proyecto apkc" y el muro no se ve
-  await hospedador.cwd(PROYECTO);
-  const r = await correr(["build"]);
-  if (r && r.codigo !== 0) {
-    // por CONSOLA, no por textContent: pintarConsola() reescribe el <pre> desde su buffer y
-    // borraría el aviso en la siguiente línea de salida
-    CONSOLA.escribir(
-      "\nEse fallo es el muro conocido: js/wasm no tiene fork/exec, así que aapt2/javac/d8 no pueden arrancar.\n" +
-      "Lo que sí corre aquí entero es `build --linker go --compiler go`: el botón Compilar debug o Compilar release.\n");
-  }
-  return r;
-}
-
 // --- el build sin procesos: recursos, Java, dex y firma, en este mismo binario ------------
 const RUTA_JAR = "/sdk/android.jar";
 const RUTA_KEYSTORE = "/sdk/release.keystore";
@@ -2761,7 +2746,11 @@ if (typeof document !== "undefined") {
     for (const boton of document.querySelectorAll(".panel-tab")) {
       boton.addEventListener("click", () => mostrarPanel(boton.dataset.panel));
     }
-    en("alternar-panel", () => alternarPanel());
+    en("alternar-panel", () => {
+      const panel = document.getElementById("panel-inferior");
+      if (panel && panel.hidden) mostrarPanel("compilar");
+      else cerrarPanel();
+    });
     en("cerrar-panel", cerrarPanel);
     en("abrir-historial", () => mostrarPanel("historial"));
     en("conflicto-mio", () => mantenerVersionPropia(CONFLICTO.doc));
@@ -2805,7 +2794,6 @@ if (typeof document !== "undefined") {
     en("compilar-debug", compilarDebug);
     en("compilar-apk", compilarDelTodo);
     en("verificar-apk", verificarLoCompilado);
-    en("probar-build-clasico", intentarCompilar);
     en("plegar-arbol", plegarTodo);
     en("desplegar-arbol", desplegarTodo);
     en("recargar-arbol", refrescarArbol);
@@ -2856,7 +2844,7 @@ export {
   documentoActivo, documentoDe, volcarHistorial, programarHistorial,
   aplicarNodoHistorial, historialDe, conCarga, mostrarCarga, ocultarCarga,
   pintarConsola, KEYSTORES, DEBUG_KEY, RUTA_JAR, RUTA_LINAJE, RUTA_VIEJO,
-  firmar, intentarCompilar, asegurarDebugKeystore, compilarCon, nuevoFichero,
+  firmar, asegurarDebugKeystore, compilarCon, nuevoFichero,
   renombrarRuta, borrarRuta, abrirMenuArchivo, decirEstadoJar,
   consultarJarDelSdk, traerJarDelSdk, asegurarJarDelProyecto,
   conBloqueo, publicar, recibirRemoto, decirEstadoClave,
@@ -2879,7 +2867,7 @@ if (typeof window !== "undefined") {
     guardarPersistencia, documentoActivo, documentoDe, volcarHistorial,
     programarHistorial, aplicarNodoHistorial, historialDe, conCarga,
     mostrarCarga, ocultarCarga, pintarConsola, KEYSTORES, DEBUG_KEY,
-    RUTA_JAR, RUTA_LINAJE, RUTA_VIEJO, firmar, intentarCompilar,
+    RUTA_JAR, RUTA_LINAJE, RUTA_VIEJO, firmar,
     asegurarDebugKeystore, compilarCon, nuevoFichero, renombrarRuta,
     borrarRuta, abrirMenuArchivo, decirEstadoJar, consultarJarDelSdk,
     traerJarDelSdk, asegurarJarDelProyecto, conBloqueo, publicar, recibirRemoto,

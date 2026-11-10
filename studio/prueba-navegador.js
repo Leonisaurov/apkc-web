@@ -114,13 +114,21 @@ const conductor = `(async () => {
   temaTerm.dispatchEvent(new Event("change", { bubbles: true }));
   CONSOLA.escribir("\u001b[31mrojo\\u001b[0m");
   const colorTerm = document.querySelector(".consola .consola-fg-1");
+  const compacto = document.getElementById("botones-iconos");
+  compacto.checked = true;
+  compacto.dispatchEvent(new Event("change", { bubbles: true }));
+  const textoGuardar = document.querySelector("#guardar-fichero .texto-boton");
   r.temas = {
     ui: document.documentElement.dataset.tema,
     term: document.documentElement.dataset.temaConsola,
     opcionesUI: temaUI.options.length,
     opcionesTerm: temaTerm.options.length,
     colorTerm: colorTerm ? getComputedStyle(colorTerm).color : "sin color",
+    botones: document.documentElement.dataset.botones,
+    oculto: textoGuardar ? getComputedStyle(textoGuardar).display : "sin texto",
   };
+  compacto.checked = false;
+  compacto.dispatchEvent(new Event("change", { bubbles: true }));
   return r;
 })()`;
 
@@ -182,6 +190,8 @@ function comprueba(cond, msg) { if (!cond) { fallos++; console.log("  FALLO:", m
       "faltan temas en los selectores: " + JSON.stringify(v.temas));
     comprueba(/235, 111, 146/.test(String(v.temas && v.temas.colorTerm)),
       "el tema de terminal no cambia la paleta ANSI: " + String(v.temas && v.temas.colorTerm));
+    comprueba(v.temas && v.temas.botones === "iconos" && v.temas.oculto === "none",
+      "el modo solo iconos no oculta el texto: " + JSON.stringify(v.temas));
   }
   ws.close();
   navegador.kill("SIGKILL");

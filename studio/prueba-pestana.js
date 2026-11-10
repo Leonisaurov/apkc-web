@@ -457,21 +457,6 @@ async function conductor() {
     /never started|not implemented on js/.test(String(build.consola)),
     JSON.stringify(build).slice(0, 320));
 
-  // el botón que anuncia el README no puede ser decorativo: pulsa, corre el build clásico y deja
-  // el muro en la consola, que es lo que la página promete
-  const clasico = await evaluar(`(async () => {
-    document.getElementById("probar-build-clasico").click();
-    for (let i = 0; i < 80; i++) {
-      if (/muro conocido/.test(document.getElementById("consola-pestana").textContent)) break;
-      await new Promise((ok) => setTimeout(ok, 200));
-    }
-    return { texto: String(document.getElementById("consola-pestana").textContent).slice(-600),
-      panel: !document.getElementById("panel-inferior").hidden };
-  })()`);
-  comprueba("el botón del build clásico enseña el muro en la consola",
-    clasico.panel && /muro conocido/.test(String(clasico.texto)) && /aapt2/.test(String(clasico.texto)),
-    JSON.stringify(clasico).slice(0, 320));
-
   // 7. el proyecto entero, compilado DENTRO de la pestaña: recursos, Java, dex y firma, sin que
   // el navegador arranque un solo proceso. El jar llega por fetch del propio origen y se guarda
   // en OPFS, que es lo que hace el botón de la página.

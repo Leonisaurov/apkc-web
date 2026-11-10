@@ -3,6 +3,7 @@
 (() => {
   const CLAVE_UI = "apkc-studio/tema";
   const CLAVE_TERM = "apkc-studio/tema-consola";
+  const CLAVE_BOTONES = "apkc-studio/botones-iconos";
 
   const UI = {
     apkc: "Oscuro",
@@ -33,6 +34,10 @@
     const term = leer(CLAVE_TERM, TERM, "catppuccin");
     document.documentElement.dataset.tema = ui;
     document.documentElement.dataset.temaConsola = term;
+    let iconos = false;
+    try { iconos = localStorage.getItem(CLAVE_BOTONES) === "1"; } catch (e) { /* sin preferencia */ }
+    if (iconos) document.documentElement.dataset.botones = "iconos";
+    else delete document.documentElement.dataset.botones;
   }
 
   aplicar();
@@ -54,6 +59,16 @@
       document.documentElement.dataset.temaConsola = selTerm.value;
       try { localStorage.setItem(CLAVE_TERM, selTerm.value); } catch (e) { /* sin persistencia */ }
     });
+
+    const iconos = document.getElementById("botones-iconos");
+    if (iconos) {
+      iconos.checked = document.documentElement.dataset.botones === "iconos";
+      iconos.addEventListener("change", () => {
+        if (iconos.checked) document.documentElement.dataset.botones = "iconos";
+        else delete document.documentElement.dataset.botones;
+        try { localStorage.setItem(CLAVE_BOTONES, iconos.checked ? "1" : "0"); } catch (e) { /* sin persistencia */ }
+      });
+    }
 
     // el menú de tema se cierra al elegir o al hacer clic fuera
     const menu = document.getElementById("menu-apariencia");

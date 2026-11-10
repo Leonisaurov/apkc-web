@@ -712,6 +712,8 @@ pre {
   background: transparent;
 }
 .menu-editor > summary {
+  display: flex;
+  align-items: center;
   padding: 0 10px;
   height: 26px;
   line-height: 24px;
@@ -720,6 +722,35 @@ pre {
   background: var(--boton);
   color: var(--texto-fuerte);
   font-size: 12px;
+}
+.menu-editor > summary svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.panel-tab svg {
+  width: 13px;
+  height: 13px;
+  vertical-align: -2px;
+  margin-right: 5px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.check-apariencia {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: 7px;
+  color: var(--texto-medio) !important;
 }
 .menu-editor > summary::before { display: none; }
 .menu-editor > summary::after {
@@ -1254,6 +1285,13 @@ pre {
   font-size: 11px;
 }
 .menu-apariencia-lista select { width: 100%; }
+
+/* ---- barra del editor en modo solo iconos --------------------------------- */
+:root[data-botones="iconos"] .texto-boton { display: none; }
+:root[data-botones="iconos"] .editor-tabs button,
+:root[data-botones="iconos"] .menu-editor > summary { padding-left: 8px; padding-right: 8px; }
+:root[data-botones="iconos"] .editor-tabs button svg { margin-right: 0; }
+:root[data-botones="iconos"] .menu-editor > summary svg { margin-right: 0; }
 
 /* ---- historial de deshacer ------------------------------------------------ */
 .historial-cab {

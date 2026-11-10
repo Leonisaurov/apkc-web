@@ -89,7 +89,7 @@ Qué hace de verdad, y qué no:
   escribe el campo de la Activity, decide con `if` y arma el texto que muestra — compilada, firmada y
   dictaminada dentro de la pestaña. El editor guarda, compila y descarga ese apk.
 - **no hace**: el `build` de siempre. En wasm `js` no puede crear tuberías, así que `aapt2`/`javac`/`d8` no
-  arrancan; el botón «Probar el build clásico» lo demuestra y apkc lo dice con su texto:
+  arrancan; por eso la interfaz no ofrece ese botón. apkc lo diría con su texto:
   `[build] aapt2 compile never started: pipe: not implemented on js`. Y dentro del `--compiler go` el
   fuente tiene frontera: sin bucles, sin arreglos, sin `switch` ni `try` — lo que no está medido se rechaza
   con su línea, no se compila a medias.
@@ -198,14 +198,16 @@ actividad, explorador del proyecto en la barra lateral, pestañas y barra de est
 solo se piden nombre, package y, si quieres, un icono PNG; al crear, el proyecto se escribe en
 OPFS y el manifiesto se abre en el editor, que ocupa el alto completo. El editor tiene números
 de línea, resaltado propio, Tab/Shift+Tab para sangrar, Enter que conserva la sangría y una
-consola inferior con Salida, Historial, Compilar y Firmar (cerrada hasta que hace falta;
+panel inferior con Consola, Historial, Compilar y Firmar (cerrado hasta que hace falta;
 ``Ctrl + ` `` la abre). Cada fichero abierto es una **pestaña**; cambiar de pestaña no pierde
 cambios y al recargar vuelven las pestañas, la activa y las carpetas abiertas del árbol. El
 contenido se lee de OPFS solo para la pestaña que se ve: las demás se cargan al pulsarlas. Cada
 documento tiene un **undo tree** con ramas: deshacer y escribir otra cosa no borra la rama
 anterior; el historial se guarda en IndexedDB por ventana y documento, con deltas y checkpoints.
 La barra del fichero deja **Guardar** a la vista y agrupa en **Archivo** lo demás (nuevo,
-subir, descargar, renombrar, borrar, historial). La API de compilación se elige en Opciones
+subir, descargar, renombrar, borrar, historial); el botón **Compilar** abre el panel en su
+pestaña de compilación. En **Tema** puedes activar **Solo iconos en la barra del editor** para
+quedarte con los iconos y sus tooltips. La API de compilación se elige en Opciones
 avanzadas (34 por defecto). El tema de interfaz (oscuro, Catppuccin, Rosé Pine, Tokyo Night,
 Gruvbox) y la paleta de la terminal se eligen en **Tema**, en la barra de estado. El árbol arranca
 **cerrado** y la cabecera del explorador
