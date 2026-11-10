@@ -34,8 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: ${{ runner.temp }}/android-sdk
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,11 +52,9 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: SDK y build-tools
-        env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
-          SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
+          mkdir -p "$ANDROID_HOME"
+          SDKM=$(ls -d /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
           echo "sdkmanager: $SDKM"
           yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
           "$SDKM" --sdk_root="$ANDROID_HOME" "platforms;android-34" "build-tools;34.0.0"
