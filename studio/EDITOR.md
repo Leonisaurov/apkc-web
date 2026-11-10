@@ -380,6 +380,13 @@ la pestaña activa.
   `apkc debug-keystore`, que escribe `/sdk/debug.keystore` (alias `androiddebugkey`,
   contraseña `android`, `CN=Android Debug`) y lo reutiliza en las siguientes compilaciones.
   `#compilar-apk` sigue siendo el camino release con keystore y contraseña.
+- `#crear-clave-release` abre `#dialogo-clave`. El formulario pide alias, CN, organización, país,
+  contraseña y confirmación; un aviso obligatorio explica que perder la clave impide actualizar la
+  app. Al generar, `apkc create-keystore` escribe `/sdk/release.keystore` (JKS), la página descarga
+  `<alias>.jks`, rellena `#storepass-compilar`/`#keyalias-compilar` y pasa al paso **Clave
+  creada**, que no deja cerrar hasta marcar que se guardó una copia. No se persiste la contraseña.
+  `decirEstadoClave()` deja `#detalle-release` plegado con `.jar-listo`, `#clave-badge` y el botón
+  **Cambiar clave de release** cuando el fichero ya existe.
 - `#panel-firmar` conserva los ids de firma y rotacion: `#keystore`, `#storepass-firmar`,
   `#keyalias-firmar`, `#apk-a-firmar`, `#firmar-aqui`, `#keystore-viejo`, `#storepass-viejo`,
   `#keyalias-viejo`, `#rotation-min-sdk`, `#usar-rotacion`, `#crear-linaje`, `#olvidar-linaje` y
@@ -415,7 +422,7 @@ En `@media (max-width: 760px)`:
 | `node studio/prueba.js` | genera el zip, comprueba EOCD, plantillas, reglas, ids de `index.html` (también los de `diagnostico.js`, `temas.js` e `historial.js`), el resaltador puro y el undo tree (ramas, reconstrucción y poda) |
 | `node studio/prueba-navegador.js` | `http` sin COOP/COEP: DOM, dos vistas, dos botones de actividad, reflejo del nombre/package, aviso de que no hay OPFS, localStorage, el diagnóstico, los temas y la paleta ANSI |
 | `APKC_WASM=... node studio/prueba-crear.js` | por http con OPFS: crear, escribir el proyecto, abrir el manifiesto, comprobar `data-ruta` del arbol, el icono, API 34, el árbol cerrado con sus botones, subir un archivo, moverlo de carpeta, varias pestañas, la persistencia tras recargar, el undo tree con ramas/IndexedDB, dos ventanas que se pasan guardados por BroadcastChannel y la fusión/conflicto de la misma línea |
-| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 75 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
+| `APKC_WASM=... APK_EJEMPLO=... KS_EJEMPLO=... ANDROID_JAR=... node studio/prueba-pestana.js` | 78 comprobaciones: editar, guardar, recargar, resaltar, números de línea, scroll de las tres capas, Tab/Shift+Tab/Enter con deshacer, jar del SDK local, `.zip` oficial con sus términos, compilar debug sin keystore, barra de descargas con descarga real, consola con colores ANSI, menú de fichero, renombrar/borrar, pantalla de carga, firmar, compilar release, verificar, recargar sin red y no pedir nada fuera del origen |
 | `APKC=... APKC_WASM=... sh studio/e2e.sh` | todo lo anterior más los apk/aab nativos; en la pestaña, más de 50 comprobaciones |
 
 El gate completo de la pagina es `e2e.sh`; `prueba-pestana.js` solo no basta para decir que la

@@ -114,6 +114,10 @@ los imports y no debe depender de ese puente.
 - **El jar listo no se reclama.** Si `/sdk/android.jar` existe en OPFS, `decirEstadoJar()` deja
   `#detalle-sdk` plegado con `.jar-listo`, muestra `#sdk-badge`, y convierte `#abrir-dialogo-sdk`
   en «Cambiar android.jar». No vuelvas a abrir el desplegable ni mantengas el botón primario.
+- **La clave de release se genera, se descarga y se confirma.** `apkc create-keystore` escribe
+  `/sdk/release.keystore` (JKS) desde `#dialogo-clave`; la página descarga `<alias>.jks` y no deja
+  cerrar hasta marcar que se guardó. La contraseña no se persiste. Si el fichero existe,
+  `decirEstadoClave()` deja `#detalle-release` plegado con `.jar-listo` y `#clave-badge`.
 - **Service worker.** `sw.js` cachea el shell e intenta cachear `apkc.wasm`/`wasm_exec.js`; nunca
   `/android-jar`, keystores ni OPFS. `offline.js` lo registra solo por http(s). Las respuestas
   cacheadas deben conservar COOP/COEP; `prueba-pestana.js` prueba la recarga offline.

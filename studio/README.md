@@ -59,7 +59,11 @@ Qué hace de verdad, y qué no:
   de la pestaña y sin levantar un proceso. «Compilar debug» no pide keystore: la primera vez
   genera `/sdk/debug.keystore` con `apkc debug-keystore` (alias `androiddebugkey`, contraseña
   `android`, `CN=Android Debug`) y reutiliza esa identidad; «Compilar release» sigue usando el
-  keystore elegido. El keystore y el `android.jar` no salen de la pestaña:
+  keystore elegido. **Crear clave de release** genera un JKS en la pestaña con
+  `apkc create-keystore` (alias, CN, organización, país y contraseña propios), lo descarga como
+  `<alias>.jks` y exige confirmar que se guardó fuera del navegador antes de cerrar el diálogo.
+  Cuando la clave ya existe, **Firma release** queda plegada, gris y con la etiqueta **listo**.
+  El keystore y el `android.jar` no salen de la pestaña:
   con `servidor.js`, el jar se toma del SDK local y se sirve en `/android-jar`; en una página
   estática, la pestaña Compilar abre un diálogo que aclara que el `android.jar` es de Google, exige un
   acuse y enlaza a sus términos y a la descarga oficial; el editor extrae

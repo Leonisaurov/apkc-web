@@ -105,7 +105,9 @@ En **Consola → Compilar**:
 1. Elige el `android.jar` del SDK (API 34) y pulsa **Guardar el android.jar elegido**. Si ya
    estaba cargado, la sección aparece plegada, gris y con la etiqueta **listo**; el botón pasa a
    **Cambiar android.jar**.
-2. Elige el keystore (`.p12` o `.jks`), escribe la contraseña y pulsa **Ver certificado**.
+2. Elige el keystore (`.p12` o `.jks`), escribe la contraseña y pulsa **Ver certificado**. Si no
+   tienes uno, pulsa **Crear clave de release**: se genera en la pestaña, se descarga y el diálogo
+   exige confirmar que guardaste una copia fuera del navegador. La contraseña no se almacena.
 3. Elige el alias.
 4. Pulsa **Compilar debug** (clave de depuración generada en la pestaña) o **Compilar release**
    (el keystore de arriba).

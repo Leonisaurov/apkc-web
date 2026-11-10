@@ -490,7 +490,7 @@ async function conductor() {
 
     const compilado = await evaluar(`(async () => {
       const ks = new Uint8Array(await (await fetch("/keystore-ejemplo")).arrayBuffer());
-      await hospedador.escribir("/sdk/keystore.p12", ks);
+      await hospedador.escribir("/sdk/release.keystore", ks);
       document.getElementById("sdk-version").value = "34";
       document.getElementById("codename").value = "14";
       document.getElementById("storepass-compilar").value = "android";
@@ -569,7 +569,7 @@ async function conductor() {
       await hospedador.cwd("/estudio");
       const r = await correr(["build", "--linker", "go", "--compiler", "go",
         "--android-jar", "/sdk/android.jar", "--sdk-version", "34", "--codename", "14",
-        "--keystore", "/sdk/keystore.p12"]);
+        "--keystore", "/sdk/release.keystore"]);
       const datos = await hospedador.bytes("/estudio/build/app.apk");
       return {
         codigo: r.codigo, ficheros: Object.keys(p.files).length,
@@ -855,7 +855,7 @@ async function conductor() {
     // 12b. compilar debug no pide keystore: genera la clave típica en OPFS y firma con ella.
     const debug = await evaluar(`(async () => {
       await hospedador.limpiar("/sdk/debug.keystore");
-      await hospedador.limpiar("/sdk/keystore.p12");
+      await hospedador.limpiar("/sdk/release.keystore");
       document.getElementById("storepass-compilar").value = "";
       await compilarDebug();
       const ks = await hospedador.bytes("/sdk/debug.keystore");
@@ -914,7 +914,76 @@ async function conductor() {
     /^https:\/\/developer\.android\.com\/studio\/terms/.test(terminos.terminos) &&
     /^https:\/\/dl\.google\.com\//.test(terminos.descarga), JSON.stringify(terminos));
 
-  // 14. recarga sin red: el service worker sirve el shell y conserva el aislamiento
+  // 14. crear una clave de release en la pestaña, descargarla y marcarla como lista
+  const clave = await evaluar(`(async () => {
+    await hospedador.limpiar("/sdk/release.keystore");
+    await decirEstadoClave();
+    document.getElementById("crear-clave-release").click();
+    const poner = (id, valor) => {
+      const campo = document.getElementById(id);
+      campo.value = valor;
+      campo.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    poner("clave-alias", "clave-navegador");
+    poner("clave-cn", "Clave de navegador");
+    poner("clave-org", "apkc studio");
+    poner("clave-pais", "ES");
+    poner("clave-pass", "clave-segura-123");
+    poner("clave-pass2", "clave-segura-123");
+    const aviso = document.getElementById("clave-aviso");
+    aviso.checked = true;
+    aviso.dispatchEvent(new Event("change", { bubbles: true }));
+    const generar = document.getElementById("clave-generar");
+    const habilitado = generar.disabled === false;
+    generar.click();
+    for (let i = 0; i < 240; i++) {
+      if (!document.getElementById("clave-paso-listo").hidden) break;
+      await new Promise((ok) => setTimeout(ok, 100));
+    }
+    const bytes = await hospedador.bytes("/sdk/release.keystore");
+    const listo = document.getElementById("clave-paso-listo");
+    const detalle = document.getElementById("detalle-release");
+    const cerrar = document.getElementById("clave-terminar");
+    const resultado = {
+      habilitado,
+      creada: !listo.hidden,
+      bytes: bytes ? bytes.length : 0,
+      descarga: document.getElementById("clave-descargar").download,
+      blob: /^blob:/.test(document.getElementById("clave-descargar").href),
+      seccionLista: detalle.classList.contains("jar-listo"),
+      badge: !document.getElementById("clave-badge").hidden,
+      boton: document.getElementById("crear-clave-release").textContent,
+      cerrarDeshabilitado: cerrar.disabled,
+      pass: document.getElementById("storepass-compilar").value,
+    };
+    const guardada = document.getElementById("clave-guardada");
+    guardada.checked = true;
+    guardada.dispatchEvent(new Event("change", { bubbles: true }));
+    resultado.cerrarHabilitado = cerrar.disabled === false;
+    cerrar.click();
+    resultado.cerrado = document.getElementById("dialogo-clave").open === false;
+    return resultado;
+  })()`);
+  comprueba("se crea una clave de release y se ofrece para descargar",
+    clave.habilitado === true && clave.creada === true && clave.bytes > 1000 &&
+    clave.descarga === "clave-navegador.jks" && clave.blob === true && clave.pass === "clave-segura-123",
+    JSON.stringify(clave));
+  comprueba("la clave creada deja la sección lista y exige confirmar que se guardó",
+    clave.seccionLista === true && clave.badge === true &&
+    /Cambiar clave de release/.test(clave.boton) &&
+    clave.cerrarDeshabilitado === true && clave.cerrarHabilitado === true && clave.cerrado === true,
+    JSON.stringify({ seccion: clave.seccionLista, badge: clave.badge, boton: clave.boton,
+      antes: clave.cerrarDeshabilitado, despues: clave.cerrarHabilitado, cerrado: clave.cerrado }));
+  const claveValida = await evaluar(`(async () => {
+    const r = await correr(["keystore", "--keystore", "/sdk/release.keystore",
+      "--storepass", "clave-segura-123"]);
+    return { codigo: r.codigo, consola: String(r.consola || "") };
+  })()`);
+  comprueba("la clave generada se puede inspeccionar con apkc",
+    claveValida.codigo === 0 && /clave-navegador/.test(claveValida.consola),
+    JSON.stringify(claveValida).slice(0, 240));
+
+  // 15. recarga sin red: el service worker sirve el shell y conserva el aislamiento
   const sw = await evaluar(`(async () => {
     if (!("serviceWorker" in navigator)) return { ok: false, motivo: "sin serviceWorker" };
     const listo = await Promise.race([

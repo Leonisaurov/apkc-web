@@ -242,13 +242,14 @@
                 </details>
 
                 <details id="detalle-release">
-                  <summary>Firma release (keystore y contraseña)</summary>
+                  <summary>Firma release (keystore y contraseña) <span id="clave-badge" class="badge-sdk" hidden>listo</span></summary>
                   <div class="panel-form">
                     <label>keystore (.p12 o .jks) <input type="file" id="keystore-compilar" accept=".p12,.keystore,.jks,application/pkcs12"></label>
                     <label>contraseña <input type="password" id="storepass-compilar" autocomplete="off" class="ruta"></label>
                     <label>alias <select id="keyalias-compilar" class="ruta"><option value="">— pulsa «ver certificado» —</option></select></label>
                     <div class="acciones">
                       <button id="ver-keystore-compilar" type="button">Ver certificado</button>
+                      <button id="crear-clave-release" type="button">Crear clave de release</button>
                       <button id="olvidar-keystore-compilar" type="button">Olvidar el keystore</button>
                     </div>
                     <p class="nota" id="estado-keystore-compilar">sin keystore inspeccionado</p>
@@ -343,6 +344,49 @@
 <input type="file" id="subir-carpeta" webkitdirectory hidden aria-label="Subir una carpeta al proyecto">
 
 <div id="menu-archivo" class="menu-archivo" role="menu" aria-label="Acciones del fichero" hidden></div>
+
+<dialog id="dialogo-clave" class="dialogo-sdk" aria-labelledby="dialogo-clave-titulo">
+  <div id="clave-paso-form">
+    <h2 id="dialogo-clave-titulo">Crear una clave de release</h2>
+    <p>Se genera dentro de esta pestaña y se descarga. Guárdala fuera del navegador: si la
+      pierdes, no podrás firmar actualizaciones de la app. Quien tenga el archivo y la contraseña
+      puede firmar como tú.</p>
+    <div class="panel-form">
+      <label>Alias <input type="text" id="clave-alias" value="release" autocomplete="off"></label>
+      <label>Nombre del certificado (CN) <input type="text" id="clave-cn" value="Release" autocomplete="off"></label>
+      <label>Organización (O) <input type="text" id="clave-org" value="apkc studio" autocomplete="off"></label>
+      <label>País (C) <input type="text" id="clave-pais" value="ES" maxlength="2" autocomplete="off"></label>
+      <label>Contraseña <input type="password" id="clave-pass" autocomplete="new-password"></label>
+      <label>Repite la contraseña <input type="password" id="clave-pass2" autocomplete="new-password"></label>
+    </div>
+    <label class="dialogo-check">
+      <input type="checkbox" id="clave-aviso">
+      Entiendo que si pierdo la clave o su contraseña no podré actualizar la app, y que el
+      archivo no se puede recuperar desde esta página.
+    </label>
+    <div class="acciones">
+      <button id="clave-generar" class="primario" type="button" disabled>Generar y descargar</button>
+      <button id="clave-cancelar" type="button">Cancelar</button>
+    </div>
+    <p id="clave-estado" class="nota"></p>
+  </div>
+  <div id="clave-paso-listo" hidden>
+    <h2>Clave creada</h2>
+    <p>Guárdala ahora en un lugar seguro, fuera de este navegador. Guarda también la contraseña:
+      no se almacena. Si borras los datos del navegador o pierdes el archivo, no podrás volver a
+      firmar actualizaciones con esta identidad.</p>
+    <div class="acciones">
+      <a id="clave-descargar" class="boton-enlace" href="#" download>Descargar la clave</a>
+    </div>
+    <label class="dialogo-check">
+      <input type="checkbox" id="clave-guardada">
+      He guardado una copia de la clave y su contraseña fuera del navegador.
+    </label>
+    <div class="acciones">
+      <button id="clave-terminar" type="button" disabled>Cerrar</button>
+    </div>
+  </div>
+</dialog>
 
 <dialog id="dialogo-sdk" class="dialogo-sdk" aria-labelledby="dialogo-sdk-titulo">
   <h2 id="dialogo-sdk-titulo">El <code>android.jar</code> es del SDK de Android de Google</h2>

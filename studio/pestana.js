@@ -1975,7 +1975,7 @@ async function intentarCompilar() {
 
 // --- el build sin procesos: recursos, Java, dex y firma, en este mismo binario ------------
 const RUTA_JAR = "/sdk/android.jar";
-const RUTA_KEYSTORE = "/sdk/keystore.p12";
+const RUTA_KEYSTORE = "/sdk/release.keystore";
 const RUTA_VIEJO = "/keystore-viejo";
 const RUTA_LINAJE = "/lineage.bin";
 
@@ -2003,7 +2003,7 @@ function sincronizarApi(guardar) {
 // /android-jar-info: el camino es el paquete oficial de Google, el .zip o el .jar.
 const JAR_SDK = { disponible: false, consultado: false, version: null, bytes: 0 };
 
-// Un keystore por flujo: el del build queda en OPFS (`/sdk/keystore.p12`) y el de `sign` en
+// Un keystore por flujo: el del build queda en OPFS (`/sdk/release.keystore`) y el de `sign` en
 // `/keystore`, las rutas que ya usaban los botones. Lo nuevo es la contraseña, el alias que se
 // elige entre los que el fichero declara, y el certificado que se enseña antes de firmar.
 const KEYSTORES = {
@@ -2012,6 +2012,145 @@ const KEYSTORES = {
   firmar: { fichero: "keystore", pass: "storepass-firmar", alias: "keyalias-firmar",
             estado: "estado-keystore-firmar", ruta: "/keystore" },
 };
+
+function actualizarEstadoClave(tiene) {
+  const detalle = document.getElementById("detalle-release");
+  const badge = document.getElementById("clave-badge");
+  const boton = document.getElementById("crear-clave-release");
+  if (detalle) {
+    detalle.classList.toggle("jar-listo", !!tiene);
+    if (tiene) detalle.open = false;
+  }
+  if (badge) {
+    badge.hidden = !tiene;
+    badge.textContent = tiene ? "listo" : "";
+  }
+  if (boton) {
+    boton.textContent = tiene ? "Cambiar clave de release" : "Crear clave de release";
+    boton.classList.toggle("primario", !tiene);
+  }
+}
+
+async function decirEstadoClave() {
+  try {
+    const r = await hospedador.leer(RUTA_KEYSTORE);
+    actualizarEstadoClave(!!(r && r.bytes));
+    return !!(r && r.bytes);
+  } catch (e) {
+    actualizarEstadoClave(false);
+    return false;
+  }
+}
+
+let claveDescargaUrl = null;
+
+function cerrarDialogoClave() {
+  const dialogo = document.getElementById("dialogo-clave");
+  if (!dialogo) return;
+  if (typeof dialogo.close === "function") dialogo.close();
+  else dialogo.hidden = true;
+}
+
+function abrirDialogoClave() {
+  const dialogo = document.getElementById("dialogo-clave");
+  if (!dialogo) return;
+  const form = document.getElementById("clave-paso-form");
+  const listo = document.getElementById("clave-paso-listo");
+  if (form) form.hidden = false;
+  if (listo) listo.hidden = true;
+  const aviso = document.getElementById("clave-aviso");
+  const guardada = document.getElementById("clave-guardada");
+  const generar = document.getElementById("clave-generar");
+  const terminar = document.getElementById("clave-terminar");
+  const estado = document.getElementById("clave-estado");
+  if (aviso) aviso.checked = false;
+  if (guardada) guardada.checked = false;
+  if (generar) generar.disabled = true;
+  if (terminar) terminar.disabled = true;
+  if (estado) estado.textContent = "";
+  for (const id of ["clave-pass", "clave-pass2"]) {
+    const campo = document.getElementById(id);
+    if (campo) campo.value = "";
+  }
+  if (typeof dialogo.showModal === "function") dialogo.showModal();
+  else dialogo.hidden = false;
+}
+
+async function generarClaveRelease() {
+  const valor = (id) => {
+    const campo = document.getElementById(id);
+    return campo ? campo.value.trim() : "";
+  };
+  const alias = valor("clave-alias") || "release";
+  const pass = document.getElementById("clave-pass") ? document.getElementById("clave-pass").value : "";
+  const pass2 = document.getElementById("clave-pass2") ? document.getElementById("clave-pass2").value : "";
+  const cn = valor("clave-cn") || "Release";
+  const org = valor("clave-org");
+  const country = (valor("clave-pais") || "ES").toUpperCase();
+  const estado = document.getElementById("clave-estado");
+  const aviso = document.getElementById("clave-aviso");
+  const decir = (texto) => { if (estado) estado.textContent = texto; };
+
+  if (!aviso || !aviso.checked) { decir("marca el aviso antes de generar la clave"); return; }
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(alias)) {
+    decir("el alias solo puede llevar letras, números, punto, guion o guion bajo"); return;
+  }
+  if (pass.length < 8) { decir("la contraseña debe tener al menos 8 caracteres"); return; }
+  if (pass !== pass2) { decir("las dos contraseñas no coinciden"); return; }
+  if (!/^[A-Za-z]{2}$/.test(country)) { decir("el país tiene que ser dos letras, por ejemplo ES"); return; }
+  const previo = await hospedador.leer(RUTA_KEYSTORE);
+  if (previo && previo.bytes &&
+      !window.confirm("Ya hay una clave de release en esta pestaña. ¿Reemplazarla? La anterior dejará de servir para actualizar la app.")) {
+    return;
+  }
+
+  decir("generando la clave…");
+  try {
+    const r = await conBloqueo(() => correr([
+      "create-keystore", "--out", RUTA_KEYSTORE,
+      "--storepass", pass, "--keyalias", alias,
+      "--common-name", cn, "--organization", org, "--country", country,
+      "--force",
+    ]));
+    if (!r || r.codigo !== 0) {
+      decir("no se pudo generar la clave; mira la consola");
+      return;
+    }
+    const bytes = await hospedador.bytes(RUTA_KEYSTORE);
+    if (!bytes || bytes.length < 1000) {
+      decir("la clave no quedó en OPFS");
+      return;
+    }
+    const campoPass = document.getElementById("storepass-compilar");
+    if (campoPass) campoPass.value = pass;
+    const select = document.getElementById("keyalias-compilar");
+    if (select) {
+      select.innerHTML = "";
+      select.add(new Option(alias, alias, true, true));
+    }
+    actualizarEstadoClave(true);
+
+    if (claveDescargaUrl) URL.revokeObjectURL(claveDescargaUrl);
+    claveDescargaUrl = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    const enlace = document.getElementById("clave-descargar");
+    if (enlace) {
+      enlace.href = claveDescargaUrl;
+      enlace.download = alias + ".jks";
+      enlace.click();
+    }
+    const form = document.getElementById("clave-paso-form");
+    const listo = document.getElementById("clave-paso-listo");
+    if (form) form.hidden = true;
+    if (listo) listo.hidden = false;
+    for (const id of ["clave-pass", "clave-pass2"]) {
+      const campo = document.getElementById(id);
+      if (campo) campo.value = "";
+    }
+    decir("");
+  } catch (e) {
+    decir("no se pudo generar la clave: " + (e && e.message ? e.message : e));
+  }
+}
 
 function estadoKeystore(cfg, texto) {
   document.getElementById(cfg.estado).textContent = texto;
@@ -2064,6 +2203,7 @@ async function inspeccionarKeystore(cfg) {
   const huella = e.sha256 ? " · SHA-256 " + e.sha256 : " · sin certificado";
   const validez = e.notAfter ? " · hasta " + e.notAfter : "";
   estadoKeystore(cfg, info.keys + " clave(s) · " + e.alias + " · " + e.subject + huella + validez);
+  if (cfg === KEYSTORES.compilar) actualizarEstadoClave(true);
   return { info, elegida: e };
 }
 
@@ -2080,6 +2220,7 @@ async function prepararKeystore(cfg) {
 // «olvidar»: borra el fichero de OPFS y el estado de la página. La contraseña no se guardó.
 async function olvidarKeystore(cfg) {
   await hospedador.limpiar(cfg.ruta);
+  if (cfg === KEYSTORES.compilar) actualizarEstadoClave(false);
   document.getElementById(cfg.pass).value = "";
   if (document.getElementById(cfg.fichero)) document.getElementById(cfg.fichero).value = "";
   const select = document.getElementById(cfg.alias);
@@ -2598,6 +2739,25 @@ if (typeof document !== "undefined") {
       reflejarAcuse();
     }
 
+    en("crear-clave-release", abrirDialogoClave);
+    en("clave-cancelar", cerrarDialogoClave);
+    en("clave-generar", generarClaveRelease);
+    en("clave-terminar", cerrarDialogoClave);
+    const avisoClave = document.getElementById("clave-aviso");
+    const generarClave = document.getElementById("clave-generar");
+    if (avisoClave && generarClave) {
+      avisoClave.addEventListener("change", () => {
+        generarClave.disabled = !avisoClave.checked;
+      });
+    }
+    const guardadaClave = document.getElementById("clave-guardada");
+    const terminarClave = document.getElementById("clave-terminar");
+    if (guardadaClave && terminarClave) {
+      guardadaClave.addEventListener("change", () => {
+        terminarClave.disabled = !guardadaClave.checked;
+      });
+    }
+
     for (const boton of document.querySelectorAll(".panel-tab")) {
       boton.addEventListener("click", () => mostrarPanel(boton.dataset.panel));
     }
@@ -2677,6 +2837,7 @@ if (typeof document !== "undefined") {
     });
 
     decirEstadoJar();
+    decirEstadoClave();
     consultarJarDelSdk();
     iniciarPestana();
   });
@@ -2698,7 +2859,8 @@ export {
   firmar, intentarCompilar, asegurarDebugKeystore, compilarCon, nuevoFichero,
   renombrarRuta, borrarRuta, abrirMenuArchivo, decirEstadoJar,
   consultarJarDelSdk, traerJarDelSdk, asegurarJarDelProyecto,
-  conBloqueo, publicar, recibirRemoto,
+  conBloqueo, publicar, recibirRemoto, decirEstadoClave,
+  actualizarEstadoClave, abrirDialogoClave, generarClaveRelease,
 };
 
 // Puente de compatibilidad para las pruebas de navegador y la consola de desarrollo.
@@ -2721,6 +2883,7 @@ if (typeof window !== "undefined") {
     asegurarDebugKeystore, compilarCon, nuevoFichero, renombrarRuta,
     borrarRuta, abrirMenuArchivo, decirEstadoJar, consultarJarDelSdk,
     traerJarDelSdk, asegurarJarDelProyecto, conBloqueo, publicar, recibirRemoto,
+    decirEstadoClave, actualizarEstadoClave, abrirDialogoClave, generarClaveRelease,
   });
   // Superficie completa para las pruebas CDP, que evalúan los nombres antiguos. No se usa desde
   // el código de la página; los imports son la vía normal.
