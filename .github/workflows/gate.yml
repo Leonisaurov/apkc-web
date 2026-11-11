@@ -51,11 +51,16 @@ jobs:
           # los .class de javac 21 con "Unsupported class file major version 65". En Termux el
           # d8 de 34.9.0 sí los lee; el CI usa el build-tools de Google y necesita javac 17.
           java-version: "17"
+      - name: caché del SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/android-sdk
+          key: android-sdk-34.0.0-v1
       - name: SDK limpio con solo la plataforma 34
         run: |
-          echo "ANDROID_HOME=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
-          export ANDROID_HOME="$RUNNER_TEMP/android-sdk"
+          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> "$GITHUB_ENV"
+          export ANDROID_HOME="$HOME/android-sdk"
           mkdir -p "$ANDROID_HOME"
           SDKM=$(ls -d /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
           echo "sdkmanager: $SDKM"
