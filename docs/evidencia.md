@@ -7467,3 +7467,42 @@ tools/entorno.sh -- sh -c 'cd studio && APKC=$TMP/apkc-gate APKC_WASM=$TMP/apkc-
 
 **Resultado**: `crear: todo en orden (35 comprobaciones)`, `pestaña: 83 comprobaciones` y
 `e2e: todo en orden`, sin ninguna línea `FALLA`.
+
+## 151. G cerrada: el gate entero en verde y la segunda pestaña sin carreras
+
+Medido el 2026-11-11. Cierra G (desmontar `pestana.js`) por su criterio de verificación: los
+módulos separados —`consola.js`, `editor.js`, `busqueda.js`, `ajustes.js`, `historial.js`,
+`fusion.js`, `temas.js`, `offline.js` y `proyecto.js`— quedan en el árbol y el gate completo pasa
+dos veces seguidas. El orquestador sigue siendo `pestana.js`; lo que cambia en este párrafo es que
+la verificación que faltaba ya no es una promesa.
+
+```sh
+tools/entorno.sh gate
+```
+
+**Resultado de las dos pasadas** (`e2e-h.log` y `e2e-j.log`):
+
+```text
+crear: todo en orden (35 comprobaciones)
+pestaña: 83 comprobaciones, apk firmada dentro de chromium de 10324 bytes y verificada
+e2e: todo en orden
+```
+
+Antes de esas dos pasadas el mismo gate falló dos veces con la pestaña omitida a medias: la
+segunda ventana de `prueba-crear.js` abría pero no leía `res/nota.txt`. Eran dos defectos reales,
+no ruido del runner:
+
+1. **La prueba no esperaba de verdad.** `abrirSegundaPagina()` hacía sesenta intentos y, si la
+   pestaña no llegaba a cargar los módulos, seguía igual; las comprobaciones fallaban con textos
+   vacíos. Ahora espera hasta 30 s, cierra y reintenta una vez, y si no carga falla con el log de
+   Chrome en el mensaje. Además la comprobación devuelve `{abierta, texto}` en vez de solo el
+   texto, para distinguir «no abrió» de «abrió vacío».
+2. **La lectura de OPFS no toleraba el acceso exclusivo de otra pestaña.**
+   `createSyncAccessHandle()` es exclusivo por fichero; si el worker de la primera pestaña lo tenía
+   abierto en ese instante, `extraer()` lanzaba y la pestaña nueva contestaba «no existe». Ahora,
+   si el acceso exclusivo falla, se lee con `getFile()` —que no lo pide y da una copia
+   consistente—, y `asegurarAcceso()` rellena la memoria por la misma vía. El arreglo está en
+   `studio/fs-fragmento.js`; la espera y el reintento, en `studio/prueba-crear.js`.
+
+Los dos cambios están commiteados en `apkc-studio` (`fa66b98` y `94c8905`) y el puntero del
+submódulo se actualiza en el mismo commit que este párrafo.
