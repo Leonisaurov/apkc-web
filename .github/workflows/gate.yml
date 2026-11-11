@@ -47,7 +47,10 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
+          # 17, no 21: el `d8` de build-tools 34.0.0 (el que instala el paso del SDK) rechaza
+          # los .class de javac 21 con "Unsupported class file major version 65". En Termux el
+          # d8 de 34.9.0 sí los lee; el CI usa el build-tools de Google y necesita javac 17.
+          java-version: "17"
       - name: SDK limpio con solo la plataforma 34
         run: |
           echo "ANDROID_HOME=$RUNNER_TEMP/android-sdk" >> "$GITHUB_ENV"
