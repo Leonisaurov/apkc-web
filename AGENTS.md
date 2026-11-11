@@ -144,6 +144,12 @@ Los bloques de arriba se lanzan con el entorno ya puesto por `tools/entorno.sh t
 sin el wrapper, `HOME` y `PREFIX` tienen que apuntar a `/data/data/com.termux/files/home` y
 `/data/data/com.termux/files/usr`.
 
+En GitHub (`.github/workflows/gate.yml`) el job rápido no descarga el SDK y el pesado lo instala y
+lo cachea (`android-sdk-34.0.0-v1`). El pesado fija **JDK 17**: el `d8` de build-tools 34.0.0 de
+Google rechaza los `.class` de javac 21 con `Unsupported class file major version 65`; el `d8` de
+34.9.0 del teléfono sí los lee. El job `publicar` tiene `needs: pesado`, así que un gate rojo no
+publica. §152.
+
 ## Lo que ya está medido, para no reabrirlo
 
 Cuatro áreas cerradas. Cada `§` es un párrafo de `docs/evidencia.md` con el comando que lo reproduce; el

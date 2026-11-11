@@ -7506,3 +7506,49 @@ no ruido del runner:
 
 Los dos cambios están commiteados en `apkc-studio` (`fa66b98` y `94c8905`) y el puntero del
 submódulo se actualiza en el mismo commit que este párrafo.
+
+## 152. E cerrada: el gate pesado pasa en Ubuntu y el release espera al gate
+
+Medido el 2026-11-11. Cierra E (CI portable). El mismo `studio/e2e.sh` que corre en Termux pasó
+en un runner Linux limpio, con el SDK de Google, build-tools 34.0.0 y Chrome de escritorio; el
+job rápido no descarga el SDK, el pesado lo instala una vez y lo cachea, y el job de release
+depende del pesado (`needs: pesado`), así que un gate rojo no publica.
+
+```sh
+gh run view 42965693455 --log | grep -E 'crear: todo|pestaña: |e2e: todo'
+gh run view 42966004867 --log | grep -E 'Cache restored|crear: todo|pestaña: |e2e: todo'
+```
+
+**Resultado del run `42965693455`** (`pesado: success`):
+
+```text
+crear: todo en orden (35 comprobaciones)
+pestaña: 83 comprobaciones, apk firmada dentro de chromium de 10262 bytes y verificada
+e2e: todo en orden
+```
+
+**Resultado del run `42966004867`**, ya con la caché del SDK (`pesado: success`):
+
+```text
+Cache restored from key: android-sdk-34.0.0-v1
+crear: todo en orden (35 comprobaciones)
+pestaña: 83 comprobaciones, apk firmada dentro de chromium de 10262 bytes y verificada
+e2e: todo en orden
+```
+
+El primer intento del CI, con JDK 21, falló con un muro real que no aparece en Termux:
+`d8` de build-tools 34.0.0 aborta con `Unsupported class file major version 65` porque javac 21
+escribe la versión 65 y ese `d8` solo lee hasta la 61. El `d8` de las build-tools 34.9.0 del
+teléfono sí la lee; el CI usa las de Google, así que el workflow fija **JDK 17** para el camino
+nativo (`java-version: "17"`). El camino de la pestaña no cambia: `--compiler go` no usa javac.
+
+**Frontera del runner, dicha y no disimulada**: en Ubuntu no hay `zipcheck.py`, ni `bundletool`,
+ni `kotlin-stdlib`; `e2e.sh` los omite con aviso (`sin zipcheck.py … se omite ese oráculo`,
+`sin bundletool …`, `kotlin: sin kotlin-stdlib … se omite`) y el gate sigue verde por las demás
+comprobaciones. Esos tres oráculos sí corren en Termux, donde están instalados; el CI no los
+sustituye. El artefacto `gate-logs` del run fallido `42754896276` se subió igualmente, que es lo
+que pide E4 para diagnosticar un rojo.
+
+El job `publicar` quedó **skipped** en los dos runs porque no había tag; su condición es
+`needs: pesado` y `if: startsWith(github.ref, 'refs/tags/')`, de modo que la release no puede
+adelantar al gate.
