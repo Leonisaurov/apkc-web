@@ -4350,15 +4350,10 @@ func (e *emisor) intenta(v jtry) error {
 			return err
 		}
 	}
-	// con `catch` y `finally` javac escribe un solo rango para el cuerpo; si el cuerpo sale por dos
-	// trozos —un `return` en una rama y ademas la caida— hay que repartir los tipos por trozos, y esa
-	// forma no esta medida. El rango del `any` que queda es el que manda sobre los tipos.
-	if finalmente != nil && len(v.atrapas) > 0 {
-		if len(filasCuerpo) != 1 {
-			return fmt.Errorf("linea %d: un `try` con `catch` y `finally` cuyo cuerpo sale por dos trozos no esta medido", v.donde.linea)
-		}
-		fin = filasCuerpo[0].fin
-	}
+	// Con `catch` y `finally`, un cuerpo que sale por más de un trozo reparte TAMBIÉN los tipos
+	// por trozos: javac escribe una fila por tipo y trozo, y después la fila `any` de cada trozo
+	// (medido en §167 con `SalidaCatch.f`). La copia del `finally` delante del `return` no está
+	// protegida, igual que en el caso de un solo trozo.
 	if finalmente != nil && len(v.atrapas) == 0 && len(filasCuerpo) == 0 {
 		// `Fin6.soloVoid` (`try { return; } finally { a = 5; }`): no queda nada protegido, y javac
 		// escribe el manejador `any` **sin fila en la tabla** —codigo muerto—. Este emisor no lo
@@ -4411,9 +4406,17 @@ func (e *emisor) intenta(v jtry) error {
 		}
 	}
 	filas := make([]entradaTry, 0, len(v.atrapas)+len(filasCuerpo)+len(filasCatch))
+	trozosConTipo := filasCuerpo
+	if finalmente == nil {
+		trozosConTipo = e.trozosDelCuerpo(inicio, fin)
+	}
 	for i := range v.atrapas {
 		for _, desc := range descs[i] {
-			filas = append(filas, entradaTry{inicio: inicio, fin: fin, handler: manejadores[i], tipo: desc})
+			for _, trozo := range trozosConTipo {
+				filas = append(filas, entradaTry{
+					inicio: trozo.inicio, fin: trozo.fin, handler: manejadores[i], tipo: desc,
+				})
+			}
 		}
 	}
 	if finalmente != nil {
@@ -4447,6 +4450,40 @@ func (e *emisor) intenta(v jtry) error {
 	e.cierra(salida)
 	e.excepciones = append(e.excepciones, filas...)
 	return nil
+}
+
+// trozosDelCuerpo: sin `finally` no hay pendiente que haya anotado los trozos, pero javac también
+// parte el rango protegido en cada `return`/`goto` del cuerpo (medido en §167 con `SalidaCatch.h`:
+// dos filas, [0,7) y [8,11), con el `ireturn` de la rama fuera de ambas). El `athrow` sí queda
+// dentro, como en §71.
+func (e *emisor) trozosDelCuerpo(inicio, fin int) []entradaTry {
+	lista, err := walkJvmCode(e.codigo[:fin])
+	if err != nil || len(lista) == 0 {
+		return []entradaTry{{inicio: inicio, fin: fin}}
+	}
+	trozos := []entradaTry{}
+	actual := inicio
+	for _, in := range lista {
+		if in.pc < inicio {
+			continue
+		}
+		corta := in.name == "return" || in.name == "ireturn" || in.name == "lreturn" ||
+			in.name == "freturn" || in.name == "dreturn" || in.name == "areturn" || in.name == "goto"
+		if !corta {
+			continue
+		}
+		if in.pc > actual {
+			trozos = append(trozos, entradaTry{inicio: actual, fin: in.pc})
+		}
+		actual = in.pc + 1 + len(in.ops) + in.relleno
+	}
+	if actual < fin {
+		trozos = append(trozos, entradaTry{inicio: actual, fin: fin})
+	}
+	if len(trozos) == 0 {
+		trozos = append(trozos, entradaTry{inicio: inicio, fin: fin})
+	}
+	return trozos
 }
 
 // ultimaEsLanza: si la ultima instruccion escrita del tramo [inicio,fin) es un `athrow`. Con `finally`

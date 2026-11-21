@@ -7901,3 +7901,36 @@ $ANDROID_HOME/build-tools/34.0.0/dexdump -d $PREFIX/tmp/studio-e46-dex/classes.d
 GitHub no hay teléfono con `rish`/Shizuku ni `app_process64`, así que la ejecución real en ART
 (`banco/banco.sh`, §61) sigue siendo una prueba local del aparato; no se puede añadir al CI sin un
 dispositivo o un emulador con el `BOOTCLASSPATH` de `zygote64`, y eso no se afirma aquí.
+
+## 167. `try` con `catch` que cruza una salida
+
+Medido el 2026-11-21. Cierra la última frontera del control de flujo que quedaba en la fila 5.9.
+La sonda `SalidaCatch` tiene tres formas: `try/catch/finally` con un `return` en una rama y caída en
+la otra, la misma sobre un campo de instancia, y `try/catch` sin `finally` con dos `return`.
+
+```text
+javap 17 de f():  Exception table
+  2  8  27  Class java/lang/RuntimeException
+  15 19 27  Class java/lang/RuntimeException
+  2  8  38  any
+  15 19 38  any
+  27 30 38  any
+javap 17 de h():  0 7 12 RuntimeException ; 8 11 12 RuntimeException
+```
+
+El emisor ya repartía las filas `any` por trozo con `finally`; ahora reparte también las de cada
+tipo de `catch`, y cuando no hay `finally` calcula los trozos con un caminante que excluye los
+`return`/`goto` (pero **no** el `athrow`, que javac deja dentro del rango desde §71). La copia del
+`finally` delante de la salida sigue sin protegerse.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run TestElTryConCatchQueCruzaSalida -count=1 -v .
+sh tools/entorno.sh gate
+```
+
+**Resultado**: el test pasa con `Code`, **filas de excepción** y dex byte a byte los de javac; el
+test que exigía rechazar este caso (`TestElFinalmenteRechazaLoNoMedido`) se actualizó. La ejecución
+con `java -Xverify:all` sobre nuestras clases da la misma salida que javac en los once valores de
+`-1..2` para `f`, `g` y `h`, con rc 0, y el gate sigue en verde. ART pendiente de dispositivo, como
+en §156.

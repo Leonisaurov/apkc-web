@@ -310,7 +310,6 @@ func TestElFinalmenteRechazaLoNoMedido(t *testing.T) {
 		{"return dentro del finally", "package p;\npublic class A { public static int f(int n) { try { f(n); } finally { if (n > 0) { return 1; } } return 2; } }\n", "dentro del propio `finally`"},
 		{"throw ultimo del cuerpo", "package p;\npublic class A { public static void f() { try { throw new RuntimeException(); } finally { f(); } } }\n", "ultima sentencia"},
 		{"throw ultimo del catch", "package p;\npublic class A { public static void f(int n) { try { f(n); } catch (RuntimeException e) { throw new RuntimeException(); } finally { f(n); } } }\n", "ultima sentencia de un `catch`"},
-		{"cuerpo que sale por dos trozos con catch", "package p;\npublic class A { public static int f(int n) { try { if (n > 0) { return 1; } f(n); } catch (RuntimeException e) { f(n); } finally { f(n); } return 2; } }\n", "dos trozos"},
 		{"cuerpo sin nada protegido", "package p;\npublic class A { public static void f(int n) { try { return; } finally { f(n); } } }\n", "nada protegido"},
 	}
 	for _, c := range casos {
