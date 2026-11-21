@@ -2059,7 +2059,7 @@ func (e *emisor) exp(x jexpr) (string, error) {
 	case jindice:
 		return e.leeIndice(v)
 	case jincr:
-		return "", fmt.Errorf("linea %d: `++`/`--` como valor no esta medido; uselo como sentencia", v.donde.linea)
+		return e.incrementoValor(v)
 	case joperador:
 		// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49):
 		// dos palabras dentro, una fuera. Antes de emitir se prueba el plegado de constantes, que javac
@@ -3939,6 +3939,114 @@ func (e *emisor) incremento(v jincr) error {
 		valor:   joperador{izq: v.destino, op: op, der: lit, donde: v.donde},
 		donde:   v.donde,
 	})
+}
+
+// incrementoValor: `++`/`--` usados como valor, medido en el párrafo 151 contra javap 17. En un
+// local javac cuenta con `iinc` y pone la carga antes (postfijo) o después (prefijo). En un campo
+// escribe `dup`/`dup_x1` alrededor de la cuenta: `dup_x1` antes de sumar deja el valor anterior y
+// `dup` después deja el nuevo. Solo entero de esta clase: el resto sigue rechazado por nombre.
+func (e *emisor) incrementoValor(v jincr) (string, error) {
+	e.marcaLinea(v.donde.linea)
+	if acc, esAcceso := v.destino.(jacceso); esAcceso {
+		segs, base := aplanar(acc)
+		if base == nil && len(segs) == 1 {
+			if lv, ok := e.locales[segs[0]]; ok {
+				if !esEnteroDesc(lv.desc) {
+					return "", fmt.Errorf("linea %d: `++`/`--` como valor sobre %s, que no es un entero", v.donde.linea, lv.desc)
+				}
+				if v.delta < -128 || v.delta > 127 {
+					return "", fmt.Errorf("linea %d: la cuenta de `++`/`--` como valor no cabe en `iinc`", v.donde.linea)
+				}
+				if lv.indice > 255 {
+					return "", fmt.Errorf("linea %d: el local %s no cabe en el índice de un `iinc`", v.donde.linea, segs[0])
+				}
+				if v.prefijo {
+					if err := e.incremento(v); err != nil {
+						return "", err
+					}
+					e.cargaDe(lv.indice, lv.desc)
+				} else {
+					e.cargaDe(lv.indice, lv.desc)
+					if err := e.incremento(v); err != nil {
+						return "", err
+					}
+				}
+				return lv.desc, nil
+			}
+		}
+	}
+	acc, esAcceso := v.destino.(jacceso)
+	if !esAcceso {
+		return "", fmt.Errorf("linea %d: `++`/`--` como valor solo sobre una variable o un campo", v.donde.linea)
+	}
+	segs, base := aplanar(acc)
+	if base != nil || len(segs) != 1 {
+		return "", fmt.Errorf("linea %d: `++`/`--` como valor sobre un campo ajeno no está medido", v.donde.linea)
+	}
+	dueño, cr, encontrado := e.duenioDelCampo(segs[0])
+	if !encontrado {
+		return "", fmt.Errorf("linea %d: %s no es una variable local ni un campo conocido", v.donde.linea, segs[0])
+	}
+	if cr.desc != "I" {
+		return "", fmt.Errorf("linea %d: `++`/`--` como valor sobre %s, que es %s: solo entero",
+			v.donde.linea, segs[0], cr.desc)
+	}
+	idx := e.pool.campo(dueño, segs[0], cr.desc)
+	op := byte(opIadd)
+	delta := v.delta
+	if delta < 0 {
+		op = opIsub
+		delta = -delta
+	}
+	if cr.acceso&accStatic != 0 {
+		d, err := e.exp(v.destino)
+		if err != nil {
+			return "", err
+		}
+		if d != "I" {
+			return "", fmt.Errorf("linea %d: el campo %s no es entero", v.donde.linea, segs[0])
+		}
+		if v.prefijo {
+			e.cargaEntero(delta)
+			e.emite(op)
+			e.baja(1)
+			e.emite(opDup)
+			e.sube()
+		} else {
+			e.emite(opDup)
+			e.sube()
+			e.cargaEntero(delta)
+			e.emite(op)
+			e.baja(1)
+		}
+		e.putstatic(idx)
+		return "I", nil
+	}
+	if e.estatico {
+		return "", fmt.Errorf("linea %d: `++`/`--` sobre un campo de instancia sin `this`", v.donde.linea)
+	}
+	e.cargaDelDuenio(dueño)
+	e.emite(opDup)
+	e.sube()
+	e.getfieldDe(idx, cr.desc)
+	// En el campo de instancia javac usa `dup_x1` en los dos sentidos: antes de la cuenta en el
+	// postfijo (deja el valor anterior) y después en el prefijo (deja el nuevo), porque el receptor
+	// queda debajo del valor.
+	if v.prefijo {
+		e.cargaEntero(delta)
+		e.emite(op)
+		e.baja(1)
+		e.emite(opDupX1)
+		e.sube()
+	} else {
+		e.emite(opDupX1)
+		e.sube()
+		e.cargaEntero(delta)
+		e.emite(op)
+		e.baja(1)
+	}
+	e.putfield(idx)
+	return "I", nil
 }
 
 // entradaTry: una fila de la exception_table del Code (JVMS 4.7.3). `fin` es exclusivo y `tipo` es el

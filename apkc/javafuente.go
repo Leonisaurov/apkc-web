@@ -135,12 +135,14 @@ type jindice struct {
 
 func (jindice) jexprPuede() {}
 
-// jincr: `i++`, `--i` y el paso de un `for`. Como sentencia se emite `iinc` en un local —medido en
-// el parrafo 67— o la lectura-cuenta-escritura de un campo; como **valor** no esta medido y el emisor
-// lo rechaza por nombre.
+// jincr: `i++`, `--i`, `i += 1` y el paso de un `for`. Como sentencia se emite `iinc` en un local
+// —medido en el párrafo 67— o la lectura-cuenta-escritura de un campo. Como valor, `prefijo` distingue
+// las dos formas medidas en el párrafo 151: `++i` cuenta antes de dejar el valor, `i++` deja el valor
+// anterior y cuenta después.
 type jincr struct {
 	destino jexpr
 	delta   int32
+	prefijo bool
 	donde   pos
 }
 
@@ -1779,7 +1781,7 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return jincr{destino: e, delta: delta, donde: donde}, nil
+		return jincr{destino: e, delta: delta, prefijo: true, donde: donde}, nil
 	}
 	if a.es('p', "!") {
 		donde := a.actual().donde

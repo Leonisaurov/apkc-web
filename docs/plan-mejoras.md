@@ -18,6 +18,9 @@ marca «hecha» por analogía ni sin evidencia propia sobre el árbol final (reg
 | A3 | `protectionLevel` **compuesto** (`signature\|privileged`) en `<permission>` | AXML byte a byte contra `aapt2 link`, con la representación de la bandera compuesta | fila 5.19 actualizada, § nuevo |
 | A4 | `nodpi`/`tvdpi` y `sw600dp` | tabla de recursos byte a byte contra `aapt2 link --no-auto-version` para cada calificador | fila 5.17 actualizada, § nuevo |
 
+**Estado (2026-11-21): A1 cerrada en §156** — once formas medidas, dex byte a byte y JVM con
+`-Xverify:all` sobre el mismo fuente; ART queda pendiente de dispositivo y está escrito como tal.
+
 Notas de ejecución:
 
 - Estos cuatro viven en el **fork `apkc/` de este repo**: no se toca `../apkc`. Cada pieza entra con

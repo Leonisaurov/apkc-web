@@ -7642,3 +7642,42 @@ compilación y firma enteras en la pestaña, apk de 9225 bytes verificada por `a
 v1/v2/v3, y **36 peticiones, 0 fuera del origen**. Es el hecho que cierra la publicación: el sitio
 no solo está empaquetado, está accesible y compila en un navegador ajeno a la máquina que lo
 construyó.
+
+## 156. `++`/`--` como valor: prefijo y postfijo, local y campo
+
+Medido el 2026-11-21. Cierra la frontera que quedaba en la fila 5.1. La sonda `IncValor` tiene once
+métodos: `++i`, `i++`, `--i`, `i--`, un `++i + i++`, y las cuatro formas sobre un campo de instancia
+y otro estático. Oráculo: `javac 17 -g` y `javap -c -p` (§151 del plan de mejoras).
+
+```text
+prefijoLocal:    0: iinc 0,1 | 3: iload_0
+postfijoLocal:   0: iload_0 | 1: iinc 0,1
+prefijoCampo:    aload_0; dup; getfield; iconst_1; iadd; dup_x1; putfield
+postfijoCampo:   aload_0; dup; getfield; dup_x1; iconst_1; iadd; putfield
+prefijoEstatico: getstatic; iconst_1; iadd; dup; putstatic
+postfijoEstatico: getstatic; dup; iconst_1; iadd; putstatic
+```
+
+En el campo de instancia **`dup_x1` va en los dos sentidos**: después de la cuenta en el prefijo y
+antes en el postfijo. La primera versión puso un `dup` en el prefijo y el verificador lo dijo:
+`pc 8 (putfield): se esperaba una referencia y hay entero`. `apkc/jvmframes.go` ya modelaba el
+`dup_x1` del §72, así que el error sirvió de oráculo además del `javap`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run TestElIncrementoComoValorSeDexaIgualQueJavac -count=1 -v .
+sh tools/entorno.sh gate
+# ejecución en la JVM delante del verificador, contra el javac del mismo fuente:
+cd apkc && go run . compile --android-jar $ANDROID_HOME/platforms/android-34/android.jar \
+  -o /tmp/opencode/proj/classes2 /tmp/opencode/proj/src /tmp/opencode/proj/jvm
+java -Xverify:all -cp /tmp/opencode/proj/classes2 Main
+```
+
+**Resultado**: el test pasa y el **dex de nuestra clase es byte a byte el de javac** (las longitudes de
+`Code` coinciden; los dos bytes del índice de `fieldref` difieren por el orden del pool y el dex los
+resuelve igual). `java -Xverify:all` termina con rc 0 y su salida es idéntica a la de las clases de
+javac en los once métodos. El gate sigue en verde (`e2e: todo en orden`). Frontera escrita: solo
+entero de esta clase; un campo ajeno (`obj.campo++` con base explícita), un ancho (`long`/`double`) y
+un delta mayor que un byte se rechazan por nombre. **ART queda pendiente de dispositivo**: en este
+escritorio no hay `rish` ni `sudo` con `app_process64`, así que no se afirma lo que no se ha corrido
+allí.
