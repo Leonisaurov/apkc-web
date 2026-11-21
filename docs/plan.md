@@ -44,9 +44,10 @@ funciona del lado cliente y está documentado, pero no es el objetivo.
 | 4.1 etapas como interfaz | **logrado por otro camino**: no hay interfaz con dos implementaciones, hay banderas (`--linker go`, `--compiler go`) que eligen el módulo de Go en vez del proceso, y `sinProcesos()` se salta el sondeo del SDK. El `os/exec` de siempre sigue ahí para el camino nativo, que es el que funciona con SDK completo | `docs/evidencia.md` §38, §44, §45 |
 | 4.2 hospedador de navegador | **hecha**: OPFS + worker + chromium, conducido y verificado por fuera (`docs/evidencia.md` §11, 16 comprobaciones) | `studio/prueba-pestana.js` |
 | 4.3 la página | **hecha**: el editor crea, **compila** (`build --linker go --compiler go`, sin procesos), dexa, firma y descarga; sin conexión y sin CDN | `docs/evidencia.md` §44 y §45 |
-| 4.4 empaque y tamaño | medida: `apkc.wasm` 9,46 MB y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 |
+| 4.4 empaque y tamaño | medida: `apkc.wasm` **12,88 MB** hoy (9,46 MB en la medición original del §45) y el `android.jar` entra por el propio origen (**26361808 bytes**, una vez, guardado en OPFS) | `docs/evidencia.md` §45 y §155 |
 | 5 cerrar el subconjunto (Java y recursos) | **cerrada con las fronteras que se enumeran al final**: el núcleo Java y los recursos de la app de cierre están cerrados, y la firma de release ya entra por la pestaña; quedan fronteras menores de recursos (`nodpi`/`tvdpi`, `sw600dp`, `layout-v1`, valores compuestos de `protectionLevel`) y un `try` interior con `catch` que cruce una salida. **Hechos 5.24 a 5.27**, el `invokestatic` sin argumentos, **5.10 (`while`, `for`, `do-while`, `break`/`continue`, §63, §69 y §70)**, **5.12 (`switch` y la caída al siguiente brazo, §64 y §129)**, **5.23 (`StackMapTable`, §65)**, **5.11 (arreglos, `main(String[])`, `new T[] {…}` y los arreglos anchos, §66, §73, §84 y §85)**, **5.1 (`++`/`--` y `+=`/`-=`, §67 y §68)**, **5.9 (`try`/`catch`, `throw`, los dos `catch`, el `finally`, el multi-catch y el `continue` que sale, §71, §75 y §132)**, **5.5 (`private`/`protected` y `access$…`, §72)**, **5.8 entera (§74, §77, §80-§85 y §130)**, **5.4 (`/from16` y `invoke-*/range`, §86 y §90)**, **5.2 (`char`, sus escapes, `caload`/`castore`, `i2c`, `aget-char`/`aput-char` y `sget-char`/`sput-char`, §87)**, **5.3 (`X.class`, `const-class` 0x1c y `==` entre referencias con `if_acmp*`, §89)** y **5.13 (`instanceof T[]` y la forma negada, §131 y §134)**, **5.7 (constructores propios, `super`/`this` y los dos `code_item` de una sobrecarga, §91)** y **5.6 (`throws`, interfaces propias, abstractos e `invokeinterface`, §92)**, **5.16 (PNG en `drawable`/`mipmap` y `roundIcon`, §93)** y **5.17 (`values-xx`, `layout-land` y `drawable-hdpi`, §94 y §103)**; están cerrados el control de flujo, los números, el `char`, los literales de clase, las llamadas de seis palabras, los constructores, `throws`/interfaces, el icono y los dos idiomas, 5.18 completa (§96, §105, §106 y §135), 5.19 completa (§97 y §102), 5.20 completa para API 27-35 (§98), 5.14 completa (§99 y §100), 5.15 (`Signature`, §101) y 5.17 completa (§94, §103 y §107). **5.21 completa, 5.28 hecha, 5.29 hecha, 5.30 hecha, 5.31 hecha, 5.32 hecha, 5.33 hecha, 5.34 hecha y 5.35 hecha** (§104, §108, §117, §118, §119, §121, §123, §124, §126 y §128: v3 escrito y verificado; la pestaña acepta un keystore de release con contraseña, alias y certificado; un `.aab` se firma como JAR v1 y se ensambla en Go sin `bundletool`; la v4 se escribe y se verifica; la rotación v3.1 se escribe con linaje y v4 de dos firmantes; las claves EC P-256/P-384 firman y verifican; el `minSdk` no cambia el firmante v3 sin rotación; la v1 SHA-1 está escrita para `minSdk < 18`) y **5.22 completa** (§109-§116: lambdas estáticas con o sin capturas, `this`, `this::m`, `Tipo::m`, el SAM genérico, el borrado a una cota, `altMetafactory` serializable y con marcadores y la concatenación dinámica de JDK 9, desugrados y ejecutados en ART; los puentes de `altMetafactory` y las constantes dinámicas se rechazan por nombre), §104, §108 y §109-§136. La **app de cierre** (bucle, `switch`, `try`/`catch`, icono y dos idiomas) ya compila y firma con el camino todo-Go (§95, 9861 bytes, `apksigner` y `zipalign` correctos); **instalada y arrancada** en la pantalla secundaria con `virtual_screen` (§136): etiqueta «Cierre ES» y `total 203` en pantalla, tras corregir el `invokevirtual` de un `static` y la firma del constructor | la sección «Fase 5» de este plan |
 | el apk en un teléfono real (hecho 2 del objetivo) | **HECHO, y sobre el apk que escribe chromium** —sin `adb`, con `rish` (el shell de Shizuku) en Android 15—: `pm install -r` `Success`; `am start -W -S` `Status: ok`, `LaunchState: COLD`, `TotalTime: 316`; dos `input tap` sobre `com.myapp:id/pulsar` dejan `content-desc="pulsos 2"` y cuatro `"muchos 4"`; `Toast` en `SurfaceFlinger` y `FATAL EXCEPTION` 0 veces; `pm compile -f` `Success` con `[status=verify]`. El camino hasta ahí destapó cuatro defectos de layout que `d8` no veía (§55) | — |
+| 6 sitio publicado en Surge | **hecha**: `sitio/` se genera con `tools/entorno.sh sitio`; el service worker pone COOP/COEP donde el host no los da y la página se recarga una vez; `surge . publish` dejó el sitio `live` en **`https://apkc-studio.surge.sh/`** y la prueba sobre el host real dio **9/9**: compila, firma, `apksigner` verifica v1/v2/v3 y hay cero peticiones fuera del origen | `docs/evidencia.md` §153, §154 y §155 |
 
 ---
 
@@ -295,12 +296,12 @@ JDK 21 del teléfono, método por método e instrucción por instrucción.
   nuestro con `rc 0`; veinticinco de treinta y nueve cuerpos salen iguales a `d8` incluso con los ids, y los
   doce restantes difieren por reescritura de la cadena de `StringBuilder`, plegado de `<clinit>`, `/lit8`
   contra operando constante, `if-nez` en vez de comparar contra cero, y tres fusiones de cola.
-- **1G.8 PENDIENTE, con su motivo**: arreglos y bucles (la rama hacia atrás rechaza hoy el bucle porque el
-  punto de fusión de registros no está medido), `switch`, `try`/`catch`, las cadenas que se concatenan con
-  una llamada cuyo tipo no se puede estimar sin emitirla, y **los campos privados del exterior leídos desde
-  una anónima**: javac los resuelve con dos métodos sintéticos del exterior (`access$000` para leer,
-  `access$002` para escribir, que además devuelve el valor) y ni el número ni el orden están medidos (§54).
-  Hasta entonces el portero los rechaza por nombre; no se abre ninguna de estas puertas "de paso".
+- **1G.8 HECHA en la Fase 5** (actualizado el 2026-11-21; aquí estaba escrita como pendiente): los
+  arreglos y los bucles que faltaban se cerraron en §63, §66, §69, §70 y §73, el `switch` en §64 y
+  §129, el `try`/`catch` en §71, §75 y §76, la concatenación tipada en §53 y los `access$NNN` para
+  campos privados del exterior en §72. El portero sigue rechazando por nombre lo que no tiene
+  sonda (anónima dentro de anónima, `>>=`/`<<=`/`&=`, `arraycopy`, dos dimensiones), que es la
+  frontera honesta y no un olvido de esta fila.
 - **1G.9 HECHA — la app que hace algo al pulsar** (§54): anónima sobre `View$OnClickListener`, escritura del
   campo del exterior por la captura, `if` y concatenación dentro del mismo `onClick`. Cinco clases con
   `javap` idéntico (49 y 69 líneas las dos del contador), `apkc dex` igual byte a byte sobre las dos
@@ -638,21 +639,13 @@ la pantalla principal.
 - **Lo primero de todo fue el ejecutor** (§61): antes de tocar un ítem, `banco/banco.sh` corre el fuente
   por los cuatro caminos. En una tarde destapó cinco cosas que ningún oráculo de bytes veía (5.23 a
   5.27 y el `invokestatic` sin argumentos).
-- **Lo que sigue**: la firma de release entra por la pestaña (5.21 y 5.28, §117), un `.aab` se
-  firma como JAR (5.29, §118), la v4 se escribe y verifica (5.30, §119), la rotación v3.1 está
-  escrita con linaje y v4 de dos firmantes (5.31, §121), las claves EC P-256/P-384 firman y
-  verifican (5.32, §123), el `minSdk` del proyecto no cambia el firmante v3 de un apk sin
-  rotación (5.35, §124), la v1 SHA-1 para `minSdk < 18` está escrita y verificada (5.34,
-  §126) y el `.aab` se ensambla y firma en Go sin `bundletool` (5.33, §128).
-  En Java, las dos piezas de 5.8, las fronteras de 5.9, la caída de 5.12 y lo que 5.13 deja; en
-  recursos, más densidades/orientaciones, `enum`/`flags` y atributos de `<permission>`. Al final, la
-  instalación en el teléfono. Los puentes de `altMetafactory` siguen fuera porque javac los deja en
-  cero; las lambdas, referencias, SAM, `altMetafactory` y concatenación ya se desugran y corren
-  (§110-§116).
-  Después, el `continue` que sale de un `try` con `finally` y los dos `finally` anidados con salida
-  pendiente (5.9, §76). El punto flotante del dex, las ramas anchas, el `char`, los literales de clase,
-  `/range`, los constructores, `throws`/interfaces, el icono y `values-es` ya están cerrados
-  (§80-§94).
+- **Lo que seguía aquí ya no sigue** (actualizado el 2026-11-21): la firma de release, el `.aab`,
+  la v4, la rotación v3.1, las claves EC, la v1 SHA-1 y el `minSdk` están en las filas 5.21 y
+  5.28-5.35 (§104, §117-§128); las dos piezas de 5.8, las fronteras de 5.9, la caída de 5.12 y
+  las formas de 5.13 están en §80-§94, §129, §131-§134 y §139; más densidades, `enum`/`flags` y
+  atributos de `<permission>` en §135, §137 y §138; la instalación en el teléfono en §55 y §136.
+  Lo único abierto son las fronteras que el inventario de la Fase 5 sigue marcando y, fuera del
+  subconjunto, la Fase 6 (publicación), cerrada en §155.
 
 ### Hitos con prueba en el teléfono
 
@@ -692,6 +685,31 @@ la pantalla principal.
   «Riesgos transversales»).
 
 ---
+
+## Fase 6 — publicar el sitio en Surge (hecha el 2026-11-21)
+
+**Criterio**: el sitio tiene que estar accesible en un host y compilar en un navegador que no es
+la máquina que lo construyó; un zip en un artifacts no cuenta (regla 10 de `AGENTS.md`).
+
+- **6.1 COOP/COEP sin servidor**: Surge no fija cabeceras, así que `studio/sw.js` las añade a
+  todas las respuestas del mismo origen y `index.html` recarga una vez si no hay
+  `crossOriginIsolated`. Sin terceros y sin una petición fuera del origen. Medido en §153.
+- **6.2 Directorio para subir**: `tools/entorno.sh sitio` deja `sitio/` con solo el runtime,
+  `apkc.wasm`, `wasm_exec.js`, `sw.js` versionado, `CNAME` y `404.html`; el zip es el respaldo.
+  Medido en §155.
+- **6.3 Publicar**: desde `sitio/`, `surge . publish` (esta CLI no acepta `surge .` solo). El
+  dominio es `https://apkc-studio.surge.sh/` y el Release no se usa: publicación manual por
+  decisión del usuario.
+- **6.4 Verificar**: sobre el host real, `prueba-sitio.js` con `SITIO_URL` dio 9/9: recarga
+  única, SW controlador, jar por selector de fichero, compilación y firma en la pestaña,
+  `apksigner` v1/v2/v3 y cero peticiones fuera del origen (§155). `surge ... debug status`
+  dice `live` y el hash del wasm servido coincide con el local.
+- **6.5 Cierre**: la fila de estado solo se marcó «hecha» con esas cuatro pruebas en verde; el
+  plan de producto sigue sin job de CI que publique (el usuario eligió publicación manual).
+
+**Mata la fase**: si el SW no consiguiera `crossOriginIsolated` en el host (otro navegador o un
+cambio de Surge), la alternativa escrita es un dominio propio detrás de un CDN que añada
+COOP/COEP en el borde; la página no cambia, solo deja de necesitar la recarga.
 
 ## Riesgos transversales
 

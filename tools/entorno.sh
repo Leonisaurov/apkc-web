@@ -1,9 +1,10 @@
-#!/data/data/com.termux/files/usr/bin/sh
+#!/bin/sh
 # entorno.sh — un solo sitio para el entorno de apkc-web.
 #
 # El shell de este aparato arranca con HOME=/home/leonisauro, que no tiene el repo ni el SDK, y con
 # PREFIX vacío. Sin esto, `studio/e2e.sh` busca `../apkc` y `~/Develop/Go/apkc-harness/zipcheck.py`
-# en sitios que no existen y falla con ENOENT aunque el código esté bien.
+# en sitios que no existen y falla con ENOENT aunque el código esté bien. En un escritorio tampoco
+# existe /data/data/com.termux/files/usr: ahí los temporales van a $XDG_CACHE_HOME/apkc-web.
 #
 # Uso:
 #   tools/entorno.sh test              # suite nativa de apkc/
@@ -22,9 +23,16 @@ RAIZ=$(CDPATH= cd -P -- "$(dirname -- "$0")/.." && pwd)
 
 # HOME del repo, no el del shell: apkc-web vive bajo <home>/Develop/Go/apkc-web.
 HOME=${HOME_APKC_WEB:-$(CDPATH= cd -P -- "$RAIZ/../../.." && pwd)}
-PREFIX=${PREFIX:-/data/data/com.termux/files/usr}
+if [ -z "${PREFIX:-}" ] || [ ! -d "${PREFIX:-/no-existe}" ]; then
+  if [ -d /data/data/com.termux/files/usr ]; then
+    PREFIX=/data/data/com.termux/files/usr
+  else
+    PREFIX=${XDG_CACHE_HOME:-$HOME/.cache}/apkc-web
+  fi
+fi
 ANDROID_HOME=${ANDROID_HOME:-$HOME/Android}
 TMP=${TMP:-$PREFIX/tmp}
+mkdir -p "$TMP"
 export HOME PREFIX ANDROID_HOME TMP
 
 # build-tools más alta que exista; puede no haber ninguna y entonces se deja el PATH como estaba.
@@ -32,7 +40,7 @@ BUILD_TOOLS=
 if [ -d "$ANDROID_HOME/build-tools" ]; then
   BUILD_TOOLS=$(ls -d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -1 || true)
 fi
-JDK=$PREFIX/lib/jvm/java-21-openjdk/bin
+JDK=${JAVA_HOME:-$PREFIX/lib/jvm/java-21-openjdk}/bin
 # /usr/sbin delante a proposito: el `sudo` de Termux ($PREFIX/bin/sudo) no encuentra un `su` que
 # soporte -c, y el del sistema sí. Es el que `banco/banco.sh` usa para app_process64 y dexdump.
 PATH_EXTRA=/usr/sbin:$PREFIX/bin
@@ -78,10 +86,9 @@ verifica_entorno() {
   if j=$(jar_del_sdk 34); then printf 'android.jar=%s\n' "$j"; else printf 'android.jar=<falta; tools/entorno.sh jar>\n'; fi
   printf 'apkc=%s\n' "${APKC:-$TMP/apkc-gate}"
   printf 'apkc-wasm=%s\n' "${APKC_WASM:-$TMP/apkc-wasm.wasm}"
-  for f in "$HOME/Android/platforms/android-34/android.jar" \
-           "$HOME/Develop/Go/apkc-harness/zipcheck.py"; do
-    [ -e "$f" ] && printf 'ok %s\n' "$f" || printf 'FALTA %s\n' "$f"
-  done
+  [ -d "$ANDROID_HOME/build-tools/34.0.0" ] && printf 'build-tools 34.0.0=%s\n' "$ANDROID_HOME/build-tools/34.0.0" || printf 'FALTA build-tools 34.0.0 en %s\n' "$ANDROID_HOME"
+  zipcheck=${APKC_HARNESS:-$HOME/Develop/Go/apkc-harness}/zipcheck.py
+  [ -f "$zipcheck" ] && printf 'ok %s\n' "$zipcheck" || printf 'zipcheck=%s (opcional: el gate lo omite con aviso)\n' "$zipcheck"
 }
 
 tarea=${1:-doctor}
@@ -97,7 +104,24 @@ case "$tarea" in
     ;;
   gate)
     construye_binarios
-    ( cd "$RAIZ/studio" && APKC=${APKC:-$TMP/apkc-gate} APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm} sh e2e.sh )
+    # SDK espejo: apkc toma la build-tools mas alta, asi que sin esto un escritorio con 36.0.0
+    # pidria android-36 aunque el proyecto mida 34 (tools/sdk34.sh).
+    SDK34=$(sh "$RAIZ/tools/sdk34.sh" "$TMP/apkc-sdk34")
+    JAVA17=""
+    for j in "$HOME/opt/jdk17" /usr/lib/jvm/java-17-openjdk-amd64 /usr/lib/jvm/java-17-openjdk; do
+      [ -x "$j/bin/javac" ] && { JAVA17=$j; break; }
+    done
+    (
+      cd "$RAIZ/studio"
+      export ANDROID_HOME="$SDK34"
+      if [ -n "$JAVA17" ]; then export JAVA_HOME="$JAVA17"; fi
+      export APKC=${APKC:-$TMP/apkc-gate} APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm}
+      sh e2e.sh
+    )
+    ;;
+  sitio)
+    ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/apkc-wasm.wasm" . )
+    APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm} sh "$RAIZ/tools/sitio.sh" "${1:-$RAIZ/sitio}"
     ;;
   banco)
     ( cd "$RAIZ" && APKC=${APKC:-$TMP/apkc-gate} sh banco/banco.sh "$@" )

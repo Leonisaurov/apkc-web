@@ -13,13 +13,15 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
 | `apps.md` | informe de ejecutar apps Android desde Termux/chroot: qué falla, por qué y el `am` con `BOOTCLASSPATH` | leerlo y reproducir sus comandos |
-| `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco`, `jar`, `doctor` y `env` | `tools/entorno.sh doctor` |
+| `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco`, `jar`, `sitio`, `doctor` y `env` | `tools/entorno.sh doctor` |
+| `tools/sdk34.sh` | SDK espejo con solo `build-tools/34.0.0` y `android-34`: `apkc` elige la build-tools más alta y sin esto un escritorio con 36.0.0 pediría android-36 | `sh tools/sdk34.sh "$TMP/apkc-sdk34"` |
 | `tools/progreso.py` | genera el JSON del panel de progreso (ítems, estados y el trabajo en curso) desde el inventario y las fronteras de `docs/plan.md` y, si existe, desde la tabla de estado del plan de producto; lo consume el panel de `virtual_screen` | `python3 tools/progreso.py "$PREFIX/tmp/tareas.json"` |
-| `tools/sitio.sh` | empaqueta el sitio publicado (`studio/` versionado + `apkc.wasm` + `wasm_exec.js`) y comprueba COOP/COEP; no mete jar, keystores ni OPFS | `APKC_WASM=… sh tools/sitio.sh` |
+| `tools/sitio.sh` | empaqueta en `sitio/` el sitio publicado (`studio/` versionado + `apkc.wasm` + `wasm_exec.js`), versiona el SW, conserva `CNAME` y comprueba COOP/COEP; no mete jar, keystores ni OPFS | `tools/entorno.sh sitio` |
 | `tools/progreso.html` | la página del panel: pendientes primero, hechos plegados y una caja «Ahora mismo» con el trabajo en curso, remarcada | `virtual_screen page show --html tools/progreso.html` (el `tareas.json` va en `~/.cache/pantalla-secundaria/www/`) |
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
-| `studio/` | apkc-studio: genera proyectos apkc, los edita y **hace correr `apkc.wasm` en la pestaña** (OPFS + worker); `_headers` da COOP/COEP al publicar | `cd studio && APKC=<binario> sh e2e.sh`; desde la raíz, `APKC_WASM=… node studio/prueba-pestana.js` |
+| `studio/` | apkc-studio: genera proyectos apkc, los edita y **hace correr `apkc.wasm` en la pestaña** (OPFS + worker); `_headers` es para Netlify/Cloudflare y **`sw.js` pone COOP/COEP en hosts que no los fijan**, con una recarga única | `cd studio && APKC=<binario> sh e2e.sh`; `APKC_WASM=… node studio/prueba-pestana.js`; sobre el host real, `SITIO_URL=… node studio/prueba-sitio.js` |
+| `sitio/` | el paquete estático que se sube a **`https://apkc-studio.surge.sh/`**; se construye, no se versiona, y lleva `CNAME` | `tools/entorno.sh sitio && cd sitio && surge . publish` |
 | `studio/EDITOR.md` | el editor de la pestaña: estructura, ids, atajos, pruebas y límites | leerlo |
 | `studio/AGENTS.md` | lo que un agente necesita al tocar `studio/`: comandos, contratos y trampas de OPFS/wasm | leerlo antes de cambiar la página |
 | `banco/` | **el banco de ejecución**: dos fuentes de prueba y un guion que corre el mismo programa por los cinco caminos (JVM, `d8` sobre javac, `d8` sobre lo que emitimos, **nuestro dex en `app_process`** y, desde el §66, **nuestro dex con nuestro `main`**, sin javac ni d8) — sin instalar nada, sin pantalla | `sh banco/banco.sh` (necesita `APKC` compilado, `ANDROID_JAR`, `build-tools` y `rish` o `/usr/sbin/sudo`) |
@@ -149,6 +151,12 @@ lo cachea (`android-sdk-34.0.0-v1`). El pesado fija **JDK 17**: el `d8` de build
 Google rechaza los `.class` de javac 21 con `Unsupported class file major version 65`; el `d8` de
 34.9.0 del teléfono sí los lee. El job `publicar` tiene `needs: pesado`, así que un gate rojo no
 publica. §152.
+
+En un escritorio sin Termux los guiones usan `#!/bin/sh` y `$XDG_CACHE_HOME/apkc-web` como
+temporales; `tools/entorno.sh gate` levanta el SDK espejo de `tools/sdk34.sh` y usa JDK 17. §154.
+La publicación es **manual**: `tools/entorno.sh sitio` y `cd sitio && surge . publish`, sobre
+`apkc-studio.surge.sh`. Surge no respeta `_headers`: el SW de `studio/` pone COOP/COEP y la página
+se recarga una vez (§153); verificar siempre con `SITIO_URL=… node studio/prueba-sitio.js` (§155).
 
 ## Lo que ya está medido, para no reabrirlo
 

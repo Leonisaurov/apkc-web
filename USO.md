@@ -166,15 +166,38 @@ No hay QR: el `blob:` de la descarga vive en el navegador y no es accesible desd
 la instalación dice `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, la app instalada está firmada con otra
 clave: desinstala la anterior o vuelve a la clave con la que se instaló.
 
-## 6.6 Empaquetar el sitio para publicar
+## 6.6 Empaquetar y publicar en Surge
 
 ```sh
-sh -c 'APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm sh tools/sitio.sh $PREFIX/tmp/apkc-sitio'
+sh tools/entorno.sh sitio          # deja sitio/ y sitio.zip (con CNAME y sw.js versionado)
+cd sitio
+surge . publish                    # la CLI 0.52.4 no acepta `surge .` solo: dice "nothing to do"
 ```
 
-Deja `apkc-sitio/` y `apkc-sitio.zip` con los ficheros versionados de `studio/`, `apkc.wasm` y
-`wasm_exec.js`, y falla si `_headers` no declara COOP/COEP. No incluye el `android.jar`, keystores
-ni OPFS.
+`tools/sitio.sh` toma los ficheros versionados de `studio/`, `apkc.wasm` y `wasm_exec.js`, quita
+las pruebas y el servidor de desarrollo, inyecta el hash de versión en el service worker y falla
+si falta COOP/COEP o queda un marcador sin sustituir. No incluye el `android.jar`, keystores ni
+OPFS. El dominio se guarda en `.surge-domain` y se escribe como `sitio/CNAME`, así que basta
+`surge . publish` en cada reconstrucción. Para volver a una revisión anterior:
+`surge apkc-studio.surge.sh rollback`.
+
+**Surge no fija cabeceras HTTP**, así que no sirve con `_headers` (eso es para Netlify/Cloudflare).
+El service worker de la propia página pone COOP/COEP y `index.html` se recarga **una vez** la
+primera vez que abres el sitio: eso es esperado, no un error. Si el navegador no lo consigue, la
+página lo dice en un aviso. El `android.jar` no se descarga del host: en la pestaña **Compilar**
+se elige del disco o se baja del paquete oficial de Google (una navegación de la persona, no una
+petición de la página).
+
+Para repetir la verificación sobre el sitio publicado, con Chromium y las build-tools a mano:
+
+```sh
+SITIO_URL=https://apkc-studio.surge.sh/ PREFIX=$PREFIX \
+  CHROME_BIN=chromium ANDROID_JAR=$HOME/Android/platforms/android-34/android.jar \
+  APKSIGNER=$ANDROID_HOME/build-tools/34.0.0/apksigner node studio/prueba-sitio.js
+```
+
+Da 9 comprobaciones y deja la apk compilada en `$PREFIX/tmp/sitio-publicado.apk`. Medido en
+`docs/evidencia.md` §155.
 
 ## 7. Errores típicos
 

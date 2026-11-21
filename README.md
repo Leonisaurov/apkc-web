@@ -8,24 +8,23 @@ que funciona hoy.
 
 ## Estado, en una línea
 
-La parte de apkc que **no lanza programas** (escritor de zip con alineado, firma v1+v2, lectura de
-keystores PKCS#12 y JKS, generación de proyecto) **ya corre en un hospedador con forma de
-navegador**: 98/98 tests, `apkc create` completo y **`apkc sign` firmando un apk de verdad en 1,20 s
-dentro de wasm**, verificado después por `apksigner`, `zipalign` y `jarsigner`
-([docs/evidencia.md](docs/evidencia.md) §7 y §8, medido el 2026-10-26).
+El objetivo está cumplido: **https://apkc-studio.surge.sh/** abre en el navegador, crea un proyecto,
+compila los recursos y el Java en Go, dexа, empaqueta, firma y verifica **dentro de la pestaña**, sin
+servidor, sin SDK en la máquina del visitante, sin red y sin un solo proceso. El sitio se construye
+con `sh tools/entorno.sh sitio` y se publica a mano con `cd sitio && surge . publish`. Medido sobre
+el host real: 9/9 comprobaciones, apk verificada por `apksigner` y cero peticiones fuera del origen
+([docs/evidencia.md](docs/evidencia.md) §155).
 
-Y **en chromium, con el proyecto en OPFS**: [`studio/`](studio/) tiene un hospedador de verdad
-(worker + servidor sin dependencias) y un editor de fuente. Hoy se puede, en la pestaña y sin subir
-nada a ningún sitio: crear el proyecto, editarlo y conservarlo entre sesiones, y firmar una apk que
-los oráculos externos aceptan. Lo que **no** se puede aún es `build`
-([docs/evidencia.md](docs/evidencia.md) §11).
+Lo que lo hizo posible es que **`aapt2`, `javac` y `d8` dejaron de ser procesos**: hay un enlazador
+de recursos, un emisor de `.class` y un dexer escritos en Go dentro del fork [`apkc/`](apkc/), con
+el subconjunto medido y lo no medido rechazado por nombre. El muro original (`js/wasm` no tiene
+`fork/exec`) y la decisión de 2026-10-27 (sin conexión y sin runtimes de terceros) siguen escritos
+en `docs/plan.md`. El dex del proyecto del studio son 2844 bytes y 217 objetos (§13); hoy el binario
+es 12,88 MB (§155).
 
-Lo que falta no es un flag: son **`aapt2`, `javac` y `d8`**, tres programas externos que `js/wasm` no
-puede arrancar porque no tiene `fork/exec`. **Desde 2026-10-27 la restricción dominante es otra: todo
-tiene que pasar en la pestaña, sin conexión y sin runtimes de terceros**, así que no se presta una JVM
-y hay que emitir en Go el bytecode, el `classes.dex` y los recursos. Se midió el objetivo: el proyecto
-del studio son **2844 bytes de dex y 217 objetos** ([docs/evidencia.md](docs/evidencia.md) §13), y la
-página ya cumple lo de sin conexión: **ninguna petición fuera de su origen** (§15).
+El oráculo final no es el propio editor: el apk que sale de chromium se instala y arranca en un
+teléfono real (§55 y §136), el gate completo pasa también en un runner Linux (§152) y en este
+escritorio (§154), y `apksigner`, `zipalign`, `aapt2 dump`, `javap`, `d8` y ART verifican las salidas.
 
 ## Repositorios
 

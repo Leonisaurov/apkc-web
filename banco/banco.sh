@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/sh
+#!/bin/sh
 # Banco de ejecución del fork. No es un test de bytes ni una comparación de `javap`: **ejecuta** lo
 # que este fork compila y lo compara con lo que ejecuta la JVM y con lo que ejecuta `d8` sobre el
 # mismo fuente. Sirve para adquirir instrucciones sin montar una app: el `.dex` va a

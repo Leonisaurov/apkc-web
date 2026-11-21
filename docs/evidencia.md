@@ -7552,3 +7552,93 @@ que pide E4 para diagnosticar un rojo.
 El job `publicar` quedó **skipped** en los dos runs porque no había tag; su condición es
 `needs: pesado` y `if: startsWith(github.ref, 'refs/tags/')`, de modo que la release no puede
 adelantar al gate.
+
+## 153. Surge no fija cabeceras: las pone el service worker y la página se recarga una vez
+
+Medido el 2026-11-21. La documentación de Surge (`surge.sh/docs/platform/` y su guía de migración
+desde Netlify) no ofrece un fichero de cabeceras: los ficheros de configuración son `CNAME`,
+`.surgeignore`, `200.html`, `404.html`, `ROUTER`, `AUTH` y `CORS`, y «Custom headers» se manda a
+*Lucid Caching*. `CORS` solo escribe `Access-Control-Allow-Origin`. Por tanto el `_headers` del
+paquete es inerte allí, y sin COOP/COEP `studio/hospedador.js` lanza `la página no es
+crossOriginIsolated`: no hay `createSyncAccessHandle` y el `fs` que exige Go no arranca.
+
+```sh
+curl -sI https://apkc-studio.surge.sh/ | grep -i cross-origin     # no devuelve nada
+grep -n 'Cross-Origin' studio/sw.js                                # las pone el SW, no el host
+```
+
+La solución vive en el propio origen y no añade dependencia: `studio/sw.js` envuelve **todas** las
+respuestas del mismo origen (navegación, módulos y las que salen de `Cache`) con
+`Cross-Origin-Opener-Policy: same-origin` y `Cross-Origin-Embedder-Policy: require-corp`;
+`index.html`, antes de los módulos, registra ese SW con `updateViaCache: "none"` y, si no hay
+aislamiento, espera `navigator.serviceWorker.ready` y recarga una sola vez (`sessionStorage`
+impide el bucle). La versión del SW se inyecta en el empaquetado desde el hash del sitio.
+
+```sh
+SITIO_DIR=sitio SIN_CABECERAS=1 PREFIX=$HOME/.cache/apkc-web CHROME_BIN=/usr/bin/chromium \
+  APKC_WASM=$PWD/sitio/apkc.wasm APK_EJEMPLO=<fixture> KS_EJEMPLO=<keystore> \
+  node studio/prueba-pestana.js
+SITIO_DIR=sitio PREFIX=$HOME/.cache/apkc-web CHROME_BIN=/usr/bin/chromium \
+  ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  APKSIGNER=$HOME/.cache/apkc-web/tmp/apkc-sdk34/build-tools/34.0.0/apksigner \
+  node studio/prueba-sitio.js
+```
+
+**Resultado**: `84 comprobaciones bien, 0 mal` con un servidor que no envía COOP/COEP pero sí
+tiene las rutas de prueba, y `8 comprobaciones bien, 0 mal` contra el paquete empaquetado servido
+por `studio/servidor-estatico.js`, sin cabeceras y sin endpoints de desarrollo. En las dos el
+estado es `{"aislada":true,"controlado":true,"recarga":"1"}` y la apk resultante (9217 bytes)
+verifica v1, v2 y v3 con `apksigner`. La recarga es automática y no hay peticiones fuera del
+origen. Nota de CLI: `surge .` con esta versión (0.52.4) responde `surge: nothing to do - try
+'surge . publish'`; con `CNAME` en el directorio basta `surge . publish`.
+
+## 154. El gate completo en un escritorio Linux, sin Termux
+
+Medido el 2026-11-21 en Arch x86_64. Los guiones tenían shebang y `PREFIX`/`TMP` de Termux:
+ahora `#!/bin/sh`, y si `/data/data/com.termux/files/usr` no existe se usa
+`$XDG_CACHE_HOME/apkc-web`. `apkc` toma la build-tools **más alta** (§ AGENTS) y de ahí deriva la
+platform: con 36.0.0 instalada pedía android-36, así que `tools/sdk34.sh` expone un SDK espejo
+con solo `build-tools/34.0.0` y `platforms/android-34` mediante enlaces, y el gate lo usa. El
+camino nativo usa **JDK 17** (`~/opt/jdk17`), por el mismo motivo del §152.
+
+```sh
+sh tools/entorno.sh doctor
+sh tools/entorno.sh test
+sh tools/entorno.sh wasm
+sh tools/entorno.sh gate
+```
+
+**Resultado**: `doctor` sin `FALTA` (solo avisa de que `zipcheck.py` es opcional); `test rc=0`
+(`ok github.com/ajinasokan/apkc 1.987s`); `wasm rc=0` con `PASS`; `gate rc=0` con
+`crear: todo en orden (35 comprobaciones)`, `pestaña: 83 comprobaciones` y `e2e: todo en orden`.
+El oráculo `zipcheck.py` se omite con aviso, igual que en el CI del §152; los demás (`apksigner`,
+`zipalign`, `aapt2 dump`, `d8` y el navegador) corren.
+
+## 155. Publicado en apkc-studio.surge.sh y verificado desde el host
+
+Medido el 2026-11-21. El directorio `sitio/` lo genera `tools/entorno.sh sitio` (27 ficheros,
+3,55 MB de zip, versión `97d25afb595e`) y se sube desde dentro con `surge . publish`.
+
+```sh
+cd sitio && surge . publish
+curl -sI https://apkc-studio.surge.sh/ | grep -iE 'HTTP/|content-type'
+curl -sI https://apkc-studio.surge.sh/apkc.wasm | grep -i content-type
+curl -s https://apkc-studio.surge.sh/apkc.wasm | sha256sum
+sha256sum sitio/apkc.wasm
+surge apkc-studio.surge.sh debug status
+SITIO_URL=https://apkc-studio.surge.sh/ PREFIX=$HOME/.cache/apkc-web CHROME_BIN=/usr/bin/chromium \
+  ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  APKSIGNER=$HOME/.cache/apkc-web/tmp/apkc-sdk34/build-tools/34.0.0/apksigner \
+  node studio/prueba-sitio.js
+```
+
+**Resultado**: `Success! - Published to apkc-studio.surge.sh`; `HTTP/2 200` y
+`content-type: text/html; charset=UTF-8` en la raíz, `application/wasm` en el binario; los dos
+`sha256` coinciden (`4533c3e5b073d57a878bcdf88fd4d343d3c39cc3e5920a37709ee7c3db443125`); el
+dominio dice `live`; `/android-jar-info` devuelve 404, así que no hay endpoints de desarrollo en
+el host. La prueba en el sitio real da **`9 comprobaciones bien, 0 mal`**: recarga única, SW
+controlador, `crossOriginIsolated`, jar de 26361808 bytes entrado por el selector de fichero,
+compilación y firma enteras en la pestaña, apk de 9225 bytes verificada por `apksigner` con
+v1/v2/v3, y **36 peticiones, 0 fuera del origen**. Es el hecho que cierra la publicación: el sitio
+no solo está empaquetado, está accesible y compila en un navegador ajeno a la máquina que lo
+construyó.

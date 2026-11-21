@@ -12,6 +12,12 @@ apkc/apkc.exe
 shim/wasm_exec.js
 studio/wasm_exec.js
 
+# el sitio que se sube a Surge se construye, no se versiona (el wasm tampoco)
+sitio/
+sitio.zip
+.surge-domain
+studio-test.zip
+
 node_modules/
 .DS_Store
 *.log

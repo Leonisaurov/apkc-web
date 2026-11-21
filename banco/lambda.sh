@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/sh
+#!/bin/sh
 # Banco de las lambdas desugradas y de la concatenación (5.22, §110-§116). `javac --release 8`
 # deja el `invokedynamic` de lambda y el `lambda$…`; este fork lo convierte en una clase sintética
 # con sus campos de captura. `javac --release 11` deja `makeConcatWithConstants`, que baja a
