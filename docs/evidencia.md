@@ -7836,3 +7836,25 @@ curl -sI https://apkc-studio.surge.sh/ | head -1
 el host real y apk de 9221 bytes verificada por `apksigner`. La versión del SW pasó de
 `97d25afb595e` (hash de tres ficheros) a `efffbf3972ee` (hash de todo el paquete). El sitio sigue
 `HTTP/2 200`.
+
+## 164. `apkc verify` comprueba v3 y v3.1
+
+Medido el 2026-11-21. Cierra la asimetría que quedaba en la firma: `verify` nombraba los pares v3 y
+v3.1 pero no los comprobaba. El firmante de v3 cambia el de v2 en dos bytes medidos: `minSdk` y
+`maxSdk` van crudos fuera de `signedData`, y dentro de `signedData` va una lista de atributos
+adicional detrás de los certificados (en la rotación, `proof-of-rotation`). La firma cubre los
+bytes íntegros de `signedData`, no solo sus dos primeros elementos.
+
+```sh
+cd apkc && go test -run 'TestVerificarV3' -count=1 -v .
+/tmp/opencode/apkc-gate verify <apk-con-v3>
+/tmp/opencode/apkc-gate verify <apk-con-rotacion-v3.1>
+$ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose --min-sdk-version 21 <apk-con-v3>
+```
+
+**Resultado**: los dos tests pasan: una apk firmada de verdad da `v1 ok`, `v2 ok`, `v3 ok` con un
+firmante, y un byte cambiado en `classes.dex` da `v3: mal — el digest v3 guardado no es el de este
+contenido`; `apksigner` dice `DOES NOT VERIFY` con el mismo `CHUNKED_SHA256 digest mismatch`. En una
+apk con rotación, `apkc verify` dice `v3 ok` y `v3.1 ok` y `apksigner` aprueba v1/v2/v3/v3.1.
+Frontera escrita: los atributos de rotación se leen pero no se validan contra el linaje, y la
+cadena de confianza sigue sin ancla, igual que en v1/v2.

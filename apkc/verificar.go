@@ -12,8 +12,10 @@ package main
 //
 // Lo que no está medido se rechaza con nombre, como en el resto del fork: se sabe leer una firma v1
 // con SHA-256, una v2 con RSASSA-PKCS1-v1_5/SHA-256 de un único firmante y el `.idsig` de la v4.
-// DSA, SHA-1, v3, varios firmantes o un certificado que no empareja con su clave pública se dicen y
-// no se aprueban. Tampoco se valida la cadena de confianza: el certificado de debug es auto-firmado
+// DSA, SHA-1, varios firmantes o un certificado que no empareja con su clave pública se dicen y
+// no se aprueban. v3 y v3.1 se comprueban con el mismo digest de los tres tramos del paquete y la
+// firma sobre signedData; los atributos de rotación se leen pero no se validan contra el linaje.
+// Tampoco se valida la cadena de confianza: el certificado de debug es auto-firmado
 // y no hay ancla que lo respalde, así que se informa de él (asunto, serie, caducidad) sin afirmar
 // que sea digno de confianza; `apksigner` hace exactamente lo mismo y lo llama "not trusted".
 
@@ -58,14 +60,19 @@ type verificacion struct {
 	entradasFirmas int
 	v1             bool
 	v2             bool
+	v3             bool
+	v31            bool
 	v4             bool
 	bundle         bool
 	v4Presente     bool
 	v1Motivos      []string
 	v2Motivos      []string
+	v3Motivos      []string
+	v31Motivos     []string
 	v4Motivos      []string
 	notas          []string
 	firmantes      int
+	firmantesV3    int
 	certificado    string
 	digestV2       []byte
 }
@@ -100,6 +107,16 @@ func verificar() {
 		} else {
 			LogE("verify", "v2 (APK Signature Scheme v2): mal —", strings.Join(v.v2Motivos, " — "))
 		}
+		if v.v3 {
+			LogI("verify", "v3 (APK Signature Scheme v3): ok —", v.firmantesV3, "firmante(s), digest y firma sobre los datos firmados verificados")
+		} else if len(v.v3Motivos) > 0 {
+			LogE("verify", "v3 (APK Signature Scheme v3): mal —", strings.Join(v.v3Motivos, " — "))
+		}
+		if v.v31 {
+			LogI("verify", "v3.1 (APK Signature Scheme v3.1): ok —", v.firmantesV3, "firmante(s), digest y firma verificados")
+		} else if len(v.v31Motivos) > 0 {
+			LogE("verify", "v3.1 (APK Signature Scheme v3.1): mal —", strings.Join(v.v31Motivos, " — "))
+		}
 		if v.v4Presente {
 			if v.v4 {
 				LogI("verify", "v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig")
@@ -115,7 +132,8 @@ func verificar() {
 	for _, nota := range v.notas {
 		LogW("verify", nota)
 	}
-	if !v.v1 || (!v.bundle && !v.v2) || (v.v4Presente && !v.v4) {
+	if !v.v1 || (!v.bundle && !v.v2) || (len(v.v3Motivos) > 0 && !v.v3) ||
+		(len(v.v31Motivos) > 0 && !v.v31) || (v.v4Presente && !v.v4) {
 		os.Exit(1)
 	}
 }
@@ -148,6 +166,7 @@ func verificarApk(ruta string) (*verificacion, error) {
 		return v, nil
 	}
 	v.verificarV2(f, info.Size())
+	v.verificarV3(f, info.Size())
 	v.verificarV1(zr)
 	v.verificarV4(ruta)
 	return v, nil
@@ -451,7 +470,7 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 		case idParV2:
 			blobV2 = par.valor
 		case idParV3, idParV3_1:
-			v.notar(fmt.Sprintf("el paquete trae también una firma v3/v3.1 (par 0x%08x): no se verificó aquí", par.id))
+			// se comprueban en verificarV3, con el mismo digest de los tres tramos del paquete
 		case idParV4:
 			v.notar("el paquete trae también una firma v4: no se verificó aquí")
 		case idParRelleno:
@@ -593,6 +612,203 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 
 func (v *verificacion) maloV2(motivo string) {
 	v.v2Motivos = append(v.v2Motivos, motivo)
+}
+
+func (v *verificacion) maloV3(motivo string) {
+	v.v3Motivos = append(v.v3Motivos, motivo)
+}
+
+func (v *verificacion) maloV31(motivo string) {
+	v.v31Motivos = append(v.v31Motivos, motivo)
+}
+
+// primerElemento saca el primer elemento con prefijo uint32 de una secuencia del bloque de firmas
+// y devuelve lo que queda. v3/v3.1 meten minSdk y maxSdk CRUDOS detrás de los dos primeros
+// elementos de signedData, así que leerSecuencia no puede recorrerlos y aquí se toman uno a uno.
+func primerElemento(b []byte) ([]byte, []byte, error) {
+	if len(b) < 4 {
+		return nil, nil, errors.New("falta el prefijo de longitud")
+	}
+	n := int(binary.LittleEndian.Uint32(b))
+	if n+4 > len(b) {
+		return nil, nil, fmt.Errorf("un elemento pide %d bytes y quedan %d", n, len(b)-4)
+	}
+	return b[4 : 4+n], b[4+n:], nil
+}
+
+// digestDelContenido: los tres tramos que cubren v2 y v3 por igual, con el campo de desplazamiento
+// del EOCD sustituido por el inicio del bloque de firmas.
+func digestDelContenido(f *os.File, eocd *registroFinal, bloque *bloqueDeFirmas,
+	tamano int64, h crypto.Hash) ([]byte, error) {
+	directorio := make([]byte, eocd.cdTamaño)
+	if _, err := f.ReadAt(directorio, eocd.cdOffset); err != nil {
+		return nil, err
+	}
+	registro := make([]byte, tamano-eocd.pos)
+	if _, err := f.ReadAt(registro, eocd.pos); err != nil {
+		return nil, err
+	}
+	binary.LittleEndian.PutUint32(registro[sitioDesplazamiento:], uint32(bloque.inicio))
+	return chunkedDigest(h, fileSection(f, bloque.inicio), bytesSection(directorio), bytesSection(registro))
+}
+
+// verificarV3 comprueba los pares v3 y v3.1 del mismo bloque que v2. El formato del firmante cambia
+// en dos cosas medidas: minSdk/maxSdk van CRUDOS fuera de signedData, y signedData lleva una lista
+// de atributos adicionales (proof-of-rotation en la rotación) detrás de los certificados. La firma
+// cubre los bytes íntegros de signedData, no solo sus dos primeros elementos.
+func (v *verificacion) verificarV3(f *os.File, tamano int64) {
+	eocd, err := leerRegistroFinal(f, tamano)
+	if err != nil {
+		v.maloV3(err.Error())
+		v.maloV31(err.Error())
+		return
+	}
+	bloque, err := leerBloqueDeFirmas(f, eocd)
+	if err != nil || bloque == nil {
+		return // v2 ya dijo que no hay bloque; no repetir el motivo
+	}
+	for _, par := range bloque.pares {
+		switch par.id {
+		case idParV3:
+			v.verificarUnBloqueV3(par.valor, f, eocd, bloque, tamano, false)
+		case idParV3_1:
+			v.verificarUnBloqueV3(par.valor, f, eocd, bloque, tamano, true)
+		}
+	}
+}
+
+func (v *verificacion) verificarUnBloqueV3(blob []byte, f *os.File, eocd *registroFinal,
+	bloque *bloqueDeFirmas, tamano int64, es31 bool) {
+	malo := v.maloV3
+	if es31 {
+		malo = v.maloV31
+	}
+	ok := true
+	falla := func(motivo string) { malo(motivo); ok = false }
+	versiones, err := leerSecuencia(blob)
+	if err != nil || len(versiones) == 0 {
+		falla("el valor del par v3 no trae ninguna versión firmada")
+		return
+	}
+	signers, err := leerSecuencia(versiones[0])
+	if err != nil || len(signers) == 0 {
+		falla("la secuencia de firmantes v3 no se puede leer")
+		return
+	}
+	if !es31 {
+		v.firmantesV3 = len(signers)
+	}
+	if len(signers) != 1 {
+		falla(fmt.Sprintf("hay %d firmantes en v3 y aquí se verifica con uno", len(signers)))
+		return
+	}
+	sd, resto, err := primerElemento(signers[0])
+	if err != nil {
+		falla("el firmante v3 no trae datos-firmados: " + err.Error())
+		return
+	}
+	if len(resto) < 8 {
+		falla("al firmante v3 le faltan minSdk y maxSdk")
+		return
+	}
+	resto = resto[8:]
+	datosFirmas, resto, err := primerElemento(resto)
+	if err != nil {
+		falla("el firmante v3 no trae la lista de firmas: " + err.Error())
+		return
+	}
+	claveDicha, _, err := primerElemento(resto)
+	if err != nil {
+		falla("el firmante v3 no trae la clave pública: " + err.Error())
+		return
+	}
+	digestsBytes, restoSD, err := primerElemento(sd)
+	if err != nil {
+		falla("los datos-firmados v3 no traen digests: " + err.Error())
+		return
+	}
+	certsBytes, _, err := primerElemento(restoSD)
+	if err != nil {
+		falla("los datos-firmados v3 no traen certificados: " + err.Error())
+		return
+	}
+	certs, err := leerSecuencia(certsBytes)
+	if err != nil || len(certs) == 0 {
+		falla("el firmante v3 no trae certificado")
+		return
+	}
+	cert, err := x509.ParseCertificate(certs[0])
+	if err != nil {
+		falla("el certificado v3 no se parsea: " + err.Error())
+		return
+	}
+	alg, h, bien := hashDeClave(cert.PublicKey)
+	if !bien {
+		falla("el certificado v3 no lleva una clave RSA o EC medida")
+		return
+	}
+	if der, err := x509.MarshalPKIXPublicKey(cert.PublicKey); err != nil || !bytes.Equal(der, claveDicha) {
+		falla("la clave pública del firmante v3 no es la del certificado")
+		return
+	}
+	digests, err := leerPares(digestsBytes)
+	if err != nil {
+		falla("los digests v3 no se pueden leer: " + err.Error())
+		return
+	}
+	paresFirmas, err := leerPares(datosFirmas)
+	if err != nil {
+		falla("las firmas v3 no se pueden leer: " + err.Error())
+		return
+	}
+	obtenido, err := digestDelContenido(f, eocd, bloque, tamano, h)
+	if err != nil {
+		falla("el digest del contenido para v3 no se puede calcular: " + err.Error())
+		return
+	}
+	medido := 0
+	for _, par := range digests {
+		if par.id != alg {
+			falla(fmt.Sprintf("algoritmo de digest v3 0x%04x no medido aquí", par.id))
+			continue
+		}
+		medido++
+		if !bytes.Equal(par.valor, obtenido) {
+			falla("el digest v3 guardado no es el de este contenido: el paquete cambió después de firmarse")
+		}
+	}
+	hh := h.New()
+	hh.Write(sd)
+	resumen := hh.Sum(nil)
+	for _, par := range paresFirmas {
+		if par.id != alg {
+			falla(fmt.Sprintf("algoritmo de firma v3 0x%04x no medido aquí", par.id))
+			continue
+		}
+		medido++
+		switch k := cert.PublicKey.(type) {
+		case *rsa.PublicKey:
+			if err := rsa.VerifyPKCS1v15(k, h, resumen, par.valor); err != nil {
+				falla("la firma RSA v3 sobre datos-firmados no verifica")
+			}
+		case *ecdsa.PublicKey:
+			if !ecdsa.VerifyASN1(k, resumen, par.valor) {
+				falla("la firma ECDSA v3 sobre datos-firmados no verifica")
+			}
+		}
+	}
+	if medido == 0 {
+		falla("el firmante v3 no trae ningún par con el algoritmo que esta orden sabe leer")
+		return
+	}
+	if ok {
+		if es31 {
+			v.v31 = true
+		} else {
+			v.v3 = true
+		}
+		v.registrarCertificado(cert)
+	}
 }
 
 // hashDeClave: el id de algoritmo y el hash del contenido que corresponden a la clave
