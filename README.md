@@ -20,7 +20,7 @@ de recursos, un emisor de `.class` y un dexer escritos en Go dentro del fork [`a
 el subconjunto medido y lo no medido rechazado por nombre. El muro original (`js/wasm` no tiene
 `fork/exec`) y la decisión de 2026-10-27 (sin conexión y sin runtimes de terceros) siguen escritos
 en `docs/plan.md`. El dex del proyecto del studio son 2844 bytes y 217 objetos (§13); hoy el binario
-es 12,88 MB (§155).
+es 12,78 MB y se baja como 3,37 MB comprimidos (§155 y §173).
 
 El oráculo final no es el propio editor: el apk que sale de chromium se instala y arranca en un
 teléfono real (§55 y §136), el gate completo pasa también en un runner Linux (§152) y en este

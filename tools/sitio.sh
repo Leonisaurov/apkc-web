@@ -40,6 +40,9 @@ done
 rm -rf "$DESTINO/.github"
 
 cp "$WASM" "$DESTINO/apkc.wasm"
+# El navegador baja la versión comprimida (3,4 MB frente a 12,8 MB) y la descomprime con
+# DecompressionStream; el sin comprimir se conserva como respaldo (§173).
+gzip -9 -c "$WASM" > "$DESTINO/apkc.wasm.gz"
 cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$DESTINO/wasm_exec.js"
 [ -n "$CNAME" ] && printf '%s\n' "$CNAME" > "$DESTINO/CNAME"
 

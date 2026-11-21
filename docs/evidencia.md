@@ -8054,3 +8054,27 @@ fallo del compilador; con ese token (que no autoriza `eval` de JavaScript) todo 
 `modern-web-guidance` para manifest, iconos y seguridad se consultaron antes de escribir esta pieza.
 Frontera: `require-trusted-types-for 'script'` no se activa porque el editor escribe en `<textarea>`
 y en un `<pre>` con `textContent`, pero no se ha auditado con esa directiva.
+
+## 173. Tamaño del wasm: qué reduce y qué no
+
+Medido el 2026-11-21. Tres mediciones sobre el mismo fuente, con `GOOS=js GOARCH=wasm`:
+
+```sh
+cd apkc
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o /tmp/opencode/apkc-wasm.wasm .
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -ldflags='-s -w' -o /tmp/opencode/apkc-small.wasm .
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /tmp/opencode/apkc-small2.wasm .
+gzip -9 -c /tmp/opencode/apkc-small.wasm | wc -c
+```
+
+**Resultado**: 12 875 248 bytes el binario normal, 12 779 866 con `-s -w` (solo un 0,7 %) y
+12 770 117 con `-trimpath` además. En cambio `gzip -9` lo deja en **3 372 669 bytes**, un 73,6 %
+menos. Surge no comprime `.wasm` (`content-length: 12907487` y sin `content-encoding`), así que
+`tools/sitio.sh` publica `apkc.wasm.gz` y `hospedador.js` lo descomprime con `DecompressionStream`
+si la API existe, con respaldo al `.wasm` sin comprimir. `tools/entorno.sh` usa `-s -w` en sus tres
+caminos de build.
+
+Chromium vuelve a dar `10 comprobaciones bien, 0 mal` con la ruta comprimida. Firefox había dado
+`4/4` antes de este cambio; la repetición posterior se quedó en `session not created: Failed to set
+preferences` de geckodriver en este equipo, así que **no se afirma** que la ruta comprimida esté
+verificada en Firefox: queda como frontera del entorno de pruebas, no del código.

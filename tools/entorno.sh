@@ -78,9 +78,14 @@ compila_wasm() {
   ( cd "$RAIZ/shim" && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" . )
 }
 
+construye_wasm() {
+  ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build \
+      -ldflags='-s -w' -o "$TMP/apkc-wasm.wasm" . )
+}
+
 construye_binarios() {
   ( cd "$RAIZ/apkc" && go build -o "$TMP/apkc-gate" . )
-  ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/apkc-wasm.wasm" . )
+  construye_wasm
 }
 
 verifica_entorno() {
@@ -131,12 +136,12 @@ case "$tarea" in
     )
     ;;
   sitio)
-    ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/apkc-wasm.wasm" . )
+    construye_wasm
     APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm} sh "$RAIZ/tools/sitio.sh" "${1:-$RAIZ/sitio}"
     ;;
   publicar)
     command -v surge >/dev/null 2>&1 || { printf 'falta el CLI de surge\n' >&2; exit 2; }
-    ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/apkc-wasm.wasm" . )
+    construye_wasm
     APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm} sh "$RAIZ/tools/sitio.sh" "$RAIZ/sitio"
     DOMINIO=$(cat "$RAIZ/.surge-domain" 2>/dev/null || cat "$RAIZ/sitio/CNAME")
     printf 'publicando en https://%s/\n' "$DOMINIO"
