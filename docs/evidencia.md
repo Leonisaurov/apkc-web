@@ -7883,3 +7883,21 @@ el CLI `apksigner verify` de las build-tools 34.0.0, 35.0.1 y 36.0.0 reporta `Ve
 scheme: false` para ese mismo fichero (no así para el de sal vacía, que aprueba), así que no se
 afirma que un dispositivo acepte la sal: el oráculo alto no la confirma aunque sus clases bajas sí.
 `apkc verify` la acepta con los mismos oráculos internos que la v4 sin sal.
+
+## 166. Más oráculos en CI: `dexdump` sí, ART en dispositivo no
+
+Medido el 2026-11-21. El gate ya pasaba el dex del navegador por `d8`; ahora `e2e.sh` pasa el mismo
+`classes.dex` por **`dexdump` de build-tools antes de que `d8` lo reescriba**, y falla si no lo
+desarma. Es un oráculo de ART que corre en el host, así que funciona también en el runner de GitHub.
+La comprobación del cotejo con la v3 de `apksigner` se actualizó: antes exigía el aviso de «no se
+verificó aquí» (§164 la cerró) y ahora exige `v3: ok`.
+
+```sh
+sh tools/entorno.sh gate
+$ANDROID_HOME/build-tools/34.0.0/dexdump -d $PREFIX/tmp/studio-e46-dex/classes.dex | head
+```
+
+**Resultado**: `gate rc=0` y `e2e: todo en orden` con `dexdump` activo. **Frontera**: en el runner de
+GitHub no hay teléfono con `rish`/Shizuku ni `app_process64`, así que la ejecución real en ART
+(`banco/banco.sh`, §61) sigue siendo una prueba local del aparato; no se puede añadir al CI sin un
+dispositivo o un emulador con el `BOOTCLASSPATH` de `zygote64`, y eso no se afirma aquí.
