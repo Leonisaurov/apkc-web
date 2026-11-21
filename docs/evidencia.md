@@ -7982,3 +7982,24 @@ java -Xverify:all -cp <clases> Main     # 12000 y 5
 `java -Xverify:all` da los mismos valores que javac con rc 0, `d8` la desarma con `goto/16`, el dexer
 propio la acepta y el gate sigue en verde. Frontera: los saltos mayores que 32767 **unidades Dalvik**
 seguirían pidiendo `goto/32`, que no se ha medido.
+
+## 170. Clase anidada estática y anotaciones más allá de `@Override`
+
+Medido el 2026-11-21. Dos fronteras del analizador:
+
+- `static class Anidada` dentro de `Exterior`: el nombre simple `Anidada` resuelve a
+  `Exterior$Anidada`, y el par de clases sale con el dex byte a byte el de javac (incluido el
+  `InnerClasses` con `static`). `java -Xverify:all` sobre nuestras clases imprime lo mismo que javac.
+- `@Deprecated` sobre un método: javac escribe el atributo `Deprecated` (longitud 0) y un
+  `RuntimeVisibleAnnotations` con una entrada sin pares; el dex de nuestras clases y de javac
+  coincide. `@SuppressWarnings` no deja huella y se tolera igual que `@Override`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run 'TestClaseAnidadaEstatica|TestAnotacionDeprecated' -count=1 -v .
+sh tools/entorno.sh gate
+```
+
+**Resultado**: los dos tests pasan y el gate sigue en verde. Frontera escrita: una anidada con
+nombre **`private`/`protected`** o **sin `static`** (pide `this$0`), y una anotación con elementos
+o con retención distinta de las medidas, siguen rechazadas por nombre con su línea.

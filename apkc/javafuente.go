@@ -336,6 +336,8 @@ type jmetodo struct {
 	// abstracto: el metodo no tiene cuerpo; en una interface es implicito y en una clase viene del
 	// modificador `abstract` (parrafo 92).
 	abstracto bool
+	// deprecado: @Deprecated deja un atributo Deprecated y un RuntimeVisibleAnnotations (§170).
+	deprecado bool
 	// lanza: las clases del atributo Exceptions de un `throws A, B` (parrafo 92).
 	lanza []string
 	linea int
@@ -850,7 +852,7 @@ func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
 			a.avanzar()
 			goto nombre
 		case a.es('p', "@"):
-			if err := a.anotacion(); err != nil {
+			if _, err := a.anotacion(); err != nil {
 				return nil, err
 			}
 			continue
@@ -952,6 +954,7 @@ nombre:
 func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error) {
 	esEstatico, esFinal, esPublico, esAbstracta := false, false, false, false
 	esPrivado, esProtegido := false, false
+	esDeprecado := false
 	for {
 		switch {
 		case a.es('k', "static"):
@@ -967,8 +970,12 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 		case a.es('k', "protected"):
 			esProtegido = true
 		case a.es('p', "@"):
-			if err := a.anotacion(); err != nil {
+			nombreAnot, err := a.anotacion()
+			if err != nil {
 				return nil, err
+			}
+			if nombreAnot == "Deprecated" || nombreAnot == "java.lang.Deprecated" {
+				esDeprecado = true
 			}
 			continue
 		case a.es('k', "class"), a.es('k', "interface"):
@@ -1011,6 +1018,7 @@ cuerpo:
 		if err != nil {
 			return m, err
 		}
+		m.deprecado = esDeprecado
 		if esAbstracta || c.esInterface {
 			m.abstracto = true
 		}
@@ -1147,7 +1155,7 @@ func (a *analizadorJava) pegaParentesis() bool {
 // sus metodos (attributes: 2, SourceFile e InnerClasses), o sea que esa anotacion no deja huella en el
 // .class. Las demas si la dejan, en un atributo que este emisor todavia no escribe: se rechazan por
 // nombre en vez de tirarlas.
-func (a *analizadorJava) anotacion() error {
+func (a *analizadorJava) anotacion() (string, error) {
 	linea := a.actual().donde.linea
 	a.avanzar() // @
 	nombre := ""
@@ -1173,10 +1181,14 @@ func (a *analizadorJava) anotacion() error {
 			}
 		}
 	}
-	if nombre == "Override" || nombre == "java.lang.Override" {
-		return nil
+	if nombre == "Override" || nombre == "java.lang.Override" ||
+		nombre == "SuppressWarnings" || nombre == "java.lang.SuppressWarnings" {
+		return nombre, nil // ninguna de las dos deja atributos en el ClassFile
 	}
-	return fmt.Errorf("linea %d: la anotacion @%s deja huella en el .class y este emisor no la escribe; solo se tolera @Override (parrafo 40)", linea, nombre)
+	if nombre == "Deprecated" || nombre == "java.lang.Deprecated" {
+		return nombre, nil
+	}
+	return "", fmt.Errorf("linea %d: la anotacion @%s deja huella en el .class y este emisor no la escribe; solo se toleran @Override, @SuppressWarnings y @Deprecated (parrafo 40)", linea, nombre)
 }
 
 // tipo lee un nombre de tipo con sus corchetes. Un array no esta medido en el emisor.

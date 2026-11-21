@@ -374,7 +374,7 @@ public class C {
 `, "if"},
 		{"una anotacion que no es Override", `package p;
 public class C {
-    @Deprecated
+    @MiAnotacion
     void f() { }
 }
 `, "anotacion"},

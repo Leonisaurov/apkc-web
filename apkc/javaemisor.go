@@ -720,7 +720,11 @@ func (ctx *contextoJava) hay(internal string) bool {
 // un import concreto, los imports con estrella y por ultimo java.lang.
 func (ctx *contextoJava) resolverSimple(nombre string) (string, error) {
 	for _, c := range ctx.orden {
-		if sinPaquete(c.nombre) == nombre {
+		simple := sinPaquete(c.nombre)
+		if i := strings.LastIndex(simple, "$"); i >= 0 {
+			simple = simple[i+1:] // `Anidada` dentro de `Exterior$Anidada`
+		}
+		if simple == nombre {
 			return internoDe(c.paquete, c.nombre), nil
 		}
 	}
@@ -5638,6 +5642,16 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		}
 		attrs = append(attrs, b...)
 		conte++
+	}
+	if m.deprecado {
+		// javac escribe primero `Deprecated` (longitud 0) y después RuntimeVisibleAnnotations con
+		// una sola entrada sin pares, medido en §170.
+		attrs = append(attrs, attrInfo(e.pool, "Deprecated", nil)...)
+		anot := u2be(1)
+		anot = append(anot, u2be(uint16(e.pool.utf8("Ljava/lang/Deprecated;")))...)
+		anot = append(anot, u2be(0)...)
+		attrs = append(attrs, attrInfo(e.pool, "RuntimeVisibleAnnotations", anot)...)
+		conte += 2
 	}
 	return e.methodInfo(m.nombre, desc, acc, attrs, conte), nil
 }

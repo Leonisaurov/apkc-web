@@ -231,7 +231,7 @@ sin `javac` y sin conexión. Oráculo: `javap -c -p` sobre los `.class` que prod
 JDK 21 del teléfono, método por método e instrucción por instrucción.
 
 - **1G.1 HECHA** — la lista se leyó de la plantilla y de la muestra del `studio/`, no se adivinó: paquete,
-  imports con estrella, `class` con `extends`, `@Override` (que no deja huella en el `.class`, medido en el
+  imports con estrella, `class` con `extends`, `@Override`, `@SuppressWarnings` y `@Deprecated` sobre un método (§170, que sí deja atributos), medido en el
   §40), métodos con parámetros, `super.<metodo>()`, llamadas sin receptor, llamadas sobre un tipo
   (`Toast.makeText`) y sobre un valor (`menu.add`), `new Tipo(args)` y `new Tipo(args) { ... }`, literales de
   cadena y entero (hexo incluido), `this`, `Tipo.this`, acceso encadenado (`R.layout.main`), `return`. El
