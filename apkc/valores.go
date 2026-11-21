@@ -316,7 +316,10 @@ func claveDeConfig(cfg string) (grupo, numero int, texto string) {
 	if d := anchoMinimoDe(cfg); d != 0 {
 		return 2, int(d), cfg
 	}
-	return 3, 0, cfg
+	if cfg == "v1" {
+		return 4, 1, cfg
+	}
+	return 5, 0, cfg
 }
 
 // mascaraConfig: las banderas del spec_map que aapt2 pone para cada configuración medida. `es` es
@@ -332,6 +335,9 @@ func mascaraConfig(cfg string) uint32 {
 	case anchoMinimoDe(cfg) != 0:
 		// smallestScreenWidthDp (0x2000) con la misma marca 0x0400 de clave con base (§159)
 		return 0x2400
+	case cfg == "v1":
+		// la copia automática por API 1 del --auto-version de aapt2 (§171)
+		return 0x0400
 	default:
 		return 0x0004
 	}

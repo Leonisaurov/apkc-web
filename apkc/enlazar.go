@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -18,6 +19,9 @@ import (
 type opcionesDeEnlace struct {
 	compileSdkVersion  int
 	compileSdkCodename string
+	// autoVersion reproduce el `--auto-version` por defecto de aapt2: añade una copia `layout-v1`
+	// de cada layout base (medido en §171). Los fixtures del repo usan --no-auto-version.
+	autoVersion bool
 }
 
 // idsNuevosDeArbol son los `@+id/nombre` que un arbol declara. Se apuntan antes de numerar.
@@ -270,6 +274,18 @@ type proyectoEnlazado struct {
 // enlazarProyecto hace las dos pasadas. `valores` son los res/values/*.xml, `layouts` los
 // res/layout/*.xml y `manifiesto` el AndroidManifest.xml, todos en texto.
 func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML, m *marcoRecursos, opts opcionesDeEnlace) (*proyectoEnlazado, error) {
+	if opts.autoVersion {
+		base := []fuenteXML{}
+		for _, f := range layouts {
+			if f.config == "" {
+				base = append(base, fuenteXML{
+					nombre: "res/layout-v1/" + path.Base(f.nombre),
+					contenido: f.contenido, config: "v1",
+				})
+			}
+		}
+		layouts = append(layouts, base...)
+	}
 	recursos := []recursoEntabla{}
 	styleables := []styleableEscribir{}
 	for _, f := range ficheros {

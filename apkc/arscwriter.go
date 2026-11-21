@@ -300,6 +300,9 @@ func configDe(lengua string) []byte {
 	b := make([]byte, 64)
 	binary.LittleEndian.PutUint32(b, 64)
 	switch {
+	case lengua == "v1":
+		// la copia que aapt2 añade con --auto-version: sdkVersion 1 en +24 (§171)
+		b[24] = 1
 	case lengua == "":
 	case len(lengua) == 6 && lengua[2:4] == "-r":
 		// `es-rMX`: language en +8/+9 y country en +10/+11 (parrafo 107)

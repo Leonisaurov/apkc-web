@@ -8003,3 +8003,25 @@ sh tools/entorno.sh gate
 **Resultado**: los dos tests pasan y el gate sigue en verde. Frontera escrita: una anidada con
 nombre **`private`/`protected`** o **sin `static`** (pide `this$0`), y una anotación con elementos
 o con retención distinta de las medidas, siguen rechazadas por nombre con su línea.
+
+## 171. `layout-v1`, la copia automática de aapt2
+
+Medido el 2026-11-21. `aapt2 link` **sin** `--no-auto-version` duplica cada layout base en la
+configuración `v1`: `res/layout/main.xml` aparece también como `res/layout-v1/main.xml`. El
+`ResTable_config` de esa copia tiene `sdkVersion = 1` en +24 y el spec lleva la bandera `0x0400`,
+que es la de «clave con base» ya vista en densidades y `sw600dp` (§159).
+
+`opcionesDeEnlace.autoVersion` reproduce ese modo; por defecto sigue desactivado para no romper los
+fixtures del repo, que se generaron con `--no-auto-version`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run TestAutoVersionLayoutV1 -count=1 -v .
+```
+
+**Resultado**: el test pasa con el `resources.arsc` byte a byte el de aapt2. El fixture se generó con
+build-tools 35.0.1 porque la 34.0.0 escribe 0 en el u16 de +10 del `RES_TABLE_TYPE_SPEC` mientras
+que 35 y 36 escriben el número de configuraciones, que es lo que hace este escritor (misma diferencia
+medida en §159). Frontera: los calificadores cubiertos siguen siendo `values-xx`, `values-es-rMX`,
+`land`, `port`, `sw600dp`, `nodpi`, `tvdpi`, las densidades `ldpi`-`xxxhdpi` y ahora `v1`; cualquier
+otro (`small`, `large`, `xlarge`, `-vN` arbitrario) se rechaza por nombre.
