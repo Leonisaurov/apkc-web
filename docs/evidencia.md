@@ -7681,3 +7681,34 @@ entero de esta clase; un campo ajeno (`obj.campo++` con base explícita), un anc
 un delta mayor que un byte se rechazan por nombre. **ART queda pendiente de dispositivo**: en este
 escritorio no hay `rish` ni `sudo` con `app_process64`, así que no se afirma lo que no se ha corrido
 allí.
+
+## 157. Asignaciones de desplazamiento y bits: `<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`
+
+Medido el 2026-11-21. Cierra la otra frontera de la fila 5.1. La sonda `Asig` las ejerce sobre un
+local, un campo de instancia y un campo estático, con literal y con variable a la derecha. El orden de
+precedencia de Java se rellenó con `|`, `^`, `&`, los desplazamientos y los comparadores, sin cambiar
+el orden relativo de lo ya medido.
+
+```text
+javap 17:  a <<= 2 -> iload; iconst_2; ishl; istore
+           campo &= b -> aload_0; dup; getfield; iload_1; iand; putfield
+           s <<= 2 -> getstatic; iconst_2; ishl; putstatic
+dexdump de d8 sobre la misma clase: and-int/2addr 0xb5, or-int/2addr 0xb6, xor-int/2addr 0xb7,
+shl-int/2addr 0xb8, shr-int/2addr 0xb9, ushr-int/2addr 0xba; con literal, and/or/xor-int/lit8 0xdd/0xde/0xdf
+y shl/shr/ushr-int/lit8 0xe0/0xe1/0xe2; el desplazamiento no conmutativo con el izquierdo vivo sale
+en 23x (shl-int 0x98).
+```
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run TestLasAsignacionesDeBitsSeDexanIgualQueJavac -count=1 -v .
+sh tools/entorno.sh gate
+```
+
+**Resultado**: el test pasa con el **dex de nuestras clases byte a byte el de javac** y longitudes de
+`Code` iguales método por método; `java -Xverify:all` sobre las clases que emite este fork da la misma
+salida que javac (`9, 6, 3, 2, 0`) con rc 0; el gate sigue en verde. `jvmframes.go` y `jvmopcode.go`
+necesitaron los seis opcodes nuevos: sin ellos el verificador propio decía `opcode outside the table
+this fork measured`. Frontera: solo `int`; el ancho (`long`/`double`) y un desplazamiento con una
+expresión a la derecha que no sea literal ni variable siguen rechazados por nombre. ART pendiente de
+dispositivo, igual que en §156.

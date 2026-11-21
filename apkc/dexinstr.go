@@ -1118,14 +1118,20 @@ func (p *traduce) parchaSaltos() error {
 //     (`sub-int v2, v1, v2` = `9102 0102`, `div-int` = `9302 0102`, `rem-int` = `9402 0102`).
 func (p *traduce) cuentaEntera(in jvmInstr) {
 	dos := map[string]byte{"iadd": opSumaInt2, "isub": opRestaInt2, "imul": opMultiplica2,
-		"idiv": opDivide2, "irem": opResiduo2}
-	tres := map[string]byte{"iadd": 0x90, "isub": 0x91, "imul": 0x92, "idiv": 0x93, "irem": 0x94}
+		"idiv": opDivide2, "irem": opResiduo2,
+		// and/or/xor y los tres desplazamientos, con la forma /2addr medida en el párrafo 157
+		"iand": 0xb5, "ior": 0xb6, "ixor": 0xb7,
+		"ishl": 0xb8, "ishr": 0xb9, "iushr": 0xba}
+	tres := map[string]byte{"iadd": 0x90, "isub": 0x91, "imul": 0x92, "idiv": 0x93, "irem": 0x94,
+		// la forma de tres registros para un desplazamiento no conmutativo con el izquierdo vivo
+		"ishl": 0x98, "ishr": 0x99, "iushr": 0x9a}
 	op, ok := dos[in.name]
 	if !ok {
 		p.falla(in, "an arithmetic opcode this translator does not know")
 		return
 	}
-	conmuta := in.name == "iadd" || in.name == "imul"
+	conmuta := in.name == "iadd" || in.name == "imul" || in.name == "iand" ||
+		in.name == "ior" || in.name == "ixor"
 	b := p.pop(in)
 	a := p.pop(in)
 	vivo := func(r int) bool {
@@ -1623,7 +1629,8 @@ func (p *traduce) recorre() error {
 			}
 		case "getstatic", "putstatic":
 			p.accesoEstatico(in, in.name == "putstatic")
-		case "iadd", "isub", "imul", "idiv", "irem":
+		case "iadd", "isub", "imul", "idiv", "irem",
+			"ishl", "ishr", "iushr", "iand", "ior", "ixor":
 			p.cuentaEntera(in)
 		case "ladd", "lsub", "lmul", "ldiv", "lrem",
 			"fadd", "fsub", "fmul", "fdiv", "frem",

@@ -70,6 +70,13 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x68: {"imul", 0},
 	0x6c: {"idiv", 0},
 	0x70: {"irem", 0},
+	// desplazamientos y operadores de bits, medidos en el párrafo 157 (`Asig` y su dex de d8)
+	0x78: {"ishl", 0},
+	0x7a: {"ishr", 0},
+	0x7c: {"iushr", 0},
+	0x7e: {"iand", 0},
+	0x80: {"ior", 0},
+	0x82: {"ixor", 0},
 	// `iinc` (parrafo 67): index de local y constante de un byte con signo, medido en `Inc`
 	// (`iinc 1, 1` y `iinc 1, -1`)
 	0x84: {"iinc", 2},

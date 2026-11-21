@@ -95,7 +95,14 @@ const (
 	opIsub = 0x64
 	opImul = 0x68
 	opIdiv = 0x6c
-	opIrem = 0x70
+	opIrem  = 0x70
+	// desplazamientos y operadores de bits, medidos en el párrafo 157 con `javap -c` de `Asig`
+	opIshl  = 0x78
+	opIshr  = 0x7a
+	opIushr = 0x7c
+	opIand  = 0x7e
+	opIor   = 0x80
+	opIxor  = 0x82
 )
 
 // descPrimitivo: el descriptor de cada tipo escrito en el fuente. `long` y `double` ocupan dos huecos
@@ -2072,7 +2079,10 @@ func (e *emisor) exp(x jexpr) (string, error) {
 			// escribe `if_acmpne` 0xa6 (o `if_acmpeq` 0xa5), `iconst_1`, `goto`, `iconst_0`.
 			return e.comparacionDeReferencias(v)
 		}
-		codes := map[string]byte{"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem}
+		codes := map[string]byte{
+			"+": opIadd, "-": opIsub, "*": opImul, "/": opIdiv, "%": opIrem,
+			"<<": opIshl, ">>": opIshr, ">>>": opIushr, "&": opIand, "|": opIor, "^": opIxor,
+		}
 		codesAnchas := map[string]map[string]byte{
 			// la familia larga, medida en `javap -c` de `L` (parrafo 74)
 			"J": {"+": 0x61, "-": 0x65, "*": 0x69, "/": 0x6d, "%": 0x71},

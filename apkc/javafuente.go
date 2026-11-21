@@ -410,7 +410,8 @@ var palabrasJava = map[string]bool{
 
 // simbolesJava, de mas largo a mas corto para que `>>` no se lea como dos `>`.
 var simbolesJava = []string{
-	"...", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", ">>", "<<", "++", "--",
+	"...", ">>>=", ">>=", "<<=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=",
+	"&=", "|=", "^=", ">>>", ">>", "<<", "++", "--",
 	"{", "}", "(", ")", "[", "]", ";", ",", ".", "=", ">", "<", "!", "+", "-", "*", "/", "&", "|", "^", ":", "@", "%",
 }
 
@@ -1635,7 +1636,7 @@ func operadorDeAsignacion(t tokenJava) (string, bool) {
 		return "", false
 	}
 	switch t.valor {
-	case "=", "+=", "-=", "*=", "/=":
+	case "=", "+=", "-=", "*=", "/=", "<<=", ">>=", ">>>=", "&=", "|=", "^=":
 		return t.valor, true
 	}
 	return "", false
@@ -1699,7 +1700,14 @@ func (a *analizadorJava) expresion() (jexpr, error) {
 
 // precedencias: las que usa este subconjunto, medidas con el emisor. El `%` entra porque su `irem` esta
 // leido de `javap -c` (parrafo 49), no porque la precedencia se suponga.
-var precedenciasJava = map[string]int{"||": 1, "&&": 2, "==": 3, "!=": 3, "<": 4, ">": 4, "<=": 4, ">=": 4, "+": 5, "-": 5, "*": 6, "/": 6, "%": 6}
+// Precedencia de Java de menor a mayor, con huecos para los operadores de bits y el desplazamiento
+// medidos en el párrafo 157. Los valores viejos se desplazaron pero no cambió su orden relativo.
+var precedenciasJava = map[string]int{
+	"||": 1, "&&": 2, "|": 3, "^": 4, "&": 5,
+	"==": 6, "!=": 6, "<": 7, ">": 7, "<=": 7, ">=": 7,
+	"<<": 8, ">>": 8, ">>>": 8,
+	"+": 9, "-": 9, "*": 10, "/": 10, "%": 10,
+}
 
 func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
 	izq, err := a.expresionUnaria()

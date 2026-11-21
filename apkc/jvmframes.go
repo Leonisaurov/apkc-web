@@ -792,7 +792,10 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, fmt.Errorf("un `pop2` sobre %s: solo se midio el valor ancho", t)
 		}
 		a.est.pila = a.est.pila[:len(a.est.pila)-1]
-	case op == 0x60 || op == 0x64 || op == 0x68 || op == 0x6c || op == 0x70:
+	// ishl, ishr, iushr, iand, ior e ixor (párrafo 157) consumen dos enteros y empujan otro,
+	// igual que la aritmética entera de al lado.
+	case op == 0x60 || op == 0x64 || op == 0x68 || op == 0x6c || op == 0x70 ||
+		op == 0x78 || op == 0x7a || op == 0x7c || op == 0x7e || op == 0x80 || op == 0x82:
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
 		}
