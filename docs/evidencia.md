@@ -8025,3 +8025,32 @@ que 35 y 36 escriben el número de configuraciones, que es lo que hace este escr
 medida en §159). Frontera: los calificadores cubiertos siguen siendo `values-xx`, `values-es-rMX`,
 `land`, `port`, `sw600dp`, `nodpi`, `tvdpi`, las densidades `ldpi`-`xxxhdpi` y ahora `v1`; cualquier
 otro (`small`, `large`, `xlarge`, `-vN` arbitrario) se rechaza por nombre.
+
+## 172. CSP con hashes, PWA instalable y el `wasm-unsafe-eval`
+
+Medido el 2026-11-21. El sitio ya tiene `manifest.webmanifest` con `id: "/"`, `start_url: "/"`,
+`display: "standalone"` e iconos PNG de 192 y 512; `index.html` lo enlaza y el SW los precachea.
+Surge no deja fijar cabeceras, así que la CSP la añade el service worker como el resto.
+
+`tools/sitio.sh` calcula los hashes SHA-256 de los dos `<script>` inline de `index.html` y genera:
+
+```text
+default-src 'self'; script-src 'self' 'wasm-unsafe-eval' 'sha256-…' 'sha256-…';
+worker-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self';
+font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'
+```
+
+```sh
+sh tools/entorno.sh sitio
+SITIO_DIR=sitio node studio/prueba-sitio.js        # Chromium
+GECKODRIVER=… SITIO_DIR=sitio node studio/prueba-firefox.js
+sh tools/entorno.sh gate
+```
+
+**Resultado**: `10 comprobaciones bien, 0 mal` en Chromium (el manifiesto y los dos iconos dan 200),
+`4/4` en Firefox y gate en verde. El primer intento sin `'wasm-unsafe-eval'` rompió la compilación:
+`WebAssembly.instantiate(): Compiling or instantiating ...` era el CSP bloqueando el wasm, no un
+fallo del compilador; con ese token (que no autoriza `eval` de JavaScript) todo pasa. Las guías de
+`modern-web-guidance` para manifest, iconos y seguridad se consultaron antes de escribir esta pieza.
+Frontera: `require-trusted-types-for 'script'` no se activa porque el editor escribe en `<textarea>`
+y en un `<pre>` con `textContent`, pero no se ha auditado con esa directiva.

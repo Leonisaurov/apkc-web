@@ -66,12 +66,31 @@ PY
 )
 python3 - "$DESTINO" "$VERSION" <<'PY'
 from pathlib import Path
+import base64
+import hashlib
+import re
 import sys
+
 raiz, version = Path(sys.argv[1]), sys.argv[2]
 for nombre in ("index.html", "sw.js", "offline.js"):
     fichero = raiz / nombre
     if fichero.exists():
         fichero.write_text(fichero.read_text().replace("__APKC_VERSION__", version))
+
+# CSP sin 'unsafe-inline': los tres <script> inline de index.html se autorizan por hash SHA-256.
+# Los módulos con src van por 'self'; el worker, el wasm y OPFS por sus esquemas de origen.
+html = (raiz / "index.html").read_text()
+hashes = []
+for cuerpo in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.S):
+    hashes.append("'sha256-" + base64.b64encode(
+        hashlib.sha256(cuerpo.encode("utf-8")).digest()).decode("ascii") + "'")
+csp = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + " ".join(hashes) +
+       "; worker-src 'self'; connect-src 'self'; img-src 'self' data:; " +
+       "style-src 'self'; font-src 'self' data:; object-src 'none'; " +
+       "base-uri 'none'; frame-ancestors 'none'")
+sw = raiz / "sw.js"
+sw.write_text(sw.read_text().replace("__APKC_CSP__", csp))
+print("csp: " + csp)
 PY
 
 # las cabeceras son la mitad del producto: sin COOP/COEP no hay OPFS ni worker
@@ -85,8 +104,8 @@ grep -q 'Cross-Origin-Embedder-Policy' "$DESTINO/sw.js" ||
   { printf 'el service worker no pone COEP\n' >&2; exit 1; }
 [ -f "$DESTINO/index.html" ] || { printf 'el sitio no tiene index.html\n' >&2; exit 1; }
 [ -f "$DESTINO/wasm_exec.js" ] || { printf 'falta wasm_exec.js\n' >&2; exit 1; }
-if grep -R -q '__APKC_VERSION__' "$DESTINO" 2>/dev/null; then
-  printf 'quedó un marcador de versión sin sustituir\n' >&2
+if grep -R -q -e '__APKC_VERSION__' -e '__APKC_CSP__' "$DESTINO" 2>/dev/null; then
+  printf 'quedó un marcador de versión o de CSP sin sustituir\n' >&2
   exit 1
 fi
 
