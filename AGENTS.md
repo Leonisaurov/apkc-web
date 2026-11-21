@@ -158,6 +158,8 @@ temporales; `tools/entorno.sh gate` levanta el SDK espejo de `tools/sdk34.sh` y 
 La publicación es **manual**: `tools/entorno.sh sitio` y `cd sitio && surge . publish`, sobre
 `apkc-studio.surge.sh`. Surge no respeta `_headers`: el SW de `studio/` pone COOP/COEP y la página
 se recarga una vez (§153); verificar siempre con `SITIO_URL=… node studio/prueba-sitio.js` (§155).
+Si `go build` dice `disk quota exceeded` al escribir en `/tmp/go-build*`, pon
+`GOTMPDIR=$HOME/.cache/apkc-web/gotmp` (disco, no tmpfs); no es un fallo del código.
 
 ## Lo que ya está medido, para no reabrirlo
 

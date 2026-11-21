@@ -8078,3 +8078,47 @@ Chromium vuelve a dar `10 comprobaciones bien, 0 mal` con la ruta comprimida. Fi
 `4/4` antes de este cambio; la repetición posterior se quedó en `session not created: Failed to set
 preferences` de geckodriver en este equipo, así que **no se afirma** que la ruta comprimida esté
 verificada en Firefox: queda como frontera del entorno de pruebas, no del código.
+
+## 174. Accesibilidad y teclado: enlace de salto y foco visible
+
+Medido el 2026-11-21. Auditoría del DOM y del CSS con la guía de accesibilidad de
+`modern-web-guidance`: la página ya tenía `lang="es"`, `<title>`, `nav` con `aria-label`, botones
+nativos y SVG decorativos con `aria-hidden`, pero suppressions de foco y ninguna vía de saltar el
+encabezado.
+
+Cambios: un `.skip-link` antes del `header` que apunta a `<main id="area-principal" tabindex="-1">`,
+visible solo al recibir `:focus-visible`; y sustitución de los `outline: none` de `input`, `select`,
+`textarea` y `#codigo` por anillos en `:focus-visible` con `outline-offset`, sin tocar el ring nativo
+de los `button` que ya existía.
+
+```sh
+sh tools/entorno.sh gate
+grep -E 'Saltar|focus-visible' studio/index.html studio/style.css
+```
+
+**Resultado**: `navegador: todo en orden` (la prueba de DOM comprueba `lang`, el enlace y el
+`tabIndex=-1` del destino), `e2e: todo en orden` y `prueba-sitio.js` 10/10. La guía
+`accessibility` se consultó antes de escribir estos cambios. Frontera: la auditoría no incluyó un
+lector de pantalla real ni el patrón completo de teclado del árbol `role="tree"`, cuyas filas son
+`<button>` nativos.
+
+## 175. Informe agregado de fricción, sin red
+
+Medido el 2026-11-21. El panel ya guardaba contadores en `localStorage` y ofrecía un informe
+descargable, pero solo contaba las reglas reconocidas. Ahora cada línea que `analyze()` no sabe
+explicar se cuenta como `friccion: <línea>` (sin pegar el log completo) y el informe añade una
+sección «líneas sin explicar» con las diez más frecuentes. Se descarga como `blob:` desde el enlace
+que ya existía: ninguna petición sale del navegador.
+
+```sh
+sh tools/entorno.sh gate
+grep -n 'friccion' studio/diagnostico.js studio/app.js
+```
+
+**Resultado**: `navegador: todo en orden` y `e2e: todo en orden`. La prueba de DOM pega una línea
+conocida y otra desconocida (`[build] mensaje nuevo sin explicar xyz`), descarga el informe desde el
+`blob:` y comprueba que la segunda aparece en el agregado. Durante esta prueba se corrigió una
+sonda rota por una secuencia `\\n` dentro de la plantilla del evaluador, que daba
+`SyntaxError: Invalid or unexpected token` antes de llegar al aserto. Frontera: los contadores son
+locales a cada navegador; agregarlos entre visitantes exigiría un servidor, que está fuera de la
+ambición.

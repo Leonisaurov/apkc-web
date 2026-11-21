@@ -54,10 +54,12 @@ bundle), B3 en §161 (Firefox 4/4; Safari sin equipo, escrito como frontera) y B
 | C3 | **documentación obsoleta**: `docs/situacion.md` dice que la anónima en `static` se rechaza (§99 la cerró); `docs/bloqueos.md` da el desugaring de lambdas como fuera de plan (§110-§116 lo hizo); repasar `README.md` y `docs/plan.md` | ninguna afirmación cerrada sigue escrita como pendiente |
 | C4 | **cierre**: panel de progreso si el usuario lo tiene abierto (regla 9), commit y push de este repo y del submódulo | `git status` limpio, `origin/web` alineado y gate en verde |
 
-**Estado (2026-11-21): plan completo.** C1 y C2 en §163 (publicado y verificado en una orden;
-versión del SW sobre todo el paquete), C3 corregido con sus `§` y C4 cerrado con el gate local en
-verde, el gate de GitHub en verde (run `44950578574`, con `zipcheck` y `bundletool` activos) y los
-dos repositorios pusheados.
+**Estado final (2026-11-21): 12/12, plan completo.** Bloque A en §156-§159, bloque B en §160-§162,
+bloque C en §163 y la cola adicional Alta/Media/Baja en §164-§175. El gate local está en verde con
+`zipcheck`, `bundletool` y `dexdump` activos, y el sitio se publica y verifica con
+`tools/entorno.sh publicar`. Fronteras escritas: ART en dispositivo no corre en CI (§166), la sal
+v4 no es confirmada por el CLI de `apksigner` (§165) y la ruta comprimida del wasm no se ha
+repetido en Firefox por un fallo de geckodriver en este equipo (§173).
 
 ## Fuera de este plan
 
