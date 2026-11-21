@@ -54,9 +54,10 @@ bundle), B3 en §161 (Firefox 4/4; Safari sin equipo, escrito como frontera) y B
 | C3 | **documentación obsoleta**: `docs/situacion.md` dice que la anónima en `static` se rechaza (§99 la cerró); `docs/bloqueos.md` da el desugaring de lambdas como fuera de plan (§110-§116 lo hizo); repasar `README.md` y `docs/plan.md` | ninguna afirmación cerrada sigue escrita como pendiente |
 | C4 | **cierre**: panel de progreso si el usuario lo tiene abierto (regla 9), commit y push de este repo y del submódulo | `git status` limpio, `origin/web` alineado y gate en verde |
 
-**Estado (2026-11-21): C1 y C2 en §163** (publicado y verificado en una orden; versión del SW sobre
-todo el paquete), **C3 cerrado** (situación y bloqueos corregidos con sus `§`). C4 se cierra con el
-gate final y el push.
+**Estado (2026-11-21): plan completo.** C1 y C2 en §163 (publicado y verificado en una orden;
+versión del SW sobre todo el paquete), C3 corregido con sus `§` y C4 cerrado con el gate local en
+verde, el gate de GitHub en verde (run `44950578574`, con `zipcheck` y `bundletool` activos) y los
+dos repositorios pusheados.
 
 ## Fuera de este plan
 
