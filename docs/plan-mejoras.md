@@ -42,6 +42,9 @@ Notas de ejecución:
 | B3 | **segundo navegador** (Firefox; Safari si hay máquina): SW + `crossOriginIsolated` + OPFS + compilación | `prueba-sitio.js` pasa allí, o se escribe la frontera exacta con el error |
 | B4 | **destello de la primera carga**: velo hasta que la página esté aislada | la recarga automática deja de verse como un parpadeo; `prueba-sitio.js` sigue en verde |
 
+**Estado (2026-11-21): Bloque B completo.** B1 y B2 en §160 (el gate ya no omite ni el zip ni el
+bundle), B3 en §161 (Firefox 4/4; Safari sin equipo, escrito como frontera) y B4 en §162.
+
 ## Bloque C — P1: cierre y pulido
 
 | # | Íteme | Criterio de cierre |
@@ -50,6 +53,10 @@ Notas de ejecución:
 | C2 | **hash de versión del SW sobre todos los ficheros** del sitio, no solo wasm + SW + `index.html` | un cambio en cualquier módulo cambia la versión del SW |
 | C3 | **documentación obsoleta**: `docs/situacion.md` dice que la anónima en `static` se rechaza (§99 la cerró); `docs/bloqueos.md` da el desugaring de lambdas como fuera de plan (§110-§116 lo hizo); repasar `README.md` y `docs/plan.md` | ninguna afirmación cerrada sigue escrita como pendiente |
 | C4 | **cierre**: panel de progreso si el usuario lo tiene abierto (regla 9), commit y push de este repo y del submódulo | `git status` limpio, `origin/web` alineado y gate en verde |
+
+**Estado (2026-11-21): C1 y C2 en §163** (publicado y verificado en una orden; versión del SW sobre
+todo el paquete), **C3 cerrado** (situación y bloqueos corregidos con sus `§`). C4 se cierra con el
+gate final y el push.
 
 ## Fuera de este plan
 

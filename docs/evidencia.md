@@ -7764,3 +7764,75 @@ para comparar la misma convención. `quitaVersion()` separa el `-v4`/`-v13` de l
 calificador, que sí va al pool de cadenas. Frontera: un tipo con solo configuraciones y **sin entrada
 base** sigue sin enlazarse (el validador de ids de tipo espera que el primer tipo escrito tenga id 1);
 la sonda y el proyecto de la página incluyen la base.
+
+## 160. Los oráculos que faltaban: `zipcheck.py` y `bundletool`
+
+Medido el 2026-11-21. `apkc-harness` ya está publicado, así que el gate deja de omitir el lector de
+zip ajeno a apkc. `tools/entorno.sh harness` lo clona en `$PREFIX/apkc-harness` (sin versionarlo),
+`doctor` lo nombra y `gate` lo usa. `e2e.sh` encuentra el `bundletool` de cualquier SDK por
+`ANDROID_HOME`/`BUNDLETOOL_JAR`, no solo por `$HOME/Android` (§154).
+
+```sh
+sh tools/entorno.sh harness
+sh tools/entorno.sh doctor | grep zipcheck
+sh tools/entorno.sh gate
+```
+
+**Resultado**: `ok /home/leonisauro/.cache/apkc-web/apkc-harness/zipcheck.py`; el gate ya no imprime
+«sin zipcheck.py» y todas las apks de la pestaña dicen `verificado por apksigner (v1+v2), zipalign,
+zipcheck y aapt2`. El `.aab` dice `validado por bundletool y jarsigner`. El workflow de GitHub
+clonea `apkc-harness` y descarga `bundletool-all-1.18.3.jar` antes del gate, con `APKC_HARNESS` y
+`BUNDLETOOL_JAR` en el entorno del paso; la verificación del run queda para §163.
+
+## 161. Firefox: el service worker también aísla fuera de Chromium
+
+Medido el 2026-11-21. `prueba-navegador.js` no sirve para Firefox (sus flags son de CDP), así que
+`studio/prueba-firefox.js` conduce Firefox por WebDriver con `geckodriver` contra el servidor
+estático sin cabeceras. El `android.jar` se sirve en una ruta **solo de desarrollo** del mismo
+origen para no meter 26 MB en base64 por el protocolo de WebDriver; el sitio publicado no la tiene.
+
+```sh
+GECKODRIVER=/ruta/geckodriver FIREFOX_BIN=/usr/bin/firefox SITIO_DIR=sitio \
+  ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar node studio/prueba-firefox.js
+```
+
+**Resultado**: `4 comprobaciones bien, 0 mal`. Firefox se recarga sola, `navigator.serviceWorker.controller`
+está puesto, `crossOriginIsolated === true`, el worker escribe y lee OPFS, el jar de 26361808 bytes
+entra en OPFS y la compilación entera firma una apk de 9221 bytes con `v1: ok` y `v2: ok` en el
+propio veredicto. Safari no está disponible en este equipo: queda como frontera escrita, no como
+afirmación.
+
+## 162. Sin destello en la primera carga
+
+Medido el 2026-11-21. `index.html` añade `apkc-aislando` a `<html>` antes de registrar el SW y lo
+quita en cuanto `crossOriginIsolated` es verdadero (o cuando el aviso de fallo tiene que verse);
+`style.css` muestra un velo mientras tanto y oculta el cuerpo.
+
+```sh
+grep -n 'apkc-aislando' sitio/index.html sitio/style.css
+sh tools/entorno.sh gate
+```
+
+**Resultado**: el velo está en los cuatro puntos de ida y vuelta del arranque y las pruebas siguen
+en verde: `pestaña: 83 comprobaciones`, `navegador: todo en orden`, `e2e: todo en orden` y
+`prueba-sitio.js` 9/9 sobre el host publicado. La recarga automática sigue ocurriendo; solo deja de
+verse como un parpadeo.
+
+## 163. Un solo comando para publicar y verificar
+
+Medido el 2026-11-21. `tools/entorno.sh publicar` construye el wasm y `sitio/`, lee el dominio de
+`.surge-domain`, ejecuta `surge . publish` desde `sitio/` y corre `prueba-sitio.js` contra la URL
+resultante con los mismos oráculos del gate. El hash del service worker ya no se calcula solo sobre
+el wasm, el SW y `index.html`: entra **cada fichero del paquete**, así que un cambio en cualquier
+módulo cambia la versión y un visitante con caché no se queda con código viejo.
+
+```sh
+sh tools/entorno.sh publicar
+grep -o 'sw.js?v=[0-9a-f]*' sitio/index.html | head -1
+curl -sI https://apkc-studio.surge.sh/ | head -1
+```
+
+**Resultado**: `Success! - Published to apkc-studio.surge.sh`, `9 comprobaciones bien, 0 mal` contra
+el host real y apk de 9221 bytes verificada por `apksigner`. La versión del SW pasó de
+`97d25afb595e` (hash de tres ficheros) a `efffbf3972ee` (hash de todo el paquete). El sitio sigue
+`HTTP/2 200`.

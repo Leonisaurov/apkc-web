@@ -34,7 +34,7 @@ fi
 # documentación del submódulo no viajan; LICENSE y NOTICE sí, porque son obligatorias.
 for dev in .gitignore AGENTS.md EDITOR.md README.md e2e.sh package.json servidor.js \
            prueba.js prueba-crear.js prueba-navegador.js prueba-pestana.js prueba-sitio.js \
-           servidor-estatico.js; do
+           prueba-firefox.js servidor-estatico.js; do
   rm -f "$DESTINO/$dev"
 done
 rm -rf "$DESTINO/.github"
@@ -47,7 +47,23 @@ cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$DESTINO/wasm_exec.js"
 # URL para que un cambio de binario no se quede servido por la caché del navegador. El hash se
 # inyecta en el SW, index.html y offline.js; en el árbol de desarrollo el marcador es literal y
 # válido como versión.
-VERSION=$(cat "$DESTINO/apkc.wasm" "$DESTINO/sw.js" "$DESTINO/index.html" | sha256sum | cut -c1-12)
+VERSION=$(python3 - "$DESTINO" <<'PY'
+from pathlib import Path
+import hashlib
+import sys
+
+raiz = Path(sys.argv[1])
+h = hashlib.sha256()
+# Todos los ficheros que viajan, no solo el wasm y el SW: si cambia cualquier módulo, la versión
+# del service worker cambia y un visitante con caché no se queda con código viejo (§163).
+for fichero in sorted(p for p in raiz.rglob("*") if p.is_file() and p.name != "CNAME"):
+    h.update(str(fichero.relative_to(raiz)).encode("utf-8"))
+    h.update(b"\0")
+    h.update(fichero.read_bytes())
+    h.update(b"\0")
+print(h.hexdigest()[:12])
+PY
+)
 python3 - "$DESTINO" "$VERSION" <<'PY'
 from pathlib import Path
 import sys

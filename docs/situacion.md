@@ -92,8 +92,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   dijo el oráculo, no un manual: **el bloque de firmas no entra en el digest del contenido** (un byte en
   el par de relleno no lo detecta nadie; uno en el valor del par de la v2 lo detectan los dos) y **los
   pares desconocidos se ignoran y se anotan**, porque herejarlos daría menos aprobados que `apksigner`.
-  No valida la cadena de confianza (sin ancla) y rechaza por nombre DSA/EC, digest que no sea SHA-256,
-  varios firmantes y las firmas v3/v4.
+  No valida la cadena de confianza (sin ancla). EC P-256/P-384, v3/v3.1, v4 y la v1 SHA-1 se
+  escriben y verifican después (§121-§126); siguen fuera DSA y los digest que no sean SHA-256.
 - **El subconjunto de Java crece midiendo, y ya acepta un fuente propio** (§49 y §50): campos con
   modificadores leídos de `javap -v` (0x0000 a 0x0010), inicializadores bajados al `<init>` con su
   `LineNumberTable`, `<clinit>` al final, locales con `checkcast`, asignación a campo y aritmética entera
@@ -107,9 +107,9 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   lleva **una** fila en la `LineNumberTable`. En dalvik son tres formas de rama (`10t`, `21t`, `22t`), todas
   medidas contra las palabras de `d8`, y el `22s` de los literales. Dos defectos
   reales salieron de la comparación: un `goto` que no encadenaba por encima de una etiqueta vacía (javac escribe
-  `13: goto 27`, no `13: goto 20`) y el formato `22s` mal leído. Quedan rechazados por nombre: la rama **hacia
-  atrás** (un bucle, cuyo punto de fusión de registros no está medido), `goto/16`, el booleano suelto como
-  condición y el `null` a la izquierda.
+  `13: goto 27`, no `13: goto 20`) y el formato `22s` mal leído. La rama hacia atrás se midió después
+  (§63, §69 y §70), así que los bucles ya no están rechazados; siguen fuera `goto/16`, el booleano
+  suelto como condición y el `null` a la izquierda.
 - **Concatenar cadenas y plegar constantes, medidos contra javac** (§53): en la versión 52 javac pega con
   `StringBuilder` (`new`/`dup`/`<init>`/una fila de `append`/`toString`, sin usar el constructor
   `StringBuilder(String)`), los literales adjacentes se doblan en **una** constante (`"hola" + " " + 3` es un
@@ -128,7 +128,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   cargar la captura** (`aload_0; getfield this$0` dos veces) en vez de hacer `dup`, y el estático del
   exterior se lee con `getstatic` sin pasar por ella. Si el campo del exterior es **privado**, javac no
   escribe el campo: escribe `access$000`/`access$002` sintéticos del exterior (el de escritura *devuelve* el
-  valor, de ahí el `pop`), y como ni el número ni el orden están medidos, ese caso se rechaza por nombre.
+  valor, de ahí el `pop`); el número y el orden se midieron después (§72), así que ese caso ya
+  se compila.
 - **El teléfono es el oráculo que faltaba, y encontró cuatro defectos** (§55): con `rish` (el shell de Shizuku,
   sin `adb`) el apk del enlace en Go **se instala y la actividad arranca** —`pm install -r` `Success`,
   `am start -W -S` `Status: ok` / `LaunchState: COLD`, `Displayed com.myapp/.MainActivity: +527ms`, sin `FATAL`,
@@ -263,7 +264,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   de javac's `Bucle` traducido por nosotros imprime `10`/`rc 10` en `app_process`, el `.class` nuestro
   también, y el banco lleva un `while` (los cuatro caminos: `total 7|total 9|total 42`, `rc 42`, `dexdump
   rc 0`). Ojo al preparar fuentes para el dexer: **javac 21 compila el `+` de cadenas con
-  `invokedynamic`**, que este fork rechaza (5.22); por eso el `Arranque` del banco imprime enteros.
+  `invokedynamic`**; se desugra en §110-§116, aunque el `Arranque` del banco sigue imprimiendo
+  enteros porque así se midió primero.
 - **El `switch`, del `.class` y del fuente, ya está** (§64): `tableswitch` (`0xaa`) y
   `lookupswitch` (`0xab`) se caminan con el relleno hasta el múltiplo de cuatro **contado desde el
   principio del `Code`**, y salen como `packed-switch` (`0x2b`) / `sparse-switch` (`0x2c`) con el
@@ -277,7 +279,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   Probado con `Ramas` (densa de ocho y dispersa de tres) en los tres caminos: nuestro dex, la JVM y el
   dex de `d8` sobre nuestras clases dan `100/105/999/3/9`, `rc 240`, `dexdump rc 0`. Y **también se lee
   del fuente**: el analizador acepta `switch` con claves literales enteras y brazos que terminan en
-  `break` o `return` (la caída al siguiente se rechaza por nombre) y el emisor escribe
+  `break` o `return`; la caída al siguiente se midió después (§129) y el emisor escribe
   `tableswitch`/`lookupswitch` con el relleno desde el principio del `Code` y destinos de 32 bits desde
   el opcode; el `.class` sale **con el mismo `Code`** que el de javac (el `StackMapTable` llegó en el
   §65) y el dex **byte a byte** el suyo (1432 bytes,
@@ -320,7 +322,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   getfield; …; putfield` para el de instancia; el traductor baja `iinc` a `add-int/lit8 vA, vB, #±1`
   (`d800 0001`, `d800 00ff`) y el `dup` del campo desaparece al traducir, así que el dex de nuestra
   `Inc` es **byte a byte** el de javac. El analizador acepta `++`/`--` como tokens (en prefijo, sufijo
-  y paso de `for`); como **valor** se rechaza por nombre, y `+=`/`-=` siguen fuera. El banco usa
+  y paso de `for`); como **valor** se midió en §156 y `+=`/`-=` en §67 y §68. El banco usa
   `i++` y un `for` con `j++` en los cinco caminos.
 - **`+=`/`-=` y `do-while`** (§68 y §69): javac baja `x += lit` a `iinc` cuando el literal cabe en un
   byte y a la lectura-cuenta-escritura cuando no (`*=`, `/=` y deltas grandes); el analizador reescribe

@@ -12,6 +12,8 @@
 #   tools/entorno.sh gate              # binarios + studio/e2e.sh (la página de punta a punta)
 #   tools/entorno.sh banco             # banco/banco.sh (necesita rish para los caminos del aparato)
 #   tools/entorno.sh jar [api]         # ruta del android.jar local o lo instala con sdkmanager (fuente oficial)
+#   tools/entorno.sh sitio             # empaqueta sitio/ listo para subir con surge
+#   tools/entorno.sh publicar          # empaqueta, publica en Surge y verifica desde el host
 #   tools/entorno.sh doctor            # imprime el entorno resuelto
 #   tools/entorno.sh env               # exports listos para `eval "$(tools/entorno.sh env)"`
 #   tools/entorno.sh -- <comando...>   # ejecuta cualquier comando con el entorno ya puesto
@@ -33,7 +35,9 @@ fi
 ANDROID_HOME=${ANDROID_HOME:-$HOME/Android}
 TMP=${TMP:-$PREFIX/tmp}
 mkdir -p "$TMP"
-export HOME PREFIX ANDROID_HOME TMP
+# apkc-harness es público: zipcheck.py es un oráculo de zip ajeno a apkc, no se versiona aquí.
+APKC_HARNESS=${APKC_HARNESS:-$PREFIX/apkc-harness}
+export HOME PREFIX ANDROID_HOME TMP APKC_HARNESS
 
 # build-tools más alta que exista; puede no haber ninguna y entonces se deja el PATH como estaba.
 BUILD_TOOLS=
@@ -87,8 +91,8 @@ verifica_entorno() {
   printf 'apkc=%s\n' "${APKC:-$TMP/apkc-gate}"
   printf 'apkc-wasm=%s\n' "${APKC_WASM:-$TMP/apkc-wasm.wasm}"
   [ -d "$ANDROID_HOME/build-tools/34.0.0" ] && printf 'build-tools 34.0.0=%s\n' "$ANDROID_HOME/build-tools/34.0.0" || printf 'FALTA build-tools 34.0.0 en %s\n' "$ANDROID_HOME"
-  zipcheck=${APKC_HARNESS:-$HOME/Develop/Go/apkc-harness}/zipcheck.py
-  [ -f "$zipcheck" ] && printf 'ok %s\n' "$zipcheck" || printf 'zipcheck=%s (opcional: el gate lo omite con aviso)\n' "$zipcheck"
+  zipcheck=$APKC_HARNESS/zipcheck.py
+  [ -f "$zipcheck" ] && printf 'ok %s\n' "$zipcheck" || printf 'FALTA %s (tools/entorno.sh harness)\n' "$zipcheck"
 }
 
 tarea=${1:-doctor}
@@ -101,6 +105,13 @@ case "$tarea" in
   wasm)
     compila_wasm
     ( cd "$RAIZ/shim" && node navegador-sim.js "$TMP/apkc-test.wasm" )
+    ;;
+  harness)
+    if [ ! -f "$APKC_HARNESS/zipcheck.py" ]; then
+      printf 'clonando apkc-harness en %s\n' "$APKC_HARNESS" >&2
+      git clone --depth 1 https://github.com/Leonisaurov/apkc-harness.git "$APKC_HARNESS" >&2
+    fi
+    printf '%s\n' "$APKC_HARNESS/zipcheck.py"
     ;;
   gate)
     construye_binarios
@@ -122,6 +133,22 @@ case "$tarea" in
   sitio)
     ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/apkc-wasm.wasm" . )
     APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm} sh "$RAIZ/tools/sitio.sh" "${1:-$RAIZ/sitio}"
+    ;;
+  publicar)
+    command -v surge >/dev/null 2>&1 || { printf 'falta el CLI de surge\n' >&2; exit 2; }
+    ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/apkc-wasm.wasm" . )
+    APKC_WASM=${APKC_WASM:-$TMP/apkc-wasm.wasm} sh "$RAIZ/tools/sitio.sh" "$RAIZ/sitio"
+    DOMINIO=$(cat "$RAIZ/.surge-domain" 2>/dev/null || cat "$RAIZ/sitio/CNAME")
+    printf 'publicando en https://%s/\n' "$DOMINIO"
+    ( cd "$RAIZ/sitio" && surge . publish )
+    # Verificación sobre el host real, con los mismos oráculos que el gate.
+    JAR=$(jar_del_sdk 34 || true)
+    APKSIGNER=$ANDROID_HOME/build-tools/34.0.0/apksigner
+    [ -x "$APKSIGNER" ] || APKSIGNER=$(command -v apksigner || true)
+    CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)
+    SITIO_URL="https://$DOMINIO/" PREFIX="$PREFIX" CHROME_BIN="$CHROME" \
+      ANDROID_JAR="$JAR" APKSIGNER="$APKSIGNER" SITIO_APK="$TMP/sitio-publicado.apk" \
+      node "$RAIZ/studio/prueba-sitio.js"
     ;;
   banco)
     ( cd "$RAIZ" && APKC=${APKC:-$TMP/apkc-gate} sh banco/banco.sh "$@" )

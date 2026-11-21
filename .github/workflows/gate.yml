@@ -84,6 +84,16 @@ jobs:
             -storepass android -keypass android -alias androiddebugkey \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Android Debug,O=Android,C=US"
+      - name: oráculo zipcheck (apkc-harness)
+        run: |
+          git clone --depth 1 https://github.com/Leonisaurov/apkc-harness.git "$RUNNER_TEMP/apkc-harness"
+          echo "APKC_HARNESS=$RUNNER_TEMP/apkc-harness" >> "$GITHUB_ENV"
+      - name: oráculo bundletool
+        run: |
+          mkdir -p "$RUNNER_TEMP/bundletool"
+          curl -fsSL -o "$RUNNER_TEMP/bundletool/bundletool-all-1.18.3.jar" \
+            https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar
+          echo "BUNDLETOOL_JAR=$RUNNER_TEMP/bundletool/bundletool-all-1.18.3.jar" >> "$GITHUB_ENV"
       - name: gate completo
         env:
           PREFIX: ${{ runner.temp }}

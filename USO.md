@@ -169,6 +169,8 @@ clave: desinstala la anterior o vuelve a la clave con la que se instaló.
 ## 6.6 Empaquetar y publicar en Surge
 
 ```sh
+sh tools/entorno.sh publicar       # construye, sube y verifica contra el host en una sola orden
+# o, si solo quieres empaquetar:
 sh tools/entorno.sh sitio          # deja sitio/ y sitio.zip (con CNAME y sw.js versionado)
 cd sitio
 surge . publish                    # la CLI 0.52.4 no acepta `surge .` solo: dice "nothing to do"

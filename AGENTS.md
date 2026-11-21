@@ -14,7 +14,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
 | `docs/plan-mejoras.md` | mejoras posteriores a la publicación, en el orden acordado P3 → P2 → P1 | leerlo antes de seguir con esa cola |
 | `apps.md` | informe de ejecutar apps Android desde Termux/chroot: qué falla, por qué y el `am` con `BOOTCLASSPATH` | leerlo y reproducir sus comandos |
-| `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco`, `jar`, `sitio`, `doctor` y `env` | `tools/entorno.sh doctor` |
+| `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco`, `jar`, `harness`, `sitio`, `publicar`, `doctor` y `env` | `tools/entorno.sh doctor` |
 | `tools/sdk34.sh` | SDK espejo con solo `build-tools/34.0.0` y `android-34`: `apkc` elige la build-tools más alta y sin esto un escritorio con 36.0.0 pediría android-36 | `sh tools/sdk34.sh "$TMP/apkc-sdk34"` |
 | `tools/progreso.py` | genera el JSON del panel de progreso (ítems, estados y el trabajo en curso) desde el inventario y las fronteras de `docs/plan.md` y, si existe, desde la tabla de estado del plan de producto; lo consume el panel de `virtual_screen` | `python3 tools/progreso.py "$PREFIX/tmp/tareas.json"` |
 | `tools/sitio.sh` | empaqueta en `sitio/` el sitio publicado (`studio/` versionado + `apkc.wasm` + `wasm_exec.js`), versiona el SW, conserva `CNAME` y comprueba COOP/COEP; no mete jar, keystores ni OPFS | `tools/entorno.sh sitio` |

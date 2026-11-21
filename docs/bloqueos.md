@@ -35,8 +35,9 @@ La interfaz hace falta aunque el navegador consiguiera las herramientas: `js/was
   como 6 `.class` (3333 bytes) y sale como **2844 bytes de dex con 217 objetos** en 17 tipos de
   sección. Eso es lo que hay que emitir para una app mínima: un artifact finito y comparable byte a
   byte contra `d8`.
-- **Donde sí es otro proyecto**: el desugaring de lambdas, `invokedynamic`, default methods y todo lo
-  que aporten dependencias ajenas. **Fuera del plan**, con el motivo escrito; no se promete.
+- **Donde sí es otro proyecto**: el desugaring de lambdas, referencias de método, SAM,
+  `altMetafactory` y concatenación dinámica ya se hizo (§110-§116); siguen fuera los default methods
+  y todo lo que aporten dependencias ajenas. **Fuera del plan**, con el motivo escrito; no se promete.
 
 ## 3. `aapt2` — el que no tiene atajo
 
