@@ -7712,3 +7712,24 @@ necesitaron los seis opcodes nuevos: sin ellos el verificador propio decía `opc
 this fork measured`. Frontera: solo `int`; el ancho (`long`/`double`) y un desplazamiento con una
 expresión a la derecha que no sea literal ni variable siguen rechazados por nombre. ART pendiente de
 dispositivo, igual que en §156.
+
+## 158. `protectionLevel` compuesto en `<permission>`
+
+Medido el 2026-11-21. Cierra la frontera del §138. La sonda cambia `dangerous` por
+`signature|privileged` en el mismo manifiesto y se enlaza con `aapt2 link --no-auto-version` y con
+`--linker go` sobre el mismo `android.jar` de API 34.
+
+```sh
+BT=$ANDROID_HOME/build-tools/34.0.0
+$BT/aapt2 dump xmltree /tmp/opencode/perm-comp/out4.apk --file AndroidManifest.xml | grep protectionLevel
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run 'TestPermisoCon' -count=1 -v .
+```
+
+**Resultado**: aapt2 escribe
+`protectionLevel(0x01010009)=0x00000012` — la OR de `signature` (0x2) y `privileged` (0x10) — y
+nuestro AXML sale **byte a byte el suyo** (1364 bytes). `TestPermisoConProtectionLevelCompuesto` y
+el anterior `TestPermisoConSusAtributos` pasan, y el gate sigue en verde. El valor compuesto se
+resuelve en `valorDeAtributo` con la OR de los ítems del framework y el tipo `0x11` que ya exigía el
+formato `flags`; un nombre que el framework no conozca se rechaza con su línea. Frontera: el separador
+es `|` sin expresiones más complejas, y solo se mide en atributos del manifiesto.

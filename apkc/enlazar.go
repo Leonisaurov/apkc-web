@@ -106,6 +106,31 @@ func valorDeAtributo(attr attrFuente, m *marcoRecursos, ids map[string]uint32) (
 		}
 		return valorEscribir{tipo: tipoReferencia, datos: id}, nil
 	}
+	// Un valor compuesto (`protectionLevel="signature|privileged"`) es la OR de los valores que
+	// el framework guarda para cada nombre, medido en §158 contra aapt2: 0x2 | 0x10 = 0x12, con el
+	// tipo hexadecimal que le corresponde al atributo de formato flags.
+	if strings.Contains(attr.texto, "|") {
+		datos := uint32(0)
+		parte := strings.Split(attr.texto, "|")
+		for i, nombre := range parte {
+			nombre = strings.TrimSpace(nombre)
+			v, encontrado := m.valoresDeAtributo(attr.nombre)[nombre]
+			if !encontrado {
+				return valorEscribir{}, fmt.Errorf("%s: el valor %q de %s no está en el framework",
+					attr.nombre, nombre, attr.texto)
+			}
+			if i == 0 {
+				datos = v.datos
+			} else {
+				datos |= v.datos
+			}
+		}
+		tipo := byte(tipoEnteroDec)
+		if m.esFlags(attr.nombre) {
+			tipo = tipoEnteroHex
+		}
+		return valorEscribir{tipo: tipo, datos: datos}, nil
+	}
 	// el nombre del atributo es la clave de los enum: `layout_width` -> wrap_content, `gravity` -> center
 	for nombre, v := range m.valoresDeAtributo(attr.nombre) {
 		if nombre == attr.texto {

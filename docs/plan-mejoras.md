@@ -18,9 +18,10 @@ marca «hecha» por analogía ni sin evidencia propia sobre el árbol final (reg
 | A3 | `protectionLevel` **compuesto** (`signature\|privileged`) en `<permission>` | AXML byte a byte contra `aapt2 link`, con la representación de la bandera compuesta | fila 5.19 actualizada, § nuevo |
 | A4 | `nodpi`/`tvdpi` y `sw600dp` | tabla de recursos byte a byte contra `aapt2 link --no-auto-version` para cada calificador | fila 5.17 actualizada, § nuevo |
 
-**Estado (2026-11-21): A1 cerrada en §156** (once formas, dex byte a byte y JVM con `-Xverify:all`)
-**y A2 cerrada en §157** (`<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`; mismos oráculos). ART queda pendiente
-de dispositivo en los dos y está escrito como tal.
+**Estado (2026-11-21): A1 cerrada en §156** (once formas, dex byte a byte y JVM con `-Xverify:all`),
+**A2 cerrada en §157** (`<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`; mismos oráculos) y **A3 cerrada en §158**
+(`protectionLevel` compuesto, AXML byte a byte contra aapt2). ART queda pendiente de dispositivo en
+A1 y A2 y está escrito como tal.
 
 Notas de ejecución:
 
