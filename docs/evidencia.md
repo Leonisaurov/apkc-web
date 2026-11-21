@@ -7733,3 +7733,34 @@ el anterior `TestPermisoConSusAtributos` pasan, y el gate sigue en verde. El val
 resuelve en `valorDeAtributo` con la OR de los ítems del framework y el tipo `0x11` que ya exigía el
 formato `flags`; un nombre que el framework no conozca se rechaza con su línea. Frontera: el separador
 es `|` sin expresiones más complejas, y solo se mide en atributos del manifiesto.
+
+## 159. `nodpi`, `tvdpi` y `sw600dp`: los tres calificadores que faltaban
+
+Medido el 2026-11-21. Cierra la frontera de la fila 5.17. Sonda: un PNG base, `drawable-nodpi-v4`,
+`drawable-tvdpi-v4`, un layout base y `layout-sw600dp-v13`, enlazados con `aapt2 link
+--no-auto-version` y con `--linker go`.
+
+```text
+aapt2 dump resources:  drawable/i -> () (tvdpi-v4) (nodpi-v4)
+                       layout/main -> () (sw600dp-v13)
+ResTable_config (64 bytes, volcado con el instrumento del §24):
+  nodpi:    density +14 = 0xffff, sdkVersion +24 = 4
+  tvdpi:    density +14 = 0x00d5 (213), sdkVersion +24 = 4
+  sw600dp:  smallestScreenWidthDp +30 = 0x0258 (600), sdkVersion +24 = 13
+spec: drawable 0x0500, layout 0x2400
+```
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run 'TestNodpiTvdpiYSw600dp|TestDensidadesYOrientacionPort' -count=1 -v .
+sh tools/entorno.sh gate
+```
+
+**Resultado**: los dos tests pasan y el `resources.arsc` de este fork sale **byte a byte** el de
+aapt2 (1168 bytes); el gate sigue en verde. Detalle medido de aapt2: las build-tools 34.0.0 escriben
+0 en el u16 de +10 del `RES_TABLE_TYPE_SPEC`, mientras que 35.0.1 y 36.0.0 escriben el número de
+configuraciones (3 y 2 aquí), que es lo que ya hacía este escritor; el fixture se generó con 35.0.1
+para comparar la misma convención. `quitaVersion()` separa el `-v4`/`-v13` de la ruta del
+calificador, que sí va al pool de cadenas. Frontera: un tipo con solo configuraciones y **sin entrada
+base** sigue sin enlazarse (el validador de ids de tipo espera que el primer tipo escrito tenga id 1);
+la sonda y el proyecto de la página incluyen la base.

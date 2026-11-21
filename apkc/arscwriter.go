@@ -21,6 +21,8 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
+	"strconv"
+	"strings"
 	"unicode/utf16"
 )
 
@@ -258,8 +260,37 @@ func densidadDe(calificador string) uint16 {
 		return 480
 	case "xxxhdpi":
 		return 640
+	case "tvdpi":
+		return 213
+	case "nodpi":
+		return 0xffff // DENSITY_ANY, medido en §159
 	}
 	return 0
+}
+
+// quitaVersion: el `-v4`/`-v13` que aapt2 añade al nombre de carpeta no es parte del calificador
+// que se guarda en la tabla, pero sí del nombre de la ruta que va al pool de cadenas.
+func quitaVersion(c string) string {
+	if i := strings.LastIndex(c, "-v"); i > 0 {
+		if _, err := strconv.Atoi(c[i+2:]); err == nil {
+			return c[:i]
+		}
+	}
+	return c
+}
+
+// anchoMinimoDe: `sw600dp` -> 600, el smallestScreenWidthDp que aapt2 escribe en +30 del
+// ResTable_config (medido en §159).
+func anchoMinimoDe(c string) uint16 {
+	c = quitaVersion(c)
+	if !strings.HasPrefix(c, "sw") || !strings.HasSuffix(c, "dp") {
+		return 0
+	}
+	n, err := strconv.Atoi(c[2 : len(c)-2])
+	if err != nil || n <= 0 || n > 65535 {
+		return 0
+	}
+	return uint16(n)
 }
 
 // configDe: los 64 bytes de ResTable_config que midió el aapt2 del aparato. La base solo declara su
@@ -280,6 +311,10 @@ func configDe(lengua string) []byte {
 	case lengua == "land":
 		// ResTable_config::orientation = ORIENTATION_LAND (2), en +12
 		b[12] = 2
+	case anchoMinimoDe(lengua) != 0:
+		// smallestScreenWidthDp en +30 y sdkVersion 13 en +24 (§159)
+		binary.LittleEndian.PutUint16(b[30:], anchoMinimoDe(lengua))
+		b[24] = 13
 	case densidadDe(lengua) != 0:
 		// density en +14 y sdkVersion 4 en +24, para todas las densidades medidas (§137)
 		binary.LittleEndian.PutUint16(b[14:], densidadDe(lengua))

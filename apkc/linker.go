@@ -125,8 +125,14 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 				tipo, config = "layout", "land"
 			case e.Name() == "layout-port":
 				tipo, config = "layout", "port"
-			case strings.HasPrefix(e.Name(), "drawable-") && densidadDe(strings.TrimPrefix(e.Name(), "drawable-")) != 0:
-				tipo, config = "drawable", strings.TrimPrefix(e.Name(), "drawable-")
+			case strings.HasPrefix(e.Name(), "layout-sw") &&
+				anchoMinimoDe(strings.TrimPrefix(e.Name(), "layout-")) != 0:
+				// layout-sw600dp y el -v13 que aapt2 añade a la ruta (§159)
+				tipo, config = "layout", quitaVersion(strings.TrimPrefix(e.Name(), "layout-"))
+			case strings.HasPrefix(e.Name(), "drawable-") &&
+				densidadDe(quitaVersion(strings.TrimPrefix(e.Name(), "drawable-"))) != 0:
+				// drawable-nodpi, drawable-tvdpi y sus equivalentes -v4 (§159)
+				tipo, config = "drawable", quitaVersion(strings.TrimPrefix(e.Name(), "drawable-"))
 			default:
 				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, layout-land, menu, xml, drawable, drawable-hdpi, mipmap y raw. Otra densidad, orientacion o version de API es una configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
 			}

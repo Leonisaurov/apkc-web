@@ -19,9 +19,10 @@ marca «hecha» por analogía ni sin evidencia propia sobre el árbol final (reg
 | A4 | `nodpi`/`tvdpi` y `sw600dp` | tabla de recursos byte a byte contra `aapt2 link --no-auto-version` para cada calificador | fila 5.17 actualizada, § nuevo |
 
 **Estado (2026-11-21): A1 cerrada en §156** (once formas, dex byte a byte y JVM con `-Xverify:all`),
-**A2 cerrada en §157** (`<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`; mismos oráculos) y **A3 cerrada en §158**
-(`protectionLevel` compuesto, AXML byte a byte contra aapt2). ART queda pendiente de dispositivo en
-A1 y A2 y está escrito como tal.
+**A2 cerrada en §157** (`<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`; mismos oráculos), **A3 cerrada en §158**
+(`protectionLevel` compuesto, AXML byte a byte contra aapt2) y **A4 cerrada en §159** (`nodpi`,
+`tvdpi` y `sw600dp`, arsc byte a byte). ART queda pendiente de dispositivo en A1 y A2 y está escrito
+como tal. **Bloque A completo.**
 
 Notas de ejecución:
 
