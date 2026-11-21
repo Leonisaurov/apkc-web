@@ -39,6 +39,10 @@ const (
 // que se pida `--v4=false`; un bundle no lo escribe porque no tiene bloque v2/v3.
 var escribirV4 = true
 
+// v4SaltHex: sal opcional del árbol de verity de la firma v4, en hexadecimal. Vacía reproduce
+// el `.idsig` que apksigner escribe por defecto (§165).
+var v4SaltHex = ""
+
 // rotacionActiva, si no es nil, firma v1/v2 con la clave vieja (la de `key`/`cert` en
 // finishSignedPackage) y v3/v4 con la nueva, con el linaje en el proof-of-rotation. Es un
 // global de la etapa porque el firmante es síncrono y el comando lo pone y lo quita.

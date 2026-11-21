@@ -33,6 +33,26 @@ func TestV4FirmaYVerifica(t *testing.T) {
 	}
 }
 
+// TestV4ConSal: la sal no vacía entra en HashingInfo, en los SigningInfo y en CADA bloque del
+// árbol de verity. El escritor y el lector tienen que seguir acordando (§165).
+func TestV4ConSal(t *testing.T) {
+	anterior := v4SaltHex
+	v4SaltHex = "0011223344"
+	defer func() { v4SaltHex = anterior }()
+	key, cert := signingPair(t)
+	salida := filepath.Join(t.TempDir(), "sal.apk")
+	if _, err := resignWithKey(fixturePackage(t), salida, key, cert); err != nil {
+		t.Fatalf("el apk no se firmó con sal: %v", err)
+	}
+	v, err := verificarApk(salida)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.v4Presente || !v.v4 {
+		t.Errorf("la v4 con sal no verificó: %v", v.v4Motivos)
+	}
+}
+
 // TestV4RechazaUnArbolCambiado: un byte cambiado en el árbol del `.idsig` tiene que
 // romper la comparación con el árbol recalculado del apk.
 func TestV4RechazaUnArbolCambiado(t *testing.T) {

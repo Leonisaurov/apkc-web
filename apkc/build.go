@@ -56,6 +56,8 @@ type buildOpts struct {
 	sigAlg      string
 	// v4 writes the .idsig sidecar next to the apk for incremental installs
 	v4 bool
+	// v4SaltHex is the optional hex salt of the verity tree (empty by default)
+	v4SaltHex string
 	// v1SHA1 writes the JAR signature with SHA-1 (minSdk < 18); the project api turns
 	// it on even without the flag
 	v1SHA1 bool
@@ -91,6 +93,7 @@ type buildFlags struct {
 	keyAlias    *string
 	sigAlg      *string
 	v4          *bool
+	v4SaltHex   *string
 	v1SHA1      *bool
 	signer      *string
 	linker      *string
@@ -114,6 +117,7 @@ func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
 	f.keyAlias = set.String("keyalias", "androiddebugkey", "key alias to use")
 	f.sigAlg = set.String("sigalg", "SHA256withRSA", "signature algorithm to use")
 	f.v4 = set.Bool("v4", true, "write the .idsig sidecar of the v4 signature for incremental installs")
+	f.v4SaltHex = set.String("v4-salt", "", "hex salt of the v4 verity tree (empty by default)")
 	f.v1SHA1 = set.Bool("v1-sha1", false, "write the JAR signature with SHA-1 (for minSdk < 18); a project below API 18 turns it on")
 	f.signer = set.String("signer", signerDefault, "packaging and signing backend: auto (the default: go unless the project builds a bundle, uses a keystore format apkc cannot read, or targets a platform older than 4.3), go (zipalign and apksigner never start), jvm (zipalign and apksigner)")
 	f.linker = set.String("linker", "aapt2", "resource linker backend: aapt2 (the default: compile and link by running the SDK tool) or go (this binary writes the resource table, the binary XML and R.java; it refuses projects whose resources it has not been measured against, and needs android.jar for the framework ids)")
@@ -136,6 +140,7 @@ func (f buildFlags) opts() buildOpts {
 		keyAlias:    *f.keyAlias,
 		sigAlg:      *f.sigAlg,
 		v4:          *f.v4,
+		v4SaltHex:   *f.v4SaltHex,
 		v1SHA1:      *f.v1SHA1,
 		signer:      *f.signer,
 		linker:      *f.linker,
@@ -162,6 +167,7 @@ func build() {
 func _build(o buildOpts) {
 	defer timeIt("total")()
 	escribirV4 = o.v4
+	v4SaltHex = o.v4SaltHex
 	if o.linker != "aapt2" && o.linker != linkerGo {
 		LogF("build", "--linker %q: the resource linkers are aapt2 and go", o.linker)
 	}

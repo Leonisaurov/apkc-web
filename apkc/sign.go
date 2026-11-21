@@ -34,6 +34,7 @@ func sign() {
 	keyAlias := set.String("keyalias", "androiddebugkey", "key alias to use")
 	out := set.String("out", "", "where to write the signed package (default: over the input, as apksigner does); the switches go before the package, and -- ends them")
 	v4 := set.Bool("v4", true, "write the .idsig sidecar of the v4 signature for incremental installs")
+	sal := set.String("v4-salt", "", "hex salt of the v4 verity tree (empty by default)")
 	lineage := set.String("lineage", "", "lineage file from apkc rotate: sign a key rotation (v1/v2 with the old key, v3/v4 with this one)")
 	oldStore := set.String("old-keystore", "", "old keystore, the one that signs v1/v2 when --lineage is used")
 	oldPass := set.String("old-storepass", "android", "password of the old keystore")
@@ -42,6 +43,7 @@ func sign() {
 	v1Sha1 := set.Bool("v1-sha1", false, "write the JAR signature with SHA-1 (for minSdk < 18)")
 	set.Parse(os.Args[2:])
 	escribirV4 = *v4
+	v4SaltHex = *sal
 	v1SHA1 = *v1Sha1
 
 	packages := set.Args()

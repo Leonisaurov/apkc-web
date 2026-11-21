@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 )
 
@@ -35,9 +36,19 @@ const (
 // (la última rellena con ceros), cada nivel partido en bloques de 4096 y relleno hasta un
 // múltiplo de 4096, y el nivel superior el primero en el fichero. El nivel superior es el
 // primero cuyos hashes caben en 4096 bytes; su SHA-256 es la raíz.
-func arbolVerity(apk []byte) (raiz, arbol []byte, err error) {
+func arbolVerity(apk, sal []byte) (raiz, arbol []byte, err error) {
 	if len(apk) == 0 {
 		return nil, nil, fmt.Errorf("un apk vacío no tiene árbol de verity")
+	}
+	// fs-verity prefija la sal a CADA bloque de CADA nivel; con sal vacía esto es sha256 del bloque,
+	// que es lo medido para el `.idsig` por defecto de apksigner.
+	hashBloque := func(bloque []byte) []byte {
+		h := sha256.New()
+		if len(sal) > 0 {
+			h.Write(sal)
+		}
+		h.Write(bloque)
+		return h.Sum(nil)
 	}
 	niveles := [][]byte{}
 	datos := apk
@@ -51,8 +62,7 @@ func arbolVerity(apk []byte) (raiz, arbol []byte, err error) {
 			}
 			var bloque [v4BlockSize]byte
 			copy(bloque[:], datos[i:fin])
-			suma := sha256.Sum256(bloque[:])
-			crudo = append(crudo, suma[:]...)
+			crudo = append(crudo, hashBloque(bloque[:])...)
 		}
 		// cada nivel se guarda relleno hasta un múltiplo de 4096; el superior es el
 		// primero que cabe en un bloque
@@ -61,8 +71,7 @@ func arbolVerity(apk []byte) (raiz, arbol []byte, err error) {
 		copy(nivel, crudo)
 		niveles = append([][]byte{nivel}, niveles...)
 		if len(crudo) <= v4BlockSize {
-			suma := sha256.Sum256(nivel)
-			raiz = suma[:]
+			raiz = hashBloque(nivel)
 			break
 		}
 		datos = nivel
@@ -93,17 +102,17 @@ func ponBytes(dst, b []byte) []byte {
 }
 
 // hashingInfoV4: hashAlgorithm, log2BlockSize, sal (vacía) y raíz.
-func hashingInfoV4(raiz []byte) []byte {
+func hashingInfoV4(raiz, sal []byte) []byte {
 	out := ponU32(nil, v4HashSHA256)
 	out = append(out, byte(v4Log2BlockSize))
-	out = ponBytes(out, nil) // sal
+	out = ponBytes(out, sal)
 	return ponBytes(out, raiz)
 }
 
 // signingInfoV4 arma y firma un SigningInfo para un firmante. La carga firmada incluye
 // el tamaño del apk, el algoritmo del árbol (SHA-256), la raíz y el digest del bloque
 // v2/v3, además del certificado. La firma usa el hash del firmante (SHA-256 o SHA-512).
-func signingInfoV4(apk, apkDigest []byte, raiz []byte, f *firmante) ([]byte, error) {
+func signingInfoV4(apk, apkDigest []byte, raiz, sal []byte, f *firmante) ([]byte, error) {
 	pub, err := x509.MarshalPKIXPublicKey(f.cert.PublicKey)
 	if err != nil {
 		return nil, err
@@ -116,7 +125,7 @@ func signingInfoV4(apk, apkDigest []byte, raiz []byte, f *firmante) ([]byte, err
 	signed = ponU64(signed, uint64(len(apk)))
 	signed = ponU32(signed, v4HashSHA256)
 	signed = append(signed, byte(v4Log2BlockSize))
-	signed = ponBytes(signed, nil) // sal
+	signed = ponBytes(signed, sal)
 	signed = ponBytes(signed, raiz)
 	signed = ponBytes(signed, apkDigest)
 	signed = ponBytes(signed, f.cert.Raw)
@@ -147,16 +156,28 @@ func v4Bytes(hashing, signingInfos, arbol []byte) []byte {
 }
 
 // v4Signature: el `.idsig` de un apk sin rotación, con un solo firmante.
+func salV4() ([]byte, error) {
+	sal, err := hex.DecodeString(v4SaltHex)
+	if err != nil {
+		return nil, fmt.Errorf("--v4-salt no es hexadecimal: %w", err)
+	}
+	return sal, nil
+}
+
 func v4Signature(apk, apkDigest []byte, f *firmante) ([]byte, error) {
-	raiz, arbol, err := arbolVerity(apk)
+	sal, err := salV4()
 	if err != nil {
 		return nil, err
 	}
-	si, err := signingInfoV4(apk, apkDigest, raiz, f)
+	raiz, arbol, err := arbolVerity(apk, sal)
 	if err != nil {
 		return nil, err
 	}
-	return v4Bytes(hashingInfoV4(raiz), si, arbol), nil
+	si, err := signingInfoV4(apk, apkDigest, raiz, sal, f)
+	if err != nil {
+		return nil, err
+	}
+	return v4Bytes(hashingInfoV4(raiz, sal), si, arbol), nil
 }
 
 // v4SignatureRotada: el `.idsig` de una rotación v3.1. Lleva el firmante viejo como
@@ -164,20 +185,24 @@ func v4Signature(apk, apkDigest []byte, f *firmante) ([]byte, error) {
 // `apksigner` llama V4.1.
 func v4SignatureRotada(apk, apkDigest []byte, oldF *firmante,
 	newF *firmante) ([]byte, error) {
-	raiz, arbol, err := arbolVerity(apk)
+	sal, err := salV4()
 	if err != nil {
 		return nil, err
 	}
-	viejo, err := signingInfoV4(apk, apkDigest, raiz, oldF)
+	raiz, arbol, err := arbolVerity(apk, sal)
 	if err != nil {
 		return nil, err
 	}
-	nuevo, err := signingInfoV4(apk, apkDigest, raiz, newF)
+	viejo, err := signingInfoV4(apk, apkDigest, raiz, sal, oldF)
+	if err != nil {
+		return nil, err
+	}
+	nuevo, err := signingInfoV4(apk, apkDigest, raiz, sal, newF)
 	if err != nil {
 		return nil, err
 	}
 	signingInfos := append([]byte{}, viejo...)
 	signingInfos = ponU32(signingInfos, apkSigningBlockIDv3_1)
 	signingInfos = ponBytes(signingInfos, nuevo)
-	return v4Bytes(hashingInfoV4(raiz), signingInfos, arbol), nil
+	return v4Bytes(hashingInfoV4(raiz, sal), signingInfos, arbol), nil
 }

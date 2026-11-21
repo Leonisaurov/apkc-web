@@ -161,8 +161,8 @@ func (v *verificacion) verificarV4(ruta string) {
 		v.maloV4("HashingInfo: " + err.Error())
 		return
 	}
-	if h.o != len(hashing) || algoritmo != v4HashSHA256 || int(log2) != v4Log2BlockSize || len(sal) != 0 {
-		v.maloV4("HashingInfo no es la forma medida (SHA-256, 4096, sal vacía)")
+	if h.o != len(hashing) || algoritmo != v4HashSHA256 || int(log2) != v4Log2BlockSize {
+		v.maloV4("HashingInfo no es la forma medida (SHA-256, 4096)")
 		return
 	}
 
@@ -198,7 +198,7 @@ func (v *verificacion) verificarV4(ruta string) {
 	}
 
 	// el árbol que el fichero lleva tiene que ser el del apk, byte a byte
-	raiz, arbol, err := arbolVerity(apk)
+	raiz, arbol, err := arbolVerity(apk, sal)
 	if err != nil {
 		v.maloV4(err.Error())
 		return

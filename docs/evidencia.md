@@ -7858,3 +7858,28 @@ contenido`; `apksigner` dice `DOES NOT VERIFY` con el mismo `CHUNKED_SHA256 dige
 apk con rotación, `apkc verify` dice `v3 ok` y `v3.1 ok` y `apksigner` aprueba v1/v2/v3/v3.1.
 Frontera escrita: los atributos de rotación se leen pero no se validan contra el linaje, y la
 cadena de confianza sigue sin ancla, igual que en v1/v2.
+
+## 165. Sal en la firma v4 y el estado de los firmantes alternativos
+
+Medido el 2026-11-21. `apksigner` de build-tools 34.0.0 no ofrece una opción de sal al firmar, pero
+su propio `VerityTreeBuilder` la acepta al verificar: la sal se prefija **cruda a cada bloque de
+cada nivel** del árbol, y va también en `HashingInfo` y en la carga firmada de cada `SigningInfo`.
+`--v4-salt <hex>` (en `build` y en `sign`) la activa en este fork; sin ella el `.idsig` es el de
+siempre. Los firmantes alternativos ya estaban en §121: con rotación v3.1 el `.idsig` lleva el
+`SigningInfoBlock` con id `0x1b93ad61` y el gate lo verifica con `apksigner`.
+
+```sh
+cd apkc && go test -run TestV4 -count=1 -v .
+/tmp/opencode/apkc-gate sign --v4-salt 0011223344 --out out.apk in.apk
+$ANDROID_HOME/build-tools/34.0.0/apksigner verify --verbose --min-sdk-version 21 \
+  --v4-signature-file out.apk.idsig out.apk
+```
+
+**Resultado**: los cuatro tests de v4 pasan, incluido `TestV4ConSal` (escritor y lector acuerdan
+con sal no vacía). Con la sal del ejemplo, la raíz y el árbol que escribe este fork son **byte a byte**
+los que producen las clases de `apksigner.jar`: `6ab21b9b…a0cce` y 4096 bytes de árbol, y la firma
+verifica con el código de `V4Signature.getSignedData` del propio `apksigner`. **Frontera medida**:
+el CLI `apksigner verify` de las build-tools 34.0.0, 35.0.1 y 36.0.0 reporta `Verified using v4
+scheme: false` para ese mismo fichero (no así para el de sal vacía, que aprueba), así que no se
+afirma que un dispositivo acepte la sal: el oráculo alto no la confirma aunque sus clases bajas sí.
+`apkc verify` la acepta con los mismos oráculos internos que la v4 sin sal.
