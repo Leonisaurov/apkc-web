@@ -1032,6 +1032,15 @@ type parcheDEX struct {
 // la sonda del parrafo 52: if-ne v1, v2 es 0x2133 con el desplazamiento en la unidad siguiente;
 // if-nez v1 es 0x0139 igual; y el goto de d8 es 0x0228, con el dos en la mitad alta de su propia
 // unidad (y 0x0528 cuando el hueco llega a cinco).
+// salto16 escribe un goto/16 (21t): el opcode en el byte bajo de la primera palabra y el
+// desplazamiento de 16 bits en la segunda, como el `2900 e32e` que d8 escribe para un goto_w.
+func (p *traduce) salto16(op byte, destino int, in jvmInstr) {
+	desde := len(p.w)
+	p.palabra(uint16(op))
+	p.palabra(0)
+	p.abreSalto(desde, len(p.w)-1, destino, false, in)
+}
+
 func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
 	desde := len(p.w)
 	switch consume {
@@ -1822,6 +1831,10 @@ func (p *traduce) recorre() error {
 			p.salto(ifEntreDos[in.name], destinoDe(in), 2, in)
 		case "goto":
 			p.salto(opSalto, destinoDe(in), 0, in)
+		case "goto_w":
+			// d8 baja el goto_w de JVM a goto/16 de Dalvik (0x29): dos palabras, la segunda con
+			// el desplazamiento en unidades de 16 bits.
+			p.salto16(0x29, destinoDe(in), in)
 		case "tableswitch", "lookupswitch":
 			p.saltoTabla(in)
 		default:

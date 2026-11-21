@@ -118,10 +118,11 @@ func (jnuevo) jexprPuede() {}
 // `newarray`/`anewarray` y una cadena de `dup` + indice + valor + `iastore`/`aastore` por elemento
 // (medido en el parrafo 73), asi que no hace falta `filled-new-array`.
 type jnuevoArreglo struct {
-	tipo      string
-	largo     jexpr
-	elementos []jexpr
-	donde     pos
+	tipo        string
+	largo       jexpr
+	dimensiones []jexpr // más de una: `new int[2][3]`, bajado por d8 a Array.newInstance
+	elementos   []jexpr
+	donde       pos
 }
 
 func (jnuevoArreglo) jexprPuede() {}
@@ -2068,17 +2069,28 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 				}
 				return jnuevoArreglo{tipo: tipo, elementos: elementos, donde: t.donde}, nil
 			}
-			largo, err := a.expresion()
-			if err != nil {
-				return nil, err
+			dims := []jexpr{}
+			for {
+				d, err := a.expresion()
+				if err != nil {
+					return nil, err
+				}
+				if err := a.comerSimbolo("]"); err != nil {
+					return nil, err
+				}
+				dims = append(dims, d)
+				if !a.es('p', "[") {
+					break
+				}
+				a.avanzar()
 			}
-			if err := a.comerSimbolo("]"); err != nil {
-				return nil, err
+			if a.es('p', "{") {
+				return nil, fmt.Errorf("linea %d: un arreglo con inicializador y más de una dimensión no está medido", t.donde.linea)
 			}
-			if a.es('p', "[") || a.es('p', "{") {
-				return nil, fmt.Errorf("linea %d: un arreglo de mas de una dimension o con inicializador no esta medido", t.donde.linea)
+			if len(dims) == 1 {
+				return jnuevoArreglo{tipo: tipo, largo: dims[0], donde: t.donde}, nil
 			}
-			return jnuevoArreglo{tipo: tipo, largo: largo, donde: t.donde}, nil
+			return jnuevoArreglo{tipo: tipo, dimensiones: dims, donde: t.donde}, nil
 		}
 		if !a.es('p', "(") {
 			return nil, fmt.Errorf("linea %d: un `new %s` sin constructor no esta medido", t.donde.linea, tipo)

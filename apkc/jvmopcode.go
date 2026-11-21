@@ -216,6 +216,7 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xa5: {"if_acmpeq", 2},
 	0xa6: {"if_acmpne", 2},
 	0xa7: {"goto", 2},
+	0xc8: {"goto_w", 4}, // §169: desplazamiento de 32 bits para métodos de más de 32 KB
 	0xc6: {"ifnull", 2},
 	0xc7: {"ifnonnull", 2},
 }
@@ -264,6 +265,10 @@ func anchoDeSwitch(op byte, code []byte, base int) (int, error) {
 // de la instruccion —desde su opcode, no desde sus operandos, que es como lo escribio el emisor y
 // como lo lee javap: `2: if_icmpne 7` lleva por operandos `00 05`—, y son un entero con signo.
 func destinoDe(in jvmInstr) int {
+	if in.op == 0xc8 {
+		return in.pc + int(int32(uint32(in.ops[0])<<24|uint32(in.ops[1])<<16|
+			uint32(in.ops[2])<<8|uint32(in.ops[3])))
+	}
 	return in.pc + int(int16(uint16(in.ops[0])<<8|uint16(in.ops[1])))
 }
 

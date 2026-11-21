@@ -111,7 +111,7 @@ func TestLosMarcosDeUnArregloSonLosDeJavac(t *testing.T) {
 // sus rechazos se prueban en `javaemisor_inicializador_test.go`.)
 func TestElArregloDelFuenteRechazaLoNoMedido(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"dos dimensiones", "class A { static void f() { int[][] v = new int[2][3]; } }", "dimension"},
+		{"dos dimensiones con inicializador", "class A { static void f() { int[][] v = new int[2][3] {{1}}; } }", "dimensión"},
 	}
 	for _, c := range casos {
 		_, err := compilarProyectoJava([]fuenteJava{{nombre: "src/A.java", contenido: c.fuente}}, jarDelSDK(t))

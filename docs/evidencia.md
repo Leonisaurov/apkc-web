@@ -7934,3 +7934,51 @@ test que exigía rechazar este caso (`TestElFinalmenteRechazaLoNoMedido`) se act
 con `java -Xverify:all` sobre nuestras clases da la misma salida que javac en los once valores de
 `-1..2` para `f`, `g` y `h`, con rc 0, y el gate sigue en verde. ART pendiente de dispositivo, como
 en §156.
+
+## 168. `arraycopy` y arreglos de dos dimensiones
+
+Medido el 2026-11-21. `System.arraycopy(a, 0, b, 0, 3)` ya se resolvía contra el `android.jar` y su
+`Code` difiere del de javac solo en los índices del pool; se sujeta aquí para que la frontera de la
+fila 5.11 deje de nombrarlo. Lo nuevo es `new int[2][3]` y `m[i][j]`: javac escribe
+`multianewarray`, que este emisor no conoce, así que se baja como d8:
+
+```text
+getstatic Integer.TYPE; newarray int con {2,3}; invokestatic Array.newInstance:(Class;[I)Object;
+checkcast [[I; aaload; iaload
+```
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run TestArregloDeDosDimensiones -count=1 -v .
+java -Xverify:all -cp <clases> Main     # 7, igual que javac
+d8 --debug ... Dos.class | dexdump -d  # filled-new-array, Array.newInstance, checkcast [[I
+```
+
+**Resultado**: el test pasa con los cinco opcodes esperados en el `Code` y el dex de este fork;
+`java -Xverify:all` da el mismo valor que javac; `d8` relee la clase y produce las mismas
+instrucciones Dalvik que con el `.class` de javac (`filled-new-array`, `invoke-static
+Array.newInstance`, `checkcast [[I`, `aget-object`, `aget`). ART pendiente de dispositivo.
+
+## 169. `goto_w` y `goto/16`
+
+Medido el 2026-11-21. Una sonda generada con 10000 asignaciones fuerza un método de más de 48000
+bytes de código, donde el `goto` de 2 bytes ya no alcanza. javac escribe
+`3: ifgt 11; 6: goto_w 48016` — invierte la condición para que la branquia corta salte solo el
+`goto_w` y el salto larguísimo lo haga la forma ancha.
+
+El emisor ahora ensancha un `goto` a `0xc8` (4 bytes de desplazamiento) y, si el que se sale de rango
+es un condicional, lo invierte e inserta el `goto_w` detrás. Insertar bytes obliga a desplazar
+etiquetas, parches, filas de línea y la tabla de excepción, todo en el mismo punto. El verificador
+(`jvmframes.go`) y el dexer (`dexinstr.go`) conocen `goto_w` y lo bajan a `goto/16` (0x29), que es lo
+que d8 escribe (`2900 e32e`).
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  go test -run TestSaltoAncho -count=1 -v .
+java -Xverify:all -cp <clases> Main     # 12000 y 5
+```
+
+**Resultado**: el test pasa, la clase escrita por este fork tiene `ifgt 11; goto_w ...`,
+`java -Xverify:all` da los mismos valores que javac con rc 0, `d8` la desarma con `goto/16`, el dexer
+propio la acepta y el gate sigue en verde. Frontera: los saltos mayores que 32767 **unidades Dalvik**
+seguirían pidiendo `goto/32`, que no se ha medido.

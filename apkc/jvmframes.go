@@ -450,6 +450,8 @@ func nombreTipoVerif(que byte) string {
 
 func salto16(in jvmInstr) int { return in.pc + int(int16(uint16(in.ops[0])<<8|uint16(in.ops[1]))) }
 
+func salto32(in jvmInstr) int { return in.pc + int(leer4(in.ops, 0)) }
+
 func leer4(b []byte, i int) int32 {
 	return int32(uint32(b[i])<<24 | uint32(b[i+1])<<16 | uint32(b[i+2])<<8 | uint32(b[i+3]))
 }
@@ -494,7 +496,7 @@ func esCondicional(op byte) bool {
 }
 
 func tieneCaida(op byte) bool {
-	return !(op == 0xa7 || op == 0xaa || op == 0xab || op == 0xac || op == 0xb0 || op == 0xb1)
+	return !(op == 0xa7 || op == 0xc8 || op == 0xaa || op == 0xab || op == 0xac || op == 0xb0 || op == 0xb1)
 }
 
 // aplica simula una instruccion sobre el estado. Devuelve los destinos a los que hay que propagar y
@@ -1050,6 +1052,8 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		return []int{salto16(in)}, true, nil
 	case op == 0xa7:
 		return []int{salto16(in)}, false, nil
+	case op == 0xc8:
+		return []int{salto32(in)}, false, nil
 	case op == 0xaa || op == 0xab:
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
@@ -1090,6 +1094,9 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 	for _, in := range instrs {
 		if esCondicional(in.op) || in.op == 0xa7 {
 			comienzos[salto16(in)] = true
+		}
+		if in.op == 0xc8 {
+			comienzos[salto32(in)] = true
 		}
 		if in.op == 0xaa || in.op == 0xab {
 			ds, err := destinosDeSwitch(in)

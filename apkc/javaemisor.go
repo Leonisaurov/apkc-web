@@ -572,6 +572,9 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 		if v.largo != nil {
 			ctx.registrarExpresion(v.largo)
 		}
+		for _, dim := range v.dimensiones {
+			ctx.registrarExpresion(dim)
+		}
 		for _, el := range v.elementos {
 			ctx.registrarExpresion(el)
 		}
@@ -684,6 +687,9 @@ func anonimasDe(c *jclas) []*jclas {
 		case jnuevoArreglo:
 			if v.largo != nil {
 				expr(v.largo)
+			}
+			for _, dim := range v.dimensiones {
+				expr(dim)
 			}
 			for _, el := range v.elementos {
 				expr(el)
@@ -1538,18 +1544,103 @@ func (e *emisor) saltoEmite(op byte, destino int, consume int) {
 // cierra anota la posicion actual como destino de la etiqueta y completa los saltos que la esperaban.
 // El operando JVM es un desplazamiento en bytes contados desde el principio de la instruccion, no
 // desde el operando: por eso se guarda `en` en la direccion de la branquia y se escribe en en+1.
+// ensanchaSalto convierte un `goto` de 3 bytes en `goto_w` de 5 cuando el desplazamiento no cabe
+// en dos bytes con signo. Insertar dos bytes corre todo lo que viene detrás, así que hay que
+// desplazar también las etiquetas, los parches pendientes, las filas de línea y la tabla de
+// excepciones (medido en §169 con un método de 48000 bytes de código).
+func (e *emisor) inserta(en, n int) {
+	e.codigo = append(e.codigo, make([]byte, n)...)
+	copy(e.codigo[en+n:], e.codigo[en:len(e.codigo)-n])
+	desplaza := func(v int) int {
+		if v > en {
+			return v + n
+		}
+		return v
+	}
+	for i := range e.parches {
+		e.parches[i].en = desplaza(e.parches[i].en)
+	}
+	for i := range e.parches4 {
+		e.parches4[i].en = desplaza(e.parches4[i].en)
+		e.parches4[i].base = desplaza(e.parches4[i].base)
+	}
+	for k, v := range e.etiquetas {
+		e.etiquetas[k] = desplaza(v)
+	}
+	for i := range e.lineas {
+		e.lineas[i].desplazamiento = desplaza(e.lineas[i].desplazamiento)
+	}
+	for i := range e.excepciones {
+		t := &e.excepciones[i]
+		t.inicio, t.fin, t.handler = desplaza(t.inicio), desplaza(t.fin), desplaza(t.handler)
+	}
+}
+
+func (e *emisor) ensanchaSalto(p parcheSalto, destino int) {
+	en := p.en
+	e.inserta(en+3, 2)
+	e.codigo[en] = 0xc8 // goto_w
+	rel := uint32(int32(destino - en))
+	e.codigo[en+1] = byte(rel >> 24)
+	e.codigo[en+2] = byte(rel >> 16)
+	e.codigo[en+3] = byte(rel >> 8)
+	e.codigo[en+4] = byte(rel)
+}
+
+// reencaminaCondicional: javac no alarga una branquia condicional; la invierte para que salte un
+// goto_w corto y pone el salto larguísimo en ese goto (medido en §169: `ifgt 11; goto_w 48016`).
+var inversaCondicion = map[byte]byte{
+	0x99: 0x9a, 0x9a: 0x99, 0x9b: 0x9c, 0x9c: 0x9b, 0x9d: 0x9e, 0x9e: 0x9d,
+	0x9f: 0xa0, 0xa0: 0x9f, 0xa1: 0xa2, 0xa2: 0xa1, 0xa3: 0xa4, 0xa4: 0xa3,
+	0xa5: 0xa6, 0xa6: 0xa5, 0xc6: 0xc7, 0xc7: 0xc6,
+}
+
+func (e *emisor) reencaminaCondicional(p parcheSalto, id int) {
+	inv, ok := inversaCondicion[p.op]
+	if !ok {
+		panic(fmt.Sprintf("no se sabe invertir la condición %#02x", p.op))
+	}
+	en := p.en
+	e.inserta(en+3, 5)
+	e.codigo[en] = inv
+	e.codigo[en+1], e.codigo[en+2] = 0, 8 // 3 bytes de la condición + 5 del goto_w
+	e.codigo[en+3] = 0xc8
+	destino := e.etiquetas[id]
+	rel := uint32(int32(destino - (en + 3)))
+	e.codigo[en+4] = byte(rel >> 24)
+	e.codigo[en+5] = byte(rel >> 16)
+	e.codigo[en+6] = byte(rel >> 8)
+	e.codigo[en+7] = byte(rel)
+}
+
 func (e *emisor) cierra(id int) {
 	if e.etiquetas == nil {
 		e.etiquetas = map[int]int{}
 	}
 	e.etiquetas[id] = len(e.codigo)
+	anchos := []parcheSalto{}
+	condicionales := []parcheSalto{}
 	for _, p := range e.parches {
 		if p.etiqueta != id {
 			continue
 		}
 		rel := len(e.codigo) - p.en
-		e.codigo[p.en+1] = byte(rel >> 8)
-		e.codigo[p.en+2] = byte(rel)
+		if rel <= 32767 && rel >= -32768 {
+			e.codigo[p.en+1] = byte(rel >> 8)
+			e.codigo[p.en+2] = byte(rel)
+			continue
+		}
+		if p.op == opGOTO {
+			anchos = append(anchos, p)
+		} else {
+			condicionales = append(condicionales, p)
+		}
+	}
+	for _, p := range condicionales {
+		e.reencaminaCondicional(p, id)
+	}
+	for _, p := range anchos {
+		e.ensanchaSalto(p, e.etiquetas[id])
 	}
 	quedan := e.parches4[:0]
 	for _, p := range e.parches4 {
@@ -3011,6 +3102,28 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
 	}
+	if len(v.dimensiones) > 1 {
+		// d8 baja `multianewarray` a `Array.newInstance` con un int[] de dimensiones y un
+		// check-cast al tipo final. Medido en §168 sobre `new int[2][3]`.
+		e.marcaLinea(v.donde.linea)
+		idxTipo := e.pool.campo("java/lang/Integer", "TYPE", "Ljava/lang/Class;")
+		e.emite(opGetstatic, byte(idxTipo>>8), byte(idxTipo))
+		e.sube()
+		dims := jnuevoArreglo{tipo: "int", elementos: v.dimensiones, donde: v.donde}
+		d, err := e.exp(dims)
+		if err != nil {
+			return "", err
+		}
+		if d != "[I" {
+			return "", fmt.Errorf("linea %d: las dimensiones dieron %s y no [I", v.donde.linea, d)
+		}
+		e.invoca(opInvokestat, "java/lang/reflect/Array", "newInstance",
+			"(Ljava/lang/Class;[I)Ljava/lang/Object;", 2)
+		desc := strings.Repeat("[", len(v.dimensiones)) + elem
+		idxClase := e.pool.clase(desc)
+		e.emite(opCheckcast, byte(idxClase>>8), byte(idxClase))
+		return desc, nil
+	}
 	if v.largo == nil {
 		// `new T[] {…}`: el largo es el numero de elementos y javac lo escribe con `cargaEntero`
 		e.cargaEntero(int32(len(v.elementos)))
@@ -3238,7 +3351,11 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
 		}
-		return "[" + d, nil
+		n := 1
+		if len(v.dimensiones) > 1 {
+			n = len(v.dimensiones)
+		}
+		return strings.Repeat("[", n) + d, nil
 	case jllamada:
 		// una llamada sin receptor escrito: la vuelta de su unica candidata en esa aridad (medido al
 		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74)
@@ -3299,7 +3416,11 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 		if err != nil {
 			return "", false
 		}
-		return "[" + d, true
+		n := 1
+		if len(v.dimensiones) > 1 {
+			n = len(v.dimensiones)
+		}
+		return strings.Repeat("[", n) + d, true
 	case jacceso:
 		segs, base := aplanar(v)
 		if base != nil || len(segs) == 0 {
