@@ -61,17 +61,25 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
    cambia el estado de una fase). Este fichero **no admite bullets de hallazgos**: reglas, mapa, entorno,
    gate y la tabla de áreas — y no pasa de ~130 líneas, porque se lee entero en cada sesión. Lo ya escrito
    no se copia aquí: `docs/situacion.md` es el recap de las mediciones.
-8. **`studio/` es un submódulo de `apkc-studio`.** El editor web tiene su propio repositorio
+8. **Verificación por capas: la punta primero, el gate al integrar.** `tools/entorno.sh` separa
+   `test` (suite Go), `wasm` (hospedador de Node), `banco` (los cinco caminos) y `gate` (todo,
+   con chromium). Al iterar, ejecuta primero el comando puntual del cambio —p. ej.
+   `go test -run TestNombre -v .` en `apkc/`, o `node prueba.js`/`prueba-pestana.js` en `studio/`—
+   y después la capa correspondiente (`test`, `wasm`); `gate` se reserva para la integración y para
+   cerrar una fase. Pasar el gate completo en cada intento es caro y no añade evidencia: el gate es
+   el oráculo final, no el de depuración. Si el cambio toca varias capas, sube de la punta al gate
+   por orden, sin repetir las capas ya verdes salvo que el código cambie.
+9. **`studio/` es un submódulo de `apkc-studio`.** El editor web tiene su propio repositorio
    (`github.com/Leonisaurov/apkc-studio`): sus cambios se commitean y se empujan **allí** primero, y
    después se actualiza el puntero del submódulo aquí (`git add studio`) en el mismo commit que los
    cambios de este repo que lo necesiten. No edites `studio/` y lo empujes solo en un sitio: el
    checkout de CI usa `submodules: recursive` y el gate se quedaría con el puntero viejo.
-9. **Si el usuario pidió abrir el panel de progreso, se actualiza al cerrar cada tarea.** Marcar la fila
+10. **Si el usuario pidió abrir el panel de progreso, se actualiza al cerrar cada tarea.** Marcar la fila
    en la tabla del plan (o el `actual.txt` de `$PREFIX/tmp/apkc-progreso/`) y regenerar
    `tareas.json` **no basta**: hay que copiarlo a `~/.cache/pantalla-secundaria/www/` y comprobar que el
    panel lo pinta. La página no se recarga: si el JSON no se copia, sigue enseñando lo anterior durante
    horas y el usuario trabaja con datos falsos.
-10. **El estado es evidencia propia, y solo propia.** Antes de cambiar una fila del plan, responder
+11. **El estado es evidencia propia, y solo propia.** Antes de cambiar una fila del plan, responder
     estas cuatro preguntas:
     (1) ¿qué comando prueba **esa** fase? (2) ¿lo he ejecutado **después** del último cambio que la
     afecta? (3) ¿la evidencia es suya o de otra fase? (4) ¿el panel dice lo mismo que el plan?
