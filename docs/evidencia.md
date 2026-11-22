@@ -8768,8 +8768,8 @@ y `d8` son los oráculos de este párrafo, no el aparato.
 
 Medido el 2026-11-22. El usuario reportó que, escribiendo `setContentView(R.layout.main);` en
 `MainActivity.java`, el diagnóstico en vivo de la pestaña decía *el tipo de este argumento no esta
-medido*. El párrafo §199 (la deuda Java de varargs y TWR) es de la otra rama; este sigue la
-numeración de §198.
+medido*. §199 cierra la deuda Java (varargs y try-with-resources); este párrafo cierra el
+diagnóstico en vivo.
 
 **Causa medida, no la de la pista.** `apkc check` compilaba **un** fichero contra el `android.jar`,
 y la `R` no viaja en el jar: `resolverSimple("R")` falla, y `tipoEstimado` (`apkc/javaemisor.go`)
@@ -8822,9 +8822,12 @@ Y un id que no existe ya no es un «no medido» sino un error con sitio: si se c
   `cadenaDeCampos` devuelven la causa real, con su sitio, en vez del mensaje genérico.
 - `check` recorta las capas de posición al propagar (`MainActivity.java: linea 11: linea 12: …`) y
   emite por error `linea`, `columna`, `posicion` (`archivo:linea:columna`) y `mensaje`.
-- La pestaña (`studio/diagnostico-vivo.js`) pinta `posicion` y subraya el token con `columna` y el
-  ancho de carácter medido sobre la fuente del textarea; la marca lleva `data-linea`, `data-columna`
-  y `data-ancho`.
+- La pestaña (`studio/diagnostico-vivo.js`) pinta `posicion` y subraya el token. Ahí hay dos
+  conversiones: la columna de `apkc` está en **caracteres** (runes) y desde 1, y el editor corta en
+  **unidades UTF-16** (un astral son dos), así que `indiceUTF16()` la traduce; y el ancho no es
+  «columnas por ancho de carácter» —un tabulador llega a su parada de `tab-size: 4`—, así que
+  `anchoDe()` mide el prefijo y el token con una sonda de la misma fuente. La marca lleva
+  `data-columna` (runes), `data-utf16`, `data-izquierda` (píxeles del prefijo) y `data-ancho`.
 
 **Coste, que es la línea base de la mejora D2.** Tiempos de reloj de `apkc check` en este
 escritorio, mismo fuente de 18 líneas:
@@ -8848,36 +8851,43 @@ enlazador no sabe escribir deja el informe con `sin R: …` en vez de un verde f
 la raíz sube hasta el manifiesto. `apkc/javaemisor_argumento_estatico_test.go`:
 `setContentView(R.layout.main)` y un `R.id` como argumento de un constructor, dexados por este fork
 y por **javac 17** (`--release 8 -g:lines,source`), dan el **mismo dex byte a byte**.
-En la pestaña, `prueba-pestana.js` comprueba el caso completo: `posicion` con
-`archivo:línea:columna`, el subrayado sobre el token (`data-columna`, `data-ancho`) y que el
-diagnóstico no escribe en la consola ni cambia `#ultimo-codigo`. Ojo con el sondeo de esa prueba: el
+`TestCheckColumnaEnCaracteres` fija la convención con un emoji delante del token: la columna del JSON
+es la de los caracteres, no la de los bytes ni la de las unidades UTF-16. En la pestaña,
+`prueba-pestana.js` comprueba el caso completo: `posicion` con `archivo:línea:columna`, el subrayado
+sobre el token (`data-columna`, `data-ancho`) y que el diagnóstico no escribe en la consola ni
+cambia `#ultimo-codigo`; y dos casos de geometría que un ancho «columnas por carácter» no resuelve:
+un astral antes del token (`/* \U0001F600 */ setContentView(R.layout.noexiste);`, donde el corte
+viejo caía dentro del par subrogado y subrayaba un carácter) y dos tabuladores delante, donde la
+marca tiene que caer en la parada real (`data-izquierda` medido) y no en `(columna-1) * ancho`. Ojo con el sondeo de esa prueba: el
 resumen del diagnóstico es `1 error` y `sin errores`, así que buscar la palabra «error» casaba con
 «Abre un fichero .java para ver los errores…» y cerraba la espera antes de tiempo; se espera la
 forma del resumen, no la palabra.
 
-**Gate.** Con el árbol de este cambio, y con puertos propios porque otro `servidor-estatico.js`
-dejó ocupado el 8795 en esta máquina:
+**Gate.** Con el árbol de este cambio, con `PREFIX` propio y con puertos propios: en esta máquina
+otro `servidor-estatico.js` tenía ocupado el 8795 y otra sesión comparte `$PREFIX/tmp`.
 
 ```sh
-HOME_APKC_WEB=/home/leonisauro CHROME_BIN=/usr/bin/chromium \
-STUDIO_SERVIDOR_PORT=8801 STUDIO_PORT=9370 STUDIO_CREAR_PORT=8802 STUDIO_CREAR_CDP=9371 \
-GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
+HOME_APKC_WEB=/home/leonisauro PREFIX=/home/leonisauro/.cache/apkc-web-diag \
+CHROME_BIN=/usr/bin/chromium STUDIO_SERVIDOR_PORT=8805 STUDIO_PORT=9375 \
+STUDIO_CREAR_PORT=8806 STUDIO_CREAR_CDP=9376 GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
 ```
 
 ```
 crear: todo en orden (35 comprobaciones)
-pestaña: 91 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
+pestaña: 94 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
 ...
 e2e: todo en orden
 ```
 
-Antes de eso, dos intentos dieron `FALLO: la pestaña con apkc.wasm` con
-`el android.jar de /android-jar respondió 404`: no era el código, era un
-`studio/servidor-estatico.js` de otra sesión escuchando en ese puerto. La página hablaba con él y
-sus endpoints dinámicos (`/android-jar`, `/keystore-ejemplo`) no existen ahí. `prueba-pestana.js`
-ahora comprueba que el puerto HTTP y el de CDP estén libres antes de arrancar y lo dice con su
-nombre (`el puerto 8795 ya está ocupado: usa STUDIO_SERVIDOR_PORT`), para que un puerto ajeno no
-vuelva a parecer un fallo del producto.
+Dos intentos anteriores no llegaron a verde por el entorno, no por el código. El primero, con
+`FALLO: la pestaña con apkc.wasm` y `el android.jar de /android-jar respondió 404`: un
+`studio/servidor-estatico.js` de otra sesión escuchaba en ese puerto, la página hablaba con él y sus
+endpoints dinámicos (`/android-jar`, `/keystore-ejemplo`) no existen ahí. El segundo, con
+`chromium no subio el debugger` y `apkc check no devolvió JSON`: el gate comparte
+`$PREFIX/tmp/apkc-wasm.wasm` con los demás worktrees y esa pasada recogió un binario de otro árbol.
+`prueba-pestana.js` ahora comprueba que el puerto HTTP y el de CDP estén libres antes de arrancar y
+lo dice con su nombre (`el puerto 8795 ya está ocupado: usa STUDIO_SERVIDOR_PORT`), y el gate se
+lanza con `PREFIX` propio para no compartir binarios ni fixtures.
 
 **Fronteras escritas.** (1) Los errores del **parser** llevan línea pero no columna: su posición es
 la de la sentencia, no la de un token, y darle columna exige tocar cada sitio que construye una

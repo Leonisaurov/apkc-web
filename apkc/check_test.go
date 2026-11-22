@@ -5,6 +5,7 @@ package main
 // android.jar y solo existe si el proyecto la trae generada o se enlaza de `res/`.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,5 +168,35 @@ func TestCheckNoEscribeNada(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(raiz, filepath.FromSlash(ruta))); err == nil {
 			t.Errorf("el check escribio %s", ruta)
 		}
+	}
+}
+
+// TestCheckColumnaEnCaracteres fija la convención del JSON: la columna va en **caracteres** (runes) y
+// desde 1, no en bytes ni en unidades UTF-16. Un emoji antes del token cuenta uno; el editor traduce
+// esa columna a unidades UTF-16 para cortar y a píxeles para subrayar (studio/diagnostico-vivo.js).
+func TestCheckColumnaEnCaracteres(t *testing.T) {
+	raiz, fuente := proyectoDeCheck(t)
+	linea := "        /* \U0001F600 */ setContentView(R.layout.noexiste);"
+	roto := strings.Replace(fuente, "        setContentView(R.layout.main);", linea, 1)
+	if roto == fuente {
+		t.Fatal("no se sustituyó la línea del setContentView")
+	}
+	r := revisarFuenteJava(roto, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	e := r.Errores[0]
+	if e.Linea != 15 {
+		t.Fatalf("el error cae en la línea %d y el setContentView está en la 15", e.Linea)
+	}
+	antes := linea[:strings.Index(linea, "R.layout.noexiste")]
+	if quiero := len([]rune(antes)) + 1; e.Columna != quiero {
+		t.Errorf("la columna es %d y la R está en el carácter %d de %q", e.Columna, quiero, linea)
+	}
+	if e.Columna == len(antes)+1 || e.Columna == len([]byte(antes)) {
+		t.Errorf("la columna %d parece contada en bytes o en unidades UTF-16, no en caracteres", e.Columna)
+	}
+	if quiero := fmt.Sprintf("MainActivity.java:15:%d", e.Columna); e.Posicion != quiero {
+		t.Errorf("la posición es %q, medida %q", e.Posicion, quiero)
 	}
 }
