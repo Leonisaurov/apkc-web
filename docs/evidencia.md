@@ -8493,3 +8493,26 @@ abierta, no disfrazada de verde: no se afirma que el sitio falle para otros nave
 se afirma que esté 10/10 en el host desde este entorno. Queda pendiente repetir el `fetch` dentro del
 worker real con red verificada y medir el SW tras estabilizar la recarga, que son las dos condiciones
 que `critico` puso para cerrar la hipótesis.
+
+## 192. ART en la Blackview, no en emulador
+
+Medido el 2026-11-21. Se corrige la frontera de §178 y el informe del subagente de infra, que decía
+que no había KVM: `/dev/kvm` existe, pero el usuario pidió usar la tableta que depura por WiFi. El
+emulador que se había arrancado se apagó con `adb -s emulator-5554 emu kill` y no se volvió a usar.
+`banco/art.sh` fija ahora el serial `192.168.1.53:46041` en **todas** las llamadas a `adb` y comprueba
+`ro.product.brand=Blackview` y `ro.product.model=MEGA 3` antes de compilar, para no confundirla con
+el Samsung `RFCNB036HWV` conectado por USB. El serial se descubrió con `adb mdns services`
+(`adb-tls-connect`); no hay nada en el puerto 5555 de esa subred. El `d8` de build-tools 34.0.0
+falla con un `NullPointerException` interno sobre `Ver$1.class`, así que la corrida usa el de 36.0.0.
+
+```sh
+adb devices -l
+adb -s 192.168.1.53:46041 shell getprop ro.product.model
+JAVA_HOME=/home/leonisauro/opt/jdk17 BT=36.0.0 sh banco/art.sh
+```
+
+**Resultado**: aparato `MEGA 3`, Android 15, `uid=2000(shell)`; los tres dex —nuestro dex de punta a
+punta en Go, el de `d8` sobre javac y el de `d8` sobre nuestra `Ver`— dan `rc=102` con salida idéntica
+a la JVM (31 valores) y `dexdump rc=0`. `art: en orden`. Frontera que queda: el job `art` de CI sigue
+siendo informativo y usa emulador con KVM, porque un runner no tiene esta tableta; lo que sí está
+cerrado es la verificación en ART del árbol actual sobre un aparato real.
