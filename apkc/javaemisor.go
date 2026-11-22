@@ -3148,7 +3148,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 	}
 	if acc, esAcceso := l.base.(jacceso); esAcceso && acc.base == nil && e.locales[acc.nombre].desc == "" {
 		if interno, err := e.ctx.resolverSimple(acc.nombre); err == nil {
-			if e.hayEmpaquetadoEn(interno, l.nombre, l.args) {
+			// el mismo orden que en el receptor de instancia: con un primitivo que cae en un
+			// parametro de referencia hay que estimar y boxear antes de invocar (§194)
+			if e.hayEmpaquetadoEn(interno, l.nombre, l.args) || e.necesitaBoxingEn(interno, l.nombre, l.args) {
 				cand, n, err := e.argumentosResueltos(interno, l.nombre, l.args)
 				if err != nil {
 					return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
