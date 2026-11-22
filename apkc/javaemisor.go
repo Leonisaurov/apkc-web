@@ -4919,6 +4919,21 @@ func (e *emisor) recursoAnidado(v jtry, recursos []jdecl, cuerpo jstmt) error {
 	}
 	base := e.siguiente
 	salida := e.nuevaEtiqueta()
+
+	// el cuerpo vacío del recurso más interno no tiene nada que proteger: javac no abre rango ni
+	// manejador y cierra con una guarda suelta. Un recurso solo deja la declaración, esa guarda y el
+	// `return` del método, sin tabla de excepciones ni `addSuppressed`; con más recursos, el nivel de
+	// dentro también se cierra así y los de fuera conservan su manejador. Medido con `javap -c -p -v`
+	// de javac 17 sobre `try (Closeable x = a) { }` y `try (Closeable x = a; Closeable y = b) { }`.
+	if len(recursos) == 1 && bloqueVacio(cuerpo) {
+		e.cargaDe(lv.indice, desc)
+		e.saltoEmite(opIFNULL, salida, 1)
+		e.cargaDe(lv.indice, desc)
+		e.invoca(opCierre, dueño, "close", "()V", 1)
+		e.cierra(salida)
+		return nil
+	}
+
 	relanza := e.nuevaEtiqueta()
 
 	inicio := len(e.codigo)
@@ -4939,11 +4954,10 @@ func (e *emisor) recursoAnidado(v jtry, recursos []jdecl, cuerpo jstmt) error {
 	e.saltoEmite(opGOTO, salida, 0)
 
 	// manejador de la excepcion del cuerpo: la guarda como primaria. El local sale del hueco que el
-	// nivel interior ya soltó: javac reutiliza el del recurso (`astore_3` en la sonda de dos
-	// recursos), y `reserva` es monótona, así que hay que retroceder a mano
-	if len(recursos) > 1 {
-		e.siguiente = base
-	}
+	// nivel interior ya soltó: javac reutiliza el del recurso y, si el cuerpo declaró locales, el del
+	// primero de ellos (`astore_2` en la sonda con `int local`, `astore_3` en la de dos recursos), y
+	// `reserva` es monótona, así que hay que retroceder a mano
+	e.siguiente = base
 	hPrimary := len(e.codigo)
 	e.marcaLinea(v.lineaAviso)
 	indicePrimary := e.reserva("", "Ljava/lang/Throwable;")
