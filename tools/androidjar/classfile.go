@@ -124,8 +124,13 @@ func claseDeStub(c *apiClase, todas map[string]*apiClase) ([]byte, error) {
 	p := nuevoPool()
 	this := p.clase(c.interno)
 	super := 0
-	if c.super != "" {
-		super = p.clase(c.super)
+	sup := c.super
+	if sup == "" && c.interno != "java/lang/Object" {
+		// JVMS 4.1: hasta las interfaces llevan java/lang/Object como super.
+		sup = "java/lang/Object"
+	}
+	if sup != "" {
+		super = p.clase(sup)
 	}
 	ifaces := []int{}
 	for _, in := range c.interfaces {
