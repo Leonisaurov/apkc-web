@@ -16,6 +16,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"strings"
+	"unicode/utf16"
 )
 
 func u16re(b []byte, i int) uint16 { return binary.LittleEndian.Uint16(b[i:]) }
@@ -92,6 +93,10 @@ func leePool(b []byte, off int) (tablaCadenas, error) {
 // está medido sobre un resources.arsc de aapt2 35.0.1 con «Hola & adiós ñ»: los dos prefijos valen
 // 14 y 16, y el offset de la cadena más 16 —no 14— es el cero que cierra. Leer el primero como
 // bytes partía la cadena y decía «does not end with a zero byte».
+//
+// Los bytes de ese modo son CESU-8, no UTF-8: aapt2 escribe cada unidad de un carácter fuera del
+// plano base como tres bytes, así que «😀» son 2 unidades y 6 bytes (el par sustituto), no 4. Por
+// eso se decodifican a unidades utf-16 antes de validar la cuenta y de armar la cadena de Go.
 func leeCadena(b []byte, desde, hasta int, esUTF8 bool) (string, int, error) {
 	if desde >= hasta || desde >= len(b) {
 		return "", desde, fmt.Errorf("string offset %d is outside [%d,%d)", desde, 0, hasta)
@@ -102,7 +107,7 @@ func leeCadena(b []byte, desde, hasta int, esUTF8 bool) (string, int, error) {
 		if err != nil {
 			return "", p, err
 		}
-		n, p, err := prefijo(b, p, hasta) // los bytes UTF-8, que son los que se copian
+		n, p, err := prefijo(b, p, hasta) // los bytes CESU-8, que son los que se copian
 		if err != nil {
 			return "", p, err
 		}
@@ -115,11 +120,14 @@ func leeCadena(b []byte, desde, hasta int, esUTF8 bool) (string, int, error) {
 		if b[p+n] != 0 {
 			return "", p, fmt.Errorf("the string at %d does not end with a zero byte", desde)
 		}
-		s := string(b[p : p+n])
-		if utf16Len(s) != unidades {
-			return "", p, fmt.Errorf("the string at %d claims %d utf-16 units and its %d bytes hold %d", desde, unidades, n, utf16Len(s))
+		decodificadas, err := decodificaCESU8(b[p:p+n], p)
+		if err != nil {
+			return "", p, err
 		}
-		return s, p + n + 1, nil
+		if len(decodificadas) != unidades {
+			return "", p, fmt.Errorf("the string at %d claims %d utf-16 units and its %d bytes hold %d", desde, unidades, n, len(decodificadas))
+		}
+		return string(utf16.Decode(decodificadas)), p + n + 1, nil
 	}
 	n, p, err := prefijoU16(b, desde, hasta)
 	if err != nil {
@@ -136,6 +144,45 @@ func leeCadena(b []byte, desde, hasta int, esUTF8 bool) (string, int, error) {
 		return "", p, fmt.Errorf("the utf-16 string at %d has no zero terminator", desde)
 	}
 	return sb.String(), p + 2*n + 2, nil
+}
+
+// decodificaCESU8 pasa los bytes del pool a unidades utf-16. Acepta la forma de aapt2 —cada
+// unidad, también las de un par sustituto, en uno a tres bytes— y además el UTF-8 de cuatro bytes,
+// que no escribe aapt2 pero sí otros emisores. Un byte que no encabeza ninguna secuencia válida es
+// un error del fichero, no texto. Los offsets del mensaje son los del fichero (base).
+func decodificaCESU8(b []byte, base int) ([]uint16, error) {
+	unidades := make([]uint16, 0, len(b))
+	for i := 0; i < len(b); {
+		c := b[i]
+		switch {
+		case c < 0x80:
+			unidades = append(unidades, uint16(c))
+			i++
+		case c&0xe0 == 0xc0:
+			if i+1 >= len(b) || b[i+1]&0xc0 != 0x80 {
+				return nil, fmt.Errorf("a two-byte sequence at %d is cut short", base+i)
+			}
+			unidades = append(unidades, uint16(c&0x1f)<<6|uint16(b[i+1]&0x3f))
+			i += 2
+		case c&0xf0 == 0xe0:
+			if i+2 >= len(b) || b[i+1]&0xc0 != 0x80 || b[i+2]&0xc0 != 0x80 {
+				return nil, fmt.Errorf("a three-byte sequence at %d is cut short", base+i)
+			}
+			unidades = append(unidades,
+				uint16(c&0x0f)<<12|uint16(b[i+1]&0x3f)<<6|uint16(b[i+2]&0x3f))
+			i += 3
+		case c&0xf8 == 0xf0:
+			if i+3 >= len(b) || b[i+1]&0xc0 != 0x80 || b[i+2]&0xc0 != 0x80 || b[i+3]&0xc0 != 0x80 {
+				return nil, fmt.Errorf("a four-byte sequence at %d is cut short", base+i)
+			}
+			r := rune(c&0x07)<<18 | rune(b[i+1]&0x3f)<<12 | rune(b[i+2]&0x3f)<<6 | rune(b[i+3]&0x3f)
+			unidades = append(unidades, utf16.Encode([]rune{r})...)
+			i += 4
+		default:
+			return nil, fmt.Errorf("the byte %#02x at %d does not start a UTF-8 sequence", c, base+i)
+		}
+	}
+	return unidades, nil
 }
 
 func prefijo(b []byte, at, hasta int) (int, int, error) {

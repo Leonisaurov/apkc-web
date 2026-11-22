@@ -10,6 +10,11 @@ package main
 // DOS longitudes (unidades utf-16 y después bytes; el orden se midió con «Hola & adiós ñ» en un
 // resources.arsc de aapt2 35.0.1) y el UTF-16 una sola, y que cada cadena termina con un
 // cero - dos bytes cero en UTF-16 - y el area se rellena hasta multiple de cuatro.
+//
+// El modo «UTF-8» de aapt2 no es UTF-8: los caracteres fuera del plano base van como su par
+// sustituto, tres bytes por unidad (CESU-8). Con «😀» (U+1F600) el prefijo de unidades vale 2 y el
+// de bytes 6, no 4; medido en el resources.arsc de aapt2 35.0.1 con «Hola & adiós ñ 😀», donde el
+// primer prefijo es 17 y el segundo 23.
 
 import (
 	"unicode/utf16"
@@ -27,8 +32,9 @@ func escribePool(cadenas []string, utf8 bool) []byte {
 	for _, s := range cadenas {
 		offsets = append(offsets, uint32(len(datos)))
 		if utf8 {
-			datos = apilarLargosUTF8(datos, len(s), utf16Len(s))
-			datos = append(datos, s...)
+			cesu, unidades := codificaCESU8(s)
+			datos = apilarLargosUTF8(datos, len(cesu), unidades)
+			datos = append(datos, cesu...)
 			datos = append(datos, 0)
 			continue
 		}
@@ -77,6 +83,26 @@ func escribePool(cadenas []string, utf8 bool) []byte {
 func apilarLargosUTF8(b []byte, bytes, unidades int) []byte {
 	b = pilaUnaLongitud(b, unidades)
 	return pilaUnaLongitud(b, bytes)
+}
+
+// codificaCESU8 pasa la cadena a unidades utf-16 y las escribe con la forma que usa aapt2 en el
+// pool «UTF-8»: uno o dos bytes para el plano base y tres por unidad para el suplementario. Un
+// carácter fuera del plano base es un par sustituto, así que ocupa 3+3 bytes —no los 4 del UTF-8
+// de Go—; por eso también devuelve la cuenta de unidades, que es el primer prefijo del formato.
+func codificaCESU8(s string) ([]byte, int) {
+	unidades := utf16.Encode([]rune(s))
+	b := make([]byte, 0, len(unidades))
+	for _, u := range unidades {
+		switch {
+		case u < 0x80:
+			b = append(b, byte(u))
+		case u < 0x800:
+			b = append(b, byte(0xc0|u>>6), byte(0x80|u&0x3f))
+		default:
+			b = append(b, byte(0xe0|u>>12), byte(0x80|u>>6&0x3f), byte(0x80|u&0x3f))
+		}
+	}
+	return b, len(unidades)
 }
 
 func pilaUnaLongitud(b []byte, n int) []byte {

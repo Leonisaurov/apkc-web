@@ -308,12 +308,53 @@ func mustBase64(t *testing.T, s string, mide int) []byte {
 
 // Cadenas que no son ASCII: en el pool UTF-8 de Android el primer prefijo de una cadena cuenta
 // unidades utf-16 y el segundo bytes, y con estos textos dejan de coincidir. «Hola & adiós ñ» mide
-// 14 unidades y 16 bytes; el emoji, dos unidades por cuatro bytes.
+// 14 unidades y 16 bytes; el emoji, dos unidades y seis bytes, porque aapt2 lo escribe como su par
+// sustituto en CESU-8 (3+3), no como los cuatro bytes del UTF-8 de Go.
 const (
 	textoAcentos = "Hola & adiós ñ"
 	textoEmoji   = "hola \U0001F600"
 	textoAmp     = "&amp;"
 )
+
+// poolAapt2Emoji son los 100 bytes del trozo RES_STRING_POOL (UTF-8) que aapt2 35.0.1 escribió en
+// el resources.arsc de la sonda, copiados tal cual desde el offset 12 del fichero. Sus cadenas, en
+// orden, son las de abajo: el «&amp;» que sobrevive al XML, «Hola & adiós ñ 😀» —con 17 unidades
+// declaradas y 23 bytes, el emoji como par sustituto—, «ñ» y «😀» solo.
+const poolAapt2Emoji = "AQAcAGQAAAAFAAAAAAAAAAABAAAwAAAAAAAAAAAAAAADAAAACwAAACUAAAAqAAAAAAAABQUmYW1wOwARF0hvbGEgJiBhZGnDs3Mgw7Eg7aC97biAAAECw7EAAgbtoL3tuIAAAA=="
+
+// TestPreviewLeeElPoolQueEscribeAapt2: el pool UTF-8 tal cual lo dejó aapt2 35.0.1 en un
+// resources.arsc con emoji. No es un ida y vuelta del escritor propio: los bytes están copiados
+// del fichero de la herramienta, y son el caso que el lector rechazaba («claims 17 utf-16 units
+// and its 23 bytes hold 21») porque la rama de UTF-8 copiaba los bytes sin decodificar el CESU-8.
+// Además, el escritor tiene que reproducir ese trozo byte a byte.
+func TestPreviewLeeElPoolQueEscribeAapt2(t *testing.T) {
+	crudo := mustBase64(t, poolAapt2Emoji, 100)
+	p, err := leePool(crudo, 0)
+	if err != nil {
+		t.Fatalf("el pool de aapt2 con emoji no se deja leer: %v", err)
+	}
+	esperadas := []string{"", "&amp;", "Hola & adiós ñ \U0001F600", "ñ", "\U0001F600"}
+	if len(p.cadenas) != len(esperadas) {
+		t.Fatalf("el pool devuelve %d cadenas y tiene %d", len(p.cadenas), len(esperadas))
+	}
+	for i, esperada := range esperadas {
+		if p.cadenas[i] != esperada {
+			t.Errorf("cadena #%d leída como %q (% x), escrita %q", i, p.cadenas[i], []rune(p.cadenas[i]), esperada)
+		}
+	}
+	// el emoji vuelve como un rune U+1F600, no como las dos unidades sueltas del par sustituto
+	if r := []rune(p.cadenas[4]); len(r) != 1 || r[0] != 0x1F600 {
+		t.Errorf("el emoji se lee como %d runes: %U", len(r), r)
+	}
+	if !p.utf8 {
+		t.Error("el trozo de aapt2 está en modo UTF-8 y el lector dice que no")
+	}
+	// y el escritor del fork vuelve a producir esos mismos 100 bytes
+	if nuestro := escribePool(esperadas, true); !bytes.Equal(nuestro, crudo) {
+		t.Errorf("el pool escrito mide %d bytes y el de aapt2 %d\nnuestro: % x\nsuyo:   % x",
+			len(nuestro), len(crudo), nuestro, crudo)
+	}
+}
 
 // TestPreviewLeeElPoolUTF8ConAcentosYEmoji ataca la causa aislada del fallo de la Fase 1: leeCadena
 // tomaba el primer prefijo como bytes y rompía con cualquier carácter multibyte. El pool se prueba
