@@ -155,6 +155,14 @@ $ grep -n 'DecompressionStream("deflate-raw")' studio/pestana.js
 ## Límites de esta auditoría
 
 No se ha ejecutado un escáner de dependencias ni una prueba de intrusión sobre el host publicado:
-el análisis es de código y de las peticiones que la propia prueba de sitio registra. Los hallazgos
-M1 y B1-B4 quedan abiertos porque este encargo no permite tocar `studio/`, `tools/sitio.sh` ni el
-contenido del sitio; la corrección de M2 ya está aplicada en `.github/workflows/gate.yml`.
+el análisis es de código y de las peticiones que la propia prueba de sitio registra. La corrección de
+M2 ya está aplicada en `.github/workflows/gate.yml`.
+
+## Estado posterior (2026-11-22)
+
+Este informe se escribió con un alcance que no permitía tocar `studio/` ni `tools/`. Después se
+cerraron, con su medición en `docs/evidencia.md`: **M1** (redacción de contraseñas, §188), **B1** (CSP
+en la primera navegación vía `<meta>` y TrustedScriptURL para registrar el SW, §188 y §195) y **B4**
+(cota de descompresión del ZIP, §188). **B2** (nombre de la política de Trusted Types sin fijar por
+prueba) y **B3** (`wasm_exec.js` sin hash) siguen abiertos y están en la deuda de §194. La verificación
+del binario publicado se cerró en §196 con `tools/verificar-publicacion.sh`.

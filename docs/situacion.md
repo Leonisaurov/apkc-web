@@ -610,3 +610,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   `addSuppressed`, jobs `art`/`safari` informativos, verificación del host al 8/10 por HTTP/2, dos
   hallazgos del informe de seguridad sin prueba versionada y dos advisories del detector de interfaz.
   Nada de eso se cuenta como cerrado.
+- **Punto de entrada para la próxima sesión (§198)**: gate en verde con 87 comprobaciones de pestaña,
+  sitio local y host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado.
+  Para seguir, lee primero §194 (deuda), §197 (carga y caché) y §198 (comandos de reproducción); el
+  inventario de la Fase 5 y la tabla de estados de `docs/plan.md` ya incluyen esta tanda.

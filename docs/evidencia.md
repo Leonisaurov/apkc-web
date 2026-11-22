@@ -8673,3 +8673,26 @@ impeccable detect --json studio/index.html studio/style.css studio/temas.js
 1 advisory, sitio local 10/10. Frontera: no se simuló el escenario de dos versiones de SW en un
 mismo perfil para medir el respaldo, ni se disparó a propósito la recuperación por rangos para ver
 el aviso en pantalla; ambos están implementados y el gate sigue en verde.
+
+## 198. Estado final para una sesión limpia
+
+Medido el 2026-11-22. Este párrafo es el punto de entrada al reanudar el trabajo: qué está verde,
+qué queda y cómo reproducirlo. No sustituye a los párrafos anteriores, los indexa.
+
+```sh
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh wasm
+CHROME_BIN=/usr/bin/chromium SITIO_DIR=../sitio ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  APKSIGNER=$ANDROID_HOME/build-tools/35.0.1/apksigner node studio/prueba-sitio.js
+SITIO_URL=https://apkc-studio.surge.sh/ node studio/prueba-sitio.js
+sh tools/verificar-publicacion.sh https://apkc-studio.surge.sh/ sitio/apkc.wasm.gz
+python3 ~/.config/opencode/validate_config.py
+```
+
+**Resultado**: gate rc=0 con `pestaña: 87 comprobaciones`, suite wasm `PASS`, sitio local 10/10, host
+real 10/10 por HTTP/2 con 53 peticiones y 0 fuera del origen, `publicación verificada: sha256
+db1bf7ca36e39c24bbf00353d358d31d5da6864add486bb8351dfb4b79813aa3`, configuración de OpenCode
+válida. `origin/web` y `origin/main` del submódulo están alineados; los worktrees están limpios y
+`studio-test.zip` se ignora. Deuda consciente, no cerrada: §194 (varargs, TWR múltiple, jobs
+informativos, dos advisories del detector, pruebas no versionadas resueltas en §197, hash de
+`wasm_exec.js`), §178 (ART real sí en la Blackview, no en CI) y §181/§185 (firma, sí cerrada).
