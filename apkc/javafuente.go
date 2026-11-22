@@ -286,6 +286,7 @@ type jswitch struct {
 	selector jexpr
 	casos    []jcaso
 	defecto  []jstmt
+	esCadena bool // `switch (String)`: se baja a hashCode + equals + switch del índice
 	// orden es el orden del fuente de los brazos: un indice de `casos`, o -1 para el `default`.
 	// javac emite los cuerpos en ese orden, y la caída al siguiente brazo depende de él.
 	orden []int
@@ -296,6 +297,7 @@ func (jswitch) jstmtPuede() {}
 
 type jcaso struct {
 	valor  int32
+	cadena string // clave de un switch de String
 	cuerpo []jstmt
 	rompe  bool // terminó en `break;`, así que el emisor escribe el salto al final del switch
 	donde  pos
@@ -308,6 +310,31 @@ type jparam struct {
 	donde  pos
 }
 
+// anotValorJ es un valor de elemento de una anotación. El subconjunto cubre los «elementos simples»
+// (JVMS 4.7.16.1): literales enteros, `char`, booleanos y cadenas, literales de clase (`c`),
+// constantes de enum (`e`) y arreglos de cualquiera de ellos (`a`). `texto` guarda la cadena o el
+// nombre del tipo, `nombre` el de la constante de enum y `lista` los hijos de un arreglo.
+type anotValorJ struct {
+	kind   byte
+	texto  string
+	nombre string
+	entero int64
+	lista  []anotValorJ
+}
+
+type anotElemJ struct {
+	nombre string
+	valor  anotValorJ
+}
+
+// anotacionJ es `@Nombre(elemento = valor, …)` tal como lo escribe el fuente. El nombre se resuelve en
+// el emisor contra los imports y el paquete, igual que cualquier otro tipo.
+type anotacionJ struct {
+	nombre    string
+	elementos []anotElemJ
+	donde     pos
+}
+
 type jcampo struct {
 	nombre      string
 	tipo        string
@@ -318,6 +345,7 @@ type jcampo struct {
 	esProtegido bool
 	esSintetico bool // val$x de una captura de anonima
 	valor       jexpr
+	anotaciones []anotacionJ
 	donde       pos
 }
 
@@ -339,8 +367,9 @@ type jmetodo struct {
 	// deprecado: @Deprecated deja un atributo Deprecated y un RuntimeVisibleAnnotations (§170).
 	deprecado bool
 	// lanza: las clases del atributo Exceptions de un `throws A, B` (parrafo 92).
-	lanza []string
-	linea int
+	lanza       []string
+	anotaciones []anotacionJ
+	linea       int
 	// lineaFin es la llave que cierra el cuerpo: javac anota ahi el `return` implicito de un metodo void,
 	// medido en el parrafo 40 (line 16 en la plantilla, que es donde esta el `}` de onCreate).
 	lineaFin int
@@ -359,8 +388,13 @@ type jclas struct {
 	esInterface   bool
 	final         bool
 	esPublica     bool
+	esPrivada     bool
 	esEstatica    bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
-	linea         int
+	// esEnum y constantes: un `enum Color { RED, GREEN }` simple. El emisor escribe el andamiaje que
+	// javac genera para el tipo (java/lang/Enum, $VALUES, values, valueOf y <clinit>).
+	esEnum     bool
+	constantes []string
+	linea      int
 	paquete       string
 	imports       []string
 	nombreExterno string
@@ -375,6 +409,8 @@ type jclas struct {
 	// capturas: las locales/parámetros effectively-final que la anonima usa y que javac baja a
 	// campos `val$x` y parámetros del constructor (5.14).
 	capturas []captura
+
+	anotaciones []anotacionJ
 }
 
 type captura struct {
@@ -406,7 +442,7 @@ var palabrasJava = map[string]bool{
 	"void": true, "return": true, "if": true, "else": true, "new": true, "this": true, "super": true,
 	"true": true, "false": true, "null": true, "for": true, "while": true, "try": true, "catch": true,
 	"boolean": true, "int": true, "long": true, "float": true, "double": true, "byte": true, "short": true,
-	"char": true, "switch": true, "case": true, "default": true, "break": true, "continue": true, "throw": true, "native": true,
+	"char": true, "enum": true, "switch": true, "case": true, "default": true, "break": true, "continue": true, "throw": true, "native": true,
 	"synchronized": true, "volatile": true, "transient": true, "instanceof": true, "do": true,
 	"finally": true, "throws": true,
 }
@@ -757,11 +793,24 @@ func parsearJava(fuente string) (*archivoJava, error) {
 		a.imports = append(a.imports, nombre)
 	}
 	salida.imports = a.imports
-	for a.actual().kind == 'k' || a.actual().kind == 'i' {
+	for a.actual().kind == 'k' || a.actual().kind == 'i' || a.es('p', "@") {
+		// una anotación delante de una clase de primer nivel también es modificador: se lee aquí y se
+		// entrega a la clase, igual que las lee miembroDeClase para los miembros.
+		anots := []anotacionJ{}
+		for a.es('p', "@") {
+			an, err := a.anotacion()
+			if err != nil {
+				return nil, err
+			}
+			if !esAnotacionSinHuella(an.nombre) {
+				anots = append(anots, an)
+			}
+		}
 		c, err := a.clase(nil)
 		if err != nil {
 			return nil, err
 		}
+		c.anotaciones = append(anots, c.anotaciones...)
 		salida.clases = append(salida.clases, c)
 	}
 	if len(salida.clases) == 0 {
@@ -813,15 +862,23 @@ func (a *analizadorJava) nombreImport() (string, error) {
 // esNombreDeTipo: `int`, `boolean` y compañía son palabras clave pero van en un nombre de tipo.
 func esNombreDeTipo(v string) bool {
 	switch v {
-	case "int", "boolean", "long", "float", "double", "byte", "short", "char", "void":
+	case "int", "boolean", "long", "float", "double", "byte", "short", "char", "void", "var":
 		return true
 	}
 	return false
 }
 
+// esAnotacionSinHuella: las tres que no escriben RuntimeVisibleAnnotations. @Deprecated la decide
+// miembroDeClase aparte, porque escribe el atributo Deprecated y una anotación sin pares (§170).
+func esAnotacionSinHuella(n string) bool {
+	return n == "Override" || n == "java.lang.Override" ||
+		n == "SuppressWarnings" || n == "java.lang.SuppressWarnings" ||
+		n == "Deprecated" || n == "java.lang.Deprecated"
+}
+
 // clase lee una declaracion de clase, con sus anidadas.
 func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
-	c := &jclas{paquete: a.paquete, linea: a.actual().donde.linea}
+	c := &jclas{paquete: a.paquete, linea: a.actual().donde.linea, encierre: exteriores}
 	anterior := a.claseActual
 	a.claseActual = c
 	defer func() { a.claseActual = anterior }()
@@ -845,6 +902,13 @@ func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
 		case a.es('k', "class"):
 			a.avanzar()
 			goto nombre
+		case a.es('k', "enum"):
+			// un enum simple: constantes sin argumentos ni cuerpo. javac lo baja a una clase final que
+			// extiende java/lang/Enum, con $VALUES, values(), valueOf() y un <clinit> (medido con javac 17).
+			c.esEnum = true
+			c.final = true
+			a.avanzar()
+			goto nombre
 		case a.es('k', "interface"):
 			// una interface propia (parrafo 92): flags ACC_INTERFACE|ACC_ABSTRACT y metodos sin cuerpo
 			c.esInterface = true
@@ -852,8 +916,12 @@ func (a *analizadorJava) clase(exteriores *jclas) (*jclas, error) {
 			a.avanzar()
 			goto nombre
 		case a.es('p', "@"):
-			if _, err := a.anotacion(); err != nil {
+			an, err := a.anotacion()
+			if err != nil {
 				return nil, err
+			}
+			if !esAnotacionSinHuella(an.nombre) {
+				c.anotaciones = append(c.anotaciones, an)
 			}
 			continue
 		default:
@@ -920,6 +988,25 @@ nombre:
 	if err := a.comerSimbolo("{"); err != nil {
 		return nil, err
 	}
+	if c.esEnum {
+		for a.actual().kind == 'i' {
+			c.constantes = append(c.constantes, a.avanzar().valor)
+			if a.es('p', ",") {
+				a.avanzar()
+				continue
+			}
+			break
+		}
+		if len(c.constantes) == 0 {
+			return nil, fmt.Errorf("linea %d: un enum sin constantes no esta medido", c.linea)
+		}
+		if a.es('p', ";") {
+			a.avanzar()
+		}
+		if !a.es('p', "}") {
+			return nil, fmt.Errorf("linea %d: solo se miden enums con constantes simples, sin argumentos ni cuerpo", a.actual().donde.linea)
+		}
+	}
 	for !a.es('p', "}") {
 		if a.es('p', ";") { // un punto y coma suelto dentro de la clase es legal en Java
 			a.avanzar()
@@ -955,6 +1042,7 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 	esEstatico, esFinal, esPublico, esAbstracta := false, false, false, false
 	esPrivado, esProtegido := false, false
 	esDeprecado := false
+	anots := []anotacionJ{}
 	for {
 		switch {
 		case a.es('k', "static"):
@@ -970,37 +1058,32 @@ func (a *analizadorJava) miembroDeClase(c *jclas, linea int) (interface{}, error
 		case a.es('k', "protected"):
 			esProtegido = true
 		case a.es('p', "@"):
-			nombreAnot, err := a.anotacion()
+			an, err := a.anotacion()
 			if err != nil {
 				return nil, err
 			}
-			if nombreAnot == "Deprecated" || nombreAnot == "java.lang.Deprecated" {
+			if an.nombre == "Deprecated" || an.nombre == "java.lang.Deprecated" {
 				esDeprecado = true
+			} else if !esAnotacionSinHuella(an.nombre) {
+				anots = append(anots, an)
 			}
 			continue
 		case a.es('k', "class"), a.es('k', "interface"):
 			if esAbstracta {
 				return nil, fmt.Errorf("linea %d: una clase anidada abstracta no esta medida", linea)
 			}
-			if esPrivado || esProtegido {
-				// medido en el parrafo 72: una anidada privada lleva en su propio ClassFile solo ACC_SUPER
-				// (0x0020) pero la fila del InnerClasses dice `static`, y javac le añade un constructor
-				// sintetico `(Exterior$1)` y una clase marcador `Exterior$1`; una protegida sí es publica en
-				// su ClassFile, pero las anidadas con nombre que no son `static` piden la captura `this$0`,
-				// que este emisor no escribe. Las dos se rechazan por nombre.
-				modificador := "private"
-				if esProtegido {
-					modificador = "protected"
-				}
-				return nil, fmt.Errorf("linea %d: una clase anidada %s no esta medida: cambia los flags del ClassFile y del InnerClasses, y javac le añade constructor sintetico y clase marcador", linea, modificador)
+			if esProtegido {
+				return nil, fmt.Errorf("linea %d: una clase anidada `protected` no esta medida: cambia los flags del ClassFile y del InnerClasses", linea)
 			}
 			anidada, err := a.clase(c)
 			if anidada != nil {
 				// los modificadores los consumio este bucle, no la declaracion: sin esto la anidada perderia
 				// el `public static final` que javac deja en su ClassFile (0x0031) y en el InnerClasses
 				anidada.esPublica = anidada.esPublica || esPublico
+				anidada.esPrivada = anidada.esPrivada || esPrivado
 				anidada.esEstatica = anidada.esEstatica || esEstatico
 				anidada.final = anidada.final || esFinal
+				anidada.anotaciones = append(anots, anidada.anotaciones...)
 			}
 			return anidada, err
 		default:
@@ -1019,6 +1102,7 @@ cuerpo:
 			return m, err
 		}
 		m.deprecado = esDeprecado
+		m.anotaciones = anots
 		if esAbstracta || c.esInterface {
 			m.abstracto = true
 		}
@@ -1052,7 +1136,7 @@ cuerpo:
 	}
 	nombre := a.avanzar().valor
 	campo := jcampo{nombre: nombre, tipo: tipo, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico,
-		esPrivado: esPrivado, esProtegido: esProtegido, donde: pos{linea}}
+		esPrivado: esPrivado, esProtegido: esProtegido, anotaciones: anots, donde: pos{linea}}
 	// un campo con inicializador: `public static final int main=0x7f020000;`, que es justo la forma en
 	// que el enlazador de la Fase 3 escribe la R.java que despues hay que compilar
 	if a.es('p', "=") {
@@ -1150,45 +1234,114 @@ func (a *analizadorJava) pegaParentesis() bool {
 	return a.i+1 < len(a.toks) && a.toks[a.i].kind == 'i' && a.toks[a.i+1].valor == "("
 }
 
-// anotacion consume `@Nombre(...)` o `@Nombre`. Solo se tolera @Override, y por un motivo medido: el
-// javap -v del parrafo 40 sobre la plantilla no muestra ningun atributo de anotaciones en la clase ni en
-// sus metodos (attributes: 2, SourceFile e InnerClasses), o sea que esa anotacion no deja huella en el
-// .class. Las demas si la dejan, en un atributo que este emisor todavia no escribe: se rechazan por
-// nombre en vez de tirarlas.
-func (a *analizadorJava) anotacion() (string, error) {
-	linea := a.actual().donde.linea
+// anotacion consume `@Nombre(elemento = valor, …)` o `@Nombre`. @Override y @SuppressWarnings tienen
+// retención SOURCE y no dejan huella en el .class (parrafo 40), así que se leen y se descartan.
+// @Deprecated se descarta aquí también: el que decide es miembroDeClase, que pone el atributo
+// Deprecated y el RuntimeVisibleAnnotations sin pares que mide el parrafo 170. Cualquier otra anotación
+// se guarda con sus elementos para que el emisor escriba su RuntimeVisibleAnnotations.
+func (a *analizadorJava) anotacion() (anotacionJ, error) {
+	an := anotacionJ{donde: a.actual().donde}
 	a.avanzar() // @
-	nombre := ""
-	if a.actual().kind == 'i' {
-		nombre, _ = a.nombrePunto()
+	if a.actual().kind == 'i' || (a.actual().kind == 'k' && esNombreDeTipo(a.actual().valor)) {
+		an.nombre, _ = a.nombrePunto()
+	} else {
+		return an, fmt.Errorf("linea %d: la anotación no nombra su tipo", an.donde.linea)
 	}
 	if a.es('p', "(") {
-		profundidad := 0
-		for {
-			t := a.actual()
-			if t.kind == 'f' {
-				break
-			}
-			if t.valor == "(" {
-				profundidad++
-			}
-			if t.valor == ")" {
-				profundidad--
-			}
-			a.avanzar()
-			if profundidad == 0 {
-				break
+		a.avanzar()
+		if !a.es('p', ")") {
+			for {
+				if a.actual().kind != 'i' {
+					return an, fmt.Errorf("linea %d: se esperaba el nombre de un elemento de la anotación @%s", a.actual().donde.linea, an.nombre)
+				}
+				nombreElem := a.avanzar().valor
+				if err := a.comerSimbolo("="); err != nil {
+					return an, err
+				}
+				valor, err := a.anotValor()
+				if err != nil {
+					return an, err
+				}
+				an.elementos = append(an.elementos, anotElemJ{nombre: nombreElem, valor: valor})
+				if !a.es('p', ",") {
+					break
+				}
+				a.avanzar()
 			}
 		}
+		if err := a.comerSimbolo(")"); err != nil {
+			return an, err
+		}
 	}
-	if nombre == "Override" || nombre == "java.lang.Override" ||
-		nombre == "SuppressWarnings" || nombre == "java.lang.SuppressWarnings" {
-		return nombre, nil // ninguna de las dos deja atributos en el ClassFile
+	return an, nil
+}
+
+// anotValor lee el valor de un elemento de anotación. Un arreglo `{a, b}` se lee aquí porque la
+// expresión ordinaria no sabe de llaves; lo demás se apoya en el parser de expresiones y se baja al
+// subconjunto de element_value de JVMS 4.7.16.1.
+func (a *analizadorJava) anotValor() (anotValorJ, error) {
+	v := anotValorJ{}
+	if a.es('p', "{") {
+		v.kind = 'a'
+		a.avanzar()
+		if !a.es('p', "}") {
+			for {
+				hijo, err := a.anotValor()
+				if err != nil {
+					return v, err
+				}
+				v.lista = append(v.lista, hijo)
+				if !a.es('p', ",") {
+					break
+				}
+				a.avanzar()
+			}
+		}
+		return v, a.comerSimbolo("}")
 	}
-	if nombre == "Deprecated" || nombre == "java.lang.Deprecated" {
-		return nombre, nil
+	// `ElementType.TYPE`: un nombre con puntos no es una expresión de este parser (sería un acceso
+	// a campo), así que se reconoce antes. Es el element_value de tipo `e` (constante de enum).
+	if a.actual().kind == 'i' && a.mira(1).kind == 'p' && a.mira(1).valor == "." && a.mira(2).kind == 'i' {
+		nombre, err := a.nombrePunto()
+		if err != nil {
+			return v, err
+		}
+		i := strings.LastIndex(nombre, ".")
+		v.kind, v.texto, v.nombre = 'e', nombre[:i], nombre[i+1:]
+		return v, nil
 	}
-	return "", fmt.Errorf("linea %d: la anotacion @%s deja huella en el .class y este emisor no la escribe; solo se toleran @Override, @SuppressWarnings y @Deprecated (parrafo 40)", linea, nombre)
+	e, err := a.expresion()
+	if err != nil {
+		return v, err
+	}
+	switch x := e.(type) {
+	case jlit:
+		switch x.tipoJ {
+		case 'i', 'c':
+			return anotValorJ{kind: 'i', entero: int64(x.entero)}, nil
+		case 'b':
+			n := int64(0)
+			if x.booleano {
+				n = 1
+			}
+			return anotValorJ{kind: 'b', entero: n}, nil
+		case 's':
+			return anotValorJ{kind: 's', texto: x.texto}, nil
+		case 'j':
+			return v, fmt.Errorf("linea %d: un elemento de anotación `long` no está medido", a.actual().donde.linea)
+		}
+	case jclase:
+		return anotValorJ{kind: 'c', texto: x.nombre}, nil
+	case jnegacion:
+		if lit, ok := x.dentro.(jlit); ok && lit.tipoJ == 'b' {
+			n := int64(1)
+			if lit.booleano {
+				n = 0
+			}
+			return anotValorJ{kind: 'b', entero: n}, nil
+		}
+	}
+	return v, fmt.Errorf("linea %d: el valor de este elemento de anotación no es un elemento simple medido", a.actual().donde.linea)
 }
 
 // tipo lee un nombre de tipo con sus corchetes. Un array no esta medido en el emisor.
@@ -1263,6 +1416,7 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 	for !a.es('p', "}") {
 		esDefecto := false
 		var valor int32
+		cadena := ""
 		switch {
 		case a.es('k', "case"):
 			a.avanzar()
@@ -1271,12 +1425,18 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 				return nil, false, err
 			}
 			lit, esLit := e.(jlit)
-			if !esLit || (lit.tipoJ != 'i' && lit.tipoJ != 'c') {
-				return nil, false, fmt.Errorf("linea %d: una clave de `case` que no es un literal entero no esta medida", a.actual().donde.linea)
+			if !esLit || (lit.tipoJ != 'i' && lit.tipoJ != 'c' && lit.tipoJ != 's') {
+				return nil, false, fmt.Errorf("linea %d: una clave de `case` que no es un literal entero, char o cadena no esta medida", a.actual().donde.linea)
 			}
-			// una clave `char` es el punto de codigo: medido en `Letras2`, `switch (c) { case 'a': … }`
-			// sale `lookupswitch { 97: 20 … }` (parrafo 87)
-			valor = lit.entero
+			if lit.tipoJ == 's' {
+				cam.esCadena = true
+				cadena = lit.texto
+				valor = int32(len(cam.casos))
+			} else {
+				// una clave `char` es el punto de codigo: medido en `Letras2`, `switch (c) { case 'a': … }`
+				// sale `lookupswitch { 97: 20 … }` (parrafo 87)
+				valor = lit.entero
+			}
 		case a.es('k', "default"):
 			a.avanzar()
 			esDefecto = true
@@ -1328,10 +1488,16 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 			continue
 		}
 		if vistas[valor] {
-			return nil, false, fmt.Errorf("linea %d: la clave %d aparece dos veces en el switch", linea, valor)
+			motivo := fmt.Sprintf("la clave %d aparece dos veces en el switch", valor)
+			if cam.esCadena {
+				motivo = "la cadena " + cadena + " aparece dos veces en el switch"
+			}
+			return nil, false, fmt.Errorf("linea %d: %s", linea, motivo)
 		}
 		vistas[valor] = true
-		cam.casos = append(cam.casos, jcaso{valor: valor, cuerpo: cuerpo, rompe: rompe, donde: pos{linea}})
+		cam.casos = append(cam.casos, jcaso{
+			valor: valor, cadena: cadena, cuerpo: cuerpo, rompe: rompe, donde: pos{linea},
+		})
 		cam.orden = append(cam.orden, len(cam.casos)-1)
 	}
 	if err := a.comerSimbolo("}"); err != nil {
@@ -1509,6 +1675,45 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		return jhacer{cuerpo: cuerpo, cond: cond, donde: pos{linea}}, true, nil
 	case a.es('k', "try"):
 		a.avanzar()
+		// try-with-resources: `try (T r = expr; …) { … }`. Se baja a declaraciones seguidas de un
+		// try/finally que llama a `close()` si el recurso no es null. Es un desugaring FUNCIONAL: no
+		// escribe el `addSuppressed` de javac, así que el dex no es byte a byte el suyo cuando el cuerpo
+		// y el cierre fallan a la vez; la frontera está documentada en el test.
+		recursos := []jdecl{}
+		if a.es('p', "(") {
+			a.avanzar()
+			for {
+				tipo, err := a.tipo()
+				if err != nil {
+					return nil, false, err
+				}
+				if a.actual().kind != 'i' {
+					return nil, false, fmt.Errorf("linea %d: el recurso del try no tiene nombre", a.actual().donde.linea)
+				}
+				nombre := a.avanzar().valor
+				if err := a.comerSimbolo("="); err != nil {
+					return nil, false, err
+				}
+				valor, err := a.expresion()
+				if err != nil {
+					return nil, false, err
+				}
+				if a.metodoActual != nil {
+					if a.metodoActual.locales == nil {
+						a.metodoActual.locales = map[string]string{}
+					}
+					a.metodoActual.locales[nombre] = tipo
+				}
+				recursos = append(recursos, jdecl{tipo: tipo, nombre: nombre, valor: valor, final: true, donde: pos{linea}})
+				if !a.es('p', ";") {
+					break
+				}
+				a.avanzar()
+			}
+			if err := a.comerSimbolo(")"); err != nil {
+				return nil, false, err
+			}
+		}
 		cuerpo, _, err := a.sentencia()
 		if err != nil {
 			return nil, false, err
@@ -1569,10 +1774,31 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		// `goto` de salida: medido en `Fini.dosCatch` (la del `catch`) y en `Fini.multi` (la del
 		// `finally`)
 		lineaCierre = a.toks[a.i-1].donde.linea
-		if len(atrapas) == 0 && finalmente == nil {
-			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch` ni `finally` no es Java valido", linea)
+		if len(atrapas) == 0 && finalmente == nil && len(recursos) == 0 {
+			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch`, `finally` ni recursos no es Java valido", linea)
 		}
-		return jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente, lineaAviso: lineaAviso, lineaCierre: lineaCierre, donde: pos{linea}}, true, nil
+		resultado := jstmt(jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente, lineaAviso: lineaAviso, lineaCierre: lineaCierre, donde: pos{linea}})
+		if len(recursos) > 0 {
+			// los recursos se cierran en orden inverso; cada cierre es un `if (r != null) r.close();`
+			for i := len(recursos) - 1; i >= 0; i-- {
+				nombre := recursos[i].nombre
+				ref := jacceso{nombre: nombre, donde: pos{linea}}
+				cond := joperador{izq: ref, op: "!=", der: jlit{tipoJ: 'n', donde: pos{linea}}, donde: pos{linea}}
+				cierre := jif{cond: cond, entonces: jstmtExpr{e: jllamada{base: ref, nombre: "close", args: []jexpr{}, donde: pos{linea}}}, donde: pos{linea}}
+				resultado = jtry{cuerpo: resultado,
+					finalmente:  jbloque{sentencias: []jstmt{cierre}, donde: pos{linea}},
+					lineaAviso:  linea,
+					lineaCierre: linea,
+					donde:       pos{linea}}
+			}
+			sentencias := make([]jstmt, 0, len(recursos)+1)
+			for _, r := range recursos {
+				sentencias = append(sentencias, r)
+			}
+			sentencias = append(sentencias, resultado)
+			return jbloque{sentencias: sentencias, donde: pos{linea}}, true, nil
+		}
+		return resultado, true, nil
 	case a.es('k', "throw"):
 		a.avanzar()
 		e, err := a.expresion()

@@ -244,7 +244,7 @@ func TestParsearRechazaLoQueNoSeEmite(t *testing.T) {
 		razon  string
 	}{
 		{"class A { void a() { int i = 1; int j = i > 0 ? 1 : 2; } }", "un ternario", "no es de este subconjunto"},
-		{"class A { @MiAnotacion void a() {} }", "una anotacion que no es Override", "@MiAnotacion"},
+		{"class A { @MiAnotacion(x = 1 + 2) void a() {} }", "un valor de anotacion que no es simple", "elemento simple"},
 		{"class A { private int x; }", "un campo private", ""},
 		{"class A { protected int x; }", "un campo protected", ""},
 		{"class A { private void a() {} }", "un metodo private", ""},

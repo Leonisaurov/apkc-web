@@ -182,12 +182,12 @@ func constanteDelPool(x poolIndex, idx int) string {
 	return "pool?" + itoa(idx)
 }
 
-// TestUnaClaseAnidadaPrivadaSigueRechazada: la frontera del parrafo 72. Una anidada `private` pide en
-// javac un constructor sintetico y una clase marcador, y una `protected` con nombre y sin `static` pide
-// la captura `this$0`: las dos salen por su nombre en vez de escribir un ClassFile que no es el suyo.
-func TestUnaClaseAnidadaPrivadaSigueRechazada(t *testing.T) {
+// TestUnaClaseAnidadaProtegidaSigueRechazada: la frontera del parrafo 72. Una anidada `protected` con
+// nombre y sin `static` pide la captura `this$0` con otros flags; sale por su nombre. La anidada `private`
+// ya se emite (TestClaseAnidadaPrivada), salvo cuando se instancia desde fuera: ahi javac pide un
+// constructor sintetico y una clase marcador que todavia no estan medidos.
+func TestUnaClaseAnidadaProtegidaSigueRechazada(t *testing.T) {
 	casos := []struct{ nombre, fuente, pista string }{
-		{"private", "package p;\npublic class A { private static class Oculta { int x = 0; } public int f() { return 1; } }\n", "private"},
 		{"protected", "package p;\npublic class A { protected class Media { int y = 0; } public int f() { return 1; } }\n", "protected"},
 	}
 	for _, c := range casos {

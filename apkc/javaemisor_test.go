@@ -372,12 +372,12 @@ public class C {
     void f() { if (true) return; }
 }
 `, "if"},
-		{"una anotacion que no es Override", `package p;
+		{"un valor de anotacion que no es simple", `package p;
 public class C {
-    @MiAnotacion
+    @MiAnotacion(x = 1 + 2)
     void f() { }
 }
-`, "anotacion"},
+`, "elemento simple"},
 		{"un tipo que no existe", `package p;
 public class C extends NoExiste {
 }

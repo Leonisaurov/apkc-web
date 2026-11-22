@@ -36,6 +36,9 @@ import (
 // versionDeClassEmitida: Java 8, dicho arriba.
 const versionDeClassEmitida = 52
 
+// accEnum: el flag ACC_ENUM de JVMS 4.1, medido con `javap -v` sobre el enum de javac 17 (0x4031).
+const accEnum = 0x4000
+
 // accMandated: el flag con el que javac marca el parametro de la captura en el MethodParameters del
 // constructor sintetizado de una anonima (parrafo 42, medido como `final mandated` = 0x8010).
 const accMandated = 0x8000
@@ -547,7 +550,9 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 	case jlanza:
 		ctx.registrarExpresion(v.e)
 	case jswitch:
-		ctx.registrarExpresion(v.selector)
+		if v.selector != nil {
+			ctx.registrarExpresion(v.selector)
+		}
 		for _, c := range v.casos {
 			for _, s := range c.cuerpo {
 				ctx.registrarSentencia(s)
@@ -649,7 +654,9 @@ func anonimasDe(c *jclas) []*jclas {
 			sent(v.cuerpo)
 			expr(v.cond)
 		case jswitch:
-			expr(v.selector)
+			if v.selector != nil {
+				expr(v.selector)
+			}
 			for _, c := range v.casos {
 				for _, st := range c.cuerpo {
 					sent(st)
@@ -845,6 +852,9 @@ func (ctx *contextoJava) accesosDe(internal string) (int, error) {
 		acc := 0
 		if c.esPublica {
 			acc |= accPublic
+		}
+		if c.esPrivada {
+			acc |= accPrivate
 		}
 		if c.esEstatica {
 			acc |= accStatic
@@ -1121,6 +1131,20 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 				acceso |= accFinal
 			}
 			poner(candidato{desc: d, acceso: acceso})
+		}
+		if nombre == "<init>" && propia.encierre != nil && !propia.esEstatica && !propia.anonima {
+			// el constructor de una anidada no estatica lo sintetiza el emisor con el exterior delante;
+			// el AST no lo tiene, así que lo ofrecemos aquí a la resolución de `new Hija()`.
+			explicito := false
+			for _, m := range propia.metodos {
+				if m.nombre == "<init>" {
+					explicito = true
+				}
+			}
+			if !explicito {
+				ext := internoDe(propia.encierre.paquete, propia.encierre.nombre)
+				poner(candidato{desc: "(L" + ext + ";)V", acceso: 0})
+			}
 		}
 		if actual == "java/lang/Object" {
 			break
@@ -2720,7 +2744,7 @@ func (e *emisor) duenioDelCampo(nombre string) (string, campoResuelto, bool) {
 	if cr, err := e.ctx.buscarCampo(e.interno, nombre); err == nil {
 		return e.interno, cr, true
 	}
-	if e.c.anonima {
+	if e.c.anonima || e.esInnerNoEstatica() {
 		externo := e.encierreInterno()
 		if cr, err := e.ctx.buscarCampo(externo, nombre); err == nil {
 			// si el campo del exterior es privado, javac no escribe el getfield contra el campo sino contra
@@ -2853,7 +2877,7 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		// clase que la creo (parrafo 72): un metodo no privado del exterior se llama con la captura
 		// (`aload_0; getfield this$0; invokevirtual`) y uno privado por su `access$NN0`, que es un
 		// `invokestatic` con la captura como primer argumento. Un estatico del exterior no lleva receptor.
-		if e.c.anonima {
+		if e.c.anonima || e.esInnerNoEstatica() {
 			cands, err := e.ctx.candidatos(e.interno, l.nombre, argc)
 			if err == nil && len(cands) == 0 {
 				externo := e.encierreInterno()
@@ -3074,9 +3098,24 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		}
 		tipos = append(tipos, d)
 	}
-	cand, err := e.ctx.buscarMetodo(interno, "<init>", len(n.args), tipos)
+	// `new Hija()` dentro de la clase exterior (o de otra anidada suya) pasa el exterior como primer
+	// argumento del constructor, que es lo que javac escribe para una anidada con nombre no estatica.
+	externo, externoDesc := "", ""
+	if inner, ok := e.ctx.esInnerNoEstatica(interno); ok {
+		externo = internoDe(inner.encierre.paquete, inner.encierre.nombre)
+		externoDesc = "L" + externo + ";"
+		tipos = append([]string{externoDesc}, tipos...)
+	}
+	cantArgs := len(n.args)
+	if externoDesc != "" {
+		cantArgs++
+	}
+	cand, err := e.ctx.buscarMetodo(interno, "<init>", cantArgs, tipos)
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %s: %w", n.donde.linea, interno, err)
+	}
+	if cand.acceso&accPrivate != 0 && e.interno != interno {
+		return "", fmt.Errorf("linea %d: el constructor de la anidada privada %s no esta medido: javac añade un constructor sintetico con una clase marcador (Exterior$1) para llamarlo desde fuera", n.donde.linea, interno)
 	}
 	e.usar(interno)
 	idx := e.pool.clase(interno)
@@ -3084,12 +3123,22 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	e.sube()
 	e.emite(opDup)
 	e.sube()
+	if externoDesc != "" {
+		if e.interno == externo {
+			e.cargaDe(0, "L")
+		} else if e.c.encierre != nil && internoDe(e.c.encierre.paquete, e.c.encierre.nombre) == externo {
+			e.cargaDe(0, "L")
+			e.getfield(e.pool.campo(e.interno, "this$0", externoDesc))
+		} else {
+			return "", fmt.Errorf("linea %d: no se puede construir %s desde %s sin el exterior %s", n.donde.linea, interno, e.interno, externo)
+		}
+	}
 	if _, err := e.argumentos(n.args); err != nil {
 		return "", err
 	}
 	// el `dup` deja dos referencias: el constructor se come una con sus argumentos y la otra es el valor de
 	// la expresion, que es el hueco que sube de la pila al terminar
-	e.invoca(opInvokespec, interno, "<init>", cand.desc, len(n.args)+1)
+	e.invoca(opInvokespec, interno, "<init>", cand.desc, cantArgs+1)
 	return "L" + interno + ";", nil
 }
 
@@ -3916,6 +3965,45 @@ func niegaComparacion(x jexpr, linea int) (jexpr, error) {
 	return joperador{izq: op.izq, op: contrario, der: op.der, donde: op.donde}, nil
 }
 
+// cambioCadena baja un `switch (String)` a la forma que javac mide: compara `hashCode` y luego
+// `equals`, guarda el índice del brazo en un local y deja que `cambio` emita el switch de enteros.
+// Aquí se compara directamente con `equals` (sin `hashCode`), equivalente y más corto; el dex que
+// se compara con javac es el del switch de índices, que sí es idéntico.
+func (e *emisor) cambioCadena(v jswitch) error {
+	d, err := e.exp(v.selector)
+	if err != nil {
+		return err
+	}
+	if d != "Ljava/lang/String;" {
+		return fmt.Errorf("linea %d: un switch de cadenas necesita String y recibió %s", v.donde.linea, d)
+	}
+	cad := e.reserva("", d)
+	e.guardaDe(cad, d)
+	indice := e.reserva("", "I")
+	e.cargaEntero(-1)
+	e.guardaDe(indice, "I")
+	for i, c := range v.casos {
+		siguiente := e.nuevaEtiqueta()
+		e.cargaDe(cad, d)
+		if _, err := e.exp(jlit{tipoJ: 's', texto: c.cadena, donde: c.donde}); err != nil {
+			return err
+		}
+		e.invoca(opInvokevirt, "java/lang/String", "equals", "(Ljava/lang/Object;)Z", 1)
+		e.saltoEmite(0x99, siguiente, 1) // ifeq: esta cadena no es la clave
+		e.cargaEntero(int32(i))
+		e.guardaDe(indice, "I")
+		e.cierra(siguiente)
+	}
+	e.cargaDe(indice, "I")
+	entero := jswitch{defecto: v.defecto, orden: v.orden, donde: v.donde}
+	for i, c := range v.casos {
+		entero.casos = append(entero.casos, jcaso{
+			valor: int32(i), cuerpo: c.cuerpo, rompe: c.rompe, donde: c.donde,
+		})
+	}
+	return e.cambio(entero)
+}
+
 // cambio: `switch` del fuente a `tableswitch` o `lookupswitch`, con la forma medida en el §64: el
 // relleno va del opcode al siguiente múltiplo de cuatro **contado desde el principio del `Code`**, y
 // cada destino es un entero de 32 bits con signo desde el principio de la instrucción. La elección de
@@ -3924,8 +4012,13 @@ func niegaComparacion(x jexpr, linea int) (jexpr, error) {
 // `lookupswitch`, con cuatro casos y rango 10 elige `tableswitch`), y las dos formas son correctas.
 func (e *emisor) cambio(v jswitch) error {
 	e.marcaLinea(v.donde.linea)
-	if _, err := e.exp(v.selector); err != nil {
-		return err
+	if v.esCadena {
+		return e.cambioCadena(v)
+	}
+	if v.selector != nil {
+		if _, err := e.exp(v.selector); err != nil {
+			return err
+		}
 	}
 	casos := append([]jcaso(nil), v.casos...)
 	sort.Slice(casos, func(i, j int) bool { return casos[i].valor < casos[j].valor })
@@ -4740,6 +4833,20 @@ func (e *emisor) stm(s jstmt) error {
 		return nil
 	case jdecl:
 		e.marcaLinea(v.donde.linea)
+		if v.tipo == "var" {
+			// Java 10 infiere el tipo del inicializador; aquí se emite primero y se reserva el local
+			// con el descriptor que dejó en la pila (medido en §179).
+			if v.valor == nil {
+				return fmt.Errorf("linea %d: `var` necesita inicializador", v.donde.linea)
+			}
+			dv, err := e.exp(v.valor)
+			if err != nil {
+				return err
+			}
+			indice := e.reserva(v.nombre, dv)
+			e.guardaDe(indice, dv)
+			return nil
+		}
 		d, err := e.ctx.descriptorDe(v.tipo)
 		if err != nil {
 			return fmt.Errorf("linea %d: %w", v.donde.linea, err)
@@ -4950,9 +5057,181 @@ func (e *emisor) descDeAccesoEstatico(interno string, segs []string) (string, er
 
 // ----- escribir el ClassFile -----
 
+// emmitirEnum escribe el ClassFile que javac 17 genera para un enum sin constantes con cuerpo ni
+// argumentos (medido con `javac --release 8 -g:lines,source Color.java`): una clase final con ACC_ENUM
+// que extiende java/lang/Enum, un campo por constante, $VALUES, values(), valueOf(String), el constructor
+// privado (String,int), $values() y el <clinit> que arma el arreglo.
+func (ctx *contextoJava) emmitirEnum(c *jclas) ([]byte, error) {
+	interno := internoDe(c.paquete, c.nombre)
+	e := &emisor{ctx: ctx, pool: nuevoPool(), c: c, interno: interno, vistas: map[string]bool{}}
+	desc := "L" + interno + ";"
+	arr := "[" + desc
+	linea := c.linea
+	if linea == 0 {
+		linea = 1
+	}
+
+	// los campos van en el orden del fuente y $VALUES al final
+	campos := []byte{}
+	for _, nombre := range c.constantes {
+		b := u2be(accPublic | accStatic | accFinal | accEnum)
+		b = append(b, u2be(uint16(e.pool.utf8(nombre)))...)
+		b = append(b, u2be(uint16(e.pool.utf8(desc)))...)
+		campos = append(campos, append(b, u2be(0)...)...)
+	}
+	b := u2be(accPrivate | accStatic | accFinal | accSynthetic)
+	b = append(b, u2be(uint16(e.pool.utf8("$VALUES")))...)
+	b = append(b, u2be(uint16(e.pool.utf8(arr)))...)
+	campos = append(campos, append(b, u2be(0)...)...)
+
+	metodos := []byte{}
+	conte := 0
+	agregar := func(nombre, mdesc string, acc int, extra []byte, extraN int, cuerpo func()) error {
+		e.preparaMetodo(mdesc, acc&accStatic != 0)
+		cuerpo()
+		codigo, err := e.codeAttr()
+		if err != nil {
+			return err
+		}
+		attrs := attrInfo(e.pool, "Code", codigo)
+		attrs = append(attrs, extra...)
+		metodos = append(metodos, e.methodInfo(nombre, mdesc, acc, attrs, 1+extraN)...)
+		conte++
+		return nil
+	}
+
+	if err := agregar("values", "()"+arr, accPublic|accStatic, nil, 0, func() {
+		e.marcaLinea(linea)
+		idx := e.pool.campo(interno, "$VALUES", arr)
+		e.getstaticDe(idx, arr)
+		e.invoca(opInvokevirt, arr, "clone", "()Ljava/lang/Object;", 1)
+		ci := e.pool.clase(arr)
+		e.emite(opCheckcast, byte(ci>>8), byte(ci))
+		e.emite(retorno('L'))
+		e.baja(1)
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := agregar("valueOf", "(Ljava/lang/String;)"+desc, accPublic|accStatic, nil, 0, func() {
+		e.reserva("nombre", "Ljava/lang/String;")
+		e.marcaLinea(linea)
+		e.ldc(e.pool.clase(interno))
+		e.sube()
+		e.cargaDe(0, "Ljava/lang/String;")
+		e.invoca(opInvokestat, "java/lang/Enum", "valueOf", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/Enum;", 2)
+		ci := e.pool.clase(interno)
+		e.emite(opCheckcast, byte(ci>>8), byte(ci))
+		e.emite(retorno('L'))
+		e.baja(1)
+	}); err != nil {
+		return nil, err
+	}
+
+	firmaCtor := attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8("()V"))))
+	if err := agregar("<init>", "(Ljava/lang/String;I)V", accPrivate, firmaCtor, 1, func() {
+		e.reserva("", "L")
+		e.reserva("", "Ljava/lang/String;")
+		e.reserva("", "I")
+		e.marcaLinea(linea)
+		e.cargaDe(0, "L")
+		e.cargaDe(1, "Ljava/lang/String;")
+		e.cargaDe(2, "I")
+		e.invoca(opInvokespec, "java/lang/Enum", "<init>", "(Ljava/lang/String;I)V", 3)
+		e.emite(retorno('V'))
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := agregar("$values", "()"+arr, accPrivate|accStatic|accSynthetic, nil, 0, func() {
+		e.marcaLinea(linea)
+		e.cargaEntero(int32(len(c.constantes)))
+		ci := e.pool.clase(interno)
+		e.emite(0xbd, byte(ci>>8), byte(ci)) // anewarray: se come el conteo y deja el arreglo
+		for i, nombre := range c.constantes {
+			e.emite(opDup)
+			e.sube()
+			e.cargaEntero(int32(i))
+			idx := e.pool.campo(interno, nombre, desc)
+			e.emite(opGetstatic, byte(idx>>8), byte(idx))
+			e.subePor(desc)
+			e.emite(0x53) // aastore
+			e.baja(3)
+		}
+		e.emite(retorno('L'))
+		e.baja(1)
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := agregar("<clinit>", "()V", accStatic, nil, 0, func() {
+		e.marcaLinea(linea)
+		for i, nombre := range c.constantes {
+			ci := e.pool.clase(interno)
+			e.emite(opNew, byte(ci>>8), byte(ci))
+			e.sube()
+			e.emite(opDup)
+			e.sube()
+			e.ldc(e.pool.cadena(nombre))
+			e.sube()
+			e.cargaEntero(int32(i))
+			e.invoca(opInvokespec, interno, "<init>", "(Ljava/lang/String;I)V", 3)
+			idx := e.pool.campo(interno, nombre, desc)
+			e.emite(opPutstatic, byte(idx>>8), byte(idx))
+			e.baja(1)
+		}
+		e.invoca(opInvokestat, interno, "$values", "()"+arr, 0)
+		idx := e.pool.campo(interno, "$VALUES", arr)
+		e.emite(opPutstatic, byte(idx>>8), byte(idx))
+		e.baja(1)
+		e.emite(retorno('V'))
+	}); err != nil {
+		return nil, err
+	}
+
+	attrs := attrInfo(e.pool, "SourceFile", u2be(uint16(e.pool.utf8(ctx.archivo))))
+	conteAttrs := 1
+	firmaClase := "Ljava/lang/Enum<L" + interno + ";>;"
+	attrs = append(attrs, attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8(firmaClase))))...)
+	conteAttrs++
+	if len(c.anotaciones) > 0 {
+		an, err := e.anotacionesAttr(c.anotaciones)
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, an...)
+		conteAttrs++
+	}
+
+	access := accSuper | accFinal | accEnum
+	if c.esPublica {
+		access |= accPublic
+	}
+	thisIdx := e.pool.clase(interno)
+	superIdx := e.pool.clase("java/lang/Enum")
+
+	out := []byte{0xca, 0xfe, 0xba, 0xbe}
+	out = append(out, u2be(0)...)
+	out = append(out, u2be(versionDeClassEmitida)...)
+	out = append(out, e.pool.serializar()...)
+	out = append(out, u2be(uint16(access))...)
+	out = append(out, u2be(uint16(thisIdx))...)
+	out = append(out, u2be(uint16(superIdx))...)
+	out = append(out, u2be(0)...) // interfaces
+	out = append(out, u2be(uint16(len(c.constantes)+1))...)
+	out = append(out, campos...)
+	out = append(out, u2be(uint16(conte))...)
+	out = append(out, metodos...)
+	out = append(out, u2be(uint16(conteAttrs))...)
+	return append(out, attrs...), nil
+}
+
 // emmitirClase escribe el ClassFile de una declaracion. El pool se arma emitiendo los miembros, asi que el
 // InnerClasses se calcula al final, cuando ya se sabe que anidadas menciona el codigo.
 func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
+	if c.esEnum {
+		return ctx.emmitirEnum(c)
+	}
 	interno := internoDe(c.paquete, c.nombre)
 	e := &emisor{ctx: ctx, pool: nuevoPool(), c: c, interno: interno, vistas: map[string]bool{}}
 
@@ -5007,8 +5286,14 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		}
 	}
 
+	esInner := !c.anonima && c.encierre != nil && !c.esEstatica
 	campos := []byte{}
 	nCampos := 0
+	if esInner {
+		// una anidada con nombre no estatica baja el exterior a this$0, delante de sus campos
+		campos = append(campos, e.campoCaptura()...)
+		nCampos++
+	}
 	if c.anonima {
 		// javac pone primero los `val$x` de las locales capturadas y después el `this$0` del exterior
 		// (medido en `Captura3$1`, parrafo 100). Una anónima de un método static no tiene this$0.
@@ -5051,6 +5336,16 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	}
 	if c.anonima {
 		b, err := e.initCaptura()
+		if err != nil {
+			return nil, err
+		}
+		metodos = append(metodos, b...)
+		conte++
+	} else if esInner {
+		if constructorEscrito {
+			return nil, fmt.Errorf("linea %d: un constructor escrito en una anidada no estatica no esta medido; javac le añade el parametro del exterior", c.linea)
+		}
+		b, err := e.initInner()
 		if err != nil {
 			return nil, err
 		}
@@ -5139,6 +5434,14 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		attrs = append(attrs, attrInfo(e.pool, "InnerClasses", entradas)...)
 		conteAttrs++
 	}
+	if len(c.anotaciones) > 0 {
+		b, err := e.anotacionesAttr(c.anotaciones)
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, b...)
+		conteAttrs++
+	}
 
 	out := []byte{0xca, 0xfe, 0xba, 0xbe}
 	out = append(out, u2be(0)...)
@@ -5204,6 +5507,18 @@ func (e *emisor) encierreInterno() string {
 		return "java/lang/Object"
 	}
 	return internoDe(e.c.encierre.paquete, e.c.encierre.nombre)
+}
+
+// esInnerNoEstatica: una clase anidada con nombre que no es static ni anonima. javac le baja el exterior
+// a un campo `this$0` y le añade ese parámetro al constructor; no escribe MethodParameters (medido con
+// javac 17 sobre `Inner$Hija`).
+func (e *emisor) esInnerNoEstatica() bool {
+	return e.c.encierre != nil && !e.c.esEstatica && !e.c.anonima
+}
+
+func (ctx *contextoJava) esInnerNoEstatica(internal string) (*jclas, bool) {
+	c, ok := ctx.clasePropia(internal)
+	return c, ok && c.encierre != nil && !c.esEstatica && !c.anonima
 }
 
 // initCaptura: el constructor de la anonima. Lleva la captura como unico parametro, le pone el campo antes
@@ -5281,6 +5596,39 @@ func (e *emisor) initCaptura() ([]byte, error) {
 		conte = 2
 	}
 	return e.methodInfo("<init>", desc, 0, attrs, conte), nil
+}
+
+// initInner: el constructor sintetizado de una anidada con nombre no estatica. Guarda `this$0` antes de
+// subir al padre (javap lo pone en la linea de la declaracion de la clase) y no lleva MethodParameters,
+// a diferencia del de una anonima (§42).
+func (e *emisor) initInner() ([]byte, error) {
+	externo := "L" + e.encierreInterno() + ";"
+	desc := "(" + externo + ")V"
+	e.preparaMetodo(desc, false)
+	e.reserva("", "L")
+	e.reserva("", externo)
+	e.marcaLinea(e.c.linea)
+	e.cargaDe(0, "L")
+	e.cargaDe(1, externo)
+	idx := e.pool.campo(e.interno, "this$0", externo)
+	e.emite(opPutfield, byte(idx>>8), byte(idx))
+	e.baja(2)
+	e.cargaDe(0, "L")
+	padre, err := e.superDe()
+	if err != nil {
+		return nil, err
+	}
+	e.invoca(opInvokespec, padre, "<init>", "()V", 1)
+	e.emite(retorno('V'))
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	acc := 0
+	if e.c.esPrivada {
+		acc |= accPrivate
+	}
+	return e.methodInfo("<init>", desc, acc, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // enclosingMethod: el atributo que dice en que metodo de que clase se creo la anonima. javac lo escribe y
@@ -5369,6 +5717,14 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 			attrs = append(attrs, attrInfo(e.pool, "ConstantValue", u2be(uint16(indice)))...)
 			conte = 1
 		}
+	}
+	if len(f.anotaciones) > 0 {
+		b, err := e.anotacionesAttr(f.anotaciones)
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, b...)
+		conte++
 	}
 	b := u2be(uint16(acc))
 	b = append(b, u2be(uint16(e.pool.utf8(f.nombre)))...)
@@ -5535,6 +5891,73 @@ func (e *emisor) excepcionesAttr(lanza []string) ([]byte, error) {
 	return attrInfo(e.pool, "Exceptions", body), nil
 }
 
+// anotacionesAttr escribe el atributo RuntimeVisibleAnnotations (JVMS 4.7.16): cuenta, descriptor del
+// tipo y pares nombre/element_value en el orden del fuente. Los tres que no dejan huella (@Override,
+// @SuppressWarnings y @Deprecated) se descartan en el parser, así que aquí solo llegan anotaciones con
+// elementos simples.
+func (e *emisor) anotacionesAttr(lista []anotacionJ) ([]byte, error) {
+	body := u2be(uint16(len(lista)))
+	for _, an := range lista {
+		desc, err := e.ctx.descriptorDe(an.nombre)
+		if err != nil {
+			return nil, err
+		}
+		body = append(body, u2be(uint16(e.pool.utf8(desc)))...)
+		body = append(body, u2be(uint16(len(an.elementos)))...)
+		for _, par := range an.elementos {
+			body = append(body, u2be(uint16(e.pool.utf8(par.nombre)))...)
+			v, err := e.valorDeAnotacion(par.valor)
+			if err != nil {
+				return nil, err
+			}
+			body = append(body, v...)
+		}
+	}
+	return attrInfo(e.pool, "RuntimeVisibleAnnotations", body), nil
+}
+
+// valorDeAnotacion codifica un element_value. `b` (booleano) usa la misma entrada Integer que `i` pero
+// con tag 'Z', tal como sale en el javap de Annotated; `e` lleva el descriptor del enum y el nombre de
+// la constante, y `a` el conteo seguido de sus elementos.
+func (e *emisor) valorDeAnotacion(v anotValorJ) ([]byte, error) {
+	switch v.kind {
+	case 'i', 'b':
+		tag := byte('I')
+		if v.kind == 'b' {
+			tag = 'Z'
+		}
+		return append([]byte{tag}, u2be(uint16(e.pool.entero(int32(v.entero))))...), nil
+	case 's':
+		return append([]byte{'s'}, u2be(uint16(e.pool.utf8(v.texto)))...), nil
+	case 'c':
+		desc, err := e.ctx.descriptorDe(v.texto)
+		if err != nil {
+			return nil, err
+		}
+		return append([]byte{'c'}, u2be(uint16(e.pool.utf8(desc)))...), nil
+	case 'e':
+		tipo, err := e.ctx.descriptorDe(v.texto)
+		if err != nil {
+			return nil, err
+		}
+		out := []byte{'e'}
+		out = append(out, u2be(uint16(e.pool.utf8(tipo)))...)
+		return append(out, u2be(uint16(e.pool.utf8(v.nombre)))...), nil
+	case 'a':
+		out := []byte{'['}
+		out = append(out, u2be(uint16(len(v.lista)))...)
+		for _, hijo := range v.lista {
+			b, err := e.valorDeAnotacion(hijo)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, b...)
+		}
+		return out, nil
+	}
+	return nil, fmt.Errorf("el valor de anotación de tipo %q no está medido", string(rune(v.kind)))
+}
+
 func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	desc, err := e.ctx.descDeMetodo(m)
 	if err != nil {
@@ -5557,6 +5980,14 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 			}
 			attrs = b
 			conte = 1
+		}
+		if len(m.anotaciones) > 0 {
+			b, err := e.anotacionesAttr(m.anotaciones)
+			if err != nil {
+				return nil, err
+			}
+			attrs = append(attrs, b...)
+			conte++
 		}
 		return e.methodInfo(m.nombre, desc, acc, attrs, conte), nil
 	}
@@ -5652,6 +6083,14 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		anot = append(anot, u2be(0)...)
 		attrs = append(attrs, attrInfo(e.pool, "RuntimeVisibleAnnotations", anot)...)
 		conte += 2
+	}
+	if len(m.anotaciones) > 0 {
+		b, err := e.anotacionesAttr(m.anotaciones)
+		if err != nil {
+			return nil, err
+		}
+		attrs = append(attrs, b...)
+		conte++
 	}
 	return e.methodInfo(m.nombre, desc, acc, attrs, conte), nil
 }
