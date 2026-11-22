@@ -20,6 +20,20 @@ import (
 // pos es una posicion en el fuente, para los mensajes y para la LineNumberTable que escribe el emisor.
 type pos struct {
 	linea int
+	// columna es la del token que abrio la expresion, contada en caracteres y desde 1. Vale cero
+	// cuando la posicion es la de una sentencia, que solo lleva la linea: el mensaje lo dice asi en
+	// vez de inventarse una columna.
+	columna int
+}
+
+// sitio escribe la posicion para un mensaje: `linea 15, columna 17` si se sabe la columna (viene de un
+// token) y `linea 15` si solo se sabe la linea. Es lo que `apkc check` convierte despues en
+// `archivo:linea:columna`, para que el editor subraye el token y no la linea entera.
+func (p pos) sitio() string {
+	if p.columna > 0 {
+		return fmt.Sprintf("linea %d, columna %d", p.linea, p.columna)
+	}
+	return fmt.Sprintf("linea %d", p.linea)
 }
 
 // jexpr es una expresion del subconjunto.
@@ -384,23 +398,23 @@ type jmetodo struct {
 // jclas es una clase, anidada o no. interior guarda las anidadas en el orden del fuente, y nombreExterno
 // el prefijo con el que javac las nombra en el binario (R y R$layout).
 type jclas struct {
-	nombre        string
-	super         string
-	implementa    []string
-	campos        []jcampo
-	metodos       []jmetodo
-	interior      []*jclas
-	abstracta     bool
-	esInterface   bool
-	final         bool
-	esPublica     bool
-	esPrivada     bool
-	esEstatica    bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
+	nombre      string
+	super       string
+	implementa  []string
+	campos      []jcampo
+	metodos     []jmetodo
+	interior    []*jclas
+	abstracta   bool
+	esInterface bool
+	final       bool
+	esPublica   bool
+	esPrivada   bool
+	esEstatica  bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
 	// esEnum y constantes: un `enum Color { RED, GREEN }` simple. El emisor escribe el andamiaje que
 	// javac genera para el tipo (java/lang/Enum, $VALUES, values, valueOf y <clinit>).
-	esEnum     bool
-	constantes []string
-	linea      int
+	esEnum        bool
+	constantes    []string
+	linea         int
 	paquete       string
 	imports       []string
 	nombreExterno string
@@ -409,7 +423,7 @@ type jclas struct {
 	// con la captura y el atributo EnclosingMethod, y en el InnerClasses su fila va sin nombre ni exterior
 	// (parrafo 42). encierre y metodoEncierre son de donde salio, y se guardan punteros porque el descriptor
 	// del exterior se calcula despues, en el emisor.
-	anonima        bool
+	anonima bool
 	// siguienteAnonima cuenta las anonimas creadas dentro de esta clase: javac las nombra
 	// Exterior$1$1, Exterior$1$2… cuando la clase que las crea ya es anonima (medido con javac 17)
 	siguienteAnonima int
@@ -470,6 +484,11 @@ var simbolesJava = []string{
 func tokenizarJava(fuente string) ([]tokenJava, error) {
 	out := []tokenJava{}
 	linea := 1
+	// inicio es el byte donde empieza la linea actual: la columna de un token es cuantos caracteres
+	// hay entre inicio y su primer byte, mas uno. Se cuenta en caracteres y no en bytes para que el
+	// subrayado del editor (que mide en caracteres) caiga sobre el token aunque la linea lleve tildes.
+	inicio := 0
+	columnaDe := func(desde int) int { return utf8.RuneCountInString(fuente[inicio:desde]) + 1 }
 	i := 0
 	for i < len(fuente) {
 		antes := i
@@ -478,6 +497,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 		case c == '\n':
 			linea++
 			i++
+			inicio = i
 		case c == ' ' || c == '\t' || c == '\r':
 			i++
 		case c == '/' && i+1 < len(fuente) && fuente[i+1] == '/':
@@ -489,6 +509,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			for i+1 < len(fuente) && !(fuente[i] == '*' && fuente[i+1] == '/') {
 				if fuente[i] == '\n' {
 					linea++
+					inicio = i + 1
 				}
 				i++
 			}
@@ -501,7 +522,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, tokenJava{kind: 's', valor: texto, donde: pos{linea}})
+			out = append(out, tokenJava{kind: 's', valor: texto, donde: pos{linea: linea, columna: columnaDe(antes)}})
 			i = nuevo
 		case c == '\'':
 			// el literal `char` del párrafo 87: un caracter entre comillas simples, con sus escapes. El
@@ -512,7 +533,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, tokenJava{kind: 'c', valor: itoa(int(valor)), donde: pos{linea}})
+			out = append(out, tokenJava{kind: 'c', valor: itoa(int(valor)), donde: pos{linea: linea, columna: columnaDe(antes)}})
 			i = nuevo
 		case esLetraJava(c) || c == '_' || c == '$':
 			// ASCII solo: Java permite letras de otros alfabetos en un identificador, pero la
@@ -527,7 +548,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			if palabrasJava[palabra] {
 				kind = 'k'
 			}
-			out = append(out, tokenJava{kind: kind, valor: palabra, donde: pos{linea}})
+			out = append(out, tokenJava{kind: kind, valor: palabra, donde: pos{linea: linea, columna: columnaDe(desde)}})
 		case esDigito(c):
 			desde := i
 			for i < len(fuente) && (fuente[i] >= '0' && fuente[i] <= '9' || fuente[i] == 'x' || fuente[i] == 'X' ||
@@ -552,7 +573,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 					i++
 				}
 			}
-			out = append(out, tokenJava{kind: 'n', valor: fuente[desde:i], donde: pos{linea}})
+			out = append(out, tokenJava{kind: 'n', valor: fuente[desde:i], donde: pos{linea: linea, columna: columnaDe(desde)}})
 		default:
 			encontrado := ""
 			for _, s := range simbolesJava {
@@ -565,7 +586,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 				r, _ := utf8.DecodeRuneInString(fuente[i:])
 				return nil, fmt.Errorf("linea %d: el caracter %q no es de este subconjunto", linea, r)
 			}
-			out = append(out, tokenJava{kind: 'p', valor: encontrado, donde: pos{linea}})
+			out = append(out, tokenJava{kind: 'p', valor: encontrado, donde: pos{linea: linea, columna: columnaDe(antes)}})
 			i += len(encontrado)
 		}
 		if i == antes {
@@ -575,7 +596,7 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			return nil, fmt.Errorf("linea %d: el caracter %q no es de este subconjunto", linea, r)
 		}
 	}
-	out = append(out, tokenJava{kind: 'f', donde: pos{linea}})
+	out = append(out, tokenJava{kind: 'f', donde: pos{linea: linea, columna: columnaDe(i)}})
 	return out, nil
 }
 
@@ -1145,7 +1166,7 @@ cuerpo:
 	}
 	nombre := a.avanzar().valor
 	campo := jcampo{nombre: nombre, tipo: tipo, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico,
-		esPrivado: esPrivado, esProtegido: esProtegido, anotaciones: anots, donde: pos{linea}}
+		esPrivado: esPrivado, esProtegido: esProtegido, anotaciones: anots, donde: pos{linea: linea}}
 	// un campo con inicializador: `public static final int main=0x7f020000;`, que es justo la forma en
 	// que el enlazador de la Fase 3 escribe la R.java que despues hay que compilar
 	if a.es('p', "=") {
@@ -1196,7 +1217,7 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 				return m, fmt.Errorf("linea %d: un parametro necesita nombre", a.actual().donde.linea)
 			}
 			nombre := a.avanzar().valor
-			m.params = append(m.params, jparam{tipo: tipo, nombre: nombre, donde: pos{linea}})
+			m.params = append(m.params, jparam{tipo: tipo, nombre: nombre, donde: pos{linea: linea}})
 			if esVarargs {
 				// JLS 8.4.1: solo el ultimo parametro puede ser varargs. Si sigue otro, se rechaza
 				// nombrando el que lo era en vez de aceptar una firma que javac no admite.
@@ -1439,7 +1460,7 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 	if err := a.comerSimbolo("{"); err != nil {
 		return nil, false, err
 	}
-	cam := jswitch{selector: sel, donde: pos{linea}}
+	cam := jswitch{selector: sel, donde: pos{linea: linea}}
 	vistas := map[int32]bool{}
 	for !a.es('p', "}") {
 		esDefecto := false
@@ -1524,7 +1545,7 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 		}
 		vistas[valor] = true
 		cam.casos = append(cam.casos, jcaso{
-			valor: valor, cadena: cadena, cuerpo: cuerpo, rompe: rompe, donde: pos{linea},
+			valor: valor, cadena: cadena, cuerpo: cuerpo, rompe: rompe, donde: pos{linea: linea},
 		})
 		cam.orden = append(cam.orden, len(cam.casos)-1)
 	}
@@ -1542,12 +1563,12 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	switch {
 	case a.es('p', "{"):
 		b, err := a.bloque()
-		return jbloque{sentencias: b, donde: pos{linea}}, err == nil, err
+		return jbloque{sentencias: b, donde: pos{linea: linea}}, err == nil, err
 	case a.es('k', "return"):
 		a.avanzar()
 		if a.es('p', ";") {
 			a.avanzar()
-			return jretorno{donde: pos{linea}}, true, nil
+			return jretorno{donde: pos{linea: linea}}, true, nil
 		}
 		e, err := a.expresion()
 		if err != nil {
@@ -1556,7 +1577,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return jretorno{e: e, donde: pos{linea}}, true, nil
+		return jretorno{e: e, donde: pos{linea: linea}}, true, nil
 	case a.es('k', "if"):
 		a.avanzar()
 		if err := a.comerSimbolo("("); err != nil {
@@ -1582,7 +1603,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			}
 			siNo = s
 		}
-		return jif{cond: cond, entonces: entonces, siNo: siNo, donde: pos{linea}}, true, nil
+		return jif{cond: cond, entonces: entonces, siNo: siNo, donde: pos{linea: linea}}, true, nil
 	case a.es('k', "while"):
 		a.avanzar()
 		if err := a.comerSimbolo("("); err != nil {
@@ -1599,7 +1620,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		return jmientras{cond: cond, cuerpo: cuerpo, donde: pos{linea}}, true, nil
+		return jmientras{cond: cond, cuerpo: cuerpo, donde: pos{linea: linea}}, true, nil
 	case a.es('k', "for"):
 		a.avanzar()
 		if err := a.comerSimbolo("("); err != nil {
@@ -1640,7 +1661,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 				if err != nil {
 					return nil, false, err
 				}
-				piezas = append(piezas, asignacion(dst, op, valor, pos{linea}))
+				piezas = append(piezas, asignacion(dst, op, valor, pos{linea: linea}))
 			} else {
 				piezas = append(piezas, jstmtExpr{e: dst})
 			}
@@ -1659,11 +1680,11 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		} else if len(piezas) > 1 {
 			return nil, false, fmt.Errorf("linea %d: mas de una sentencia en el paso de un `for`", linea)
 		}
-		p := jpara{cuerpo: cuerpo, cond: cond, paso: paso, donde: pos{linea}}
+		p := jpara{cuerpo: cuerpo, cond: cond, paso: paso, donde: pos{linea: linea}}
 		if inicio == nil {
 			return p, true, nil
 		}
-		return jbloque{sentencias: []jstmt{inicio, p}, donde: pos{linea}}, true, nil
+		return jbloque{sentencias: []jstmt{inicio, p}, donde: pos{linea: linea}}, true, nil
 	case a.es('k', "switch"):
 		return a.cambio(linea)
 	case a.es('k', "break"):
@@ -1671,13 +1692,13 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return jrompe{donde: pos{linea}}, true, nil
+		return jrompe{donde: pos{linea: linea}}, true, nil
 	case a.es('k', "continue"):
 		a.avanzar()
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return jcontinua{donde: pos{linea}}, true, nil
+		return jcontinua{donde: pos{linea: linea}}, true, nil
 	case a.es('k', "do"):
 		a.avanzar()
 		cuerpo, _, err := a.sentencia()
@@ -1700,7 +1721,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return jhacer{cuerpo: cuerpo, cond: cond, donde: pos{linea}}, true, nil
+		return jhacer{cuerpo: cuerpo, cond: cond, donde: pos{linea: linea}}, true, nil
 	case a.es('k', "try"):
 		a.avanzar()
 		// try-with-resources: `try (T r = expr; …) { … }`. Los recursos se guardan en orden y es el
@@ -1731,7 +1752,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 					}
 					a.metodoActual.locales[nombre] = tipo
 				}
-				recursos = append(recursos, jdecl{tipo: tipo, nombre: nombre, valor: valor, final: true, donde: pos{linea}})
+				recursos = append(recursos, jdecl{tipo: tipo, nombre: nombre, valor: valor, final: true, donde: pos{linea: linea}})
 				if !a.es('p', ";") {
 					break
 				}
@@ -1795,7 +1816,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
-			finalmente = jbloque{sentencias: b, donde: pos{linea}}
+			finalmente = jbloque{sentencias: b, donde: pos{linea: linea}}
 		}
 		// la llave que cerro el ultimo bloque del constructo es la linea con la que javac anota el
 		// `goto` de salida: medido en `Fini.dosCatch` (la del `catch`) y en `Fini.multi` (la del
@@ -1806,7 +1827,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		}
 		return jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente,
 			recursos: recursos, lineaAviso: lineaAviso, lineaCierre: lineaCierre,
-			donde: pos{linea}}, true, nil
+			donde: pos{linea: linea}}, true, nil
 	case a.es('k', "throw"):
 		a.avanzar()
 		e, err := a.expresion()
@@ -1816,7 +1837,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return jlanza{e: e, donde: pos{linea}}, true, nil
+		return jlanza{e: e, donde: pos{linea: linea}}, true, nil
 	}
 	// declaracion local o expresion
 	tipoActual := a.actual()
@@ -1837,7 +1858,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 				}
 				a.metodoActual.locales[nombre] = tipo
 			}
-			d := jdecl{tipo: tipo, nombre: nombre, donde: pos{linea}, final: final}
+			d := jdecl{tipo: tipo, nombre: nombre, donde: pos{linea: linea}, final: final}
 			if a.es('p', "=") {
 				a.avanzar()
 				e, err := a.expresion()
@@ -1868,7 +1889,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if err := a.comerSimbolo(";"); err != nil {
 			return nil, false, err
 		}
-		return asignacion(e, op, valor, pos{linea}), true, nil
+		return asignacion(e, op, valor, pos{linea: linea}), true, nil
 	}
 	if err := a.comerSimbolo(";"); err != nil {
 		return nil, false, err
@@ -2368,22 +2389,25 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		if a.es('p', ".") {
 			// R.layout.main: se lee como acceso y el emisor decide si es una constante inlinable.
 			// MainActivity.this: la captura del exterior, que javac baja a un campo this$0.
-			base := jexpr(jacceso{nombre: nombre, donde: t.donde})
+			// La cadena entera lleva la posicion de su **cabeza**, que es donde empieza el token que el
+			// editor tiene que subrayar: `R.layout.main` se señala en la `R`, no en `main` (§200).
+			inicio := t.donde
+			base := jexpr(jacceso{nombre: nombre, donde: inicio})
 			for a.es('p', ".") {
 				a.avanzar()
 				if a.es('k', "this") {
 					a.avanzar()
 					if acc, esAcceso := base.(jacceso); esAcceso && acc.base == nil {
-						return jthis{nombre: acc.nombre, donde: t.donde}, nil
+						return jthis{nombre: acc.nombre, donde: inicio}, nil
 					}
-					return nil, fmt.Errorf("linea %d: `.this` solo se mide detras de un nombre de clase suelto", t.donde.linea)
+					return nil, fmt.Errorf("%s: `.this` solo se mide detras de un nombre de clase suelto", inicio.sitio())
 				}
 				siguiente := a.actual()
 				if siguiente.kind != 'i' {
-					return nil, fmt.Errorf("linea %d: tras el punto se esperaba un nombre", siguiente.donde.linea)
+					return nil, fmt.Errorf("%s: tras el punto se esperaba un nombre", siguiente.donde.sitio())
 				}
 				a.avanzar()
-				base = jacceso{base: base, nombre: siguiente.valor, donde: siguiente.donde}
+				base = jacceso{base: base, nombre: siguiente.valor, donde: inicio}
 			}
 			return base, nil
 		}
@@ -2428,7 +2452,7 @@ func (a *analizadorJava) registraCaptura(nombre string) bool {
 	c.capturas = append(c.capturas, captura{nombre: nombre, tipo: tipo})
 	c.campos = append(c.campos, jcampo{
 		nombre: "val$" + nombre, tipo: tipo, esFinal: true, esSintetico: true,
-		donde: pos{c.linea},
+		donde: pos{linea: c.linea},
 	})
 	return true
 }

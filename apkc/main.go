@@ -119,7 +119,9 @@ verify - read one package back and check the signatures this tool writes: the v1
          chain is never validated: a debug certificate is self-signed and there is no anchor.
 check  - read one .java file and print, as one line of JSON on stdout, the errors the parser and
          the emitter find, without writing any .class (--android-jar to resolve names; without a
-         jar only the parser is checked). No process is started, so it runs inside the tab.
+         jar only the parser is checked). --proyecto links the project's resources in memory so
+         that R.layout.main resolves instead of being reported as an unknown name, and every error
+         comes with archivo:linea:columna. No process is started, so it runs inside the tab.
 preview - read one apk and print, as one line of JSON on stdout, the model of its first screen:
          type, id, text, children and an approximate rectangle per node. The layout is the one
          the app's onCreate passes to setContentView (the Dalvik interpreter of Phase 2 reads it

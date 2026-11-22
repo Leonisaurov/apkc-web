@@ -8764,3 +8764,124 @@ propios y con salidas abruptas del cuerpo, el constructor varargs que necesita e
 que no es el último parámetro (JLS 8.4.1) y los varargs genéricos. No se midieron varargs privados
 accesibles desde una anónima ni el comportamiento en ART de los dex nuevos; la igualdad byte a byte
 y `d8` son los oráculos de este párrafo, no el aparato.
+## 200. El falso error de `R.layout.main` en el diagnóstico en vivo
+
+Medido el 2026-11-22. El usuario reportó que, escribiendo `setContentView(R.layout.main);` en
+`MainActivity.java`, el diagnóstico en vivo de la pestaña decía *el tipo de este argumento no esta
+medido*. El párrafo §199 (la deuda Java de varargs y TWR) es de la otra rama; este sigue la
+numeración de §198.
+
+**Causa medida, no la de la pista.** `apkc check` compilaba **un** fichero contra el `android.jar`,
+y la `R` no viaja en el jar: `resolverSimple("R")` falla, y `tipoEstimado` (`apkc/javaemisor.go`)
+tapaba ese fallo con un `linea %d: el tipo de ese argumento no esta medido` genérico. El emisor
+nunca estuvo mal: la plantilla completa, con su `R.java`, ya salía byte a byte igual que la de
+javac en `TestEtapasDeBuildEnGo`; lo que faltaba era que el diagnóstico viera la misma `R` que ve
+la compilación.
+
+Antes y después, con el mismo fuente y el mismo `android.jar`:
+
+```sh
+cd apkc && go build -o /tmp/apkc .
+# antes: el binario del commit anterior, en un árbol aparte
+git archive HEAD~1 apkc | tar -x -C /tmp/antes && ( cd /tmp/antes/apkc && go build -o /tmp/apkc-antes . )
+/tmp/apkc-antes check --android-jar "$ANDROID_HOME/platforms/android-34/android.jar" \
+  /tmp/proy/src/com/hola/apkcstudio/MainActivity.java
+/tmp/apkc check --android-jar "$ANDROID_HOME/platforms/android-34/android.jar" \
+  --nombre MainActivity.java /tmp/proy/src/com/hola/apkcstudio/MainActivity.java
+```
+
+```
+antes:   {"tipo":"check","fichero":"MainActivity.java","lineas":18,"emisor":false,"errores":[
+         {"linea":15,"mensaje":"MainActivity.java: linea 11: linea 12: linea 15: linea 15:
+          el tipo de ese argumento no esta medido"}]}
+después: {"tipo":"check","fichero":"MainActivity.java","lineas":18,"emisor":true,
+          "recursos":"R enlazada de res/","errores":[]}
+```
+
+Y un id que no existe ya no es un «no medido» sino un error con sitio: si se cambia
+`R.layout.main` por `R.layout.noexiste` en ese mismo fuente,
+
+```
+{"linea":15,"columna":24,"posicion":"MainActivity.java:15:24",
+ "mensaje":"al estimar el tipo de R.layout.noexiste, el campo noexiste no esta en
+            com/hola/apkcstudio/R$layout ni en sus padres"}
+```
+
+**Lo que cambió, con su porqué.**
+
+- `apkc check` tiene `--proyecto` (por defecto sube desde la carpeta del fichero hasta el
+  `AndroidManifest.xml`): enlaza `res/` **en memoria** con el mismo enlazador de `build --linker go`
+  y compila esa `R` junto al fuente; si el proyecto ya tiene la `R.java` que dejó un build, usa esa.
+  Nunca escribe en el árbol. `--nombre` pone el fichero real en las posiciones (el temporal de la
+  pestaña se llama `.apkc-check.java`), y `--sdk-version`/`--codename` dicen la versión del platform
+  cuando la ruta del jar no la lleva, que es el caso de la pestaña (`/sdk/android.jar`): sin ellos el
+  enlace en la pestaña fallaba con `la ruta del android.jar no dice la version del platform`.
+- `pos` (`apkc/javafuente.go`) guarda la **columna** del token, contada en caracteres, y `sitio()`
+  la escribe en los mensajes. La cadena de accesos lleva la posición de su cabeza (`R` en
+  `R.layout.main`), que es lo que el editor subraya. `tipoEstimado`, `acceso`, `accesoEstatico` y
+  `cadenaDeCampos` devuelven la causa real, con su sitio, en vez del mensaje genérico.
+- `check` recorta las capas de posición al propagar (`MainActivity.java: linea 11: linea 12: …`) y
+  emite por error `linea`, `columna`, `posicion` (`archivo:linea:columna`) y `mensaje`.
+- La pestaña (`studio/diagnostico-vivo.js`) pinta `posicion` y subraya el token con `columna` y el
+  ancho de carácter medido sobre la fuente del textarea; la marca lleva `data-linea`, `data-columna`
+  y `data-ancho`.
+
+**Coste, que es la línea base de la mejora D2.** Tiempos de reloj de `apkc check` en este
+escritorio, mismo fuente de 18 líneas:
+
+```
+sin proyecto (solo el jar):                  22-23 ms
+con --proyecto y la R.java del build delante: 22-25 ms
+con --proyecto y res/ enlazado en memoria:    181-193 ms
+```
+
+El salto son los ~170 ms de releer y parsear `resources.arsc` del `android.jar` en cada invocación.
+Dentro de la pestaña, el mismo `check` con `--proyecto` tarda **1,065 s** (lo imprime `apkc`) y el
+diagnóstico enseña el resultado **1,6 s** después de la última pulsación (350 ms de debounce + la
+pasada), medido en `prueba-pestana.js` (`--- 4c: roto en 1601 ms, sano en 1602 ms`). Ese coste es
+lo que D2 tiene que bajar; aquí solo queda medido.
+
+**Pruebas nuevas.** `apkc/check_test.go`: el fuente del studio con la raíz del proyecto da **cero
+errores**; usa la `R.java` del build cuando existe; sin proyecto el error nombra `R.layout.main`,
+cae en la línea 15 y en la columna de la `R`, y no repite la posición en el mensaje; un `res/` que el
+enlazador no sabe escribir deja el informe con `sin R: …` en vez de un verde falso; no escribe nada;
+la raíz sube hasta el manifiesto. `apkc/javaemisor_argumento_estatico_test.go`:
+`setContentView(R.layout.main)` y un `R.id` como argumento de un constructor, dexados por este fork
+y por **javac 17** (`--release 8 -g:lines,source`), dan el **mismo dex byte a byte**.
+En la pestaña, `prueba-pestana.js` comprueba el caso completo: `posicion` con
+`archivo:línea:columna`, el subrayado sobre el token (`data-columna`, `data-ancho`) y que el
+diagnóstico no escribe en la consola ni cambia `#ultimo-codigo`. Ojo con el sondeo de esa prueba: el
+resumen del diagnóstico es `1 error` y `sin errores`, así que buscar la palabra «error» casaba con
+«Abre un fichero .java para ver los errores…» y cerraba la espera antes de tiempo; se espera la
+forma del resumen, no la palabra.
+
+**Gate.** Con el árbol de este cambio, y con puertos propios porque otro `servidor-estatico.js`
+dejó ocupado el 8795 en esta máquina:
+
+```sh
+HOME_APKC_WEB=/home/leonisauro CHROME_BIN=/usr/bin/chromium \
+STUDIO_SERVIDOR_PORT=8801 STUDIO_PORT=9370 STUDIO_CREAR_PORT=8802 STUDIO_CREAR_CDP=9371 \
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
+```
+
+```
+crear: todo en orden (35 comprobaciones)
+pestaña: 91 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
+...
+e2e: todo en orden
+```
+
+Antes de eso, dos intentos dieron `FALLO: la pestaña con apkc.wasm` con
+`el android.jar de /android-jar respondió 404`: no era el código, era un
+`studio/servidor-estatico.js` de otra sesión escuchando en ese puerto. La página hablaba con él y
+sus endpoints dinámicos (`/android-jar`, `/keystore-ejemplo`) no existen ahí. `prueba-pestana.js`
+ahora comprueba que el puerto HTTP y el de CDP estén libres antes de arrancar y lo dice con su
+nombre (`el puerto 8795 ya está ocupado: usa STUDIO_SERVIDOR_PORT`), para que un puerto ajeno no
+vuelva a parecer un fallo del producto.
+
+**Fronteras escritas.** (1) Los errores del **parser** llevan línea pero no columna: su posición es
+la de la sentencia, no la de un token, y darle columna exige tocar cada sitio que construye una
+sentencia sin mover la `LineNumberTable`, que se compara byte a byte. (2) Si el `res/` del proyecto
+usa algo que el enlazador de Go no escribe (un drawable XML, por ejemplo), no hay `R` y el informe
+lo dice en `recursos`; el error que sale entonces es el de verdad, nunca un verde falso.
+

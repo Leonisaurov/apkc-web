@@ -2232,36 +2232,40 @@ func enPilaReceptor(opcode byte) int {
 // ----- expresiones -----
 
 // lineaDeExpr: donde estaba la expresion, para la LineNumberTable y para los mensajes.
-func lineaDeExpr(x jexpr) int {
+func lineaDeExpr(x jexpr) int { return posDeExpr(x).linea }
+
+// posDeExpr: la posicion de una expresion. La columna solo viene cuando la expresion la abrio un
+// token (`R.layout.main`, un literal, una llamada); las posiciones de sentencia salen con cero.
+func posDeExpr(x jexpr) pos {
 	switch v := x.(type) {
 	case jlit:
-		return v.donde.linea
+		return v.donde
 	case jclase:
-		return v.donde.linea
+		return v.donde
 	case jthis:
-		return v.donde.linea
+		return v.donde
 	case jacceso:
-		return v.donde.linea
+		return v.donde
 	case jllamada:
-		return v.donde.linea
+		return v.donde
 	case jcast:
-		return v.donde.linea
+		return v.donde
 	case jinstanceof:
-		return v.donde.linea
+		return v.donde
 	case jnuevo:
-		return v.donde.linea
+		return v.donde
 	case jnuevoArreglo:
-		return v.donde.linea
+		return v.donde
 	case jindice:
-		return v.donde.linea
+		return v.donde
 	case jincr:
-		return v.donde.linea
+		return v.donde
 	case joperador:
-		return v.donde.linea
+		return v.donde
 	case jnegacion:
-		return v.donde.linea
+		return v.donde
 	}
-	return 0
+	return pos{}
 }
 
 // exp emite la expresion y devuelve el descriptor de lo que deja en la pila.
@@ -2846,35 +2850,35 @@ func aplanar(a jacceso) ([]string, jexpr) {
 // emitir porque `R.layout.main` no emite nada: la constante se dobla.
 func (e *emisor) acceso(a jacceso) (string, error) {
 	segs, base := aplanar(a)
-	linea := a.donde.linea
+	donde := a.donde
 	if len(segs) == 0 {
-		return "", fmt.Errorf("linea %d: acceso sin nombre", linea)
+		return "", fmt.Errorf("%s: acceso sin nombre", donde.sitio())
 	}
 	if base != nil {
 		d, err := e.exp(base)
 		if err != nil {
 			return "", err
 		}
-		return e.cadenaDeCampos(d, segs, linea)
+		return e.cadenaDeCampos(d, segs, donde)
 	}
 	if v, ok := e.locales[segs[0]]; ok {
 		e.cargaDe(v.indice, v.desc)
-		return e.cadenaDeCampos(v.desc, segs[1:], linea)
+		return e.cadenaDeCampos(v.desc, segs[1:], donde)
 	}
 	if len(segs) == 1 {
-		if d, ok := e.campoDeLaClaseActual(segs[0], linea); ok {
+		if d, ok := e.campoDeLaClaseActual(segs[0], donde.linea); ok {
 			return d, nil
 		}
 	}
 	interno, err := e.ctx.resolverSimple(segs[0])
 	if err != nil {
-		return "", fmt.Errorf("linea %d: %w", linea, err)
+		return "", fmt.Errorf("%s: al leer %s, %w", donde.sitio(), strings.Join(segs, "."), err)
 	}
-	return e.accesoEstatico(interno, segs[1:], linea)
+	return e.accesoEstatico(interno, segs[1:], donde)
 }
 
 // cadenaDeCampos: campos de instancia sobre el valor que ya esta en la pila.
-func (e *emisor) cadenaDeCampos(desc string, segs []string, linea int) (string, error) {
+func (e *emisor) cadenaDeCampos(desc string, segs []string, donde pos) (string, error) {
 	actual := desc
 	for _, seg := range segs {
 		if seg == "length" && len(actual) > 0 && actual[0] == '[' {
@@ -2885,18 +2889,18 @@ func (e *emisor) cadenaDeCampos(desc string, segs []string, linea int) (string, 
 			continue
 		}
 		if len(actual) == 0 || actual[0] != 'L' {
-			return "", fmt.Errorf("linea %d: %s no es un objeto, no se le puede sacar %s", linea, actual, seg)
+			return "", fmt.Errorf("%s: %s no es un objeto, no se le puede sacar %s", donde.sitio(), actual, seg)
 		}
 		dueño := actual[1 : len(actual)-1]
 		cr, err := e.ctx.buscarCampo(dueño, seg)
 		if err != nil {
-			return "", fmt.Errorf("linea %d: %w", linea, err)
+			return "", fmt.Errorf("%s: %w", donde.sitio(), err)
 		}
 		if cr.constante {
-			return "", fmt.Errorf("linea %d: %s es una constante y sacarla de una instancia no esta medida", linea, seg)
+			return "", fmt.Errorf("%s: %s es una constante y sacarla de una instancia no esta medido", donde.sitio(), seg)
 		}
 		if cr.acceso&accStatic != 0 {
-			return "", fmt.Errorf("linea %d: %s.%s es estatico: sacarlo de una instancia no esta medido", linea, dueño, seg)
+			return "", fmt.Errorf("%s: %s.%s es estatico: sacarlo de una instancia no esta medido", donde.sitio(), dueño, seg)
 		}
 		idx := e.pool.campo(dueño, seg, cr.desc)
 		e.getfieldDe(idx, cr.desc)
@@ -2907,16 +2911,16 @@ func (e *emisor) cadenaDeCampos(desc string, segs []string, linea int) (string, 
 
 // accesoEstatico: `R.layout.main` desde el nombre del tipo. Las anidadas intermedias no emiten nada; el
 // ultimo segmento es un campo estatico o una constante doblada.
-func (e *emisor) accesoEstatico(interno string, segs []string, linea int) (string, error) {
+func (e *emisor) accesoEstatico(interno string, segs []string, donde pos) (string, error) {
 	if len(segs) == 0 {
-		return "", fmt.Errorf("linea %d: el tipo %s suelto no es un valor", linea, interno)
+		return "", fmt.Errorf("%s: el tipo %s suelto no es un valor", donde.sitio(), interno)
 	}
 	tipo := interno
 	for i, seg := range segs {
 		ultimo := i == len(segs)-1
 		if anidada := tipo + "$" + seg; e.ctx.hay(anidada) {
 			if ultimo {
-				return "", fmt.Errorf("linea %d: %s es un tipo, no un valor", linea, seg)
+				return "", fmt.Errorf("%s: %s es un tipo, no un valor", donde.sitio(), seg)
 			}
 			// javac deja la Class de la anidada en el pool aunque el valor se doble despues: medido en el
 			// parrafo 40 (#11 = Class com/hola/j1g/R$layout en MainActivity, que no usa ese tipo en codigo)
@@ -2926,23 +2930,23 @@ func (e *emisor) accesoEstatico(interno string, segs []string, linea int) (strin
 		}
 		cr, err := e.ctx.buscarCampo(tipo, seg)
 		if err != nil {
-			return "", fmt.Errorf("linea %d: %w", linea, err)
+			return "", fmt.Errorf("%s: %w", donde.sitio(), err)
 		}
 		if !ultimo {
-			return "", fmt.Errorf("linea %d: tras el campo %s no hay nada medido", linea, seg)
+			return "", fmt.Errorf("%s: tras el campo %s no hay nada medido", donde.sitio(), seg)
 		}
 		if cr.constante {
 			e.cargaEntero(cr.valor)
 			return "I", nil
 		}
 		if cr.acceso&accStatic == 0 {
-			return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede nombrar por el tipo", linea, tipo, seg)
+			return "", fmt.Errorf("%s: %s.%s no es estatico y no se puede nombrar por el tipo", donde.sitio(), tipo, seg)
 		}
 		idx := e.pool.campo(tipo, seg, cr.desc)
 		e.getstaticDe(idx, cr.desc)
 		return cr.desc, nil
 	}
-	return "", fmt.Errorf("linea %d: no se resuelve %s.%s", linea, interno, strings.Join(segs, "."))
+	return "", fmt.Errorf("%s: no se resuelve %s.%s", donde.sitio(), interno, strings.Join(segs, "."))
 }
 
 // literalDeClase emite `X.class` con la forma que midió el párrafo 89: un tipo de referencia o un
@@ -2954,7 +2958,7 @@ func (e *emisor) literalDeClase(v jclase) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("linea %d: no hay envoltorio medido para `%s.class`", v.donde.linea, v.nombre)
 		}
-		return e.accesoEstatico(envoltorio, []string{"TYPE"}, v.donde.linea)
+		return e.accesoEstatico(envoltorio, []string{"TYPE"}, v.donde)
 	}
 	var nombre string
 	if v.primitivo {
@@ -3942,11 +3946,21 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			}
 		}
 		if base == nil {
-			if interno, err := e.ctx.resolverSimple(segs[0]); err == nil {
-				return e.descDeAccesoEstatico(interno, segs[1:])
+			// `R.layout.main` y cualquier `Clase.campo` / `Clase.campo.campo`: el tipo de la cadena se
+			// saca de la declaracion del campo, sin emitir nada. Cuando la cabeza no se resuelve se
+			// devuelve **su** motivo (que suele ser una `R` que el classpath no trae) y no un «no
+			// esta medido» que escondia la causa real (§200).
+			interno, err := e.ctx.resolverSimple(segs[0])
+			if err != nil {
+				return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
 			}
+			d, err := e.descDeAccesoEstatico(interno, segs[1:])
+			if err != nil {
+				return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
+			}
+			return d, nil
 		}
-		return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+		return "", fmt.Errorf("%s: no se puede estimar el tipo de %s sin emitir su receptor: eso solo pasa con accesos de un nombre, variables locales y `Clase.campo` estaticos", v.donde.sitio(), strings.Join(segs, "."))
 	case jthis:
 		return "L" + e.interno + ";", nil
 	case jindice:
@@ -3955,7 +3969,7 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 				return lv.desc[1:], nil
 			}
 		}
-		return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+		return "", fmt.Errorf("%s: no se puede estimar el tipo de un elemento de arreglo si el arreglo no es una variable local", v.donde.sitio())
 	case jnuevoArreglo:
 		d, err := e.ctx.descriptorDe(v.tipo)
 		if err != nil {
@@ -3970,15 +3984,18 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		// una llamada sin receptor escrito: la vuelta de su unica candidata en esa aridad (medido al
 		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74)
 		if v.base != nil || v.super {
-			return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s() sin emitir el receptor de la llamada", v.donde.sitio(), v.nombre)
 		}
 		cands, err := e.ctx.candidatos(e.interno, v.nombre, len(v.args))
-		if err != nil || len(cands) != 1 {
-			return "", fmt.Errorf("linea %d: el tipo de ese argumento no esta medido", v.donde.linea)
+		if err != nil {
+			return "", fmt.Errorf("%s: al estimar el tipo de %s(), %w", v.donde.sitio(), v.nombre, err)
+		}
+		if len(cands) != 1 {
+			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s(): hay %d candidatas con %d argumentos y el tipo lo decide la sobrecarga", v.donde.sitio(), v.nombre, len(cands), len(v.args))
 		}
 		return vueltaDe(cands[0].desc), nil
 	}
-	return "", fmt.Errorf("linea %d: el tipo de un argumento de %T no esta medido", lineaDeExpr(x), x)
+	return "", fmt.Errorf("%s: el tipo de una expresion %T no se puede estimar sin emitirla", posDeExpr(x).sitio(), x)
 }
 
 // tipoPrevisto: el descriptor que va a salir de una expresion, **sin escribir su codigo**. Hace falta
