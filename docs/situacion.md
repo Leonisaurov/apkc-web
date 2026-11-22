@@ -600,3 +600,9 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   y la resolución de sobrecargas ampliada siguen pendientes, y la anónima dentro de anónima se revirtió
   porque su emisión no era la de javac. El gate integrado está en verde con 85 comprobaciones de
   pestaña y las cuatro plantillas verificadas (§190).
+- **Cierre de las cuatro fronteras Java y ART en aparato (§192-§193)**: la tableta Blackview MEGA 3
+  ejecutó los tres dex con `app_process64` y `dexdump`, con rc y salida idénticos a la JVM, sin
+  emulador (§192). En el compilador se cerraron `try-with-resources` con `addSuppressed`, la anidada
+  privada instanciada desde fuera, boxing/ensanchamiento/arreglos en sobrecargas y la anónima dentro
+  de anónima, todas byte a byte contra javac 17; solo quedan los varargs como frontera (§193). El
+  gate integrado sigue en verde con 85 comprobaciones de pestaña.

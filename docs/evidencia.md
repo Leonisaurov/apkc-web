@@ -8516,3 +8516,33 @@ punta en Go, el de `d8` sobre javac y el de `d8` sobre nuestra `Ver`— dan `rc=
 a la JVM (31 valores) y `dexdump rc=0`. `art: en orden`. Frontera que queda: el job `art` de CI sigue
 siendo informativo y usa emulador con KVM, porque un runner no tiene esta tableta; lo que sí está
 cerrado es la verificación en ART del árbol actual sobre un aparato real.
+
+## 193. Las cuatro fronteras Java que quedaban, cerradas
+
+Medido el 2026-11-21 con javac 17.0.21 y comparación byte a byte de dex. Se cerraron en cuatro
+commits separados, con `go test -count=1 ./...` tras cada uno (el entorno estaba justo de RAM y `tcr`
+mató una corrida con `RAM libre del sistema por debajo del umbral`; se usó `GOGC=50 GOMAXPROCS=2`).
+
+1. **`try-with-resources` con `addSuppressed`**: con un recurso se emite el patrón de javac —local
+   `primary`, segundo rango protegido para `close()`, `Throwable.addSuppressed` y `athrow— y el dex
+   sale byte a byte. Los múltiples recursos siguen con el desugaring funcional de §179.
+2. **Anidada privada instanciada desde fuera**: constructor sintético `(LCapa$1;)V`, clase marcador
+   con `EnclosingMethod` e `InnerClasses` `0x1008`, llamada con `aconst_null` y soporte de `const/4`
+   en el traductor; tres clases byte a byte contra `javac --release 8`.
+3. **Sobrecargas con boxing, ensanchamiento y arreglos**: `Integer.valueOf`, `ldc2_w` sobre la
+   constante y `int[]` frente a `Object`, byte a byte. **Frontera**: los varargs se siguen rechazando
+   en el parser (`un parametro necesita nombre`) y hay un test que lo fija.
+4. **Anónima dentro de anónima**: `Capa$1$1` con `this$0:LCapa$1;`, `val$m`, ctor `(LCapa$1;I)V`,
+   `Signature: ()V`, `EnclosingMethod` a `Capa$1.run` y las dos filas de `InnerClasses` en el orden de
+   javac. `initCaptura` deja de escribir `MethodParameters` cuando la clase creadora es anónima. Las
+   tres clases salen byte a byte. La sonda usa `int m = getM()` porque el parser no acepta `final` en
+   una declaración local, y se comprobó que el `.class` es idéntico al de la sonda con `final`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar go test -count=1 ./...
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
+```
+
+**Resultado**: `ok github.com/ajinasokan/apkc 8.497s` sobre el árbol integrado, suite wasm `PASS` y
+gate rc=0 con `pestaña: 85 comprobaciones`, cuatro plantillas verificadas y el `.aab` ensamblado en
+Go validado. Frontera que queda: varargs en sobrecargas; las otras tres piezas no tienen deuda.
