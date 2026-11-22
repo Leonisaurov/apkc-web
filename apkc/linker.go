@@ -74,6 +74,40 @@ var tiposDeResQueSeEnlazan = map[string]bool{
 	"menu": true, "xml": true, "raw": true,
 }
 
+// calificadorExtraDeCarpeta: reconoce las carpetas `layout-small`, `values-v21`,
+// `drawable-large-v4`, etc., que los casos medidos antes no cubren. Devuelve el tipo base, el
+// calificador (con el `-vN` explícito, que configDe necesita para escribir sdkVersion) y si aapt2
+// añade `-v4` a la ruta del apk: lo añade cuando el tamaño de pantalla está y no hay versión
+// explícita, igual que con la densidad (medido con build-tools 35.0.1).
+func calificadorExtraDeCarpeta(nombre string) (tipo, config string, autoVersion, ok bool) {
+	i := strings.IndexByte(nombre, '-')
+	if i <= 0 {
+		return "", "", false, false
+	}
+	tipo, sufijo := nombre[:i], nombre[i+1:]
+	if !tiposDeResQueSeEnlazan[tipo] {
+		return "", "", false, false
+	}
+	partes := strings.Split(sufijo, "-")
+	partesVistas, version, pantalla := 0, false, false
+	for _, p := range partes {
+		switch {
+		case tamanoPantallaDe(p) != 0:
+			pantalla = true
+			partesVistas++
+		case strings.HasPrefix(p, "v") && soloDigitos(p[1:]):
+			version = true
+			partesVistas++
+		default:
+			return "", "", false, false
+		}
+	}
+	if partesVistas == 0 {
+		return "", "", false, false
+	}
+	return tipo, sufijo, pantalla && !version, true
+}
+
 // tipoDeRecurso: la carpeta de res/ que da el tipo, sin calificador. Un nombre con guion todavía no
 // se acepta (5.17), así que basta el primer segmento.
 func tipoDeRecurso(ruta string) string {
@@ -111,6 +145,7 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			return nil, nil, nil, manifiesto, fmt.Errorf("res/%s no es una carpeta de recursos", e.Name())
 		}
 		tipo, config := e.Name(), ""
+		autoVersion := false
 		if !tiposDeResQueSeEnlazan[tipo] {
 			// `values-es` (idioma), `layout-land` (orientación) y `drawable-hdpi` (densidad) son las
 			// configuraciones medidas (parrafos 94 y 103). Cualquier otra sigue fuera.
@@ -133,8 +168,13 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 				densidadDe(quitaVersion(strings.TrimPrefix(e.Name(), "drawable-"))) != 0:
 				// drawable-nodpi, drawable-tvdpi y sus equivalentes -v4 (§159)
 				tipo, config = "drawable", quitaVersion(strings.TrimPrefix(e.Name(), "drawable-"))
+				autoVersion = true
 			default:
-				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, layout-land, menu, xml, drawable, drawable-hdpi, mipmap y raw. Otra densidad, orientacion o version de API es una configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
+				if t, c, auto, ok := calificadorExtraDeCarpeta(e.Name()); ok {
+					tipo, config, autoVersion = t, c, auto
+				} else {
+					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, layout-land, menu, xml, drawable, drawable-hdpi, mipmap y raw. Otra densidad, orientacion o version de API es una configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
+				}
 			}
 		}
 		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
@@ -146,9 +186,10 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
 			}
 			carpetaSalida := e.Name()
-			if tipo == "drawable" && config != "" {
-				// la densidad nacio en la API 4: aapt2 deja `drawable-hdpi-v4` también con
-				// --no-auto-version (parrafo 103)
+			if autoVersion {
+				// la densidad y el tamaño de pantalla nacieron en la API 4: aapt2 deja
+				// `drawable-hdpi-v4` y `layout-small-v4` también con --no-auto-version
+				// (parrafo 103 y medido con build-tools 35.0.1)
 				carpetaSalida += "-v4"
 			}
 			ruta := filepath.Join("res", carpetaSalida, f.Name())

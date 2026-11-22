@@ -207,16 +207,15 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 		// las configuraciones van en el orden de su valor, no en el del nombre: port (1) antes que
 		// land (2) y las densidades de menor a mayor (ldpi, mdpi, …), medido en el §137
 		sort.SliceStable(configs[1:], func(a, b int) bool {
-			ca, cb := configs[1:][a], configs[1:][b]
-			ga, na, _ := claveDeConfig(ca)
-			gb, nb, _ := claveDeConfig(cb)
+			ga, na, ta := claveDeConfig(configs[1:][a])
+			gb, nb, tb := claveDeConfig(configs[1:][b])
 			if ga != gb {
 				return ga < gb
 			}
 			if na != nb {
 				return na < nb
 			}
-			return ca < cb
+			return ta < tb
 		})
 		bloques := []bloqueEscribir{}
 		for _, cfg := range configs {
@@ -300,47 +299,55 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 	}, nil
 }
 
-// claveDeConfig: el grupo y el número con el que aapt2 ordena las configuraciones dentro de un
-// tipo. Las orientaciones (port 1, land 2) van antes que las densidades (120, 160, …) y los idiomas
-// van tras ellas en orden alfabético.
+// claveDeConfig: la clave con la que aapt2 ordena las configuraciones dentro de un tipo. Es la
+// comparación lexicográfica de ResTable_config::compare de AOSP, medida con build-tools 35.0.1:
+// locale → screenType → (input, screenSize) → version → screenLayout → uiMode → smallestWidth.
+// `grupo` es el locale, `numero` la densidad (los 16 bits altos de screenType) y `texto` todos los
+// campos en hexadecimal de anchura fija. Así comparar la terna equivale a comparar los campos en
+// orden, sin desbordar un `int` de 32 bits en wasm con `nodpi` (screenType 0xffff0000). Por eso
+// `port` (screenType=1) va después de `v33` (screenType=0, version=33) y `v21` antes que
+// `small-v21` (misma versión, screenLayout 0 frente a 1).
 func claveDeConfig(cfg string) (grupo, numero int, texto string) {
-	switch cfg {
-	case "port":
-		return 0, 1, cfg
-	case "land":
-		return 0, 2, cfg
-	}
-	if d := densidadDe(cfg); d != 0 {
-		return 1, int(d), cfg
-	}
-	if d := anchoMinimoDe(cfg); d != 0 {
-		return 2, int(d), cfg
-	}
-	if cfg == "v1" {
-		return 4, 1, cfg
-	}
-	return 5, 0, cfg
+	f := camposDeConfig(cfg)
+	grupo, numero = int(f.locale), int(f.screenType>>16)
+	texto = fmt.Sprintf("%08x%08x%08x%08x%08x%08x%08x%08x%08x",
+		f.locale, f.screenType, f.input, f.screenSize, f.version,
+		f.screenLayout, f.uiMode, f.smallestWidth, f.screenSizeDp)
+	return grupo, numero, texto
 }
 
-// mascaraConfig: las banderas del spec_map que aapt2 pone para cada configuración medida. `es` es
-// locale (0x0004), `land` orientación (0x0080) y `hdpi` densidad (0x0100) más la marca 0x0400 que
-// aapt2 añade al tipo drawable con densidad (medido en el parrafo 103: 0x0500).
+// mascaraConfig: las banderas del spec_map que aapt2 pone para cada configuración medida. Son la
+// unión de las banderas de todos los calificadores del nombre: locale 0x0004, orientación 0x0080,
+// densidad 0x0100, versión 0x0400, screenLayout 0x0800 y smallestScreenWidthDp 0x2000. Las
+// versiones implícitas (densidad y tamaño de pantalla desde la API 4, sw desde la 13) aportan el
+// 0x0400 de la versión: hdpi sale 0x0500 (§103), sw600dp 0x2400 (§159) y small 0x0c00, medido con
+// build-tools 35.0.1.
 func mascaraConfig(cfg string) uint32 {
-	switch {
-	case cfg == "port" || cfg == "land":
-		return 0x0080
-	case densidadDe(cfg) != 0:
-		// densidad (0x0100) y la marca 0x0400 que aapt2 añade cuando la clave tiene base (§103 y §137)
-		return 0x0500
-	case anchoMinimoDe(cfg) != 0:
-		// smallestScreenWidthDp (0x2000) con la misma marca 0x0400 de clave con base (§159)
-		return 0x2400
-	case cfg == "v1":
-		// la copia automática por API 1 del --auto-version de aapt2 (§171)
-		return 0x0400
-	default:
+	f := camposDeConfig(cfg)
+	var banderas uint32
+	if f.locale != 0 {
+		banderas |= 0x0004
+	}
+	if f.screenType != 0 {
+		if f.screenType&0xffff0000 != 0 {
+			banderas |= 0x0100
+		} else {
+			banderas |= 0x0080
+		}
+	}
+	if f.version != 0 {
+		banderas |= 0x0400
+	}
+	if f.screenLayout != 0 {
+		banderas |= 0x0800
+	}
+	if f.smallestWidth != 0 {
+		banderas |= 0x2000
+	}
+	if banderas == 0 {
 		return 0x0004
 	}
+	return banderas
 }
 
 // sinRepetidos conserva el orden, que ya viene sorted.

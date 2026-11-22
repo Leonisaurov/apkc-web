@@ -293,42 +293,164 @@ func anchoMinimoDe(c string) uint16 {
 	return uint16(n)
 }
 
+// versionDe: el `-vN` de un calificador, que aapt2 guarda como sdkVersion en +24 del
+// ResTable_config. Medido con aapt2 de build-tools 35.0.1: `v21` -> 21, `v33` -> 33, y `small-v21`
+// -> 21. En un int de 16 bits cabe hasta v65535.
+func versionDe(c string) uint16 {
+	for _, parte := range strings.Split(c, "-") {
+		if len(parte) < 2 || parte[0] != 'v' {
+			continue
+		}
+		n, err := strconv.Atoi(parte[1:])
+		if err == nil && n >= 0 && n <= 65535 {
+			return uint16(n)
+		}
+	}
+	return 0
+}
+
+// tamanoPantallaDe: `small`/`large`/`xlarge`, los valores del MASK_SCREENSIZE que aapt2 escribe en
+// el byte bajo de screenLayout (+28 del ResTable_config). Medido con build-tools 35.0.1:
+// small=1, large=3, xlarge=4; todos con sdkVersion 4 en +24.
+func tamanoPantallaDe(c string) uint8 {
+	for _, parte := range strings.Split(c, "-") {
+		switch parte {
+		case "small":
+			return 1
+		case "large":
+			return 3
+		case "xlarge":
+			return 4
+		}
+	}
+	return 0
+}
+
+// camposConfig: los campos del ResTable_config que este enlazador escribe, en el orden en que
+// ResTable_config::compare los compara (locale, screenType, input, screenSize, version,
+// screenLayout, screenLayout2, colorMode, uiMode, smallestScreenWidthDp, screenSizeDp). Los que no
+// están medidos quedan a cero. `locale` empaqueta language en los dos bytes altos y country en los
+// dos bajos; `screenType` empaqueta orientation | touchscreen<<8 | density<<16.
+type camposConfig struct {
+	locale        uint32
+	screenType    uint32
+	input         uint32
+	screenSize    uint32
+	version       uint32
+	screenLayout  uint32
+	uiMode        uint32
+	smallestWidth uint32
+	screenSizeDp  uint32
+}
+
+func esLengua(s string) bool {
+	if len(s) != 2 {
+		return false
+	}
+	for i := 0; i < 2; i++ {
+		if s[i] < 'a' || s[i] > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+func soloDigitos(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// camposDeConfig descompone un calificador compuesto (`small-v21`, `sw600dp-v13`, `es-rMX`, …) en
+// los campos que escribe configDe. Las versiones implícitas que aapt2 aplica por compatibilidad
+// (densidad y tamaño de pantalla desde la API 4, smallestScreenWidthDp desde la 13) se añaden cuando
+// no hay un `-vN` explícito.
+func camposDeConfig(c string) camposConfig {
+	var f camposConfig
+	partes := strings.Split(c, "-")
+	for i, p := range partes {
+		switch {
+		case p == "port":
+			f.screenType |= 1
+		case p == "land":
+			f.screenType |= 2
+		case densidadDe(p) != 0:
+			f.screenType |= uint32(densidadDe(p)) << 16
+		case strings.HasPrefix(p, "sw") && anchoMinimoDe(p) != 0:
+			f.smallestWidth = uint32(anchoMinimoDe(p))
+		case tamanoPantallaDe(p) != 0:
+			f.screenLayout = uint32(tamanoPantallaDe(p))
+		case strings.HasPrefix(p, "v") && soloDigitos(p[1:]):
+			n, err := strconv.Atoi(p[1:])
+			if err == nil && n <= 65535 {
+				f.version = uint32(n)
+			}
+		case esLengua(p):
+			f.locale = uint32(p[0])<<24 | uint32(p[1])<<16
+			if i+1 < len(partes) && len(partes[i+1]) == 3 &&
+				(partes[i+1][0] == 'r' || partes[i+1][0] == 'R') {
+				f.locale |= uint32(partes[i+1][1])<<8 | uint32(partes[i+1][2])
+			}
+		}
+	}
+	if f.version == 0 {
+		switch {
+		case f.screenLayout != 0, f.screenType&0xffff0000 != 0:
+			f.version = 4
+		case f.smallestWidth != 0:
+			f.version = 13
+		}
+	}
+	return f
+}
+
 // configDe: los 64 bytes de ResTable_config que midió el aapt2 del aparato. La base solo declara su
 // tamaño (64). `values-es` escribe 'e' y 's' en language[0] y language[1] (offset +8 y +9); el resto
-// queda a cero. Medido en el volcado del parrafo 94.
-func configDe(lengua string) []byte {
+// queda a cero. Medido en el volcado del parrafo 94 y ampliado con build-tools 35.0.1 para
+// screenLayout (+28) y `-vN` (sdkVersion en +24).
+func configDe(calificador string) []byte {
 	b := make([]byte, 64)
 	binary.LittleEndian.PutUint32(b, 64)
-	switch {
-	case lengua == "v1":
-		// la copia que aapt2 añade con --auto-version: sdkVersion 1 en +24 (§171)
-		b[24] = 1
-	case lengua == "":
-	case len(lengua) == 6 && lengua[2:4] == "-r":
-		// `es-rMX`: language en +8/+9 y country en +10/+11 (parrafo 107)
-		b[8], b[9] = lengua[0], lengua[1]
-		b[10], b[11] = lengua[4], lengua[5]
-	case lengua == "port":
-		// ResTable_config::orientation = ORIENTATION_PORT (1), en +12 (§137)
-		b[12] = 1
-	case lengua == "land":
-		// ResTable_config::orientation = ORIENTATION_LAND (2), en +12
-		b[12] = 2
-	case anchoMinimoDe(lengua) != 0:
-		// smallestScreenWidthDp en +30 y sdkVersion 13 en +24 (§159)
-		binary.LittleEndian.PutUint16(b[30:], anchoMinimoDe(lengua))
-		b[24] = 13
-	case densidadDe(lengua) != 0:
-		// density en +14 y sdkVersion 4 en +24, para todas las densidades medidas (§137)
-		binary.LittleEndian.PutUint16(b[14:], densidadDe(lengua))
-		b[24] = 4
-	default:
-		if len(lengua) != 2 {
-			// una región (`es-rMX`) pide country y otra máscara que no está medida
-			return b
+	partes := strings.Split(calificador, "-")
+	for i, p := range partes {
+		if esLengua(p) {
+			b[8], b[9] = p[0], p[1]
+			if i+1 < len(partes) && len(partes[i+1]) == 3 &&
+				(partes[i+1][0] == 'r' || partes[i+1][0] == 'R') {
+				b[10], b[11] = partes[i+1][1], partes[i+1][2]
+			}
+			break
 		}
-		b[8], b[9] = lengua[0], lengua[1]
 	}
+	for _, p := range partes {
+		switch p {
+		case "port":
+			// ResTable_config::orientation = ORIENTATION_PORT (1), en +12 (§137)
+			b[12] = 1
+		case "land":
+			// ResTable_config::orientation = ORIENTATION_LAND (2), en +12
+			b[12] = 2
+		}
+	}
+	if d := anchoMinimoDe(calificador); d != 0 {
+		// smallestScreenWidthDp en +30 (§159)
+		binary.LittleEndian.PutUint16(b[30:], d)
+	}
+	if d := densidadDe(calificador); d != 0 {
+		// density en +14 (§137)
+		binary.LittleEndian.PutUint16(b[14:], d)
+	}
+	if t := tamanoPantallaDe(calificador); t != 0 {
+		// screenLayout en +28: small=1, large=3, xlarge=4
+		binary.LittleEndian.PutUint32(b[28:], uint32(t))
+	}
+	binary.LittleEndian.PutUint16(b[24:], uint16(camposDeConfig(calificador).version))
 	return b
 }
 
