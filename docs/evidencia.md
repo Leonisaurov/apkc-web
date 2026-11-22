@@ -8550,7 +8550,8 @@ Go validado. Frontera que queda: varargs en sobrecargas; las otras tres piezas n
 ## 194. Deuda abierta al cierre de esta ronda
 
 Medido el 2026-11-21. Se enumera lo que **no** está cerrado, con el comando que lo reproduce, para
-no confundir «frontera escrita» con «hecho».
+no confundir «frontera escrita» con «hecho». Los puntos 1 y 2 se cerraron después con su medición en
+§199; este párrafo conserva el estado de la ronda que lo originó.
 
 1. **Varargs en resolución de sobrecargas**. `resuelveSobrecarga` acepta boxing, ensanchamiento y
    arreglos (§193), pero un parámetro `int... xs` se rechaza en el parser con `un parametro necesita
@@ -8693,6 +8694,73 @@ python3 ~/.config/opencode/validate_config.py
 real 10/10 por HTTP/2 con 53 peticiones y 0 fuera del origen, `publicación verificada: sha256
 db1bf7ca36e39c24bbf00353d358d31d5da6864add486bb8351dfb4b79813aa3`, configuración de OpenCode
 válida. `origin/web` y `origin/main` del submódulo están alineados; los worktrees están limpios y
-`studio-test.zip` se ignora. Deuda consciente, no cerrada: §194 (varargs, TWR múltiple, jobs
+`studio-test.zip` se ignora. Deuda consciente, no cerrada: §194 (varargs y TWR múltiple cerrados
+después en §199; jobs
 informativos, dos advisories del detector, pruebas no versionadas resueltas en §197, hash de
 `wasm_exec.js`), §178 (ART real sí en la Blackview, no en CI) y §181/§185 (firma, sí cerrada).
+
+## 199. Cierre de la deuda Java: varargs y `try-with-resources` múltiple
+
+Medido el 2026-11-22 con javac 17.0.21. Cierra los dos puntos Java de la deuda de §194 (1 y 2).
+La comparación es siempre la misma: el fuente se compila con el emisor del fork y con
+`javac --release 8 -g:lines,source`, los dos `.class` pasan por `dexDeClases` y el test exige
+`bytes.Equal`. El oráculo no comparte código con el emisor.
+
+1. **Varargs en resolución de sobrecargas.** El léxico ya traía `"..."`; el parser ahora lo acepta
+   como último parámetro (`javafuente.go`), guarda el tipo como arreglo (`int... xs` → `int[]` →
+   `[I`) y marca el método. El `method_info` lleva `ACC_VARARGS` (**0x0080**, medido `0x0088` en un
+   `static`: sin el bit el dex no coincide, porque `accesoDex` lo conserva). `buscarMetodo` añade la
+   fase 3 de JVMS 15.12.2.4 **después** de las exactas y de las aplicables de aridad fija: los
+   primeros `len(ps)-1` argumentos van a los parámetros fijos y cada uno de los restantes debe caber
+   en el tipo elemento del último arreglo. Una llamada con el arreglo declarado no empaqueta.
+   `argumentosDeLlamada`/`empaquetaVarargs` escriben la cadena de javac (`cargaEntero(n)`,
+   `newarray`/`anewarray`, `dup`, índice, valor, `*astore`). Medido byte a byte en los caminos sin
+   receptor, con receptor implícito y explícito, y con el tipo cualificando una llamada estática.
+
+2. **Boxing hacia referencia, que la fase 3 necesitaba.** `asignable` solo aceptaba boxing cuando el
+   envoltorio era exactamente el parámetro, así que `asignable("I", "Ljava/lang/Object;")` era falso
+   y `String.format("%d %s", 1, "x")` moría con «ninguna es la mas especifica». Ahora un primitivo con
+   envoltorio conocido se prueba contra la cadena de referencias del envoltorio (JVMS 5.3). `expA`
+   emite el `valueOf` y devuelve el descriptor del envoltorio, que es lo que queda en la pila; por eso
+   `empaquetaVarargs`, el inicializador `new T[] {…}` y la asignación `a[0] = 7` sobre un `Object[]`
+   aceptan un descriptor asignable al elemento, no solo el idéntico. Sin esto el validador veía un
+   `int` suelto contra un descriptor `(Ljava/lang/Object;)V`. Cubierto por los tres caminos de
+   llamada y por el de asignación a arreglo.
+
+3. **`try-with-resources` con N recursos.** `jtry.recurso` pasa a ser `recursos []jdecl` y
+   `recursoAnidado` emite un nivel por recurso, como javac 17: la declaración queda fuera del rango,
+   que cubre el nivel interior entero; el manejador guarda la primaria en el hueco que deja su propio
+   recurso (javac reutiliza el del interior y, si el cuerpo declaró locals, el del primero de ellos),
+   cierra dentro de un segundo rango y añade la del cierre con `Throwable.addSuppressed` antes de
+   re-lanzar. Las filas de la tabla salen de dentro hacia fuera. Con el cuerpo vacío javac no abre
+   rango ni manejador para el recurso más interno: se emite solo la guarda `if (r != null) r.close()`
+   y el `return`. Medido byte a byte con uno, dos y tres recursos, con un local propio en el cuerpo y
+   con el cuerpo vacío; `d8 --release` acepta el `.class` de tres recursos con `rc 0`.
+
+4. **Lo que salió al falsar el cierre.** La primera auditoría adversarial encontró tres casos Java
+   válidos que fallaban (`String.format`, TWR con local en el cuerpo, TWR con cuerpo vacío); la
+   segunda destapó el mismo boxing en el receptor explícito, en la llamada estática cualificada por
+   el tipo y en la asignación a un arreglo de referencias. Los cinco están cerrados con su test byte a
+   byte: `TestBoxingHaciaObjectoEnVarargs`, `TestReceptorExplicitoConBoxing`,
+   `TestTryWithResourcesHuecoDelCuerpo`, `TestTryWithResourcesCuerpoVacio` y el caso
+   `estatico_cualificado` de `TestReceptorExplicitoConBoxing`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar go test -count=1 -run 'TestVarargs|TestBoxingHaciaObjectoEnVarargs|TestReceptorExplicitoConBoxing|TestTryWithResources' -v .
+tcr -c 2 -m 2G -r 400M -- env GOGC=50 GOMAXPROCS=2 APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar go test -count=1 ./...
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh wasm
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
+```
+
+**Resultado**: los tests de las cuatro piezas pasan; la suite completa da `ok
+github.com/ajinasokan/apkc 50.579s`, la suite del hospedador de navegador da `PASS` y el gate da
+`e2e: todo en orden` con `pestaña: 87 comprobaciones`, sin cambiar el número de comprobaciones ni
+los apks de las plantillas. Los casos atacados por la auditoría que antes fallaban salen ahora byte a
+byte: `String.format("%d %s", 1, "x")`, `s.f(7)` sobre `f(Object)`, `S.f(7)`, `a[0] = 7` sobre
+`Object[]`, tres recursos, local propio y cuerpo vacío.
+
+**Frontera**: siguen rechazándose por nombre el `try-with-resources` con `catch` o `finally`
+propios y con salidas abruptas del cuerpo, el constructor varargs que necesita empaquetado, un `...`
+que no es el último parámetro (JLS 8.4.1) y los varargs genéricos. No se midieron varargs privados
+accesibles desde una anónima ni el comportamiento en ART de los dex nuevos; la igualdad byte a byte
+y `d8` son los oráculos de este párrafo, no el aparato.

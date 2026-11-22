@@ -604,16 +604,18 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   ejecutó los tres dex con `app_process64` y `dexdump`, con rc y salida idénticos a la JVM, sin
   emulador (§192). En el compilador se cerraron `try-with-resources` con `addSuppressed`, la anidada
   privada instanciada desde fuera, boxing/ensanchamiento/arreglos en sobrecargas y la anónima dentro
-  de anónima, todas byte a byte contra javac 17; solo quedan los varargs como frontera (§193). El
+  de anónima, todas byte a byte contra javac 17; los varargs quedaron como frontera en §193 y se cerraron en §199. El
   gate integrado sigue en verde con 85 comprobaciones de pestaña.
-- **Deuda abierta (§194)**: varargs en sobrecargas, `try-with-resources` con varios recursos sin
-  `addSuppressed`, jobs `art`/`safari` informativos, verificación del host al 8/10 por HTTP/2, dos
-  hallazgos del informe de seguridad sin prueba versionada y dos advisories del detector de interfaz.
-  Nada de eso se cuenta como cerrado.
+- **Deuda abierta (§194), con dos puntos cerrados en §199**: varargs en sobrecargas y
+  `try-with-resources` con varios recursos y `addSuppressed` ya están medidos y cerrados, igual que
+  el diagnóstico/paleta versionado (§197) y el host a 10/10 (§196 y §198). Siguen abiertos los jobs
+  `art`/`safari` informativos, dos hallazgos del informe de seguridad sin prueba versionada y dos
+  advisories del detector de interfaz. Lo demás no se cuenta como cerrado.
 - **Punto de entrada para la próxima sesión (§198)**: gate en verde con 87 comprobaciones de pestaña,
   sitio local y host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado.
-  Para seguir, lee primero §194 (deuda), §197 (carga y caché) y §198 (comandos de reproducción); el
-  inventario de la Fase 5 y la tabla de estados de `docs/plan.md` ya incluyen esta tanda.
+  Para seguir, lee primero §194 (deuda), §199 (cierre Java), §197 (carga y caché) y §198 (comandos de
+  reproducción); el inventario de la Fase 5 y la tabla de estados de `docs/plan.md` ya incluyen esta
+  tanda.
 - **Objetivo próximo: vista previa del APK** (`docs/plan-vista-previa.md`): la propuesta del usuario
   se naturalizó sobre el estado de §198 —cifras reales del binario, comandos con las rutas actuales,
   lector DEX del fork reutilizado y restricciones R1-R8— y quedó como fila 7 de la tabla de estados
