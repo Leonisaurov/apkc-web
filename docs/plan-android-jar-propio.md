@@ -92,6 +92,49 @@ se validó con `python3 -c 'import yaml; yaml.safe_load(...)'`, que comprueba
 sintaxis, no que los jobs pasen. J4 sigue pendiente hasta que un run real esté
 en verde.
 
+### 0.1. Intento de ejecución de J4 (2026-11-22)
+
+El entorno sí tiene `gh` autenticado (`gh auth status`: cuenta `Leonisaurov`,
+scopes `repo` y `workflow`) y el remoto `origin` apunta a
+`https://github.com/Leonisaurov/apkc-web`. El workflow no se pudo lanzar:
+
+```sh
+gh workflow list --repo Leonisaurov/apkc-web --all
+# gate  active  412858500
+# (no aparece android-jar)
+
+gh workflow run android-jar.yml --repo Leonisaurov/apkc-web --ref web
+# HTTP 404: workflow android-jar.yml not found on the default branch
+
+git show origin/web:.github/workflows/android-jar.yml
+# fatal: path '.github/workflows/android-jar.yml' exists on disk, but not in 'origin/web'
+
+git ls-remote origin web main
+# 8e7b014... refs/heads/main
+# 10e566f... refs/heads/web
+```
+
+El workflow existe en el `web` local desde `7648c8a`, pero `origin/web` está en
+`10e566f` y no lo tiene; el `web` local está 39 commits por delante. GitHub
+exige que un workflow `workflow_dispatch` esté en la rama por defecto para
+poder lanzarlo por nombre, y el de este repo es `main`, que tampoco lo tiene.
+
+**Resultado: J4 no verificada.** No hay número de run, URL, artifact ni hash de
+CI que reportar, y no se escribe «CI verde». Para ejecutarlo hace falta un push
+que no se ha hecho porque requiere confirmación explícita del usuario:
+
+```sh
+# opción mínima: llevar solo el commit del workflow a origin/web
+git push origin 7648c8a:web
+# después
+gh workflow run android-jar.yml --repo Leonisaurov/apkc-web --ref web
+gh run watch --repo Leonisaurov/apkc-web
+gh run download --repo Leonisaurov/apkc-web --name android-stub-34
+```
+
+La alternativa es llevar el workflow a `main` (rama por defecto), que cambia el
+alcance del push. Ninguna de las dos se ha ejecutado.
+
 ## 1. Qué contiene el jar que consume la pestaña
 
 Medición sobre `$ANDROID_HOME/platforms/android-34/android.jar`:
@@ -593,8 +636,12 @@ Cada fase se cierra con su comando en verde y su párrafo en
   `sha256sum -c`.
 - Criterio de rechazo: un workflow escrito no es un workflow verde. Si el job
   no pasa, la fase sigue pendiente.
-- **Estado: workflow escrito y YAML validado con PyYAML; no ejecutado en
-  GitHub.** No se afirma que esté verde.
+- **Estado: NO verificada.** El workflow está escrito y el YAML validado con
+  PyYAML, pero no está en `origin/web` (que sigue en `10e566f`) ni en la rama
+  por defecto. `gh workflow run android-jar.yml --ref web` devolvió
+  `HTTP 404: workflow android-jar.yml not found on the default branch`. No hay
+  run, artifact ni hash de CI. El comando que falta y el push que requiere
+  confirmación están en §0.1.
 
 ### J5. Consumo desde el sitio
 
