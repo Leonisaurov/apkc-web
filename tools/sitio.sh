@@ -88,7 +88,8 @@ for cuerpo in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re
     hashes.append("'sha256-" + base64.b64encode(
         hashlib.sha256(cuerpo.encode("utf-8")).digest()).decode("ascii") + "'")
 csp = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + " ".join(hashes) +
-       "; worker-src 'self'; connect-src 'self'; img-src 'self' data:; " +
+       "; require-trusted-types-for 'script'; " +
+       "worker-src 'self'; connect-src 'self'; img-src 'self' data:; " +
        "style-src 'self'; font-src 'self' data:; object-src 'none'; " +
        "base-uri 'none'; frame-ancestors 'none'")
 sw = raiz / "sw.js"

@@ -8122,3 +8122,59 @@ sonda rota por una secuencia `\\n` dentro de la plantilla del evaluador, que dab
 `SyntaxError: Invalid or unexpected token` antes de llegar al aserto. Frontera: los contadores son
 locales a cada navegador; agregarlos entre visitantes exigiría un servidor, que está fuera de la
 ambición.
+
+## 176. Tres mundos visuales para el editor, sin clonar VS Code
+
+Medido el 2026-11-21. El usuario pidió las tres propuestas (Taller artesanal, Terminal moderno y
+Azul refinado), no dos. La verdad del producto se escribió en `studio/PRODUCT.md` a partir de la
+evidencia del repo, sin entrevista de producto: se dice aquí expresamente porque el usuario pidió
+«adelante con todo» y esa sustitución debe quedar visible. El contrato de `Operate` está en
+`studio/.impeccable/surfaces/index-html.md`: los temas cambian tipo, paleta, densidad y **una** firma;
+no cambian navegación, ids ni controles.
+
+Los tres mundos están en `studio/style.css` (`data-tema`) y se eligen en Ajustes. Cada uno aporta
+dos marcas (riel y pestaña activa), no solo colores. `studio/DESIGN.md` y
+`studio/.impeccable/design.json` fijan tokens y assets. Se corrigió el veredicto **FIX** de la
+revisión final: se eliminó el kicker sobre el H1, se sustituyeron siete colores prestados del VS Code
+por tokens de tema, se completaron las seis marcas, se cambiaron los glifos Unicode por `clip-path`
+y SVG, y el foco de botón pasó de 1px a 2px.
+
+```sh
+impeccable detect --json studio/index.html studio/style.css studio/temas.js
+node /tmp/opencode/capture-temas.js "$PWD/sitio" "$PWD/studio/.impeccable/review"
+```
+
+**Resultado**: el detector deja **0 warnings** y **1 advisory** (`3,4:1 — #ffffff sobre #2e92d5`,
+azul calculado para el hover de un botón, no un literal del código). Las seis capturas viven en
+`studio/.impeccable/review/`; la firma se ve en las parejas `*-editor.png`. Frontera: no se probó un
+lector de pantalla real; el contraste se audita con el detector y con las capturas, no con un
+espectrófotómetro.
+
+## 177. Instalación PWA, idioma, atajos y Trusted Types
+
+Medido el 2026-11-21. `#instalar-app` solo aparece si el navegador expone `navigator.install()` y
+no hace ninguna petición: el manifest ya está enlazado en el documento. `studio/idioma.js` traduce
+el marco y el Inicio entre español e inglés con `data-i18n` y guarda la elección en `localStorage`;
+`studio/main.js` lo importa como módulo. El panel de atajos del Inicio se amplió con cabecera y
+textos traducidos. El gate de WebKit corre en GitHub Actions con Playwright (job informativo: es el
+motor de Safari en Linux, no Safari real) y `studio/prueba-webkit.js` comprueba aislamiento, carga y
+cero peticiones fuera del origen.
+
+Los cinco sumideros HTML se auditaron. Tres (`select.innerHTML = ""`) pasaron a `replaceChildren()`;
+los otros dos (consola y resalto) pasaron por una política de Trusted Types en `studio/tt.js` que
+rechaza `<script` y atributos `on*`. `tools/sitio.sh` inyecta `require-trusted-types-for 'script'` en
+el CSP del service worker. Durante la verificación apareció un fallo real: el global es
+`trustedTypes` en minúsculas; con `TrustedTypes` la política no se creaba y el CSP bloqueaba la
+consola con `This document requires 'TrustedHTML' assignment`. Corregido y vuelto a medir.
+
+```sh
+node /tmp/opencode/prueba-idioma.js "$PWD/sitio"   # es→en, sin red
+node /tmp/opencode/prueba-tt.js "$PWD/sitio"        # SW controla, CSP activo, cero excepciones
+grep -n "require-trusted-types-for" tools/sitio.sh
+```
+
+**Resultado**: `idioma: todo en orden` (`lang`, H1, botón y selector en los dos idiomas) y
+`trusted types: todo en orden` (`aislado:true, controlado:true, tt:true, cspActiva:true`, sin
+excepciones). Frontera: Safari no se ejecuta en los runners; el job de WebKit es una aproximación
+informativa y no bloquea el gate. No se añadió una cabecera CSP report-only paralela porque el SW ya
+inyecta la política única: dos políticas duplicarían los informes sin añadir cobertura.

@@ -121,6 +121,27 @@ jobs:
           name: sitio
           path: ${{ runner.temp }}/sitio
 
+  # WebKit es el motor de Safari. Es una comprobación informativa en un runner Linux: no es
+  # Safari real (no se puede ejecutar macOS en los runners de este repo), por eso no bloquea.
+  webkit:
+    needs: pesado
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npx -y playwright@latest install webkit --with-deps
+      - uses: actions/download-artifact@v4
+        with:
+          name: sitio
+          path: sitio
+      - name: WebKit sobre el sitio publicado
+        run: node studio/prueba-webkit.js
+
   # El release no puede saltarse el gate: si el pesado falla, este job no arranca. Publica el
   # sitio empaquetado como artefacto de la release; el host definitivo sigue sin decidirse.
   publicar:
