@@ -1,0 +1,232 @@
+name: deps-maven
+
+# Prefetch de dependencias Maven para apkc-studio. El runner es el ÚNICO que habla con Maven:
+# descarga los artefactos (y su .pom), calcula SHA-256 y publica un artefacto de Actions con
+# `deps-index.json` y los ficheros bajo `deps/`. La página nunca pide a Maven: importa ese
+# paquete desde su propio origen cuando el usuario pulsa «Resolver».
+#
+# No hay paso de publicación automática: el paquete no se versiona (son binarios) y el sitio se
+# publica a mano. Para servirlo, descarga el artefacto `deps-maven` y copia su contenido
+# (`deps-index.json` y `deps/`) en `studio/` antes de `tools/entorno.sh sitio`, o súbelo junto al
+# resto del sitio con tu propio paso de despliegue.
+
+on:
+  workflow_dispatch:
+    inputs:
+      coordenadas:
+        description: >-
+          Coordenadas Maven, una por línea o separadas por espacios
+          (grupo:artefacto:versión[:clasificador][@jar|@aar|@pom]).
+          Ejemplo: com.google.code.gson:gson:2.10.1
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prefetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Normalizar las coordenadas
+        env:
+          COORDENADAS: ${{ inputs.coordenadas }}
+        run: |
+          set -eu
+          printf '%s\n' "$COORDENADAS" | tr -s ' \t' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;/^$/d' \
+            > "$RUNNER_TEMP/coordenadas.txt"
+          echo "coordenadas pedidas: $(wc -l < "$RUNNER_TEMP/coordenadas.txt" | tr -d ' ')"
+          cat "$RUNNER_TEMP/coordenadas.txt"
+
+      - name: Descargar artefactos y .pom, y escribir el índice
+        env:
+          COORDENADAS: ${{ runner.temp }}/coordenadas.txt
+          SALIDA: dist
+        run: |
+          python3 - "$COORDENADAS" "$SALIDA" <<'PY'
+          import hashlib
+          import json
+          import os
+          import re
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          entradas_txt, salida = sys.argv[1], sys.argv[2]
+          REPOS = {
+              "central": "https://repo1.maven.org/maven2",
+              "google": "https://dl.google.com/dl/android/maven2",
+          }
+          EXTENSIONES = {"jar", "aar", "pom"}
+          PARTE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+          UA = {"User-Agent": "apkc-studio-deps-maven/1 (GitHub Actions)"}
+
+          def morir(msg):
+              print("error: " + msg, file=sys.stderr)
+              sys.exit(1)
+
+          def parte(valor, que):
+              if not valor or not PARTE.match(valor) or ".." in valor:
+                  morir(f"{que} no válido: {valor!r}")
+              return valor
+
+          def descargar(url):
+              ultimo = None
+              for intento in range(1, 4):
+                  try:
+                      with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=45) as r:
+                          tipo = r.headers.get("Content-Type", "")
+                          if "text/html" in tipo.lower():
+                              morir(f"{url} devolvió HTML, no un artefacto")
+                          return r.read()
+                  except urllib.error.HTTPError as e:
+                      if e.code == 404:
+                          return None
+                      ultimo = e
+                  except Exception as e:  # red, TLS, timeout
+                      ultimo = e
+                  time.sleep(intento)
+              morir(f"no se pudo descargar {url}: {ultimo}")
+
+          coordenadas = []
+          with open(entradas_txt, encoding="utf-8") as f:
+              for linea in f:
+                  linea = linea.strip()
+                  if linea and linea not in coordenadas:
+                      coordenadas.append(linea)
+          if not coordenadas:
+              morir("no hay coordenadas que descargar")
+
+          artefactos = []
+          for crudo in coordenadas:
+              cuerpo, extension = crudo, ""
+              if "@" in crudo:
+                  cuerpo, extension = crudo.rsplit("@", 1)
+                  extension = extension.lower()
+                  if extension not in EXTENSIONES:
+                      morir(f"extensión no admitida en {crudo!r}: @{extension}")
+              partes = cuerpo.split(":")
+              if len(partes) not in (3, 4):
+                  morir(f"coordenada mal formada: {crudo!r}")
+              grupo, artefacto, version = (parte(partes[0], "grupo"), parte(partes[1], "artefacto"),
+                                           parte(partes[2], "versión"))
+              clasificador = parte(partes[3], "clasificador") if len(partes) == 4 else ""
+              de_google = (grupo.startswith("androidx.") or grupo.startswith("com.android.")
+                           or grupo.startswith("com.google.android."))
+              repositorio = "google" if de_google else "central"
+              if not extension:
+                  extension = "aar" if de_google else "jar"
+              carpeta = grupo.replace(".", "/")
+              nombre = artefacto + "-" + version + (("-" + clasificador) if clasificador else "")
+              url = "/".join([REPOS[repositorio], carpeta, artefacto, version,
+                              nombre + "." + extension])
+              datos = descargar(url)
+              if datos is None:
+                  morir(f"404 en {url}")
+
+              def guardar(ruta_relativa, bytes_):
+                  destino = os.path.join(salida, ruta_relativa)
+                  os.makedirs(os.path.dirname(destino), exist_ok=True)
+                  with open(destino, "wb") as f:
+                      f.write(bytes_)
+                  return hashlib.sha256(bytes_).hexdigest()
+
+              fichero = "/".join(["deps", grupo, artefacto, version, nombre + "." + extension])
+              sha256 = guardar(fichero, datos)
+              pom = None
+              if extension != "pom":
+                  url_pom = "/".join([REPOS[repositorio], carpeta, artefacto, version,
+                                      nombre + ".pom"])
+                  datos_pom = descargar(url_pom)
+                  if datos_pom is not None:
+                      fichero_pom = "/".join(["deps", grupo, artefacto, version, nombre + ".pom"])
+                      pom = {
+                          "fichero": fichero_pom,
+                          "bytes": len(datos_pom),
+                          "sha256": guardar(fichero_pom, datos_pom),
+                          "url": url_pom,
+                      }
+                  else:
+                      print(f"aviso: {crudo} no tiene .pom; el índice lo deja en null", file=sys.stderr)
+              artefactos.append({
+                  "coordenada": crudo,
+                  "grupo": grupo,
+                  "artefacto": artefacto,
+                  "version": version,
+                  "clasificador": clasificador,
+                  "extension": extension,
+                  "repositorio": repositorio,
+                  "url": url,
+                  "fichero": fichero,
+                  "bytes": len(datos),
+                  "sha256": sha256,
+                  "pom": pom,
+              })
+
+          artefactos.sort(key=lambda a: a["coordenada"])
+          indice = {
+              "version": 1,
+              "generado": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "origen": "GitHub Actions · deps-maven (descarga en el runner; la página no toca Maven)",
+              "artefactos": artefactos,
+          }
+          os.makedirs(salida, exist_ok=True)
+          with open(os.path.join(salida, "deps-index.json"), "w", encoding="utf-8") as f:
+              json.dump(indice, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          print(f"índice con {len(artefactos)} artefacto(s)")
+          PY
+
+      - name: Verificar el índice contra los ficheros
+        run: |
+          set -eu
+          cd dist
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          import sys
+
+          indice = json.load(open("deps-index.json", encoding="utf-8"))
+          assert indice["version"] == 1, "versión de índice inesperada"
+          if not indice["artefactos"]:
+              sys.exit("el índice está vacío")
+          for a in indice["artefactos"]:
+              for pieza in [a] + ([a["pom"]] if a.get("pom") else []):
+                  ruta = pieza["fichero"]
+                  datos = open(ruta, "rb").read()
+                  if len(datos) != pieza["bytes"]:
+                      sys.exit(f"tamaño distinto en {ruta}")
+                  if hashlib.sha256(datos).hexdigest() != pieza["sha256"]:
+                      sys.exit(f"sha256 distinto en {ruta}")
+                  print(f"ok {ruta} {pieza['bytes']} bytes {pieza['sha256']}")
+          PY
+          sha256sum deps-index.json > SHA256SUMS
+          find deps -type f | sort | xargs sha256sum >> SHA256SUMS
+          sha256sum -c SHA256SUMS >/dev/null
+
+      - name: Resumen
+        run: |
+          {
+            echo '## deps-maven'
+            echo '```json'
+            python3 - <<'PY'
+          import json
+          d = json.load(open("dist/deps-index.json", encoding="utf-8"))
+          print(json.dumps({k: d[k] for k in ("version", "generado", "origen")}, ensure_ascii=False, indent=2))
+          for a in d["artefactos"]:
+              print(f"{a['coordenada']}  {a['bytes']} bytes  {a['sha256']}")
+          PY
+            echo '```'
+            echo 'Para servirlo: descarga este artefacto, copia `deps-index.json` y `deps/` en'
+            echo '`studio/` y publica con `tools/entorno.sh sitio`. No se versiona ningún binario.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deps-maven
+          path: dist/
+          if-no-files-found: error
