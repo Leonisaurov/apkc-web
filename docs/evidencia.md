@@ -8642,3 +8642,34 @@ bien, 0 mal** con chromium por defecto (HTTP/2), 53 peticiones, 0 fuera del orig
 firmada y verificada. Frontera: el botón de reparación no se ha pulsado en un navegador con la caché
 envenenada; se ofrece como último recurso, no como primera línea. No se volvió a publicar después
 de la comprobación.
+
+## 197. Carga, respaldo de caché y pruebas versionadas
+
+Medido el 2026-11-22. Se cerraron los cinco puntos que faltaban después del truncamiento:
+
+1. **Progreso del precache**: `sw.js` guarda el shell en secuencial y `index.html` cuenta las entradas
+   de la caché cada 200 ms, reflejándolo en el velo mediante `--texto-preparacion`. Con perfil fresco
+   se midió `Guardando el navegador (30 ficheros)…` antes del aislamiento. Se descartaron dos vías:
+   `client.postMessage` desde `install` y `BroadcastChannel` no entregaban en ese momento; el
+   sondeo de la caché sí.
+2. **Última copia buena**: `activate` conserva la versión actual y la anterior, en vez de borrar
+   todas. Como `caches.match` busca en todas las cachés, una instalación a medias o sin red puede
+   servirse de la anterior.
+3. **Aviso de recuperación**: cuando el wasm se reconstruye por rangos, el worker envía
+   `tipo:"aviso"` y `pestana.js` lo escribe en la consola: «se reconstruyó por trozos: la copia
+   guardada estaba incompleta».
+4. **Pruebas versionadas**: el diagnóstico en vivo y la paleta viven ahora en `prueba-pestana.js`
+   (ya no solo en un script CDP temporal). El gate subió de 85 a **87 comprobaciones**.
+5. **Detector**: `.marca-error` pasó de `repeating-linear-gradient` a un fondo plano. El detector
+   quedó en **0 warnings, 1 advisory** (el de contraste calculado de §194).
+
+```sh
+node /tmp/opencode/diag-caches-local.js
+GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
+impeccable detect --json studio/index.html studio/style.css studio/temas.js
+```
+
+**Resultado**: velo con progreso medido, gate rc=0 con `pestaña: 87 comprobaciones`, detector con
+1 advisory, sitio local 10/10. Frontera: no se simuló el escenario de dos versiones de SW en un
+mismo perfil para medir el respaldo, ni se disparó a propósito la recuperación por rangos para ver
+el aviso en pantalla; ambos están implementados y el gate sigue en verde.
