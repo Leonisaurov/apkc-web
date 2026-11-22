@@ -303,6 +303,10 @@ type entradaRecurso struct {
 	recuentos uint32
 	valor     valor
 	crudo     []byte
+	// ausente es el offset 0xffffffff: la clave existe en el tipo pero esta configuracion no la
+	// declara (medido en `values-es`, parrafo 94). La entrada se guarda en su sitio para que el
+	// indice siga siendo el numero de entrada del id.
+	ausente bool
 }
 
 // bloqueTipo es un ResTable_type: el id, su nombre, la configuracion (guardada como 64 bytes sin
@@ -455,7 +459,14 @@ func (tr *tablaRecursos) leeBloque(b []byte, off, hs, s int) (bloqueTipo, error)
 		if o+4 > off+entriesStart {
 			return bl, fmt.Errorf("entry offset #%d at %d is past the offsets table", i, o)
 		}
-		e := off + entriesStart + int(u32re(b, o))
+		desplazamiento := u32re(b, o)
+		if desplazamiento == 0xffffffff {
+			// la clave no existe en esta configuracion; el lector guarda el hueco para que el
+			// indice de la entrada siga siendo el que compone el id de recurso
+			bl.entradas = append(bl.entradas, entradaRecurso{ausente: true})
+			continue
+		}
+		e := off + entriesStart + int(desplazamiento)
 		if e+8 > off+s {
 			return bl, fmt.Errorf("entry #%d at %d runs past its type block", i, e)
 		}
@@ -518,4 +529,62 @@ func (tr *tablaRecursos) clave(e entradaRecurso) string {
 		return fmt.Sprintf("ninguna(%d)", e.clave)
 	}
 	return tr.claves[int(e.clave)]
+}
+
+// bloqueDeTipo busca el bloque del tipo dado; el de la configuración base manda, y si no hay base
+// se queda con el primero que aparezca. Es la consulta que necesita la vista previa: un layout se
+// resuelve contra lo que un teléfono corriente cargaría.
+func (tr *tablaRecursos) bloqueDeTipo(tipo uint32) *bloqueTipo {
+	var primero *bloqueTipo
+	for i := range tr.bloques {
+		bl := &tr.bloques[i]
+		if uint32(bl.id) != tipo {
+			continue
+		}
+		if esConfiguracionBase(bl.config) {
+			return bl
+		}
+		if primero == nil {
+			primero = bl
+		}
+	}
+	return primero
+}
+
+// entradaDeId resuelve el id de recurso (0xppTTHHHH) a su entrada en la configuración base: el
+// paquete tiene que ser el de esta tabla, el tipo el que ocupa el byte de en medio y la entrada el
+// índice bajo. Es la forma que un layout escribe en `android:id` para `@+id/total`.
+func (tr *tablaRecursos) entradaDeId(id uint32) (bloqueTipo, entradaRecurso, bool) {
+	if id>>24 != tr.idPaquete&0xff {
+		return bloqueTipo{}, entradaRecurso{}, false
+	}
+	bl := tr.bloqueDeTipo((id >> 16) & 0xff)
+	if bl == nil {
+		return bloqueTipo{}, entradaRecurso{}, false
+	}
+	indice := int(id & 0xffff)
+	if indice >= len(bl.entradas) {
+		return bloqueTipo{}, entradaRecurso{}, false
+	}
+	return *bl, bl.entradas[indice], true
+}
+
+// nombreDeId devuelve el tipo y la clave del recurso, que es como se nombra una referencia en el
+// modelo (`id/total`, `string/hola`).
+func (tr *tablaRecursos) nombreDeId(id uint32) (tipo, clave string, ok bool) {
+	bl, e, ok := tr.entradaDeId(id)
+	if !ok || e.ausente {
+		return "", "", false
+	}
+	return bl.nombre, tr.clave(e), true
+}
+
+// valorDeId da el Res_value de una entrada simple. Un valor complejo (un estilo) no tiene uno y se
+// rechaza: su nombre lo da nombreDeId.
+func (tr *tablaRecursos) valorDeId(id uint32) (valor, bool) {
+	_, e, ok := tr.entradaDeId(id)
+	if !ok || e.ausente || e.compleja {
+		return valor{}, false
+	}
+	return e.valor, true
 }

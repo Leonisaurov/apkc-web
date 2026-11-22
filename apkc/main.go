@@ -21,7 +21,7 @@ func main() {
 	// verify reads one package and starts nothing either, for the same reason: it is the
 	// stage the tab needs to say something about the apk it just wrote.
 	switch os.Args[1] {
-	case "dex", "link", "compile", "check", "verify", "keystore", "rotate", "debug-keystore", "create-keystore":
+	case "dex", "link", "compile", "check", "verify", "keystore", "rotate", "debug-keystore", "create-keystore", "preview":
 	case "build":
 		// `apkc build --linker go --compiler go` starts no process either: it is the whole build of
 		// the tab, and there is no SDK to find in there (§44)
@@ -65,12 +65,21 @@ func main() {
 		link()
 	case "verify":
 		verificar()
+	case "preview":
+		preview()
 	case "version":
 		// what a script asks when it has to know which apkc answered the rest
 		fmt.Println(buildStamp())
 	}
 
-	LogV("apkc", "finished in", time.Since(start))
+	// preview es el único comando cuyo stdout es el contrato entero: la línea de JSON del modelo.
+	// La línea de cierre de los demás sería un segundo documento en la misma salida y rompería a
+	// quien lea stdout tal cual (`apkc preview app.apk | jq .`), así que en preview va a stderr.
+	if os.Args[1] == "preview" {
+		fmt.Fprintln(os.Stderr, "[apkc] finished in", time.Since(start))
+	} else {
+		LogV("apkc", "finished in", time.Since(start))
+	}
 }
 
 func printHelp() {
@@ -111,6 +120,10 @@ verify - read one package back and check the signatures this tool writes: the v1
 check  - read one .java file and print, as one line of JSON on stdout, the errors the parser and
          the emitter find, without writing any .class (--android-jar to resolve names; without a
          jar only the parser is checked). No process is started, so it runs inside the tab.
+preview - read one apk and print, as one line of JSON on stdout, the model of its first screen:
+         type, id, text, children and an approximate rectangle per node. The layout is chosen by
+         name (--layout, main by default) because the real reference lives in setContentView,
+         which is Phase 2 of docs/plan-vista-previa.md. No process is started either.
 version - print the commit this binary was built from
 `)
 }
