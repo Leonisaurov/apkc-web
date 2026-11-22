@@ -8580,3 +8580,32 @@ grep -n 'TestLosVarargsSiguenSiendoFrontera' apkc/javaemisor_sobrecarga_conversi
 grep -n 'continue-on-error' .github/workflows/gate.yml
 impeccable detect --json studio/index.html studio/style.css studio/temas.js
 ```
+
+## 195. Diagnóstico en vivo y copias truncadas del wasm
+
+Medido el 2026-11-21. El usuario preguntó por el checker de la pestaña Diagnóstico: `apkc check`
+(`apkc/check.go`) devuelve un JSON con errores del parser/emisor sin escribir `.class`, y
+`studio/diagnostico-vivo.js` lo llama con 350 ms de debounce, pinta la lista y subraya en
+`#diagnostico-marcas`. El mismo usuario reportó que no podía compilar en su navegador con el error
+`section (code 10, "Code") extends past end of the module`, que es el truncamiento de §191.
+
+`tools/sitio.sh` escribe ahora `wasm-manifest.json` con el tamaño y el SHA-256 reales del binario,
+y `sw.js` lo precachea. El worker comprueba cada copia contra ese manifiesto antes de instanciar:
+primero la del SW, después una URL con `?directo=` que fuerza red, después el binario sin comprimir
+y por último su variante con cache-busting. Si ninguna sirve, el error es explícito e indica recargar
+con `Ctrl+Mayús+R` o borrar los datos del sitio, en vez del mensaje opaco de `WebAssembly`.
+
+```sh
+node /tmp/opencode/prueba-vivo-final.js
+cat sitio/wasm-manifest.json
+sha256sum sitio/apkc.wasm
+CHROME_BIN=/usr/bin/chromium SITIO_DIR=../sitio node studio/prueba-sitio.js
+```
+
+**Resultado**: `vivo: todo en orden` (9/9: fuente bueno sin errores, error en vivo en el panel, una
+marca de subrayado, paleta abierta/filtrada/cerrada). El manifiesto dice `bytes 13320296` y
+`sha256 5b64608d…cf09f21`, idéntico al `sha256sum` del fichero. El sitio local da 10/10. En el host
+real, desde este entorno donde **todas** las peticiones del binario salen truncadas, la prueba ahora
+falla con `no se pudo bajar un apkc.wasm íntegro: recarga con Ctrl+Mayús+R…`, que es la detección
+funcionando, no el error de `instantiate`. Frontera: no se pudo verificar aquí que la variante
+`?directo=` recupere una copia sana en la red del usuario; eso depende de su navegador.
