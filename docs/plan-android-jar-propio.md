@@ -68,8 +68,10 @@ go -C tools/androidjar run . \
 
 | Jar | Clases | Recursos | `resources.arsc` | Tamaño | SHA-256 |
 | --- | --- | --- | --- | --- | --- |
-| completo | 4.873 | 3.758 | 301.784 B | 2.916.833 B | `e2ddfb55b63b32890cb77e55d9249dabc521e78510fd35d0c2a3e639bd7c8827` |
-| mínimo | 15 | 3.758 | 301.784 B | 111.997 B | `817171a3e4cf3fdf8d1334a6222742f83be63db9788ebf9fac63b666ef41952c` |
+| completo (primer intento, no reproducible) | 4.873 | 3.758 | 301.784 B | 2.810.522 B | `9103b3aa7a301325a6bd78d0b05f9640b82ff345af185adbf1f68bc8a3097186` |
+| mínimo (primer intento, no reproducible) | 15 | 3.758 | 301.784 B | 111.607 B | `5d69f0bf7c833c0229cf07391a0cc1ce48029496d32d5b5ba2964fce6e76ac40` |
+| completo (artifact CI, fecha fijada y Go 1.27.4) | 4.873 | 3.758 | 301.784 B | 2.916.833 B | `e2ddfb55b63b32890cb77e55d9249dabc521e78510fd35d0c2a3e639bd7c8827` |
+| mínimo (artifact CI, fecha fijada y Go 1.27.4) | 15 | 3.758 | 301.784 B | 111.997 B | `817171a3e4cf3fdf8d1334a6222742f83be63db9788ebf9fac63b666ef41952c` |
 
 El jar completo no contiene `res/` ni `NOTICES/` de la SDK: solo clases
 generadas, `resources.arsc`, `NOTICE`, `LICENSE` y (en el directorio de salida)
@@ -117,14 +119,15 @@ git ls-remote origin web main
 # 10e566f... refs/heads/web
 ```
 
-El workflow existe en el `web` local desde `7648c8a`, pero `origin/web` está en
-`10e566f` y no lo tiene; el `web` local está 39 commits por delante. GitHub
-exige que un workflow `workflow_dispatch` esté en la rama por defecto para
-poder lanzarlo por nombre, y el de este repo es `main`, que tampoco lo tiene.
+Esto era el estado del primer intento, cuando `origin/web` estaba en
+`10e566f` y no tenía el workflow. Tras el push autorizado, `origin/web` pasó a
+`28e8e8d` y el workflow se lanzó por nombre sobre `web` con
+`gh workflow run android-jar.yml --ref web`. No hizo falta tocar `main` del
+repo principal.
 
-**Resultado: J4 no verificada.** No hay número de run, URL, artifact ni hash de
-CI que reportar, y no se escribe «CI verde». Para ejecutarlo hace falta un push
-que no se ha hecho porque requiere confirmación explícita del usuario:
+**Resultado del primer intento: J4 no verificada** (404, sin run). Quedó como
+historial de la decisión; el resultado definitivo está en §6/J4 y en los
+comandos siguientes, que SÍ se ejecutaron tras la autorización:
 
 ```sh
 # opción mínima: llevar solo el commit del workflow a origin/web
@@ -135,8 +138,9 @@ gh run watch --repo Leonisaurov/apkc-web
 gh run download --repo Leonisaurov/apkc-web --name android-stub-34
 ```
 
-La alternativa es llevar el workflow a `main` (rama por defecto), que cambia el
-alcance del push. Ninguna de las dos se ha ejecutado.
+La alternativa de llevar el workflow a `main` no hizo falta: se lanzó por
+nombre sobre `web` con `--ref web`. El push real fue `git push origin HEAD:web`
+(hasta `28e8e8d`), autorizado por el usuario.
 
 ### 0.2. Primer run real de J4: falló (45059765189)
 
@@ -495,8 +499,10 @@ El studio usa el jar para dos cosas distintas y conviene separarlas:
    plantillas. Medido: **111.997 bytes**.
 2. **`android-stub-full.jar`**: todas las clases públicas de `current.txt` y
    `libcore-current.txt` sin `Code`, para que el autocompletado siga ofreciendo
-   las clases y métodos del framework. Medido: **2.916.833 bytes** y 4.873
-   clases. Falta probar el autocompletado de la pestaña (J5).
+   las clases y métodos del framework. Medido en el artifact CI: **2.916.833
+   bytes** y 4.873 clases. El autocompletado de la pestaña sí se probó en local
+   con el artefacto del run (J5 local): 171 comprobaciones y `e2e: todo en
+   orden`. Falta probarlo en el sitio publicado.
 
 El jar actual de la SDK se sigue aceptando como fichero del usuario para quien
 quiera paridad total. El jar propio pasa a ser el camino por defecto del sitio.
@@ -776,11 +782,20 @@ Cada fase se cierra con su comando en verde y su párrafo en
   `sha256sum -c`.
 - Criterio de rechazo: un workflow escrito no es un workflow verde. Si el job
   no pasa, la fase sigue pendiente.
-- **Estado: hecha.** Run `45062792689` en verde: `generar` y `verificar`
-  pasan, el artifact se descarga y sus hashes coinciden con los locales
-  (`e2ddfb5…`/`817171a…`). Ver §0.4. Los runs anteriores `45059765189` (fallo
-  por ruta relativa) y `45062398416` (verde pero no reproducible) quedan como
-  historia, no como aceptación.
+- **Estado: hecha.** Run real <https://github.com/Leonisaurov/apkc-web/actions/runs/45062792689>
+  (`head_sha=730e0d5`; los dos commits posteriores hasta `28e8e8d` son solo
+  documentación): `generar` en 22 s y `verificar` en 47 s, ambos en verde, con
+  la SDK del runner como oráculo. Artifact `android-stub-34` descargado y
+  verificado: `unzip -t` sin errores, `LICENSE`/`NOTICE` presentes, sin
+  `res/`/`NOTICES/` de la SDK; `sha256sum -c SHA256SUMS` falla solo por las
+  rutas absolutas del runner, pero los hashes directos coinciden con el jar
+  local determinista (Go 1.27.4 y fecha fijada): full 2.916.833 B
+  `e2ddfb55…c8827` y min 111.997 B `817171a3…41952c`. Con el jar mínimo,
+  `apkc compile`/`build` reproducen `.class`, `resources.arsc` `bb0d10a…` y
+  `classes.dex` `966b43c…` idénticos a la SDK 34. Los runs anteriores
+  `45059765189` (fallo por ruta relativa) y `45062398416` (verde pero no
+  reproducible) quedan como historia, no como aceptación. `origin/web` quedó
+  en `28e8e8d`.
 
 ### J5. Consumo desde el sitio
 
@@ -846,9 +861,11 @@ lleva el comando que la comprobará.
    ids de §33; `TestMarco` pasa. Comando:
    `unzip -p android-stub-34-min.jar resources.arsc | wc -c` y
    `HOME=… go test -C apkc -run TestMarco`.
-3. **HECHO**: el jar completo pesa 2.916.833 bytes. Lo que **no** se ha
-   probado es el autocompletado de la pestaña con él: eso es J5.
-   Comando pendiente: `studio/prueba-pestana.js`, apartado de autocompletado.
+3. **HECHO**: el jar completo del artifact pesa 2.916.833 bytes. El
+   autocompletado de la pestaña sí se probó en local con él (J5 local, 171
+   comprobaciones y `e2e: todo en orden`); lo que sigue pendiente es el sitio
+   publicado. Comando pendiente: `SITIO_URL=https://apkc-studio.surge.sh node
+   studio/prueba-sitio.js` con el jar servido por `tools/sitio.sh`.
 4. **HECHO**: los 23 nombres de tipo se emiten aunque `public-final.xml` solo
    tenga 17; `TestMarcoDelAndroidJar` pasa con el jar generado.
 5. **HIPÓTESIS**: Metalava en modo `TextCodebase` genera stubs utilizables.
