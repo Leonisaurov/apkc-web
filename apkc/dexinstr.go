@@ -1528,7 +1528,9 @@ func (p *traduce) recorre() error {
 		// listener del studio lo dejan ver (§21)
 		seTira := k+1 < len(lista) && (lista[k+1].name == "pop" || lista[k+1].name == "pop2")
 		switch in.name {
-		case "iconst_0", "iconst_1":
+		case "aconst_null", "iconst_0", "iconst_1":
+			// d8 baja `aconst_null` a `const/4 vAA, #0`, la misma palabra que `iconst_0` (medido al
+			// dexar el constructor sintetico de Capa$Hija con javac 17 --release 8)
 			v := 0
 			if in.name == "iconst_1" {
 				v = 1

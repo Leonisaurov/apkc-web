@@ -450,6 +450,11 @@ type contextoJava struct {
 	// leer y escribir un mismo campo llevan el mismo indice y distinto ultimo digito, medido en el
 	// parrafo 72 (`access$000` y `access$002` para el primer miembro).
 	accesorNumero map[string]int
+
+	// ctorSintetico: por cada anidada privada que se instancia desde fuera, el nombre interno de la
+	// clase marcador que javac añade (Exterior$1). La clave es el nombre interno de la anidada.
+	ctorSintetico map[string]string
+	registrando   *jclas // la clase cuyo arbol se esta recorriendo en registrar
 }
 
 // accesorSintetico: un `access$NNN` del exterior. El cuerpo se deduce del miembro y del sentido: leer
@@ -487,6 +492,8 @@ func internoDe(paquete string, nombre string) string {
 func (ctx *contextoJava) registrar(c *jclas) {
 	ctx.orden = append(ctx.orden, c)
 	ctx.propias[internoDe(c.paquete, c.nombre)] = c
+	antes := ctx.registrando
+	ctx.registrando = c
 	for _, m := range c.metodos {
 		for _, s := range m.cuerpo {
 			ctx.registrarSentencia(s)
@@ -495,6 +502,7 @@ func (ctx *contextoJava) registrar(c *jclas) {
 	for _, d := range c.interior {
 		ctx.registrar(d)
 	}
+	ctx.registrando = antes
 }
 
 // registrarSentencia y registrarExpresion bajan por el arbol hasta los `new Tipo(...) { ... }`: la clase
@@ -570,6 +578,23 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 func (ctx *contextoJava) registrarExpresion(x jexpr) {
 	switch v := x.(type) {
 	case jnuevo:
+		// un `new Hija()` desde la clase que la contiene, siendo Hija private, pide el constructor
+		// sintetico y la clase marcador de javac; se anota aqui porque las hijas se emiten ANTES que
+		// la exterior y el emisor necesita saberlo al escribir la anidada
+		if ctx.registrando != nil && v.cuerpo == nil {
+			for _, h := range ctx.registrando.interior {
+				nombreCorto := h.nombre
+				if i := strings.LastIndex(nombreCorto, "$"); i >= 0 {
+					nombreCorto = nombreCorto[i+1:]
+				}
+				if !h.esPrivada || (v.tipo != nombreCorto && !strings.HasSuffix(v.tipo, "."+nombreCorto)) {
+					continue
+				}
+				if h.encierre != nil {
+					ctx.ctorSintetico[internoDe(h.paquete, h.nombre)] = internoDe(h.encierre.paquete, h.encierre.nombre) + "$1"
+				}
+			}
+		}
 		for _, a := range v.args {
 			ctx.registrarExpresion(a)
 		}
@@ -1135,7 +1160,7 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 			}
 			poner(candidato{desc: d, acceso: acceso})
 		}
-		if nombre == "<init>" && propia.encierre != nil && !propia.esEstatica && !propia.anonima {
+		if nombre == "<init>" && propia.encierre != nil && !propia.anonima {
 			// el constructor de una anidada no estatica lo sintetiza el emisor con el exterior delante;
 			// el AST no lo tiene, así que lo ofrecemos aquí a la resolución de `new Hija()`.
 			explicito := false
@@ -1144,9 +1169,14 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 					explicito = true
 				}
 			}
-			if !explicito {
+			if !explicito && !propia.esEstatica {
 				ext := internoDe(propia.encierre.paquete, propia.encierre.nombre)
 				poner(candidato{desc: "(L" + ext + ";)V", acceso: 0})
+			}
+			// la anidada estatica privada que se instancia desde fuera: javac le pone `private` al
+			// constructor que el emisor sintetiza, y esa es la firma que la resolucion tiene que ver
+			if !explicito && propia.esEstatica && ctx.ctorSintetico[interno] != "" {
+				poner(candidato{desc: "()V", acceso: accPrivate})
 			}
 		}
 		if actual == "java/lang/Object" {
@@ -1358,7 +1388,7 @@ func compilarProyectoJava(fuentes []fuenteJava, rutaJar string) ([]claseEmitida,
 	defer busc.cerrar()
 	ctx := &contextoJava{busc: busc, propias: map[string]*jclas{},
 		accesores: map[string][]accesorSintetico{}, accesorID: map[string]accesorSintetico{},
-		accesorNumero: map[string]int{}}
+		accesorNumero: map[string]int{}, ctorSintetico: map[string]string{}}
 	type parseado struct {
 		a    *archivoJava
 		nomb string
@@ -1428,7 +1458,21 @@ func (ctx *contextoJava) emmitirArbol(c *jclas) ([]claseEmitida, error) {
 	if err != nil {
 		return nil, fmt.Errorf("linea %d: %w", c.linea, err)
 	}
-	return append(salida, claseEmitida{interno: internoDe(c.paquete, c.nombre), datos: datos}), nil
+	interno := internoDe(c.paquete, c.nombre)
+	salida = append(salida, claseEmitida{interno: interno, datos: datos})
+	// la marcador la escribe la clase exterior, despues de que sus metodos hayan pedido el
+	// constructor sintetico; el orden final lo fija el sort de compilarProyectoJava
+	for _, hija := range c.interior {
+		if marcador, ok := ctx.ctorSintetico[internoDe(hija.paquete, hija.nombre)]; ok {
+			datosM, err := ctx.emmitirMarcador(c, marcador)
+			if err != nil {
+				return nil, err
+			}
+			salida = append(salida, claseEmitida{interno: marcador, datos: datosM})
+			break
+		}
+	}
+	return salida, nil
 }
 
 // ----- el emisor de una clase -----
@@ -3121,8 +3165,26 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %s: %w", n.donde.linea, interno, err)
 	}
+	// Un constructor privado no se puede llamar desde fuera de su clase: javac 17 con --release 8
+	// escribe un constructor sintetico con un ultimo parametro de una clase marcador (Exterior$1)
+	// y la llamada le pasa `null` (medido con `javap -v` sobre Capa.java).
+	marcador := ""
+	descLlamada := cand.desc
 	if cand.acceso&accPrivate != 0 && e.interno != interno {
-		return "", fmt.Errorf("linea %d: el constructor de la anidada privada %s no esta medido: javac añade un constructor sintetico con una clase marcador (Exterior$1) para llamarlo desde fuera", n.donde.linea, interno)
+		inner, ok := e.ctx.clasePropia(interno)
+		if !ok || inner.encierre == nil {
+			return "", fmt.Errorf("linea %d: el constructor privado de %s no se puede llamar desde fuera", n.donde.linea, interno)
+		}
+		if cand.desc != "()V" {
+			return "", fmt.Errorf("linea %d: el constructor sintetico de la anidada privada %s con argumentos no esta medido", n.donde.linea, interno)
+		}
+		marcador = internoDe(inner.encierre.paquete, inner.encierre.nombre) + "$1"
+		e.ctx.ctorSintetico[interno] = marcador
+		i := strings.LastIndex(cand.desc, ")")
+		if i < 0 {
+			return "", fmt.Errorf("linea %d: el descriptor %s no es de un constructor", n.donde.linea, cand.desc)
+		}
+		descLlamada = cand.desc[:i] + "L" + marcador + ";" + cand.desc[i:]
 	}
 	e.usar(interno)
 	idx := e.pool.clase(interno)
@@ -3143,9 +3205,13 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if _, err := e.argumentos(n.args); err != nil {
 		return "", err
 	}
+	if marcador != "" {
+		e.emite(0x01) // aconst_null
+		e.sube()
+	}
 	// el `dup` deja dos referencias: el constructor se come una con sus argumentos y la otra es el valor de
 	// la expresion, que es el hueco que sube de la pila al terminar
-	e.invoca(opInvokespec, interno, "<init>", cand.desc, cantArgs+1)
+	e.invoca(opInvokespec, interno, "<init>", descLlamada, cantArgs+1)
 	return "L" + interno + ";", nil
 }
 
@@ -5480,6 +5546,14 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
+	if marcador, ok := e.ctx.ctorSintetico[interno]; ok {
+		b, err := e.initMarcador(marcador)
+		if err != nil {
+			return nil, err
+		}
+		metodos = append(metodos, b...)
+		conte++
+	}
 	// los `access$NNN` que pidieron las anidadas, en el orden en que se crearon; javac los escribe entre
 	// los metodos declarados y el `<clinit>` (medido en el parrafo 72)
 	for _, a := range e.ctx.accesores[e.interno] {
@@ -5517,6 +5591,15 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	}
 	if strings.Contains(c.nombre, "$") {
 		anadir(interno)
+	}
+	// javac escribe tambien la fila de la clase marcador en la exterior y en la anidada
+	if m := e.ctx.ctorSintetico[interno]; m != "" {
+		anadir(m)
+	}
+	for _, m := range e.ctx.ctorSintetico {
+		if strings.HasPrefix(m, interno+"$") {
+			anadir(m)
+		}
 	}
 	for _, m := range e.menciona {
 		anadir(m)
@@ -5576,9 +5659,57 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	return out, nil
 }
 
+// emmitirMarcador: la clase sintetica vacia `Exterior$1` que javac 17 con --release 8 añade cuando una
+// anidada privada se instancia desde fuera. No tiene campos ni metodos; lleva SourceFile,
+// EnclosingMethod sin metodo y una fila `static #N;` en su propio InnerClasses (medido con javap).
+func (ctx *contextoJava) emmitirMarcador(externo *jclas, marcador string) ([]byte, error) {
+	e := &emisor{ctx: ctx, pool: nuevoPool(), c: externo, interno: marcador, vistas: map[string]bool{}}
+	thisIdx := e.pool.clase(marcador)
+	superIdx := e.pool.clase("java/lang/Object")
+	padre := internoDe(externo.paquete, externo.nombre)
+	enclosing := u2be(uint16(e.pool.clase(padre)))
+	enclosing = append(enclosing, u2be(0)...)
+	fila := u2be(uint16(e.pool.clase(marcador)))
+	fila = append(fila, u2be(0)...)
+	fila = append(fila, u2be(0)...)
+	fila = append(fila, u2be(uint16(accStatic|accSynthetic))...)
+	inner := u2be(1)
+	inner = append(inner, fila...)
+	attrs := attrInfo(e.pool, "SourceFile", u2be(uint16(e.pool.utf8(ctx.archivo))))
+	attrs = append(attrs, attrInfo(e.pool, "EnclosingMethod", enclosing)...)
+	attrs = append(attrs, attrInfo(e.pool, "InnerClasses", inner)...)
+
+	out := []byte{0xca, 0xfe, 0xba, 0xbe}
+	out = append(out, u2be(0)...)
+	out = append(out, u2be(versionDeClassEmitida)...)
+	out = append(out, e.pool.serializar()...)
+	out = append(out, u2be(uint16(accSuper|accSynthetic))...)
+	out = append(out, u2be(uint16(thisIdx))...)
+	out = append(out, u2be(uint16(superIdx))...)
+	out = append(out, u2be(0)...) // interfaces
+	out = append(out, u2be(0)...) // campos
+	out = append(out, u2be(0)...) // metodos
+	out = append(out, u2be(3)...)
+	return append(out, attrs...), nil
+}
+
 // filaInner: inner, outer, nombre simple y access_flags, como los escribe javac. La fila de una anonima va
 // sin exterior y sin nombre, y con flags ninguno: medido en el parrafo 42 (`InnerClasses: #2;`).
 func (e *emisor) filaInner(internal string) ([]byte, error) {
+	esMarcador := false
+	for _, m := range e.ctx.ctorSintetico {
+		if m == internal {
+			esMarcador = true
+		}
+	}
+	if esMarcador {
+		// `static #N;` sin exterior ni nombre simple, con ACC_SYNTHETIC: medido en el InnerClasses de
+		// Capa.class, Capa$Hija.class y Capa$1.class con javac 17 --release 8 (flags 0x1008)
+		b := u2be(uint16(e.pool.clase(internal)))
+		b = append(b, u2be(0)...)
+		b = append(b, u2be(0)...)
+		return append(b, u2be(uint16(accStatic|accSynthetic))...), nil
+	}
 	if propia, ok := e.ctx.clasePropia(internal); ok && propia.anonima {
 		b := u2be(uint16(e.pool.clase(internal)))
 		b = append(b, u2be(0)...) // outer
@@ -6230,11 +6361,35 @@ func (e *emisor) initSintetico() ([]byte, error) {
 	if e.c.esPublica {
 		acc = accPublic
 	}
+	if e.c.esPrivada {
+		// javac marca `private` el constructor sintetizado de una anidada privada (medido con
+		// javap 17 --release 8 sobre Capa$Hija)
+		acc |= accPrivate
+	}
 	codigo, err := e.codeAttr()
 	if err != nil {
 		return nil, err
 	}
 	return e.methodInfo("<init>", "()V", acc, attrInfo(e.pool, "Code", codigo), 1), nil
+}
+
+// initMarcador: el constructor sintetico que javac escribe en una anidada privada instanciada desde
+// fuera. Recibe la clase marcador como ultimo parametro y delega en el constructor original:
+// `aload_0; [args...]; invokespecial this.<init>(args); return` (medido con javap 17 sobre Capa.java).
+func (e *emisor) initMarcador(marcador string) ([]byte, error) {
+	desc := "(L" + marcador + ";)V"
+	e.preparaMetodo(desc, false)
+	e.reserva("", "L")
+	e.reserva("", "L"+marcador+";")
+	e.marcaLinea(e.c.linea)
+	e.cargaDe(0, "L")
+	e.invoca(opInvokespec, e.interno, "<init>", "()V", 1)
+	e.emite(retorno('V'))
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	return e.methodInfo("<init>", desc, accSynthetic, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // clinitSintetico: el `static {}` que javac escribe al final, despues de los metodos declarados, solo
