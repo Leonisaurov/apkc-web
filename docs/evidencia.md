@@ -8281,3 +8281,25 @@ bytes y verificada`, build de la pestaña verificado por apksigner, zipalign, zi
 `wasm` rc=0 con `PASS`; el fuzzing diferencial de 20 casos contra javac `--release 8` y d8,
 `ok ... 39.378s`. No se anuncia «0 pendientes»: la firma y ART siguen siendo fronteras escritas en
 §178 y §181.
+
+## 183. Trusted Types: los otros sumideros aparecieron al probar el sitio
+
+Medido el 2026-11-21. La primera medición de §177 solo veía los dos sumideros HTML; la prueba del
+sitio empaquetado destapó dos más. `new Worker("hospedador.js")` exige `TrustedScriptURL` y fallaba
+con `This document requires 'TrustedScriptURL' assignment`. Después, `politica.createURL` no existe
+en Chromium y rompía el refresco del árbol. La política de `studio/tt.js` incorporó
+`createScriptURL` (acepta el worker del mismo origen y los `blob:`); `enlaceConfiable` comprueba
+`typeof politica.createURL === "function"` antes de llamarlo y, si el motor no lo expone, devuelve
+la cadena, porque todos los `href` son literales o blobs creados aquí.
+
+```sh
+CHROME_BIN=/usr/bin/chromium SITIO_DIR=../sitio \
+  ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  APKSIGNER=$ANDROID_HOME/build-tools/35.0.1/apksigner node studio/prueba-sitio.js
+GOTMPDIR=$HOME/.cache/apkc-web/gotmp sh tools/entorno.sh gate
+```
+
+**Resultado**: `10 comprobaciones bien, 0 mal`, cero peticiones fuera del origen, APK de 9221 bytes
+compilada y firmada en el sitio y verificada por apksigner; `gate` rc=0 con `pestaña: 83
+comprobaciones`. Lección registrada: el CSP aplicado por el service worker no se manifiesta hasta
+que el SW controla la página, así que comprobar solo la primera carga no basta.
