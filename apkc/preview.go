@@ -126,6 +126,7 @@ type nodoVista struct {
 	declAlto      int        // lo mismo para el alto
 	gravityBits   int32      // android:gravity de la view, ya como bits
 	layoutGravity int32      // android:layout_gravity, o -1 cuando no se declara
+	pesoSuma      float64    // android:weightSum del contenedor, o 0 cuando no se declara
 	pad           ladosVista // el relleno efectivo, en dp
 	margen        ladosVista // el margen efectivo, en dp
 	medAncho      int        // el tamaño medido, que es el que ocupa en la colocación
@@ -683,6 +684,9 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	if peso, ok := e.atributo(uriDeRecursos, "layout_weight"); ok {
 		n.Peso = c.numeroDe(peso)
 	}
+	if suma, ok := e.atributo(uriDeRecursos, "weightSum"); ok {
+		n.pesoSuma = c.numeroDe(suma)
+	}
 	if pad, ok := c.ladosDe(e, "padding"); ok {
 		n.pad = pad
 		copia := pad
@@ -985,14 +989,15 @@ func especDeHijo(esp espec, relleno, margenes, decl int) espec {
 	return espec{limita: false}
 }
 
-// tamanoPropio: el tamaño declarado manda; un espec EXACTLY manda sobre wrap_content; wrap_content
+// tamanoPropio: un espec EXACTLY manda sobre lo declarado (es el que usa el reparto del peso para
+// dejar a un hijo de `0dp` con el alto que le toca); si no, el tamaño declarado manda; wrap_content
 // toma el contenido medido, recortado al techo del padre, y match_parent ocupa lo que el padre da.
 func tamanoPropio(decl int, esp espec, contenido int) int {
 	switch {
-	case decl >= 0:
-		return decl
 	case esp.exacto:
 		return esp.tam
+	case decl >= 0:
+		return decl
 	case decl == medidaMatch:
 		if esp.limita {
 			return esp.tam
@@ -1093,23 +1098,43 @@ func (n *nodoVista) medirLineal(vertical bool, espAncho, espAlto espec) {
 			conPeso = append(conPeso, hijoConPeso{n: h, espAncho: espHijoAncho, espAlto: espHijoAlto})
 		}
 	}
-	// el hueco que sobra del techo del padre se reparte en proporción al peso, y el hijo se vuelve a
-	// medir con el tamaño exacto que le tocó (así un contenedor con peso mide bien a sus hijos)
+	// el hueco que sobra (o falta) del techo del padre se reparte en proporción al peso, como el
+	// bucle de measureVertical: cada hijo descuenta su parte del exceso y su peso del denominador,
+	// el tamaño se remide EXACTLY y nunca queda negativo. El denominador es weightSum si el layout
+	// lo declara; si no, la suma de los pesos de los hijos.
 	if sumaPesos > 0 && espPrincipal.limita {
-		restante := espPrincipal.tam - padAncho - total
-		if vertical {
-			restante = espPrincipal.tam - padAlto - total
+		restante := espPrincipal.tam - padAlto - total
+		if !vertical {
+			restante = espPrincipal.tam - padAncho - total
 		}
-		if restante > 0 {
+		denominador := sumaPesos
+		if n.pesoSuma > 0 {
+			denominador = n.pesoSuma
+		}
+		if restante != 0 {
 			for i := range conPeso {
-				extra := int(float64(restante) * conPeso[i].n.Peso / sumaPesos)
-				h := conPeso[i].n
-				if vertical {
-					h.medir(conPeso[i].espAncho, espec{tam: h.medAlto + extra, limita: true, exacto: true})
-				} else {
-					h.medir(espec{tam: h.medAncho + extra, limita: true, exacto: true}, conPeso[i].espAlto)
+				if denominador <= 0 {
+					break
 				}
-				total += extra
+				h := conPeso[i].n
+				reparto := int(h.Peso * float64(restante) / denominador)
+				restante -= reparto
+				denominador -= h.Peso
+				antes := h.medAlto
+				if !vertical {
+					antes = h.medAncho
+				}
+				tam := antes + reparto
+				if tam < 0 {
+					tam = 0
+				}
+				if vertical {
+					h.medir(conPeso[i].espAncho, espec{tam: tam, limita: true, exacto: true})
+					total += h.medAlto - antes
+				} else {
+					h.medir(espec{tam: tam, limita: true, exacto: true}, conPeso[i].espAlto)
+					total += h.medAncho - antes
+				}
 			}
 		}
 	}

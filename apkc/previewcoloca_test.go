@@ -15,6 +15,7 @@ package main
 // TYPE_DIMENSION (lo que escribe aapt2) y como cadena `"16dp"` (lo que deja el enlazador en Go).
 
 import (
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,6 +35,7 @@ const (
 	idAttrLayoutHeight   = 0x010100f5
 	idAttrLayoutMargin   = 0x010100f6
 	idAttrLayoutMarginAb = 0x010100fa
+	idAttrWeightSum      = 0x01010128
 	idAttrLayoutWeight   = 0x01010181
 	idAttrText           = 0x0101014f
 )
@@ -473,6 +475,121 @@ func TestPreviewDiceLoMismoQueAapt2(t *testing.T) {
 	}
 	if r := m.Raiz.Hijos[0].Rect; r != (rectVista{X: 124, Y: 284, Ancho: 112, Alto: 24}) {
 		t.Errorf("con gravity=0x11 el hijo se coloca en %+v: se esperaba {124 284 112 24}", r)
+	}
+}
+
+// layoutDePesos arma un LinearLayout vertical match_parent con los atributos de raíz que se pidan y
+// los hijos dados: la sonda de las reglas de layout_weight de measureVertical.
+func layoutDePesos(attrsRaiz []atributoEscribir, hijos ...*elementoEscribir) documentoAXML {
+	base := []atributoEscribir{
+		{ns: "android", nombre: "orientation", id: idAttrOrientation, tipo: tipoEnteroDec, datos: 1},
+		{ns: "android", nombre: "layout_width", id: idAttrLayoutWidth, tipo: tipoEnteroDec, datos: 0xffffffff},
+		{ns: "android", nombre: "layout_height", id: idAttrLayoutHeight, tipo: tipoEnteroDec, datos: 0xffffffff},
+	}
+	return documentoAXML{
+		ns:   []declaracionNS{{prefijo: "android", uri: uriAndroid, linea: 2}},
+		utf8: true,
+		raiz: &elementoEscribir{
+			nombre: "LinearLayout",
+			linea:  2,
+			attrs:  append(base, attrsRaiz...),
+			hijos:  hijos,
+		},
+	}
+}
+
+// hijoDeTexto arma un TextView de ancho match_parent con el alto que se le diga (0x1 es `0dp` en el
+// entero complejo de aapt2) y el peso. El peso va como flotante, que es como lo escribe aapt2
+// (`layout_weight(0x01010181)=1`).
+func hijoDeTexto(alto uint32, peso int, texto string) *elementoEscribir {
+	return &elementoEscribir{
+		nombre: "TextView",
+		linea:  8,
+		attrs: []atributoEscribir{
+			{ns: "android", nombre: "layout_width", id: idAttrLayoutWidth, tipo: tipoEnteroDec, datos: 0xffffffff},
+			atributoDim("layout_height", idAttrLayoutHeight, tipoDimension, alto, ""),
+			{ns: "android", nombre: "layout_weight", id: idAttrLayoutWeight, tipo: tipoFlotante, datos: math.Float32bits(float32(peso))},
+			{ns: "android", nombre: "text", id: idAttrText, tipo: tipoCadena, texto: texto},
+		},
+	}
+}
+
+// TestPreviewReparteElPesoDeUnHijoDeCero: el patrón «0dp + layout_weight», el más común. La raíz de
+// 640 con un hijo de 24 dp y otro de 0dp con peso 1 deja al segundo 640-24 = 616 de alto, no 0: el
+// tamaño declarado no puede ganar al EXACTLY que reparte el peso (measureVertical mide al hijo del
+// peso con makeMeasureSpec(share, EXACTLY)).
+func TestPreviewReparteElPesoDeUnHijoDeCero(t *testing.T) {
+	m, err := modeloVistaDeAPK(apkConLayout(t, layoutDePesos(nil,
+		hijoDeTexto(0x00001801, 0, "AAA"), // 24dp sin peso
+		hijoDeTexto(0x00000001, 1, "BBB"), // 0dp con peso 1
+	)), "")
+	if err != nil {
+		t.Fatalf("el apk del peso 0dp no se deja leer: %v", err)
+	}
+	primero, segundo := m.Raiz.Hijos[0], m.Raiz.Hijos[1]
+	if primero.Rect != (rectVista{X: 0, Y: 0, Ancho: 360, Alto: 24}) {
+		t.Errorf("el primer hijo se coloca en %+v: se esperaba {0 0 360 24}", primero.Rect)
+	}
+	if segundo.Rect != (rectVista{X: 0, Y: 24, Ancho: 360, Alto: 616}) {
+		t.Errorf("el hijo de 0dp con peso 1 ocupa %+v: se esperaba {0 24 360 616}", segundo.Rect)
+	}
+}
+
+// TestPreviewReparteElExcesoNegativo: dos hijos que no caben (400+300 en 640) con peso 1 cada uno.
+// El bucle de measureVertical admite remainingExcess negativo y reparte el recorte: 400-30 = 370 y
+// 300-30 = 270, que suman 640. El modelo no puede dejarlos en 700.
+func TestPreviewReparteElExcesoNegativo(t *testing.T) {
+	m, err := modeloVistaDeAPK(apkConLayout(t, layoutDePesos(nil,
+		hijoDeTexto(0x00019001, 1, "A"), // 400dp
+		hijoDeTexto(0x00012c01, 1, "B"), // 300dp
+	)), "")
+	if err != nil {
+		t.Fatalf("el apk del exceso negativo no se deja leer: %v", err)
+	}
+	primero, segundo := m.Raiz.Hijos[0], m.Raiz.Hijos[1]
+	if primero.Rect != (rectVista{X: 0, Y: 0, Ancho: 360, Alto: 370}) {
+		t.Errorf("el primer hijo se coloca en %+v: se esperaba {0 0 360 370}", primero.Rect)
+	}
+	if segundo.Rect != (rectVista{X: 0, Y: 370, Ancho: 360, Alto: 270}) {
+		t.Errorf("el segundo hijo se coloca en %+v: se esperaba {0 370 360 270}", segundo.Rect)
+	}
+	if fondo := segundo.Rect.Y + segundo.Rect.Alto; fondo > dpPantallaAlto {
+		t.Errorf("los hijos llegan a %d y la pantalla tiene %d: el recorte no se repartió", fondo, dpPantallaAlto)
+	}
+}
+
+// TestPreviewRespetaWeightSum: android:weightSum manda como denominador. Con weightSum=2 y un solo
+// hijo de peso 1, el hijo ocupa la mitad del hueco: 640/2 = 320, no los 640 que daría la suma de pesos.
+func TestPreviewRespetaWeightSum(t *testing.T) {
+	m, err := modeloVistaDeAPK(apkConLayout(t, layoutDePesos(
+		[]atributoEscribir{{ns: "android", nombre: "weightSum", id: idAttrWeightSum, tipo: tipoEnteroDec, datos: 2}},
+		hijoDeTexto(0x00000001, 1, "Medio"),
+	)), "")
+	if err != nil {
+		t.Fatalf("el apk con weightSum no se deja leer: %v", err)
+	}
+	if r := m.Raiz.Hijos[0].Rect; r != (rectVista{X: 0, Y: 0, Ancho: 360, Alto: 320}) {
+		t.Errorf("con weightSum=2 el hijo ocupa %+v: se esperaba {0 0 360 320}", r)
+	}
+}
+
+// TestPreviewReparteElPesoEnSecuencia: el reparto es secuencial, como el bucle de measureVertical:
+// cada hijo descuenta su parte del exceso y su peso del denominador. Con pesos 1 y 2 sobre 640, el
+// primero se lleva 640/3 = 213 y el segundo los 427 que quedan; un reparto en paralelo daría 426.
+func TestPreviewReparteElPesoEnSecuencia(t *testing.T) {
+	m, err := modeloVistaDeAPK(apkConLayout(t, layoutDePesos(nil,
+		hijoDeTexto(0x00000001, 1, "Uno"),
+		hijoDeTexto(0x00000001, 2, "Dos"),
+	)), "")
+	if err != nil {
+		t.Fatalf("el apk del reparto secuencial no se deja leer: %v", err)
+	}
+	primero, segundo := m.Raiz.Hijos[0], m.Raiz.Hijos[1]
+	if primero.Rect != (rectVista{X: 0, Y: 0, Ancho: 360, Alto: 213}) {
+		t.Errorf("el primero se coloca en %+v: se esperaba {0 0 360 213}", primero.Rect)
+	}
+	if segundo.Rect != (rectVista{X: 0, Y: 213, Ancho: 360, Alto: 427}) {
+		t.Errorf("el segundo se coloca en %+v: se esperaba {0 213 360 427}", segundo.Rect)
 	}
 }
 
