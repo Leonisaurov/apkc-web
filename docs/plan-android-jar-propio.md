@@ -29,10 +29,10 @@ Lo medido en local:
   --linker go --compiler go` deja el mismo `classes.dex` y el mismo
   `resources.arsc` que con el jar completo.
 - El jar generado con esas 15 clases y la tabla de recursos completa pesa
-  **111.607 bytes**; el jar completo, con las 4.873 clases públicas y la misma
-  tabla, pesa **2.810.522 bytes**. El jar de solo las clases (sin recursos)
+  **111.673 bytes**; el jar completo, con las 4.873 clases públicas y la misma
+  tabla, pesa **2.829.065 bytes**. El jar de solo las clases (sin recursos)
   medía 65.028 bytes; con la tabla de recursos (301.784 bytes) el jar mínimo
-  comprimido pasa a 111.607 bytes.
+  comprimido pasa a 111.673 bytes.
 - El `resources.arsc` es el 62 % del jar de la SDK (16.390.624 bytes) y es lo
   único que `apkc/marco.go` necesita para los ids del framework. La tabla
   propia completa mide **301.784 bytes**, con 3.758 recursos y 1.897 atributos,
@@ -67,8 +67,8 @@ go -C tools/androidjar run . \
 
 | Jar | Clases | Recursos | `resources.arsc` | Tamaño | SHA-256 |
 | --- | --- | --- | --- | --- | --- |
-| completo | 4.873 | 3.758 | 301.784 B | 2.811.239 B | `56e45ad385e8648f09652457ade03ca8c764b84ef5fc5c77b266b2aa4fd03d46` |
-| mínimo | 15 | 3.758 | 301.784 B | 111.609 B | `725d8a266809208d32ee538ab9b5a2cca30a2c351aa09eb979f32793790a97b9` |
+| completo | 4.873 | 3.758 | 301.784 B | 2.829.065 B | `211507a880f02c2736939add2d8d990b5b8abfcbcec883f0c0757c4766e0803a` |
+| mínimo | 15 | 3.758 | 301.784 B | 111.673 B | `a77c8ce0fb80b0682dea5c8962dc33e1318e2cb44eb2971925be19a9d4492313` |
 
 El jar completo no contiene `res/` ni `NOTICES/` de la SDK: solo clases
 generadas, `resources.arsc`, `NOTICE`, `LICENSE` y (en el directorio de salida)
@@ -89,9 +89,10 @@ prueba:
 
 **Lo que no se ha verificado**: el primer run real falló (§0.2) y el arreglo
 del workflow todavía no se ha empujado; no hay artifact ni hash de CI. El
-autocompletado con el jar generado sí se probó en local (§0.3): 157
-comprobaciones y 0 fallos en `prueba-pestana.js`. El `e2e.sh` completo no pasa
-por una incompatibilidad previa de `apkc preview --pulsar`, ajena al jar.
+autocompletado y el `e2e.sh` local sí se probaron con el jar generado (§0.3):
+171 comprobaciones y 0 fallos en `prueba-pestana.js`, y `e2e: todo en orden`
+usando el `apkc` de `emulador-clics` porque el de este worktree no tiene
+`--pulsar`. El sitio publicado sigue sin probar.
 
 ### 0.1. Intento de ejecución de J4 (2026-11-22)
 
@@ -165,8 +166,10 @@ Al reproducir J5 apareció un segundo defecto del generador: al leer
 descriptores quedaban como `LString;` en vez de `Ljava/lang/String;`, y
 `PrintStream.println(String)` no resolvía. Se añadió `arreglaDescriptor`, que
 reescribe los nombres simples dentro de `L...;` una vez leído todo el fichero.
-Eso cambia el artefacto: el jar de este árbol es **56e45ad…** (completo) y
-**725d8a2…** (mínimo), no los 9103b3a…/5d69f0b… del primer intento.
+Eso cambia el artefacto: el jar de este árbol es **211507a…** (completo) y
+**a77c8ce…** (mínimo), no los 9103b3a…/5d69f0b… del primer intento ni los
+56e45ad…/725d8a2… intermedios. Ninguno de esos hashes es un artifact de CI:
+el run falló antes de subirlo.
 
 **Arreglo en el worktree**: el paso ahora calcula `OUT="$GITHUB_WORKSPACE/dist"`
 y pasa rutas absolutas a `-out`; el job `verificar` usa
@@ -177,7 +180,7 @@ nuevo; sin ese run, J4 sigue **NO verificada**.
 
 ### 0.3. J5 local: autocompletado con el jar generado
 
-Se probó la pestaña con el jar completo (`56e45ad…`, 2.811.239 B) montado como
+Se probó la pestaña con el jar completo (`211507a…`, 2.829.065 B) montado como
 `ANDROID_JAR`, en un `PREFIX` propio y puertos `18793`/`19347`:
 
 ```sh
@@ -189,7 +192,7 @@ STUDIO_SERVIDOR_PORT=18793 STUDIO_PORT=19347 \
 node studio/prueba-pestana.js
 ```
 
-Resultado real: **157 comprobaciones bien, 0 mal**. Entre ellas:
+Resultado real: **171 comprobaciones bien, 0 mal**. Entre ellas:
 
 - `el índice del android.jar se lee de OPFS por trozos y sin una sola petición`
   — 3.372 clases indexadas, 496.700 bytes leídos, 0 peticiones.
@@ -206,18 +209,30 @@ Para que ese test sirviera con el jar propio se cambiaron dos cosas en
 SDK, sino `JAR_BYTES` leído del fichero, y la comprobación nueva exige que el
 jar cargado pese menos de 5 MB y que `R.layout` siga saliendo de los recursos.
 
-**Frontera**: `studio/e2e.sh` completo **no** está en verde con este worktree.
-Falla en una comprobación anterior y ajena al jar:
+El gate completo también se ejecutó. El `apkc` de este worktree no tiene el
+flag `--pulsar` que espera el `studio` submodule en `9f9d5c1`, así que se usó el
+binario y el wasm del worktree `emulador-clics` (commit `e524c4d`), sin tocar
+`apkc/`:
 
-```text
-FALLO: apkc preview --pulsar no entrega el clic de id/pulsar:
-flag provided but not defined: -pulsar
-usage: apkc preview [--layout nombre] [--sin-ejecutar] app.apk
+```sh
+PREFIX=/tmp/androidjar-propio/prefix5 \
+APKC=/tmp/androidjar-propio/apkc-preview \
+APKC_WASM=/tmp/androidjar-propio/apkc-preview-wasm.wasm \
+ANDROID_JAR=/tmp/androidjar-propio/sdk-generated4/platforms/android-34/android.jar \
+sh studio/e2e.sh
 ```
 
-El `apkc` del worktree no tiene el flag `--pulsar` que espera el `studio`
-submodule en `9f9d5c1`; no se toca `apkc/` desde este frente. Por eso **J5 no se
-cierra**: la parte de autocompletado está medida, la del gate completo no.
+Salida real:
+
+```text
+vista previa: 3 nodos, res/layout/main.xml, … un clic deja "Pulsos: 1" …
+pestaña: 171 comprobaciones, apk firmada dentro de chromium de 10320 bytes y verificada
+e2e: todo en orden
+```
+
+**Frontera**: la pestaña y el `e2e` local están cerrados con el jar generado,
+pero el **sitio publicado** no se ha probado con este jar. J5 queda hecha en su
+parte local y pendiente en la de publicación.
 
 ## 1. Qué contiene el jar que consume la pestaña
 
@@ -436,10 +451,10 @@ El studio usa el jar para dos cosas distintas y conviene separarlas:
 
 1. **`android-stub-min.jar`**: 15 clases medidas + tabla de recursos pública.
    Es lo que necesita `apkc compile` y `apkc build --linker go` para las
-   plantillas. Medido: **111.607 bytes**.
+   plantillas. Medido: **111.673 bytes**.
 2. **`android-stub-full.jar`**: todas las clases públicas de `current.txt` y
    `libcore-current.txt` sin `Code`, para que el autocompletado siga ofreciendo
-   las clases y métodos del framework. Medido: **2.810.522 bytes** y 4.873
+   las clases y métodos del framework. Medido: **2.829.065 bytes** y 4.873
    clases. Falta probar el autocompletado de la pestaña (J5).
 
 El jar actual de la SDK se sigue aceptando como fichero del usuario para quien
@@ -733,11 +748,12 @@ Cada fase se cierra con su comando en verde y su párrafo en
 - Comando: `SITIO_URL=https://apkc-studio.surge.sh node studio/prueba-sitio.js`.
 - Criterio de rechazo: si el SW o el host no sirven el jar con COOP/COEP, la
   página vuelve al selector de fichero y la fase no se cierra.
-- **Estado: parcial.** El autocompletado con el jar generado pasa 157/0 en
-  `prueba-pestana.js` (§0.3). El `e2e.sh` completo falla antes por el flag
-  `--pulsar` que no tiene el `apkc` de este worktree, y el sitio publicado no se
-  ha probado. La fase no se cierra hasta que el gate completo y el host estén
-  en verde.
+- **Estado: hecha en local, pendiente en el sitio.** `prueba-pestana.js` pasa
+  171/0 y `e2e.sh` termina en `e2e: todo en orden`, con el jar generado como
+  `ANDROID_JAR` (§0.3). Se usó el `apkc`/wasm de `emulador-clics` porque el de
+  este worktree no tiene `--pulsar`; no se tocó `apkc/`. Falta probar el jar en
+  el sitio publicado (`prueba-sitio.js`), que es lo que impide cerrar la fase
+  entera.
 
 ## 7. Fronteras
 
@@ -788,7 +804,7 @@ lleva el comando que la comprobará.
    ids de §33; `TestMarco` pasa. Comando:
    `unzip -p android-stub-34-min.jar resources.arsc | wc -c` y
    `HOME=… go test -C apkc -run TestMarco`.
-3. **HECHO**: el jar completo pesa 2.810.522 bytes. Lo que **no** se ha
+3. **HECHO**: el jar completo pesa 2.829.065 bytes. Lo que **no** se ha
    probado es el autocompletado de la pestaña con él: eso es J5.
    Comando pendiente: `studio/prueba-pestana.js`, apartado de autocompletado.
 4. **HECHO**: los 23 nombres de tipo se emiten aunque `public-final.xml` solo
