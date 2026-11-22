@@ -8609,3 +8609,36 @@ real, desde este entorno donde **todas** las peticiones del binario salen trunca
 falla con `no se pudo bajar un apkc.wasm íntegro: recarga con Ctrl+Mayús+R…`, que es la detección
 funcionando, no el error de `instantiate`. Frontera: no se pudo verificar aquí que la variante
 `?directo=` recupere una copia sana en la red del usuario; eso depende de su navegador.
+
+## 196. Causa del wasm truncado y recuperación
+
+Medido el 2026-11-22. El error del usuario `section (code 10, "Code") extends past end of the module`
+no era del proyecto: era el binario llegando a medias. Se separaron tres cosas:
+
+1. **Causa del entorno**: Surge trunca respuestas grandes por HTTP/2 desde esta red. `curl` con
+   `--http1.1` baja el gz completo; por HTTP/2 falla con `error -532`. En rangos, 256 KB llegan
+   enteros (262144 bytes) y 512 KB se cortan. Cloudflare sirve 2 MB por HTTP/2 sin problema, así
+   que no es la red en general ni Chromium.
+2. **Lo que empeoró el proceso**: cada publicación cambia la versión del SW; `activate` borra la
+   caché anterior y `install` vuelve a hacer `cache.add('./apkc.wasm.gz')` con un `catch` que traga
+   el fallo. Con la red ya truncada, la copia sana desapareció y no quedó respaldo. Además el
+   fallback con `?directo=` era inútil: `caches.match(peticion, { ignoreSearch: true })` ignoraba la
+   query y siempre devolvía la copia cacheada. Se reportó como arreglo sin verificarlo en el host.
+3. **Arreglo**: `tools/sitio.sh` escribe `wasm-manifest.json` con tamaño y SHA-256 del wasm y del
+   gz; `sw.js` deja pasar `?directo=` sin tocar caché; `hospedador.js` prueba la copia normal, la red
+   forzada y, si ambas llegan truncadas, reconstruye el gz con peticiones `Range` de 256 KB y
+   comprueba ambos hashes antes de instanciar. Si nada sirve, el error manda a «Reparar caché», un
+   botón escondido en Tema → Reparar caché (último recurso) que desregistra el SW, borra las cachés
+   y recarga. `tools/verificar-publicacion.sh` compara por HTTP/1.1 el gz publicado con el local y
+   falla la publicación si no coinciden.
+
+```sh
+sh tools/verificar-publicacion.sh https://apkc-studio.surge.sh/ sitio/apkc.wasm.gz
+CHROME_BIN=/usr/bin/chromium SITIO_URL=https://apkc-studio.surge.sh/ node studio/prueba-sitio.js
+```
+
+**Resultado**: `publicación verificada: sha256 5e5daa06…f0166f`; el host real da **10 comprobaciones
+bien, 0 mal** con chromium por defecto (HTTP/2), 53 peticiones, 0 fuera del origen, APK de 9221 bytes
+firmada y verificada. Frontera: el botón de reparación no se ha pulsado en un navegador con la caché
+envenenada; se ofrece como último recurso, no como primera línea. No se volvió a publicar después
+de la comprobación.
