@@ -3721,7 +3721,10 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 	if err != nil {
 		return err
 	}
-	if dv != elem {
+	// `expA` devuelve el descriptor que queda en la pila: con `a[0] = 7` sobre un `Object[]` es el
+	// envoltorio (`Ljava/lang/Integer;`), que javac escribe con `Integer.valueOf` antes del `aastore`.
+	// Lo que no cabe es lo de siempre: identidad, ensanchamiento o boxing con su subida a referencia.
+	if !e.ctx.asignable(dv, elem) {
 		return fmt.Errorf("linea %d: el arreglo es %s y se le asigna un %s", v.donde.linea, elem, dv)
 	}
 	ancho := elem[0] == 'J' || elem[0] == 'D'
