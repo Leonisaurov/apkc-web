@@ -972,9 +972,12 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 		c := cands[0]
 		if c.varargs {
 			// con una sola candidata no hay eleccion, pero si hay que decidir la forma: un arreglo del
-			// tipo declarado se pasa tal cual y cualquier otra cosa se empaqueta.
+			// tipo declarado se pasa tal cual y cualquier otra cosa se empaqueta. El `null` cabe en el
+			// arreglo por la fase estricta, y javac lo pasa **como el arreglo** (`aconst_null;
+			// invokestatic f:([Ljava/lang/String;)V`), no envuelto en un `new String[]{null}`.
 			_, _, ps := splitDescriptor(c.desc)
-			c.empaquetar = len(ps) == 0 || len(tipos) != len(ps) || tipos[len(ps)-1] != ps[len(ps)-1]
+			c.empaquetar = len(ps) == 0 || len(tipos) != len(ps) ||
+				!ctx.asignableEstricto(tipos[len(ps)-1], ps[len(ps)-1])
 		}
 		return c, nil
 	}
@@ -1210,8 +1213,21 @@ func (ctx *contextoJava) asignableEstricto(desde, hasta string) bool {
 	}
 	if desde[0] == '[' {
 		// JVMS 4.10.3: todo arreglo es subtipo de Object, Cloneable y Serializable
-		return hasta == "Ljava/lang/Object;" || hasta == "Ljava/lang/Cloneable;" ||
-			hasta == "Ljava/io/Serializable;"
+		if hasta == "Ljava/lang/Object;" || hasta == "Ljava/lang/Cloneable;" ||
+			hasta == "Ljava/io/Serializable;" {
+			return true
+		}
+		// y la covarianza de arreglos (JLS 4.10.3) es solo entre elementos de REFERENCIA:
+		// `String[]` es `Object[]`, pero `int[]` no es `long[]` ni `Object[]`. Medido con javac 17:
+		// `f(new String[1])` con `f(Object[])` y `f(Object)` elige `(Ljava/lang/Object;)V`, porque
+		// `String[] <: Object[]` y por eso `Object[]` es la candidata mas especifica.
+		if hasta[0] == '[' {
+			de, a := desde[1:], hasta[1:]
+			if esTipoDeReferencia(de) && esTipoDeReferencia(a) {
+				return ctx.asignableEstricto(de, a)
+			}
+		}
+		return false
 	}
 	if desde[0] != 'L' || hasta[0] != 'L' {
 		return false
