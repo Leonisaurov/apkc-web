@@ -154,8 +154,46 @@ func leeAPIEn(r io.Reader, a *api) error {
 		for i, in := range c.interfaces {
 			c.interfaces[i] = internoDe(in, a.clases)
 		}
+		for _, f := range c.campos {
+			f.desc = arreglaDescriptor(f.desc, a.clases)
+		}
+		for _, m := range c.metodos {
+			m.desc = arreglaDescriptor(m.desc, a.clases)
+		}
 	}
 	return nil
+}
+
+// arreglaDescriptor resuelve los nombres simples que quedaron sin paquete porque
+// java.lang todavía no estaba en el mapa cuando se leyó el miembro (java.io va
+// antes que java.lang en libcore-current.txt). En un descriptor solo hay
+// nombres simples dentro de `L...;`; los que ya llevan `/` no se tocan.
+func arreglaDescriptor(desc string, clases map[string]*apiClase) string {
+	var b strings.Builder
+	for i := 0; i < len(desc); {
+		if desc[i] != 'L' {
+			b.WriteByte(desc[i])
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(desc) && desc[j] != ';' {
+			j++
+		}
+		if j >= len(desc) {
+			b.WriteString(desc[i:])
+			break
+		}
+		nombre := desc[i+1 : j]
+		if !strings.Contains(nombre, "/") {
+			if _, ok := clases["java.lang."+nombre]; ok {
+				nombre = "java/lang/" + nombre
+			}
+		}
+		b.WriteString("L" + nombre + ";")
+		i = j + 1
+	}
+	return b.String()
 }
 
 func limpiarAnotaciones(s string) string {

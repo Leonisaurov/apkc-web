@@ -70,20 +70,21 @@ jobs:
             java.lang.Object,
             java.lang.String
         run: |
-          mkdir -p dist dist/min dist/full
+          OUT="$GITHUB_WORKSPACE/dist"
+          mkdir -p "$OUT/full" "$OUT/min"
           go -C tools/androidjar run . \
-            -in "$RUNNER_TEMP/aosp" -out dist/full -api 34 \
+            -in "$RUNNER_TEMP/aosp" -out "$OUT/full" -api 34 \
             -tag "${{ env.AOSP_TAG || 'android-14.0.0_r75' }}" \
             -notice "$RUNNER_TEMP/aosp/NOTICE" -license "$RUNNER_TEMP/aosp/LICENSE"
           go -C tools/androidjar run . \
-            -in "$RUNNER_TEMP/aosp" -out dist/min -api 34 \
+            -in "$RUNNER_TEMP/aosp" -out "$OUT/min" -api 34 \
             -tag "${{ env.AOSP_TAG || 'android-14.0.0_r75' }}" \
             -notice "$RUNNER_TEMP/aosp/NOTICE" -license "$RUNNER_TEMP/aosp/LICENSE" \
             -only "$ONLY"
-          cp dist/full/android-stub-34.jar dist/android-stub-34-full.jar
-          cp dist/min/android-stub-34.jar dist/android-stub-34-min.jar
-          cp "$RUNNER_TEMP/aosp/NOTICE" "$RUNNER_TEMP/aosp/LICENSE" dist/
-          sha256sum dist/*.jar | tee dist/SHA256SUMS
+          cp "$OUT/full/android-stub-34.jar" "$OUT/android-stub-34-full.jar"
+          cp "$OUT/min/android-stub-34.jar" "$OUT/android-stub-34-min.jar"
+          cp "$RUNNER_TEMP/aosp/NOTICE" "$RUNNER_TEMP/aosp/LICENSE" "$OUT/"
+          sha256sum "$OUT"/*.jar | tee "$OUT/SHA256SUMS"
 
       - name: Resumen con el SHA-256
         run: |
@@ -147,23 +148,23 @@ jobs:
 
       - name: Construir la referencia con la SDK y el jar generado
         working-directory: ${{ runner.temp }}/proj
-        env:
-          SDK_JAR: ${{ env.ANDROID_HOME }}/platforms/android-34/android.jar
         run: |
+          SDK_JAR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/platforms/android-34/android.jar"
+          JAR="$GITHUB_WORKSPACE/dist/android-stub-34-min.jar"
           "$RUNNER_TEMP/apkc" build --linker go --compiler go \
             --android-jar "$SDK_JAR" --sdk-version 34 --codename 14 \
             --keystore "$HOME/.android/debug.keystore"
           cp "$RUNNER_TEMP/proj/build/classes.dex" "$RUNNER_TEMP/sdk.dex"
           cp "$RUNNER_TEMP/proj/build/resources.arsc" "$RUNNER_TEMP/sdk.arsc"
 
-          "$RUNNER_TEMP/apkc" compile --android-jar dist/android-stub-34-min.jar \
+          "$RUNNER_TEMP/apkc" compile --android-jar "$JAR" \
             -o "$RUNNER_TEMP/out-min" src
           "$RUNNER_TEMP/apkc" compile --android-jar "$SDK_JAR" \
             -o "$RUNNER_TEMP/out-sdk" src
           diff -r "$RUNNER_TEMP/out-min" "$RUNNER_TEMP/out-sdk"
 
           "$RUNNER_TEMP/apkc" build --linker go --compiler go \
-            --android-jar dist/android-stub-34-min.jar --sdk-version 34 --codename 14 \
+            --android-jar "$JAR" --sdk-version 34 --codename 14 \
             --keystore "$HOME/.android/debug.keystore"
           cmp "$RUNNER_TEMP/sdk.dex" "$RUNNER_TEMP/proj/build/classes.dex"
           cmp "$RUNNER_TEMP/sdk.arsc" "$RUNNER_TEMP/proj/build/resources.arsc"
