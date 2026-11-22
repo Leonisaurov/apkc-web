@@ -87,6 +87,12 @@ type resultadoEjecucion struct {
 	Pulsaciones   []string       `json:"pulsaciones,omitempty"`
 	Avisos        []string       `json:"avisos,omitempty"`
 	Error         string         `json:"error,omitempty"`
+	// Pantallas es el recorrido de actividades que la ejecución abrió, en orden, con la actual al
+	// final: es la prueba de que `startActivity` y `finish()` movieron la app de pantalla.
+	Pantallas []string `json:"pantallas,omitempty"`
+	// Ciclo es la secuencia de métodos de ciclo de vida que se llamaron (`onCreate`, `onStart`,
+	// `onResume`, `onPause`, `onStop`, `onDestroy`, `onRestart`), en orden.
+	Ciclo []string `json:"ciclo,omitempty"`
 
 	// malformado separa dos clases de fallo que no son lo mismo: «la app llama a algo que el MVP no
 	// cubre» (se sigue con el modelo y rc 0) y «estos bytes no son un dex ejecutable», que el comando
@@ -146,6 +152,9 @@ type objetoDalvik struct {
 	tag          any
 	cadena       *strings.Builder
 	oyente       any
+	// intentClase es el destino de un `Intent(Context, Class)` de una actividad propia: es lo que
+	// `startActivity` lee para abrir la pantalla siguiente
+	intentClase string
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -309,6 +318,24 @@ type maquinaDalvik struct {
 	// inflado (un `findViewById` dentro del `onClick`, por ejemplo): el framework no devuelve una
 	// vista vacía, devuelve la que ya trae su texto
 	textosDeLayout map[uint32]string
+	// el recorrido de actividades: cada `startActivity` deja aquí la clase destino y el bucle de
+	// `ejecutaOnCreateNavegando` abre la siguiente pantalla; `finish()` pide volver a la anterior
+	pendiente string
+	terminada bool
+	arrancada bool
+	// las actividades que el manifiesto declara, por descriptor: fuera de esta lista no se lanza
+	// nada, porque en el aparato tampoco se puede arrancar una actividad no declarada
+	declaradas map[string]bool
+	// ciclo de vida que esta máquina ejecutó, para el registro del resultado
+	ciclo []string
+	// registro es el ciclo compartido por todas las pantallas, en orden real: una actividad que se
+	// pausa anota antes de que la siguiente arranque, y al volver sigue donde tocaba
+	registro *[]string
+	// el Intent con el que se abrió esta actividad, para `getIntent`; nil en la lanzadora
+	intent *objetoDalvik
+	// el Intent que un `startActivity` acaba de entregar: el bucle de navegación lo pasa a la
+	// máquina de la actividad nueva
+	intentoSaliente *objetoDalvik
 }
 
 type oyenteRegistrado struct {
@@ -487,6 +514,18 @@ func cadenaDe(v any) (string, bool) {
 // `charAt()`: ni bytes ni runes. «á» es una unidad y dos bytes, y un emoji son dos unidades.
 func unidadesDeCadena(s string) []uint16 { return utf16.Encode([]rune(s)) }
 
+// claseDeLiteral lee el descriptor de un `X.class`: el `const-class` del intérprete guarda el tipo
+// en el campo `$tipo` del objeto de `java.lang.Class`, que es lo que el constructor de `Intent`
+// necesita para saber a qué actividad apunta.
+func claseDeLiteral(v any) string {
+	o, ok := v.(*objetoDalvik)
+	if !ok || o.clase != "Ljava/lang/Class;" {
+		return ""
+	}
+	tipo, _ := o.campos["Ljava/lang/Class;.$tipo"].(string)
+	return tipo
+}
+
 // esReflexion dice si alguno de los candidatos es de reflexión (java.lang.Class o su paquete
 // java.lang.reflect): ahí el intérprete no puede saber qué se va a llamar, así que se rechaza por
 // nombre.
@@ -517,9 +556,22 @@ func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string
 // ejecutaOnCreatePreparando es el mismo arranque con un gancho entre `onCreate` y los clics. Lo usa
 // `apkc preview` para registrar los oyentes declarativos del layout (`android:onClick`): el
 // framework los enlaza al inflar, es decir, después de que la app pida su `setContentView` y antes
-// de que llegue ningún toque.
+// de que llegue ningún toque. Sin lista de actividades declaradas, cualquier clase del dex puede ser
+// destino de `startActivity` (es el camino de las pruebas que no leen manifiesto).
 func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string,
 	preparar func(m *maquinaDalvik)) (*resultadoEjecucion, uint32, error) {
+	return ejecutaOnCreateNavegando(d, tabla, actividad, pulsos, preparar, nil)
+}
+
+// ejecutaOnCreateNavegando es el arranque con ciclo de vida y navegación. `declaradas` son las
+// actividades que el manifiesto declara, por descriptor: una que no esté ahí no se lanza, como en el
+// aparato.
+//
+// La pila de actividades vive aquí y no en el dex: cada pantalla conserva su propia máquina (sus
+// objetos, sus capturas y sus oyentes) mientras está cubierta, y `finish()` la descubre otra vez sin
+// repetir su `onCreate`, que es lo que hace que el estado vuelva como estaba.
+func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string,
+	preparar func(m *maquinaDalvik), declaradas map[string]bool) (*resultadoEjecucion, uint32, error) {
 	res := &resultadoEjecucion{Metodo: "onCreate"}
 	prog, err := cargaPrograma(d)
 	if err != nil {
@@ -527,6 +579,9 @@ func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad strin
 		return res, 0, nil
 	}
 	m := nuevaMaquina(prog, tabla)
+	m.declaradas = declaradas
+	ciclo := []string{}
+	m.registro = &ciclo
 	clase, conMain := eligeClaseLanzadora(prog, actividad)
 	if clase == "" {
 		res.Error = "el dex no trae ninguna clase con main ni onCreate"
@@ -534,43 +589,94 @@ func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad strin
 	}
 	res.Actividad = claseCorta(clase)
 
-	cl := prog.clases[clase]
-	obj := &objetoDalvik{clase: clase, campos: map[string]any{}}
-	m.actividad = obj
-	if ctor := cl.metodos["<init>()V"]; ctor != nil {
-		if _, err := m.ejecutaCuerpo(clase, ctor, []any{obj}, []string{clase}); err != nil {
-			res.falla(err)
-			res.Pasos = m.pasos
-			return res, m.layoutID, nil
-		}
-	}
+	// todas guarda cada máquina que se abrió, incluida la que `finish()` dejó atrás: el resultado
+	// suma sus pasos y sus avisos, pero las capturas y los oyentes son los de la pantalla actual.
+	todas := []*maquinaDalvik{}
+	pila := []*maquinaDalvik{m}
 
 	if conMain {
 		res.Metodo = "main"
-		main := cl.metodos["main([Ljava/lang/String;)V"]
-		vacio := &arregloDalvik{tipo: "[Ljava/lang/String;", datos: []any{}}
-		if _, err := m.ejecutaCuerpo(clase, main, []any{vacio}, []string{"[Ljava/lang/String;"}); err != nil {
-			res.falla(err)
+		cl := prog.clases[clase]
+		m.actividad = &objetoDalvik{clase: clase, campos: map[string]any{}}
+		if ctor := cl.metodos["<init>()V"]; ctor != nil {
+			if _, err := m.ejecutaCuerpo(clase, ctor, []any{m.actividad}, []string{clase}); err != nil {
+				res.falla(err)
+			}
+		}
+		if res.Error == "" {
+			main := cl.metodos["main([Ljava/lang/String;)V"]
+			vacio := &arregloDalvik{tipo: "[Ljava/lang/String;", datos: []any{}}
+			if _, err := m.ejecutaCuerpo(clase, main, []any{vacio}, []string{"[Ljava/lang/String;"}); err != nil {
+				res.falla(err)
+			}
 		}
 	} else {
-		onCreate := cl.metodos["onCreate(Landroid/os/Bundle;)V"]
-		if onCreate == nil {
-			res.Error = fmt.Sprintf("%s no tiene onCreate(Landroid/os/Bundle;)V", claseCorta(clase))
-		} else if _, err := m.ejecutaCuerpo(clase, onCreate, []any{obj, nil},
-			[]string{clase, "Landroid/os/Bundle;"}); err != nil {
+		if err := m.abreActividad(clase, preparar, false); err != nil {
 			res.falla(err)
+			res.Pasos = m.pasos
+			res.Capturas = m.capturas
+			res.Consola = m.consola
+			res.Avisos = m.avisos
+			res.Ciclo = m.ciclo
+			return res, m.layoutID, nil
+		}
+		res.Pantallas = append(res.Pantallas, res.Actividad)
+	}
+	todas = append(todas, m)
+
+	// estabiliza lleva la app al estado que pide su código: abre la actividad que dejó pendiente un
+	// `startActivity` y vuelve a la anterior si alguien llamó a `finish()`. Se repite hasta que no
+	// quede nada pendiente, porque una pantalla nueva puede navegar a otra en su propio `onCreate`.
+	estabiliza := func() {
+		for {
+			if m.pendiente != "" {
+				destino := m.pendiente
+				m.pendiente = ""
+				if _, ok := prog.clases[destino]; !ok {
+					m.avisa("startActivity a %s: la clase no está en el dex", claseCorta(destino))
+					continue
+				}
+				if m.declaradas != nil && !m.declaradas[destino] {
+					m.avisa("startActivity a %s: no está declarada en el manifiesto", claseCorta(destino))
+					continue
+				}
+				m.pausa()
+				nueva := nuevaMaquina(prog, tabla)
+				nueva.declaradas = m.declaradas
+				nueva.registro = m.registro
+				nueva.intent = m.intentoSaliente
+				if err := nueva.abreActividad(destino, preparar, true); err != nil {
+					m.avisa("la actividad %s no arrancó: %v", claseCorta(destino), err)
+					m.reanuda()
+					continue
+				}
+				todas = append(todas, nueva)
+				pila = append(pila, nueva)
+				m = nueva
+				res.Pantallas = append(res.Pantallas, claseCorta(destino))
+				continue
+			}
+			if m.terminada {
+				m.terminada = false
+				m.cierra()
+				if len(pila) > 1 {
+					pila = pila[:len(pila)-1]
+					m = pila[len(pila)-1]
+					m.reanuda()
+					res.Pantallas = append(res.Pantallas, claseCorta(m.actividad.clase))
+					continue
+				}
+				m.avisa("finish() en la única actividad: la app se queda sin pantalla")
+			}
+			return
 		}
 	}
-
-	// el layout ya se sabe (lo dijo `setContentView`): sus `android:onClick` se enlazan aquí, como
-	// haría el inflado, antes de entregar ningún clic
-	if preparar != nil && res.Error == "" {
-		preparar(m)
-	}
+	estabiliza()
 
 	// los clics pedidos, en orden y solo si la app llegó viva a este punto. El estado que ve cada
 	// `onClick` incluye los anteriores, porque comparten la misma máquina: es lo que hace que
-	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1.
+	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1. Entre clic y clic se estabiliza la
+	// navegación: el siguiente clic va a la pantalla que quedó delante.
 	var errPulsos error
 	if res.Error == "" {
 		entregados := 0
@@ -591,15 +697,161 @@ func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad strin
 			}
 			res.Pulsaciones = append(res.Pulsaciones, pedido)
 			entregados++
+			estabiliza()
 		}
 	}
-	res.Pasos = m.pasos
-	res.Interacciones = m.interaccion
+
+	// el resultado es el de la pantalla actual, con la suma de lo que hicieron las que se visitaron
+	res.Actividad = claseCorta(m.actividad.clase)
 	res.Capturas = m.capturas
-	res.Consola = m.consola
 	res.Oyentes = m.oyentesDeVista()
-	res.Avisos = m.avisos
+	for _, x := range todas {
+		res.Pasos += x.pasos
+		res.Interacciones += x.interaccion
+		res.Consola = append(res.Consola, x.consola...)
+		for _, a := range x.avisos {
+			if !contieneTexto(res.Avisos, a) {
+				res.Avisos = append(res.Avisos, a)
+			}
+		}
+	}
+	res.Ciclo = ciclo
+	// la consola se renumera al unir las pantallas: `secuencia` es el orden real de emisión
+	for i := range res.Consola {
+		res.Consola[i].Secuencia = i + 1
+	}
 	return res, m.layoutID, errPulsos
+}
+
+// contieneTexto dice si la lista ya tiene ese aviso, para no repetirlo al unir pantallas.
+func contieneTexto(lista []string, texto string) bool {
+	for _, s := range lista {
+		if s == texto {
+			return true
+		}
+	}
+	return false
+}
+
+// abreActividad crea la instancia, ejecuta su constructor, su `onCreate` y —si no navegó ni se
+// cerró en él— su `onStart` y su `onResume`. `exigirLayout` distingue la lanzadora (que puede
+// quedarse sin `setContentView` y usar el layout que pidió el comando) de una actividad abierta por
+// `startActivity`, que sin layout propio no tiene nada que enseñar.
+func (m *maquinaDalvik) abreActividad(clase string, preparar func(*maquinaDalvik), exigirLayout bool) error {
+	cl, ok := m.prog.clases[clase]
+	if !ok {
+		return fmt.Errorf("la actividad %s no está en el dex", claseCorta(clase))
+	}
+	obj := &objetoDalvik{clase: clase, campos: map[string]any{}}
+	m.actividad = obj
+	if ctor := cl.metodos["<init>()V"]; ctor != nil {
+		if _, err := m.ejecutaCuerpo(clase, ctor, []any{obj}, []string{clase}); err != nil {
+			return err
+		}
+	}
+	onCreate := cl.metodos["onCreate(Landroid/os/Bundle;)V"]
+	if onCreate == nil {
+		return fmt.Errorf("%s no tiene onCreate(Landroid/os/Bundle;)V", claseCorta(clase))
+	}
+	m.anotaCiclo("onCreate")
+	if _, err := m.ejecutaCuerpo(clase, onCreate, []any{obj, nil},
+		[]string{clase, "Landroid/os/Bundle;"}); err != nil {
+		return err
+	}
+	// el layout ya se sabe (lo dijo `setContentView`): sus `android:onClick` se enlazan aquí, como
+	// haría el inflado, antes de que la app lea nada en `onStart` o `onResume`
+	if preparar != nil && (!exigirLayout || m.layoutID != 0) {
+		preparar(m)
+	}
+	if m.pendiente == "" && !m.terminada {
+		if err := m.cicloDe("onStart", "()V"); err != nil {
+			return err
+		}
+		if err := m.cicloDe("onResume", "()V"); err != nil {
+			return err
+		}
+		m.arrancada = true
+	}
+	return nil
+}
+
+// cicloDe llama a un método del ciclo de vida si la actividad lo declara. No lo inventa: si no está
+// en el dex, no se anota ni se ejecuta.
+func (m *maquinaDalvik) cicloDe(nombre, proto string) error {
+	if m.actividad == nil {
+		return nil
+	}
+	met := m.buscaMetodo(m.actividad.clase, nombre, proto)
+	if met == nil {
+		return nil
+	}
+	m.anotaCiclo(nombre)
+	if _, err := m.ejecutaCuerpo(m.actividad.clase, met, []any{m.actividad}, []string{m.actividad.clase}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (m *maquinaDalvik) anotaCiclo(nombre string) {
+	clase := ""
+	if m.actividad != nil {
+		clase = claseCorta(m.actividad.clase) + "."
+	}
+	m.ciclo = append(m.ciclo, clase+nombre)
+	if m.registro != nil {
+		*m.registro = append(*m.registro, clase+nombre)
+	}
+}
+
+// pausa deja la actividad cubierta por otra: `onPause` y `onStop`, si los declara.
+func (m *maquinaDalvik) pausa() {
+	if !m.arrancada {
+		return
+	}
+	if err := m.cicloDe("onPause", "()V"); err != nil {
+		m.avisa("onPause de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
+	if err := m.cicloDe("onStop", "()V"); err != nil {
+		m.avisa("onStop de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
+	m.arrancada = false
+}
+
+// reanuda vuelve a poner delante una actividad que estaba cubierta: `onRestart`, `onStart` y
+// `onResume`, si los declara.
+func (m *maquinaDalvik) reanuda() {
+	if m.actividad == nil || m.arrancada {
+		return
+	}
+	if err := m.cicloDe("onRestart", "()V"); err != nil {
+		m.avisa("onRestart de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
+	if err := m.cicloDe("onStart", "()V"); err != nil {
+		m.avisa("onStart de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
+	if err := m.cicloDe("onResume", "()V"); err != nil {
+		m.avisa("onResume de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
+	m.arrancada = true
+}
+
+// cierra una actividad que se va: `onPause`/`onStop` si estaba delante y `onDestroy` siempre.
+func (m *maquinaDalvik) cierra() {
+	if m.actividad == nil {
+		return
+	}
+	if m.arrancada {
+		if err := m.cicloDe("onPause", "()V"); err != nil {
+			m.avisa("onPause de %s falló: %v", claseCorta(m.actividad.clase), err)
+		}
+		if err := m.cicloDe("onStop", "()V"); err != nil {
+			m.avisa("onStop de %s falló: %v", claseCorta(m.actividad.clase), err)
+		}
+		m.arrancada = false
+	}
+	if err := m.cicloDe("onDestroy", "()V"); err != nil {
+		m.avisa("onDestroy de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
 }
 
 // oyentesDeVista resume los listeners registrados con un id de recurso, sin repetir: es la lista con
@@ -1690,12 +1942,51 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	obj, _ := receptor.(*objetoDalvik)
 
 	switch nombre {
+	case "startActivity":
+		if len(vals) == 1 && obj != nil && obj == m.actividad {
+			if o, ok := vals[0].(*objetoDalvik); ok && o.clase == "Landroid/content/Intent;" && o.intentClase != "" {
+				m.pendiente = o.intentClase
+				m.intentoSaliente = o
+				return nil, true, nil
+			}
+			return m.rechaza(nombre, proto,
+				"solo se emula un Intent de clase propia, `new Intent(this, Otra.class)`", "")
+		}
+	case "startActivityForResult":
+		if obj != nil && obj == m.actividad {
+			return m.rechaza(nombre, proto,
+				"startActivityForResult no está en el subconjunto: usa startActivity", "")
+		}
+	case "finish":
+		if len(vals) == 0 && obj != nil && obj == m.actividad {
+			m.terminada = true
+			return nil, true, nil
+		}
+	case "getIntent":
+		if len(vals) == 0 && obj != nil && obj == m.actividad {
+			if m.intent != nil {
+				return m.intent, true, nil
+			}
+			return &objetoDalvik{clase: "Landroid/content/Intent;", campos: map[string]any{}}, true, nil
+		}
+	case "setClass":
+		if len(vals) == 2 && es("Landroid/content/Intent;") && obj != nil {
+			obj.intentClase = claseDeLiteral(vals[1])
+			return obj, true, nil
+		}
 	case "<init>":
 		// el constructor de una clase del framework (Activity, Object, la vista que sea): no hay
 		// cuerpo que ejecutar y no hay nada que capturar. La excepción es `StringBuilder(String)`,
 		// que javac usa con el primer trozo ya dentro (`new StringBuilder("Pulsos: ")`): sin esto,
 		// el `+` de javac salía sin su parte literal y el texto se quedaba en el número (medido:
 		// «1»). Solo esa forma: `StringBuilder(int)` es la CAPACIDAD, no contenido.
+		//
+		// `Intent(Context, Class)` guarda el destino: es lo único que `startActivity` necesita para
+		// abrir una actividad propia, y el literal `X.class` llega como objeto de `java.lang.Class`.
+		if obj != nil && es("Landroid/content/Intent;") &&
+			proto == "(Landroid/content/Context;Ljava/lang/Class;)V" && len(vals) == 2 {
+			obj.intentClase = claseDeLiteral(vals[1])
+		}
 		if obj != nil && proto == "(Ljava/lang/String;)V" && es("Ljava/lang/StringBuilder;") {
 			obj.cadena = &strings.Builder{}
 			obj.cadena.WriteString(textoDe(vals[0]))

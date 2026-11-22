@@ -9259,3 +9259,50 @@ anterior.
 **Frontera**: este párrafo no afirma CI verde aparte del run real citado, ni render fiel, ni
 paridad con ART en dispositivo; el incremental queda con I1/I2 hechas e I3 hecha en parte, I4 e I5
 pendientes.
+
+## 205. E1 del plan de emulación: ciclo de vida y navegación entre actividades propias
+
+Medido el 2026-11-22 sobre el worktree `plan-emulacion` (rama de trabajo, sin publicar), con el
+`android.jar` de `/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar`. Cambia el
+intérprete de la vista previa, no el compilador: `apkc/previewinterprete.go` ejecuta `onStart` y
+`onResume` después de `onCreate`, llama a `onPause`/`onStop` al cubrir una actividad y a
+`onRestart`/`onStart`/`onResume` al volver, y emula `Intent(Context, Class)`, `startActivity` y
+`finish()` con una pila de actividades en memoria. Cada actividad conserva su máquina mientras está
+cubierta: volver con `finish()` no repite su `onCreate`. Solo se abre una actividad que el
+manifiesto declara; fuera de ahí queda un aviso y no se cambia de pantalla. El modelo publica
+`ejecucion.pantallas` (recorrido, con la actual al final) y `ejecucion.ciclo` (métodos de ciclo de
+vida en orden real). La pestaña no necesita código nuevo: el clic reejecuta la lista completa de
+`--pulsar`, como ya hacía.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  go test -count=1 -run 'TestElPreviewNavegaEntreActividadesPropias|TestElPreviewNoAbreUnaActividadNoDeclarada' -v .
+```
+
+**Resultado**: las dos pruebas `PASS` (0,04 s y 0,02 s). La primera recorre un APK de dos
+actividades: sin clics se ve `res/layout/main.xml`; con `--pulsar id/abrir` se ve
+`res/layout/segunda.xml` y la actividad pasa a `com.hola.navega.SegundaActivity`; con
+`--pulsar id/abrir --pulsar id/volver` vuelve al `main` con el texto en «Pulsos: 1», no en el
+«Pulsos: 0» del layout, y el ciclo exacto es `Main.onCreate, onStart, onResume, onPause, onStop,
+Segunda.onCreate, onStart, onResume, onPause, onStop, onDestroy, Main.onRestart, onStart, onResume`.
+La segunda prueba deja la segunda actividad fuera del manifiesto: el `startActivity` deja el aviso
+«no está declarada en el manifiesto», conserva el layout `main` y el recorrido de una sola pantalla.
+
+```sh
+APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar sh tools/entorno.sh test
+APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar sh tools/entorno.sh wasm
+HOME_APKC_WEB=/home/leonisauro STUDIO_NAV_PORT=9289 STUDIO_SERVIDOR_PORT=9291 \
+  STUDIO_PORT=9445 STUDIO_CREAR_PORT=9292 STUDIO_CREAR_CDP=9446 sh tools/entorno.sh gate
+```
+
+**Resultado**: suite nativa `ok github.com/ajinasokan/apkc 57.626s`; suite wasm `PASS` con 274
+ficheros en la memoria simulada; gate `crear: todo en orden (35 comprobaciones)`,
+`pestaña: 204 comprobaciones` y `e2e: todo en orden`, sin «sin chromium» ni «sin APKC_WASM».
+`apkc/previewnavega_test.go` es la prueba de aceptación.
+
+**Fronteras de este `§`.** (1) `Intent` implícito, `startActivityForResult`, `launchMode`,
+`singleTop` y las transiciones animadas quedan fuera: el primero se rechaza por nombre y los demás
+no se emulan. (2) `finish()` desde la única actividad deja un aviso y conserva la pantalla; no se
+simula el cierre del proceso. (3) Sigue fuera ejecutar métodos con tabla de excepciones
+(`triesSize > 0`), porque el intérprete no la corre. (4) El sitio publicado no se ha empaquetado con
+este cambio: `tools/entorno.sh sitio` y `surge . publish` siguen pendientes.

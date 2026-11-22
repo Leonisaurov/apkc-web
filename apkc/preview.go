@@ -305,15 +305,21 @@ func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulso
 	// Fase 2: la actividad se ejecuta antes de elegir el layout, porque el `setContentView` dice cuál
 	// es. Si no hay classes.dex o el dex no se deja ejecutar, el modelo de la Fase 1 sigue saliendo.
 	var layoutID uint32
+	declaradas := actividadesDeclaradas(arbolManifiesto, ctxManifiesto)
 	if ejecutar {
 		if dexBytes, err := entradaDeZip(zr, "classes.dex"); err == nil {
 			if d, err := readDex(dexBytes); err == nil {
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
 				var errPulsos error
-				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreatePreparando(d, tabla, preferida, pulsos,
-					func(m *maquinaDalvik) { preparaVistasDelLayout(m, zr, tabla, layout) })
+				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreateNavegando(d, tabla, preferida, pulsos,
+					func(m *maquinaDalvik) { preparaVistasDelLayout(m, zr, tabla, layout) }, declaradas)
 				if errPulsos != nil {
 					return nil, errPulsos
+				}
+				// la pantalla que se pinta es la que quedó delante tras la navegación, no la lanzadora
+				if modelo.Ejecucion != nil && len(modelo.Ejecucion.Pantallas) > 1 &&
+					modelo.Ejecucion.Actividad != "" {
+					modelo.Actividad = modelo.Ejecucion.Actividad
 				}
 				// un dex mal formado no se ejecuta a medias ni se tapa con un modelo que parecería
 				// medido: el comando lo rechaza. Una API fuera del subconjunto, en cambio, solo deja
@@ -623,6 +629,28 @@ func actividadLanzadora(arbol *elementoLeido, ctx *contextoVista) (*elementoLeid
 		return primera, true
 	}
 	return nil, false
+}
+
+// actividadesDeclaradas recoge los `android:name` de cada `<activity>` del manifiesto, ya como
+// descriptor de type_id. `startActivity` solo puede abrir una de estas, como en el aparato.
+func actividadesDeclaradas(arbol *elementoLeido, ctx *contextoVista) map[string]bool {
+	declaradas := map[string]bool{}
+	app := arbol.hijo("application")
+	if app == nil {
+		return declaradas
+	}
+	paquete := ctx.textoDeAtributo(arbol, "", "package")
+	for _, h := range app.hijos {
+		if h.nombre != "activity" && h.nombre != "activity-alias" {
+			continue
+		}
+		nombre := ctx.textoDeAtributo(h, uriDeRecursos, "name")
+		if nombre == "" {
+			continue
+		}
+		declaradas[descriptorDeActividad(paquete, nombre)] = true
+	}
+	return declaradas
 }
 
 func esLanzadora(actividad *elementoLeido, ctx *contextoVista) bool {
