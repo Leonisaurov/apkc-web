@@ -167,7 +167,7 @@ func TestPorteroDelCompilerNombraLoQueNoMide(t *testing.T) {
 		}, false, "dependencias"},
 		{"bundle pedido", func(_ *testing.T, raiz string) {
 			pon(t, raiz, "src/p/A.java", "package p;\npublic class A {}\n")
-		}, true, "bundles"},
+		}, true, ""},
 		{"proyecto medido", func(_ *testing.T, raiz string) {
 			pon(t, raiz, "src/p/A.java", "package p;\npublic class A {}\n")
 		}, false, ""},

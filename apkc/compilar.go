@@ -142,9 +142,8 @@ func revisarCompilerGo(o buildOpts) error {
 	if jars := allJars(); len(jars) > 0 {
 		return fmt.Errorf("--compiler go no dexa dependencias: hay %d jars en jar/ y eso lo hace d8", len(jars))
 	}
-	if o.useAAB {
-		return fmt.Errorf("--compiler go no escribe bundles: d8 es quien produce el .aar de las dependencias")
-	}
+	// El bundle ya no depende de d8: aab_go.go convierte el arsc del enlazador y el dex de
+	// este compilador en resources.pb y en el XmlNode del manifiesto (§186).
 	return nil
 }
 

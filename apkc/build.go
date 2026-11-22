@@ -239,7 +239,9 @@ func _build(o buildOpts) {
 	// an intermediate deleted by hand must be produced again, no matter what
 	// the timestamps say about the inputs
 	linkedFile := filepath.Join("build", "resources.arsc")
-	if o.useAAB {
+	// El enlazador Go escribe arsc aunque el destino sea un bundle: el ensamblador de
+	// aab_go.go convierte ese arsc a resources.pb, así que no hay resources.pb que esperar.
+	if o.useAAB && o.linker != linkerGo {
 		linkedFile = filepath.Join("build", "resources.pb")
 	}
 	resMissing := !exists(linkedFile)
@@ -367,9 +369,9 @@ func _build(o buildOpts) {
 		// has no intermediate to miss: asking for it there repackaged every idle round
 		(o.signer != signerGo && !exists(filepath.Join("build", "bundle.zip")))
 	if needBundle {
-		if o.signer == signerGo && !o.useAAB {
-			// the package is written below, from the same plan: a bundle.zip that
-			// only exists to be read back and moved by zipalign would be wasted work
+		if o.signer == signerGo {
+			// El firmante Go empaqueta desde el plan (apk) o convierte el arsc del enlazador
+			// Go (aab_go.go); en los dos casos un bundle.zip intermedio sería trabajo perdido.
 		} else {
 			buildBundle(o.useAAB, depDexes, auxDigests, libs)
 		}
@@ -571,8 +573,8 @@ func compileRes(incremental bool, linker string) bool {
 func bundleRes(o buildOpts, incremental bool) bool {
 	defer timeIt("aapt2 link")()
 	if o.linker == linkerGo {
-		if o.useAAB {
-			LogF("build", "--linker go cannot write a bundle: aapt2 link --proto-format produces resources.pb, and this linker does not")
+		if o.useAAB && o.signer != signerGo {
+			LogF("build", "--linker go --aab necesita --signer=go: el bundle se ensambla desde el arsc, no desde resources.pb de aapt2")
 		}
 		opts, err := opcionesDelProyecto(androidJar, o.sdkVersion, o.codename)
 		if err != nil {
