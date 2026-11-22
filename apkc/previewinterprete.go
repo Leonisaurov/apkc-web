@@ -294,15 +294,25 @@ type maquinaDalvik struct {
 	oyentes     []oyenteRegistrado
 	interaccion int
 	profundidad int
+	// la instancia de la actividad que corre `onCreate`: es el receptor de un `android:onClick`
+	// declarado en el layout, que el framework resuelve contra el contexto de la vista
+	actividad *objetoDalvik
+	// las vistas que `findViewById` ya devolvió, por id: un `android:onClick` recibe la misma
+	// instancia que la app tocó, no una copia con el id puesto
+	vistas map[uint32]*objetoDalvik
 }
 
 type oyenteRegistrado struct {
 	oyente any
 	vista  any
+	// `metodo` solo lo llevan los oyentes declarativos (`android:onClick="sumar"`): el nombre del
+	// método a llamar en `oyente`. Un `setOnClickListener` lo deja vacío y se usa `onClick`.
+	metodo string
 }
 
 func nuevaMaquina(p *programaDalvik, tabla *tablaRecursos) *maquinaDalvik {
-	return &maquinaDalvik{prog: p, tabla: tabla, vistos: map[string]bool{}}
+	return &maquinaDalvik{prog: p, tabla: tabla, vistos: map[string]bool{},
+		vistas: map[uint32]*objetoDalvik{}}
 }
 
 func (m *maquinaDalvik) avisa(formato string, args ...any) {
@@ -405,6 +415,15 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 // resultado es solo para la lista de clics (un id que no existe o una vista sin listener): la app
 // ejecutada a medias no se devuelve como si fuera una pantalla buena.
 func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string) (*resultadoEjecucion, uint32, error) {
+	return ejecutaOnCreatePreparando(d, tabla, actividad, pulsos, nil)
+}
+
+// ejecutaOnCreatePreparando es el mismo arranque con un gancho entre `onCreate` y los clics. Lo usa
+// `apkc preview` para registrar los oyentes declarativos del layout (`android:onClick`): el
+// framework los enlaza al inflar, es decir, después de que la app pida su `setContentView` y antes
+// de que llegue ningún toque.
+func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string,
+	preparar func(m *maquinaDalvik)) (*resultadoEjecucion, uint32, error) {
 	res := &resultadoEjecucion{Metodo: "onCreate"}
 	prog, err := cargaPrograma(d)
 	if err != nil {
@@ -421,6 +440,7 @@ func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string
 
 	cl := prog.clases[clase]
 	obj := &objetoDalvik{clase: clase, campos: map[string]any{}}
+	m.actividad = obj
 	if ctor := cl.metodos["<init>()V"]; ctor != nil {
 		if _, err := m.ejecutaCuerpo(clase, ctor, []any{obj}, []string{clase}); err != nil {
 			res.falla(err)
@@ -444,6 +464,12 @@ func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string
 			[]string{clase, "Landroid/os/Bundle;"}); err != nil {
 			res.falla(err)
 		}
+	}
+
+	// el layout ya se sabe (lo dijo `setContentView`): sus `android:onClick` se enlazan aquí, como
+	// haría el inflado, antes de entregar ningún clic
+	if preparar != nil && res.Error == "" {
+		preparar(m)
 	}
 
 	// los clics pedidos, en orden y solo si la app llegó viva a este punto. El estado que ve cada
@@ -563,9 +589,13 @@ func (m *maquinaDalvik) pulsa(id uint32) bool {
 			m.avisa("el listener de %#08x no es un objeto del dex", id)
 			return true
 		}
-		met := m.buscaMetodo(obj.clase, "onClick", "(Landroid/view/View;)V")
+		nombre := "onClick"
+		if reg.metodo != "" {
+			nombre = reg.metodo
+		}
+		met := m.buscaMetodo(obj.clase, nombre, "(Landroid/view/View;)V")
 		if met == nil {
-			m.avisa("%s se registró como listener y no tiene onClick", claseCorta(obj.clase))
+			m.avisa("%s se registró como listener y no tiene %s", claseCorta(obj.clase), nombre)
 			return true
 		}
 		m.interaccion++
@@ -576,6 +606,29 @@ func (m *maquinaDalvik) pulsa(id uint32) bool {
 		return true
 	}
 	return false
+}
+
+// registraOnClickDeclarativo enlaza el `android:onClick="sumar"` del layout, como hace el inflado
+// del framework: el receptor es la actividad (el contexto de la vista) y el método se busca por
+// nombre con la firma `(View)V`. Devuelve el motivo cuando no se puede enlazar, y "" cuando sí.
+func (m *maquinaDalvik) registraOnClickDeclarativo(id uint32, nombre string) string {
+	if m.actividad == nil {
+		return fmt.Sprintf("android:onClick=%q no tiene actividad donde buscar el método", nombre)
+	}
+	if m.buscaMetodo(m.actividad.clase, nombre, "(Landroid/view/View;)V") == nil {
+		return fmt.Sprintf("android:onClick=%q y %s no tiene %s(View)", nombre,
+			claseCorta(m.actividad.clase), nombre)
+	}
+	vista := m.vistas[id]
+	if vista == nil {
+		vista = &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{}, id: id}
+		if m.vistas == nil {
+			m.vistas = map[uint32]*objetoDalvik{}
+		}
+		m.vistas[id] = vista
+	}
+	m.oyentes = append(m.oyentes, oyenteRegistrado{oyente: m.actividad, vista: vista, metodo: nombre})
+	return ""
 }
 
 // eligeClaseLanzadora busca a quién ejecutar: primero la actividad del manifiesto si tiene un punto
@@ -1560,8 +1613,18 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			if err != nil {
 				return nil, true, err
 			}
-			return &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{},
-				id: uint32(id)}, true, nil
+			if vista := m.vistas[uint32(id)]; vista != nil {
+				return vista, true, nil
+			}
+			vista := &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{},
+				id: uint32(id)}
+			if m.vistas == nil {
+				m.vistas = map[uint32]*objetoDalvik{}
+			}
+			if id != 0 {
+				m.vistas[uint32(id)] = vista
+			}
+			return vista, true, nil
 		}
 	case "setOnClickListener":
 		if len(vals) == 1 {

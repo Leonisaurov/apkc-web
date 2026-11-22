@@ -185,7 +185,8 @@ Read one apk and print, as one line of JSON on stdout, the model of its first sc
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
 default) unless the app's onCreate calls setContentView with a resource id, which the Dalvik
 interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and stops
-there: it does NOT click anything on its own. Each --pulsar id runs the OnClickListener registered
+there: it does NOT click anything on its own. An android:onClick="metodo" declared in the layout is
+bound before any click, as the framework does on inflate, so --pulsar reaches it. Each --pulsar id runs the OnClickListener registered
 on that view, in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal); the
 text the app writes (TextView.setText) comes back in ejecucion.capturas and in each node's
 textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.consola. Repeating the
@@ -309,7 +310,8 @@ func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulso
 			if d, err := readDex(dexBytes); err == nil {
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
 				var errPulsos error
-				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreateConPulsos(d, tabla, preferida, pulsos)
+				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreatePreparando(d, tabla, preferida, pulsos,
+					func(m *maquinaDalvik) { enlazaOnClicksDelLayout(m, zr, tabla, layout) })
 				if errPulsos != nil {
 					return nil, errPulsos
 				}
@@ -370,6 +372,60 @@ func descriptorDeActividad(paquete, nombre string) string {
 		nombre = paquete + "." + nombre
 	}
 	return "L" + strings.ReplaceAll(nombre, ".", "/") + ";"
+}
+
+// enlazaOnClicksDelLayout recorre el layout que la app pidió con `setContentView` y registra cada
+// `android:onClick`: el inflado del framework resuelve el nombre contra el contexto de la vista (la
+// actividad) y deja el listener puesto. Sin esto, una app que declara el clic en el XML —el patrón
+// de los contadores de tutorial, `android:onClick="sumar"`— se ejecutaba con `oyentes` vacío y el
+// emulador no tenía a quién pulsar, aunque la app funcionara en el aparato.
+func enlazaOnClicksDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecursos, layout string) {
+	if m == nil {
+		return
+	}
+	ruta, err := rutaDelLayoutDeLaActividad(tabla, zr, layout, m.layoutID)
+	if err != nil {
+		return
+	}
+	datos, err := entradaDeZip(zr, ruta)
+	if err != nil {
+		return
+	}
+	axml, err := leeAXML(datos)
+	if err != nil {
+		return
+	}
+	ctx := &contextoVista{axml: axml, tabla: tabla}
+	raiz, err := ctx.arbol()
+	if err != nil {
+		return
+	}
+	var recorre func(*elementoLeido)
+	recorre = func(e *elementoLeido) {
+		// los hijos primero: el orden en que se enlazan no cambia el resultado, pero deja el registro
+		// con las vistas de dentro antes que su contenedor, como las recorre el inflado
+		for _, h := range e.hijos {
+			recorre(h)
+		}
+		valor, ok := e.atributo(uriDeRecursos, "onClick")
+		if !ok {
+			return
+		}
+		metodo := strings.TrimSpace(ctx.texto(valor))
+		if metodo == "" {
+			return
+		}
+		id, ok := e.atributo(uriDeRecursos, "id")
+		if !ok || id.datos == 0 {
+			m.avisa("android:onClick=%q en un %s sin android:id: un clic no puede llegar a una vista sin id",
+				metodo, e.nombre)
+			return
+		}
+		if motivo := m.registraOnClickDeclarativo(id.datos, metodo); motivo != "" {
+			m.avisa("%s", motivo)
+		}
+	}
+	recorre(raiz)
 }
 
 // anotaTextoDinamico copia a cada nodo la última escritura que el intérprete capturó sobre su id.
