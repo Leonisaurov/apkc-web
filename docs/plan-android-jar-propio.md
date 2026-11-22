@@ -1,9 +1,10 @@
 # Plan: un `android.jar` propio para la pestaña
 
-Estado: investigación cerrada y plan propuesto (2026-11-22). No hay código de
-generador todavía: este documento fija qué se midió, qué se puede redistribuir,
-qué falta y con qué comando se comprobará. El trabajo de implementación empieza
-en J2.
+Estado: generador implementado y validado en local (2026-11-22). El workflow de
+GitHub Actions está escrito y su YAML está validado con PyYAML, pero **no se ha
+ejecutado en GitHub**: no se afirma que el job esté verde. Este documento
+conserva la investigación, añade el resultado real de J2 y J3 y deja J4 y J5
+como fases de CI y de sitio.
 
 ## Resumen ejecutivo
 
@@ -27,16 +28,69 @@ Lo medido en local:
   ese subconjunto, `apkc compile` deja los mismos `.class` y `apkc build
   --linker go --compiler go` deja el mismo `classes.dex` y el mismo
   `resources.arsc` que con el jar completo.
-- El jar de solo esas 15 clases pesa **65.028 bytes** comprimido (271.437 bytes
-  descomprimidos), frente a 26,36 MB del jar de la SDK.
-- El `resources.arsc` es el 62 % del jar (16.390.624 bytes) y es lo único que
-  `apkc/marco.go` necesita para los ids del framework. Un `resources.arsc`
-  sintético solo de atributos mide **177.224 bytes**; la tabla pública completa
-  (17 tipos, 2.925 entradas) aún no se enlazó.
+- El jar generado con esas 15 clases y la tabla de recursos completa pesa
+  **111.607 bytes**; el jar completo, con las 4.873 clases públicas y la misma
+  tabla, pesa **2.810.522 bytes**. El jar de solo las clases (sin recursos)
+  medía 65.028 bytes; con la tabla de recursos (301.784 bytes) el jar mínimo
+  comprimido pasa a 111.607 bytes.
+- El `resources.arsc` es el 62 % del jar de la SDK (16.390.624 bytes) y es lo
+  único que `apkc/marco.go` necesita para los ids del framework. La tabla
+  propia completa mide **301.784 bytes**, con 3.758 recursos y 1.897 atributos,
+  y reproduce los 28 ids de §33.
 - Los ids públicos se pueden reconstruir desde `public-final.xml`: **2.924 de
   2.926** ids comprobados coinciden con los del jar de la SDK. Discrepa un
   string de producto (`string/safety_protection_display_text`) y falta uno en
   el volcado.
+
+## 0. Resultado de la implementación (2026-11-22)
+
+El generador está en `tools/androidjar/` (módulo Go propio, sin dependencias) y
+el workflow en `.github/workflows/android-jar.yml`. No se ha tocado `apkc/` ni
+`studio/`.
+
+Lo que se generó y se midió en local, con la etiqueta `android-14.0.0_r75`:
+
+```sh
+go -C tools/androidjar run . \
+  -in /tmp/androidjar-propio/aosp -out dist/full -api 34 \
+  -tag android-14.0.0_r75 \
+  -notice /tmp/androidjar-propio/aosp/NOTICE \
+  -license tools/androidjar/LICENSE
+
+go -C tools/androidjar run . \
+  -in /tmp/androidjar-propio/aosp -out dist/min -api 34 \
+  -tag android-14.0.0_r75 \
+  -notice /tmp/androidjar-propio/aosp/NOTICE \
+  -license tools/androidjar/LICENSE \
+  -only 'android.app.Activity,android.content.Context,android.content.ContextWrapper,android.os.Bundle,android.view.ContextThemeWrapper,android.view.Menu,android.view.MenuItem,android.view.MenuItem.OnMenuItemClickListener,android.view.View,android.view.View.OnClickListener,android.widget.TextView,android.widget.Toast,java.lang.CharSequence,java.lang.Object,java.lang.String'
+```
+
+| Jar | Clases | Recursos | `resources.arsc` | Tamaño | SHA-256 |
+| --- | --- | --- | --- | --- | --- |
+| completo | 4.873 | 3.758 | 301.784 B | 2.810.522 B | `9103b3aa7a301325a6bd78d0b05f9640b82ff345af185adbf1f68bc8a3097186` |
+| mínimo | 15 | 3.758 | 301.784 B | 111.607 B | `5d69f0bf7c833c0229cf07391a0cc1ce48029496d32d5b5ba2964fce6e76ac40` |
+
+El jar completo no contiene `res/` ni `NOTICES/` de la SDK: solo clases
+generadas, `resources.arsc`, `NOTICE`, `LICENSE` y (en el directorio de salida)
+`PROCEDENCIA.md`.
+
+Validación local, con las cinco plantillas del studio en un proyecto de
+prueba:
+
+- `apkc compile --android-jar android-stub-34.jar` deja los mismos `.class` que
+  el jar de la SDK: `diff -r` sin salida.
+- `apkc build --linker go --compiler go` deja `build/resources.arsc` con SHA-256
+  `bb0d10a345812e456330a42c4d0eff1983bce55d71bb9f9d831255cd5c5536d0` y
+  `build/classes.dex` con
+  `966b43c7394fbba0012304e067e1359935c6cfee7dc741d942a71fbebb99bd92`.
+  Los dos coinciden con el build hecho contra el jar de la SDK.
+- `HOME=… go test -C apkc -run TestMarco` pasa con el jar generado:
+  `TestMarcoDelAndroidJar`, `TestMarcoRechaza` y `TestMarcoValoresDeAtributo`.
+
+**Lo que no se ha verificado**: el workflow no se ha lanzado en GitHub. El YAML
+se validó con `python3 -c 'import yaml; yaml.safe_load(...)'`, que comprueba
+sintaxis, no que los jobs pasen. J4 sigue pendiente hasta que un run real esté
+en verde.
 
 ## 1. Qué contiene el jar que consume la pestaña
 
@@ -185,7 +239,8 @@ está en el árbol de fullsdk y arrastra la licencia de la SDK. No se usa.
 
 | Fuente | URL | Licencia | Qué aporta |
 | --- | --- | --- | --- |
-| `frameworks/base/core/api/current.txt` | `https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-14.0.0_r75/core/api/current.txt?format=TEXT` | Apache-2.0 (NOTICE del repo) | firmas de la API pública, constantes incluidas |
+| `frameworks/base/core/api/current.txt` | `https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-14.0.0_r75/core/api/current.txt?format=TEXT` | Apache-2.0 (NOTICE del repo) | firmas de la API pública de `android.*`, constantes incluidas |
+| `libcore/api/current.txt` | `https://android.googlesource.com/platform/libcore/+/refs/tags/android-14.0.0_r75/api/current.txt?format=TEXT` | Apache-2.0 (NOTICE de `libcore`) | `java.*`, `javax.*` y `org.*`; sin esto no se resuelven `String`, `Object` ni `CharSequence` |
 | `core/res/res/values/public-final.xml` | misma etiqueta, `.../core/res/res/values/public-final.xml` | Apache-2.0 (NOTICE de `frameworks/base`) | nombres e ids públicos de recursos |
 | `core/res/res/values/attrs.xml` | misma etiqueta | Apache-2.0 (cabecera del propio fichero) | formatos, enums y flags de los atributos |
 | `core/res/res/values/attrs_manifest.xml` | misma etiqueta | Apache-2.0 (misma árbol) | atributos del manifiesto |
@@ -199,6 +254,10 @@ Cifras medidas de esas fuentes:
 
 - `current.txt`: **4.374.046 bytes**, **62.527 líneas**, 139 paquetes, 18.071
   campos `static final` y 17.857 métodos. Cabecera `// Signature format: 2.0`.
+- `libcore-current.txt`: **1.337.830 bytes**, **22.029 líneas** y 79 paquetes;
+  es la mitad que aporta `java.lang.String`, `java.lang.Object` y
+  `java.lang.CharSequence`. Sin ella, el jar generado no compila ni la
+  plantilla base.
 - `public-final.xml`: **242.391 bytes**, **3.148** etiquetas `<public>`, de las
   cuales 2.941 llevan `id="0x..."` explícito y 207 no. El parseo XML completo
   agrupa **2.925 entradas en 17 tipos**.
@@ -233,6 +292,7 @@ distribuye es un build propio de fuentes Apache-2.0, no el binario de la SDK**.
 | `prebuilts/sdk/**/android.jar` | **No** | su `NOTICE` es la SDK License |
 | `prebuilts/fullsdk/**/android-stubs-src.jar` | **No** | misma licencia de SDK |
 | `current.txt`, `public-final.xml`, `attrs*.xml` de `frameworks/base` | **Sí** | Apache-2.0; conservar `LICENSE` y `NOTICE` |
+| `libcore/api/current.txt` | **Sí** | Apache-2.0; es la fuente de `java.*` |
 | Stubs generados por nosotros desde esos ficheros | **Sí, con condiciones** | obra propia sobre Apache-2.0; incluir aviso de procedencia y NOTICE |
 | `org.robolectric:android-all` | **Sí según su POM** | Apache-2.0 con la nota citada; es un build de AOSP, no el jar de la SDK |
 
@@ -249,10 +309,11 @@ El studio usa el jar para dos cosas distintas y conviene separarlas:
 
 1. **`android-stub-min.jar`**: 15 clases medidas + tabla de recursos pública.
    Es lo que necesita `apkc compile` y `apkc build --linker go` para las
-   plantillas. Tamaño objetivo: 200-500 KB.
-2. **`android-stub-full.jar`**: todas las clases públicas de `current.txt` sin
-   `Code`, para que el autocompletado siga ofreciendo las clases y métodos del
-   framework. Tamaño estimado: 2-5 MB; **HIPÓTESIS**, no medido.
+   plantillas. Medido: **111.607 bytes**.
+2. **`android-stub-full.jar`**: todas las clases públicas de `current.txt` y
+   `libcore-current.txt` sin `Code`, para que el autocompletado siga ofreciendo
+   las clases y métodos del framework. Medido: **2.810.522 bytes** y 4.873
+   clases. Falta probar el autocompletado de la pestaña (J5).
 
 El jar actual de la SDK se sigue aceptando como fichero del usuario para quien
 quiera paridad total. El jar propio pasa a ser el camino por defecto del sitio.
@@ -275,10 +336,13 @@ que lea `current.txt` (formato de firma 2.0) y emita:
 - Anotaciones opcionales. No hacen falta para compilar; se pueden omitir en la
   variante mínima.
 
-Por qué no `javac` directamente: `current.txt` incluye `java.lang.*` y
+Por qué no `javac` directamente: `libcore-current.txt` incluye `java.lang.*` y
 `java.util.*`. Compilar esos stubs con el JDK choca con los paquetes del propio
 JDK y obliga a `--patch-module` o a un `bootclasspath` especial. Un escritor
-propio evita el problema y permite decidir qué metadatos se emiten.
+propio evita el problema y permite decidir qué metadatos se emiten. Por eso el
+generador lee **dos** ficheros: `libcore-current.txt` primero y `current.txt`
+después, compartiendo el mapa de clases para que `CharSequence` se convierta en
+`java/lang/CharSequence`.
 
 Ruta alternativa, más rápida de arrancar: tomar `org.robolectric:android-all`
 (Apache-2.0), filtrar las clases que aparecen en `current.txt` y quitarles el
@@ -320,15 +384,14 @@ recursos públicos y los valores de los atributos. El generador debe:
    `android:attr/theme = 0x01010000`; sin eso, `aapt2` ignora los ids y los
    reasigna en orden.
 
-**HIPÓTESIS**: la tabla completa con los 17 tipos de `public-final.xml` y los
-placeholders de estilos, colores, dimen, strings, drawables, layouts, etc.
-quedará en 250-450 KB. Se comprobará con:
+**HECHO**: el generador escribe la tabla directamente, sin `aapt2`. La tabla
+completa mide **301.784 bytes**, declara 23 nombres de tipo, 3.758 recursos y
+1.897 atributos. La ruta `aapt2` con placeholders quedó como alternativa y no
+es la que usa el código.
 
 ```sh
-aapt2 compile --dir "$TMP/fw/res" -o "$TMP/fw/compiled.zip"
-aapt2 link --manifest "$TMP/fw/AndroidManifest.xml" \
-  -o "$TMP/fw/fw.apk" --stable-ids "$TMP/fw/ids.txt" "$TMP/fw/compiled.zip"
-unzip -p "$TMP/fw/fw.apk" resources.arsc | wc -c
+unzip -p dist/android-stub-34-min.jar resources.arsc | wc -c
+# 301784
 ```
 
 ### 3.4. Contenido y licencia del jar publicado
@@ -374,6 +437,8 @@ generar:
                  core/res/res/values/attrs_manifest.xml; do
           curl -fsSL "$base/$f?format=TEXT" | base64 -d > "$RUNNER_TEMP/aosp/$(basename "$f")"
         done
+        curl -fsSL "https://android.googlesource.com/platform/libcore/+/refs/tags/$AOSP_TAG/api/current.txt?format=TEXT" \
+          | base64 -d > "$RUNNER_TEMP/aosp/libcore-current.txt"
         sha256sum "$RUNNER_TEMP"/aosp/* | tee "$RUNNER_TEMP/aosp/SHA256SUMS"
     - name: Generar el jar
       run: go run ./tools/androidjar -api 34 -in "$RUNNER_TEMP/aosp" -out dist
@@ -498,6 +563,9 @@ Cada fase se cierra con su comando en verde y su párrafo en
   producir el artefacto.
 - Riesgo: `current.txt` no incluye `@hide`; una plantilla que use una API
   oculta dejará de compilar. Es una frontera, no un fallo.
+- **Estado: hecho en local.** El generador está en `tools/androidjar/`, no usa
+  `javac` y produce 4.873 clases. La comparación de las cinco plantillas está
+  en §0.
 
 ### J3. Generador de `resources.arsc`
 
@@ -514,6 +582,8 @@ Cada fase se cierra con su comando en verde y su párrafo en
 - Criterio de rechazo: si la tabla mínima no reproduce los 23 nombres de tipo
   o los 1.545 atributos, se añaden tipos vacíos y se documenta; no se rebaja el
   test.
+- **Estado: hecho en local.** La tabla mide 301.784 bytes, emite 23 tipos,
+  1.897 atributos y `TestMarco` pasa. Ver §0.
 
 ### J4. Workflow y artifact
 
@@ -523,6 +593,8 @@ Cada fase se cierra con su comando en verde y su párrafo en
   `sha256sum -c`.
 - Criterio de rechazo: un workflow escrito no es un workflow verde. Si el job
   no pasa, la fase sigue pendiente.
+- **Estado: workflow escrito y YAML validado con PyYAML; no ejecutado en
+  GitHub.** No se afirma que esté verde.
 
 ### J5. Consumo desde el sitio
 
@@ -565,28 +637,28 @@ Propuesta de entradas:
   de `frameworks/base` es Apache-2.0; cláusula 3.4 citada.
 - **§D. Ids desde `public-final.xml`**: 2.924 de 2.926; la discrepancia de
   `string/safety_protection_display_text`.
-- **§E. Tabla de recursos sintética**: 177.224 B solo de atributos; estado de
-  la tabla completa.
+- **§E. Tabla de recursos propia**: 301.784 B, 3.758 recursos, 1.897
+  atributos, 23 tipos; `TestMarco` en verde.
 - **§F. Workflow**: salida del job `generar` y `verificar`, hash del artifact.
+  Pendiente de un run real en GitHub.
 
 ## 9. Hipótesis y preguntas abiertas
 
-Se marcan como **HIPÓTESIS**; cada una lleva el comando que la comprobará.
+Se distingue lo **HECHO** de lo que sigue siendo **HIPÓTESIS**; cada hipótesis
+lleva el comando que la comprobará.
 
-1. **HIPÓTESIS**: el generador de clases desde `current.txt` produce las 15
-   clases con descriptores equivalentes a los de la SDK.
-   Comprobación: `diff -r out-min out-full` sobre las cinco plantillas.
-2. **HIPÓTESIS**: el generador de `resources.arsc` completo queda en 250-450 KB
-   y reproduce los 28 ids de §33.
-   Comprobación: `unzip -p android-stub-34-min.jar resources.arsc | wc -c` y
-   `HOME=… go test -run TestMarco`.
-3. **HIPÓTESIS**: `android-stub-full.jar` (todas las clases públicas sin
-   `Code`) pesa 2-5 MB y conserva el autocompletado.
-   Comprobación: `unzip -l` del jar y `studio/prueba-pestana.js`, apartado de
-   autocompletado.
-4. **HIPÓTESIS**: los 23 nombres de tipo se pueden emitir aunque
-   `public-final.xml` solo tenga 17, sin romper `marco`.
-   Comprobación: `TestMarcoDelAndroidJar` con el jar generado.
+1. **HECHO**: el generador de clases desde `current.txt` + `libcore-current.txt`
+   produce las 15 clases con los mismos `.class` que la SDK en las cinco
+   plantillas. Comando: `diff -r out-min out-sdk` sin salida.
+2. **HECHO**: el `resources.arsc` propio mide 301.784 bytes y reproduce los 28
+   ids de §33; `TestMarco` pasa. Comando:
+   `unzip -p android-stub-34-min.jar resources.arsc | wc -c` y
+   `HOME=… go test -C apkc -run TestMarco`.
+3. **HECHO**: el jar completo pesa 2.810.522 bytes. Lo que **no** se ha
+   probado es el autocompletado de la pestaña con él: eso es J5.
+   Comando pendiente: `studio/prueba-pestana.js`, apartado de autocompletado.
+4. **HECHO**: los 23 nombres de tipo se emiten aunque `public-final.xml` solo
+   tenga 17; `TestMarcoDelAndroidJar` pasa con el jar generado.
 5. **HIPÓTESIS**: Metalava en modo `TextCodebase` genera stubs utilizables.
    Está marcado como experimental en su propio código. Comprobación:
    `metalava --stubs … current.txt` y `javac` de los `.java`.
@@ -603,21 +675,19 @@ Se marcan como **HIPÓTESIS**; cada una lleva el comando que la comprobará.
 
 ## 10. Anexo: reproducible
 
-Los artefactos de medición están en `/tmp/opencode/`:
+Los artefactos de medición viven en `/tmp/androidjar-propio/` (la sesión
+anterior usó `/tmp/opencode/`, que se limpió):
 
-- `apkc-jar`: binario de `apkc` compilado desde `apkc/`.
-- `jarprobe/`: extracción del `android.jar` de API 34.
-- `classstat.py`: lector de `Code`/stubs.
-- `closure.py` y `closure2.py`: bucles que descubren las clases necesarias.
-- `classes15.jar`: las 15 clases comprimidas.
-- `sub.jar`: 15 clases + `resources.arsc` completo.
-- `proj/` y `proj2/`: proyectos de prueba de la plantilla base y de las cinco
-  plantillas.
-- `fw/`: recursos sintéticos, `ids.txt`, `fw3.apk` y su `resources.arsc` de
-  177.224 B.
-- `current-api34.txt`, `public-final-api34.xml`, `attrs-api34.xml`,
-  `attrs-manifest-api34.xml`: fuentes Apache-2.0 descargadas de la etiqueta
+- `aosp/`: `current.txt`, `libcore-current.txt`, `public-final.xml`,
+  `attrs.xml`, `attrs_manifest.xml` y `NOTICE`, de la etiqueta
   `android-14.0.0_r75`.
+- `apkc`: binario de `apkc` compilado desde `apkc/`.
+- `proj-base/` y `proj-five/`: proyectos de prueba de la plantilla base y de
+  las cinco plantillas.
+- `dist-final/full/` y `dist-final/min/`: los dos jars generados, con su
+  `PROCEDENCIA.md`.
+- `out-five-sdk/` y `final-min-classes/`: salidas de `apkc compile` para el
+  `diff -r`.
 
-Nada de esto se versiona: los binarios y las extracciones viven en temporales.
-El repo solo guarda este plan y, cuando toque, el generador y sus tests.
+Nada de esto se versiona: los jars van como artifact de CI, no al repo. El repo
+guarda el generador, sus tests, el workflow y este plan.

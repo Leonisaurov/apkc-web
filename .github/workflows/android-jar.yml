@@ -1,0 +1,185 @@
+name: android-jar
+
+# Genera un android-stub.jar desde fuentes Apache-2.0 de AOSP. No descarga,
+# publica ni usa como base el android.jar de la SDK de Google. La SDK solo se
+# instala en el job de verificación como oráculo, y nunca se sube como artifact.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 6 1 * *'
+  push:
+    paths:
+      - 'tools/androidjar/**'
+      - '.github/workflows/android-jar.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  generar:
+    runs-on: ubuntu-latest
+    env:
+      AOSP_TAG: android-14.0.0_r75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Descargar las fuentes Apache-2.0 de AOSP
+        env:
+          AOSP_TAG: android-14.0.0_r75
+        run: |
+          mkdir -p "$RUNNER_TEMP/aosp"
+          base="https://android.googlesource.com/platform"
+          curl -fsSL "$base/frameworks/base/+/refs/tags/$AOSP_TAG/core/api/current.txt?format=TEXT" \
+            | base64 -d > "$RUNNER_TEMP/aosp/current.txt"
+          curl -fsSL "$base/libcore/+/refs/tags/$AOSP_TAG/api/current.txt?format=TEXT" \
+            | base64 -d > "$RUNNER_TEMP/aosp/libcore-current.txt"
+          for f in public-final.xml attrs.xml attrs_manifest.xml; do
+            curl -fsSL "$base/frameworks/base/+/refs/tags/$AOSP_TAG/core/res/res/values/$f?format=TEXT" \
+              | base64 -d > "$RUNNER_TEMP/aosp/$f"
+          done
+          curl -fsSL "$base/frameworks/base/+/refs/tags/$AOSP_TAG/NOTICE?format=TEXT" \
+            | base64 -d > "$RUNNER_TEMP/aosp/NOTICE"
+          curl -fsSL 'https://www.apache.org/licenses/LICENSE-2.0.txt' \
+            -o "$RUNNER_TEMP/aosp/LICENSE"
+          sha256sum "$RUNNER_TEMP"/aosp/* | tee "$RUNNER_TEMP/aosp/SHA256SUMS"
+
+      - name: Probar el generador
+        run: go -C tools/androidjar test ./...
+
+      - name: Generar el jar completo y el mínimo
+        env:
+          ONLY: >-
+            android.app.Activity,
+            android.content.Context,
+            android.content.ContextWrapper,
+            android.os.Bundle,
+            android.view.ContextThemeWrapper,
+            android.view.Menu,
+            android.view.MenuItem,
+            android.view.MenuItem.OnMenuItemClickListener,
+            android.view.View,
+            android.view.View.OnClickListener,
+            android.widget.TextView,
+            android.widget.Toast,
+            java.lang.CharSequence,
+            java.lang.Object,
+            java.lang.String
+        run: |
+          mkdir -p dist dist/min dist/full
+          go -C tools/androidjar run . \
+            -in "$RUNNER_TEMP/aosp" -out dist/full -api 34 \
+            -tag "${{ env.AOSP_TAG || 'android-14.0.0_r75' }}" \
+            -notice "$RUNNER_TEMP/aosp/NOTICE" -license "$RUNNER_TEMP/aosp/LICENSE"
+          go -C tools/androidjar run . \
+            -in "$RUNNER_TEMP/aosp" -out dist/min -api 34 \
+            -tag "${{ env.AOSP_TAG || 'android-14.0.0_r75' }}" \
+            -notice "$RUNNER_TEMP/aosp/NOTICE" -license "$RUNNER_TEMP/aosp/LICENSE" \
+            -only "$ONLY"
+          cp dist/full/android-stub-34.jar dist/android-stub-34-full.jar
+          cp dist/min/android-stub-34.jar dist/android-stub-34-min.jar
+          cp "$RUNNER_TEMP/aosp/NOTICE" "$RUNNER_TEMP/aosp/LICENSE" dist/
+          sha256sum dist/*.jar | tee dist/SHA256SUMS
+
+      - name: Resumen con el SHA-256
+        run: |
+          {
+            echo '## android-stub-34'
+            echo '```'
+            sha256sum dist/*.jar
+            echo '```'
+            echo "Entradas AOSP:"
+            cat "$RUNNER_TEMP/aosp/SHA256SUMS"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-stub-34
+          path: dist/
+
+  verificar:
+    needs: generar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Instalar la SDK solo como oráculo
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager --install 'platforms;android-34' >/dev/null
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-stub-34
+          path: dist
+
+      - name: Compilar apkc
+        run: go -C apkc build -o "$RUNNER_TEMP/apkc" .
+
+      - name: Crear el proyecto de las plantillas
+        run: |
+          mkdir -p "$RUNNER_TEMP/proj"
+          printf 'com.myapp\nMy App\n' | "$RUNNER_TEMP/apkc" create "$RUNNER_TEMP/proj"
+          cp tools/androidjar/pruebas/MainActivity.java \
+            "$RUNNER_TEMP/proj/src/com/myapp/MainActivity.java"
+          cp tools/androidjar/pruebas/res/layout/main.xml \
+            "$RUNNER_TEMP/proj/res/layout/main.xml"
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+            -storetype JKS -storepass android -keypass android \
+            -alias androiddebugkey -keyalg RSA -validity 10000 \
+            -dname 'CN=Android Debug,O=Android,C=US'
+
+      - name: Construir la referencia con la SDK y el jar generado
+        working-directory: ${{ runner.temp }}/proj
+        env:
+          SDK_JAR: ${{ env.ANDROID_HOME }}/platforms/android-34/android.jar
+        run: |
+          "$RUNNER_TEMP/apkc" build --linker go --compiler go \
+            --android-jar "$SDK_JAR" --sdk-version 34 --codename 14 \
+            --keystore "$HOME/.android/debug.keystore"
+          cp "$RUNNER_TEMP/proj/build/classes.dex" "$RUNNER_TEMP/sdk.dex"
+          cp "$RUNNER_TEMP/proj/build/resources.arsc" "$RUNNER_TEMP/sdk.arsc"
+
+          "$RUNNER_TEMP/apkc" compile --android-jar dist/android-stub-34-min.jar \
+            -o "$RUNNER_TEMP/out-min" src
+          "$RUNNER_TEMP/apkc" compile --android-jar "$SDK_JAR" \
+            -o "$RUNNER_TEMP/out-sdk" src
+          diff -r "$RUNNER_TEMP/out-min" "$RUNNER_TEMP/out-sdk"
+
+          "$RUNNER_TEMP/apkc" build --linker go --compiler go \
+            --android-jar dist/android-stub-34-min.jar --sdk-version 34 --codename 14 \
+            --keystore "$HOME/.android/debug.keystore"
+          cmp "$RUNNER_TEMP/sdk.dex" "$RUNNER_TEMP/proj/build/classes.dex"
+          cmp "$RUNNER_TEMP/sdk.arsc" "$RUNNER_TEMP/proj/build/resources.arsc"
+
+      - name: TestMarco con el jar generado
+        run: |
+          mkdir -p "$RUNNER_TEMP/fakehome/Android/platforms/android-34"
+          cp dist/android-stub-34-full.jar \
+            "$RUNNER_TEMP/fakehome/Android/platforms/android-34/android.jar"
+          HOME="$RUNNER_TEMP/fakehome" go -C apkc test -count=1 -run TestMarco -v .
+
+      - name: Comprobar que no viaja nada de la SDK
+        run: |
+          if unzip -l dist/android-stub-34-full.jar | grep -qE ' res/|NOTICES/'; then
+            echo 'el jar generado contiene res/ o NOTICES/ de la SDK' >&2
+            exit 1
+          fi
+          unzip -t dist/android-stub-34-min.jar
+          unzip -t dist/android-stub-34-full.jar
