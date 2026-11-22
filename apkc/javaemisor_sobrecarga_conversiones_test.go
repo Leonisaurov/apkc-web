@@ -189,6 +189,42 @@ func TestBoxingHaciaObjectoEnVarargs(t *testing.T) {
 	}
 }
 
+// Sondas del boxing con RECEPTOR EXPLÍCITO (`s.f(7)` en vez de `f(7)`). Ese camino bajaba los
+// argumentos antes de resolver y dejaba un `int` suelto contra `(Ljava/lang/Object;)V`, que el
+// validador rechaza; javac escribe `Integer.valueOf` igual que con receptor implícito. Las fuentes
+// van en una línea, como las sondas de arriba, para que `LineNumberTable` coincida (§194).
+const (
+	receptorBoxFuente     = `public class S { void f(Object o){} void t(S s){ s.f(7); } }`
+	receptorCadenaFuente  = `public class S { void f(CharSequence c){} void t(S s){ s.f("hola"); } }`
+	receptorVarargsFuente = `public class S { void f(Object... o){} void t(S s){ s.f(7, "x"); } }`
+)
+
+const (
+	receptorBoxJavac     = "yv66vgAAADQAGQoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAEWphdmEvbGFuZy9JbnRlZ2VyAQAHdmFsdWVPZgEAFihJKUxqYXZhL2xhbmcvSW50ZWdlcjsKAA4ADwcAEAwAEQASAQABUwEAAWYBABUoTGphdmEvbGFuZy9PYmplY3Q7KVYBAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQABdAEABihMUzspVgEAClNvdXJjZUZpbGUBAAZTLmphdmEAIQAOAAIAAAAAAAMAAQAFAAYAAQATAAAAHQABAAEAAAAFKrcAAbEAAAABABQAAAAGAAEAAAABAAAAEQASAAEAEwAAABkAAAACAAAAAbEAAAABABQAAAAGAAEAAAABAAAAFQAWAAEAEwAAACIAAgACAAAACisQB7gAB7YADbEAAAABABQAAAAGAAEAAAABAAEAFwAAAAIAGA=="
+	receptorCadenaJavac  = "yv66vgAAADQAFQoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCAAIAQAEaG9sYQoACgALBwAMDAANAA4BAAFTAQABZgEAGyhMamF2YS9sYW5nL0NoYXJTZXF1ZW5jZTspVgEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAGKExTOylWAQAKU291cmNlRmlsZQEABlMuamF2YQAhAAoAAgAAAAAAAwABAAUABgABAA8AAAAdAAEAAQAAAAUqtwABsQAAAAEAEAAAAAYAAQAAAAEAAAANAA4AAQAPAAAAGQAAAAIAAAABsQAAAAEAEAAAAAYAAQAAAAEAAAARABIAAQAPAAAAHwACAAIAAAAHKxIHtgAJsQAAAAEAEAAAAAYAAQAAAAEAAQATAAAAAgAU"
+	receptorVarargsJavac = "yv66vgAAADQAGwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAEWphdmEvbGFuZy9JbnRlZ2VyAQAHdmFsdWVPZgEAFihJKUxqYXZhL2xhbmcvSW50ZWdlcjsIAA4BAAF4CgAQABEHABIMABMAFAEAAVMBAAFmAQAWKFtMamF2YS9sYW5nL09iamVjdDspVgEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAGKExTOylWAQAKU291cmNlRmlsZQEABlMuamF2YQAhABAAAgAAAAAAAwABAAUABgABABUAAAAdAAEAAQAAAAUqtwABsQAAAAEAFgAAAAYAAQAAAAEAgAATABQAAQAVAAAAGQAAAAIAAAABsQAAAAEAFgAAAAYAAQAAAAEAAAAXABgAAQAVAAAALgAFAAIAAAAWKwW9AAJZAxAHuAAHU1kEEg1TtgAPsQAAAAEAFgAAAAYAAQAAAAEAAQAZAAAAAgAa"
+)
+
+// TestReceptorExplicitoConBoxing: la llamada sobre un receptor escrito (`s.f(7)`) resuelve como
+// javac 17 y el dex sale byte a byte: el receptor se carga antes que los argumentos y después va
+// `bipush 7; invokestatic Integer.valueOf; invokevirtual f(Object)`. La cadena es el control de lo
+// ya medido (`CharSequence` recibe el literal sin boxing) y la última es un varargs con receptor
+// explícito, donde el elemento del arreglo también se boxea.
+func TestReceptorExplicitoConBoxing(t *testing.T) {
+	casos := []struct{ nombre, fuente, javac string }{
+		{"boxing_a_objecto", receptorBoxFuente, receptorBoxJavac},
+		{"cadena_sin_cambio", receptorCadenaFuente, receptorCadenaJavac},
+		{"varargs_a_objecto", receptorVarargsFuente, receptorVarargsJavac},
+	}
+	for _, c := range casos {
+		nuestro, suyo := dexDeCaso(t, c.fuente, c.javac)
+		if !bytes.Equal(nuestro, suyo) {
+			t.Errorf("%s: el dex mide %d bytes y el de javac %d; el primero que difiere es el %d",
+				c.nombre, len(nuestro), len(suyo), primerByteDistinto(nuestro, suyo))
+		}
+	}
+}
+
 // TestVarargsTieneQueSerElUltimo: `int... xs, int y` no es Java (JLS 8.4.1) y el parser lo rechaza
 // nombrando el parámetro varargs en vez de aceptar una firma que javac no admite.
 func TestVarargsTieneQueSerElUltimo(t *testing.T) {

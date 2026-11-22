@@ -98,7 +98,7 @@ const (
 	opIsub = 0x64
 	opImul = 0x68
 	opIdiv = 0x6c
-	opIrem  = 0x70
+	opIrem = 0x70
 	// desplazamientos y operadores de bits, medidos en el párrafo 157 con `javap -c` de `Asig`
 	opIshl  = 0x78
 	opIshr  = 0x7a
@@ -3184,9 +3184,12 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 	receptor := d[1 : len(d)-1]
 	var cand candidato
 	n := argc
-	if e.hayEmpaquetadoEn(receptor, l.nombre, l.args) {
-		// una candidata varargs del receptor: los tipos hay que estimarlos antes, porque la aridad
-		// del `invoke` la fija el descriptor y no el fuente (§194)
+	if e.hayEmpaquetadoEn(receptor, l.nombre, l.args) || e.necesitaBoxingEn(receptor, l.nombre, l.args) {
+		// una candidata varargs del receptor, o una de aridad fija con un parametro de referencia
+		// donde el fuente pone un primitivo: los tipos hay que estimarlos antes, porque la aridad
+		// del `invoke` la fija el descriptor y no el fuente, y porque el boxing (`Integer.valueOf`)
+		// se escribe entre el valor y la llamada. Bajar primero el literal deja un `int` que el
+		// descriptor rechaza. El receptor va delante en los dos caminos (§194)
 		cand, n, err = e.argumentosResueltos(receptor, l.nombre, l.args)
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
@@ -3375,6 +3378,44 @@ func (e *emisor) hayEmpaquetadoEn(clase, nombre string, args []jexpr) bool {
 		return false
 	}
 	return e.hayEmpaquetado(args, cands)
+}
+
+// necesitaBoxingEn: si la candidata de `clase.nombre` para estos tipos estimados tiene algun
+// parametro de referencia donde el fuente pone un primitivo —o si elige una varargs que hay que
+// empaquetar—. Es la pregunta que decide, en una llamada con receptor explicito, si hay que resolver
+// ANTES de bajar los argumentos: con boxing el `Integer.valueOf` se escribe entre el valor y el
+// `invoke`, y bajar primero el literal dejaria sobre la pila un `int` que el descriptor rechaza.
+// Lo que no se puede prever sin emitir devuelve falso y deja el camino de siempre, que baja los
+// argumentos y resuelve con sus descriptores reales (§194).
+func (e *emisor) necesitaBoxingEn(clase, nombre string, args []jexpr) bool {
+	tipos := make([]string, 0, len(args))
+	for _, arg := range args {
+		d, err := e.tipoEstimado(arg)
+		if err != nil {
+			return false
+		}
+		tipos = append(tipos, d)
+	}
+	cand, err := e.ctx.buscarMetodo(clase, nombre, len(args), tipos)
+	if err != nil {
+		return false
+	}
+	if cand.empaquetar {
+		return true
+	}
+	_, _, ps := splitDescriptor(cand.desc)
+	for i := range ps {
+		if i >= len(tipos) {
+			break
+		}
+		if _, primitivo := boxingDe[tipos[i]]; !primitivo {
+			continue
+		}
+		if len(ps[i]) > 0 && (ps[i][0] == 'L' || ps[i][0] == '[') {
+			return true
+		}
+	}
+	return false
 }
 
 // argumentosResueltos: estima los tipos de los argumentos (sin escribir nada), resuelve la sobrecarga
