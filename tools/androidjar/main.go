@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -312,7 +313,7 @@ func escribeJar(ruta string, clases []*apiClase, todas map[string]*apiClase, ars
 			_ = f.Close()
 			return fmt.Errorf("%s: %w", c.nombre, err)
 		}
-		w, err := zw.Create(c.interno + ".class")
+		w, err := creaEntrada(zw, c.interno+".class")
 		if err != nil {
 			return err
 		}
@@ -320,7 +321,7 @@ func escribeJar(ruta string, clases []*apiClase, todas map[string]*apiClase, ars
 			return err
 		}
 	}
-	w, err := zw.Create("resources.arsc")
+	w, err := creaEntrada(zw, "resources.arsc")
 	if err != nil {
 		return err
 	}
@@ -335,7 +336,7 @@ func escribeJar(ruta string, clases []*apiClase, todas map[string]*apiClase, ars
 		if err != nil {
 			return err
 		}
-		w, err := zw.Create(par.destino)
+		w, err := creaEntrada(zw, par.destino)
 		if err != nil {
 			return err
 		}
@@ -347,6 +348,15 @@ func escribeJar(ruta string, clases []*apiClase, todas map[string]*apiClase, ars
 		return err
 	}
 	return f.Close()
+}
+
+// creaEntrada fija la fecha para que dos ejecuciones del mismo árbol den el
+// mismo jar: `zip.Create` pone time.Now y el hash del artifact cambiaria en
+// cada run.
+func creaEntrada(zw *zip.Writer, nombre string) (io.Writer, error) {
+	h := &zip.FileHeader{Name: nombre, Method: zip.Deflate}
+	h.Modified = time.Date(1980, 1, 1, 0, 0, 0, 0, time.UTC)
+	return zw.CreateHeader(h)
 }
 
 func escribeProcedencia(ruta, entrada, tag string, api int, clases []*apiClase, recursos, attrs int) error {
