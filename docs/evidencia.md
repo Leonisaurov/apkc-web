@@ -8322,3 +8322,144 @@ CHROME_BIN=/usr/bin/chromium SITIO_URL=https://apkc-studio.surge.sh/ \
 origen; el host publicado dio también `10 comprobaciones bien, 0 mal`, APK de 9217 bytes firmada y
 verificada por apksigner, SW que controla la página y `crossOriginIsolated:true`. Noviembre de
 2026: la firma (§181) y ART en CI (§178) siguen siendo fronteras escritas, no piezas terminadas.
+
+## 185. Linaje v3.1 y SourceStamp: de frontera a pieza cerrada
+
+Medido el 2026-11-21. Se corrige lo escrito en §181: ya no es una frontera. `verificar.go` lee los
+atributos detrás de los certificados del `signedData`, valida la cadena de proof-of-rotation nodo a
+nodo con el algoritmo del padre y las claves de `lineage.go`, exige que el certificado del firmante
+sea la hoja del linaje y comprueba los rangos (`rotation-min-sdk`: v3.0 termina en `minSdkAttr-1`,
+v3.1 empieza en `minSdkAttr`, y no conviven en el mismo bloque). SourceStamp cubre v2/v3 y también
+v1: los bytes firmados del esquema 1 son `pairsOf([{4, SHA-256(MANIFEST.MF)}])`, es decir
+`uint32(8+32) | uint32(4) | uint32(32) | SHA-256(de los bytes sin comprimir de MANIFEST.MF)`. La vía
+ingeniosa de firmar `MANIFEST.MF` o `.SF` directamente daba `Verification failure`; la causa era el
+envoltorio `pairsOf` con el id de digest 4, no el manifiesto.
+
+```sh
+apksigner rotate --out lineage --old-signer --ks viejo.p12 --new-signer --ks nuevo.p12
+apksigner sign --lineage lineage --rotation-min-sdk-version 33 --ks nuevo.p12 -o rotated.apk in.apk
+apksigner verify -v --min-sdk-version 28 rotated.apk
+apkc verify rotated.apk
+apksigner sign --stamp-signer --ks stamp.p12 -o stamped.apk in.apk
+apkc verify stamped.apk
+```
+
+**Resultado**: `apksigner` da v3 `true` y v3.1 `true`; `apkc verify` rc 0 con `v3 ok`, `v3.1 ok` y
+`SourceStamp: ok`; los cuatro tests nuevos pasan y la suite completa da
+`ok github.com/ajinasokan/apkc 49.187s`. Frontera que queda: la rotación con claves EC no se ha
+medido con `apksigner` (ya señalada en §121).
+
+## 186. Recursos: uiMode, touchscreen, teclado y navegación
+
+Medido el 2026-11-21 con aapt2 de build-tools 35.0.1. El encargo situaba `uiMode` en +36; la medición
+lo corrige a **+29** (spec `0x1400` = `0x1000` de UI_MODE más `0x0400` de versión 8). Touchscreen está
+en +13, keyboard en +16 y navigation en +17. Medidos desk=2, car=3, television=4, appliance=5,
+watch=6, night=0x20 y car-night=0x23, con sdkVersion 8 implícito; `car-v21` eleva la versión a 21.
+El arsc de 5052 bytes sale byte a byte igual que el de aapt2 con la mezcla completa (small, seis
+uiMode, car-night, sw600dp, v21, tres teclados, tres navegaciones, tres touchscreen, orientación,
+densidad y `values-es` con clave sin base). `claveDeConfig` y `mascaraConfig` incorporan los campos
+nuevos sin romper locale/densidad/versión/screenLayout/sw600dp.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar go test -count=1 ./...
+```
+
+**Resultado**: los tres tests nuevos (`valores_entrada_uimode_test.go`,
+`valores_fuentes_calificadores_test.go`, `valores_sinbase_test.go`) pasan. Un test preexistente
+esperaba el motivo sin tilde («configuracion») y se actualizó a «configuración». Frontera: la
+fidelidad de `CompoundValue` en estilos y `attr` no se reproduce en el bundle (se dice en §187).
+
+## 187. El .aab nace en Go, también desde el enlazador y el compilador Go
+
+Medido el 2026-11-21. Se cierra la frontera 5.33 (§128). `aab_go.go` convierte el AXML del manifiesto
+y de los layouts a `XmlNode` proto, y el `resources.arsc` del enlazador a `ResourceTable` (paquete,
+tipos, entradas `0xPPTTEEEE`, configuraciones y `FileReference`), añade `BundleConfig.pb` y el prefijo
+`base/`. La medición previa extrajo `Resources.proto` del propio jar de bundletool 1.18.3 y fijó el
+contrato con un oráculo preciso: `bundletool validate` rechaza un `resources.pb` vacío y acepta un
+`ResourceTable` mínimo con paquete y `FileReference`. La integración CLI cambió `build.go` para no
+esperar `resources.pb` cuando el enlazador es Go, para no construir `bundle.zip` con el firmante Go,
+y `compilar.go` para dejar de rechazar `--compiler go --aab`.
+
+```sh
+java -jar bundletool-all-1.18.3.jar validate --bundle=/tmp/opencode/aab-desde-go.aab
+jarsigner -verify /tmp/opencode/aab-desde-go.aab
+sh tools/entorno.sh gate
+```
+
+**Resultado**: `bundletool validate` rc 0, `jarsigner -verify` → `jar verified`, `apkc verify` →
+`bundle=true v1=true`. En el gate: `java: .aab de 5891 bytes, ensamblado y firmado en Go, validado
+por bundletool y jarsigner`. Frontera: los valores compuestos conservan su id con `Item.id` vacío y
+no se traduce el contenido de `CompoundValue`; no se reproducen `source_pool`, `tool_fingerprint` ni
+posiciones de columna, que el oráculo no exige.
+
+## 188. Editor: check en vivo, plantillas, paleta y contraseñas redactadas
+
+Medido el 2026-11-21. `apkc check` (`apkc/check.go`) devuelve una línea JSON con
+`{tipo,fichero,lineas,emisor,aviso,errores}` sin escribir `.class`; está excluido de `findSDKs`, así
+que corre en wasm sin procesos. `studio/diagnostico-vivo.js` escribe el buffer en un fichero temporal,
+llama al hospedador con 350 ms de debounce, limpia el temporal y pinta la lista y el subrayado. Se
+añadieron las plantillas `ciclo`, `menu` y `traducido` (compiladas y verificadas en el gate) y la
+paleta `Ctrl+Mayús+P` con seis acciones que reutilizan funciones e ids existentes. El hallazgo M1 del
+informe de seguridad quedó cerrado: `redactarArgv` sustituye los valores de `--*pass*` por `***` solo
+en la copia que se imprime, sin mutar el `argv` que se ejecuta.
+
+```sh
+apkc check --android-jar $ANDROID_HOME/platforms/android-34/android.jar /tmp/opencode/check-malo.java
+node studio/prueba.js
+sh tools/entorno.sh gate
+```
+
+**Resultado**: `{"tipo":"check","fichero":"check-malo.java","lineas":…,"errores":[{"linea":5,…}]}`;
+`prueba: todo en orden` (24 reglas, 9/9 muestras); gate con `prueba: 85 comprobaciones` (83 antes de
+las dos de M1) y las tres plantillas nuevas verificadas por apksigner, zipalign y aapt2. Frontera: el
+parser y el emisor paran en el primer error; el JSON no es una lista de recuperación. El diagnóstico
+en vivo y la paleta se verificaron con un guion CDP temporal, no con una prueba versionada en el repo.
+
+## 189. Infraestructura: ART y Safari informativos, bench y auditoría
+
+Medido el 2026-11-21. El workflow tiene seis jobs (`rapido`, `pesado`, `webkit`, `safari`, `art`,
+`publicar`). `art` arranca un emulador con KVM en `ubuntu-latest` y corre el banco ART; es
+informativo porque KVM depende del hardware del runner y aquí no se pudo ejecutar. `safari` corre en
+`macos-latest` e imprime la identidad del ejecutable con `tools/safari-info.mjs`: Playwright no
+automatiza `Safari.app`, así que sigue siendo WebKit, no Safari real. El job `webkit` preexistente
+era un **falso verde**: `npx -y playwright@latest install` deja el paquete en la caché, no en
+`node_modules`, y `import("playwright")` fallaba silenciosamente; ahora instala el paquete antes.
+`publicar` sigue dependiendo solo de `pesado`. `tools/bench-web.sh` mide con CDP sobre el sitio
+empaquetado.
+
+```sh
+NODE_PATH=/tmp/opencode/yaml/node_modules node -e "const y=require('js-yaml'),fs=require('fs');console.log(Object.keys(y.load(fs.readFileSync('.github/workflows/gate.yml','utf8')).jobs).join(', '))"
+tcr -q -- env ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar sh tools/bench-web.sh "$PWD/sitio"
+```
+
+**Resultado**: `jobs: rapido, pesado, webkit, safari, art, publicar`. Bench sobre el árbol integrado:
+`aislamiento_ms 406`, `wasm_instantiate_muestras 5`, `wasm_instantiate_total_ms 274`,
+`android_jar_opfs_ms 385` para 26361808 bytes, `primer_build_ms 3881` para 9221 bytes, 43 peticiones
+de red. `INFORMA-SEGURIDAD.md` recoge M1 (cerrado en §188), M2 (falso verde cerrado) y los hallazgos
+B1-B4 abiertos: CSP solo por el SW, nombre de Trusted Types no fijado, `wasm_exec.js` sin fijar y zip
+sin cota de descompresión. Frontera: los jobs `art` y `safari` se verificaron por sintaxis YAML y de
+guiones, no ejecutándose en sus runners.
+
+## 190. Gate final, dos agentes caídos y lección de orquestación
+
+Medido el 2026-11-21. Se integraron seis worktrees con dueño exclusivo de archivos. Dos agentes
+alcanzaron el límite de pasos (Java y firma) y uno devolvió un informe corrupto (recursos): en los
+tres casos el trabajo estaba en el worktree y se recuperó, se limpió y se verificó antes de
+cherry-pick. En Java solo se conservaron las dos piezas cerradas (`i2b`/`i2s` y `ConstantValue` de
+`static final long`); la anónima dentro de anónima emitía `MethodParameters` y `InnerClasses` que no
+son los de javac y su test llevaba código de depuración, así que se revirtió y sigue siendo frontera.
+No se ejecutaron `addSuppressed`, la anidada privada desde fuera ni la resolución de sobrecargas con
+boxing/varargs/ensanchamiento: siguen pendientes y no se afirma lo contrario.
+
+```sh
+tcr -q -- env APKC_ANDROID_JAR=… JAVAC=… D8=… go test -count=1 ./...
+tcr -q -- sh tools/entorno.sh wasm
+tcr -q -- sh tools/entorno.sh gate
+python3 ~/.config/opencode/validate_config.py
+```
+
+**Resultado**: suite Go `ok … 46.465s` con javac y d8 activos; suite wasm `PASS`; gate rc=0 con
+`pestaña: 85 comprobaciones`, cuatro plantillas verificadas y `.aab` ensamblado y validado;
+configuración de OpenCode `TODO VÁLIDO` (12 agentes, `git push global = ask`). Lección: el worktree
+aislado evitó pisadas entre agentes, pero no evita que un agente se quede sin pasos o devuelva un
+informe inútil; el árbol del worktree es la fuente de verdad, no el informe.

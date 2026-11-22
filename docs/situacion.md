@@ -590,3 +590,13 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   `screenLayout` corregido a +28 (§180); el fuzzing diferencial de 20 casos pasa contra javac y d8
   (§182). El sitio quedó publicado y verificado 10/10 en el host real (§184). Fronteras escritas,
   no cerradas: ART en CI (§178) y linaje/SourceStamp en `verify` (§181).
+- **Seis worktrees, una integración y dos agentes caídos (§185-§190)**: el linaje y SourceStamp
+  dejaron de ser frontera (§185); los calificadores `uiMode`, touchscreen, teclado y navegación
+  corrigen el offset de uiMode a +29 (§186); el `.aab` se ensambla en Go desde el arsc del enlazador,
+  sin bundletool (§187); la pestaña gana `check` en vivo, tres plantillas, paleta y contraseñas
+  redactadas (§188); el gate de CI añade ART y Safari informativos, bench medible y auditoría de
+  seguridad, y cierra el falso verde del job WebKit (§189). De las seis piezas Java pedidas solo se
+  conservaron `i2b`/`i2s` y el `ConstantValue` ancho: `addSuppressed`, la anidada privada desde fuera
+  y la resolución de sobrecargas ampliada siguen pendientes, y la anónima dentro de anónima se revirtió
+  porque su emisión no era la de javac. El gate integrado está en verde con 85 comprobaciones de
+  pestaña y las cuatro plantillas verificadas (§190).
