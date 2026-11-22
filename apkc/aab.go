@@ -16,8 +16,19 @@ import (
 // BundleConfig.pb and the `base/` prefix of the base module, and that is what this
 // writes. The signature is JAR v1, because a bundle has no APK Signing Block.
 func buildAAB() {
-	entrada := filepath.Join("build", "bundle.zip")
 	salida := filepath.Join("build", "app.aab")
+	entrada := filepath.Join("build", "bundle.zip")
+	if _, err := os.Stat(entrada); err != nil && os.IsNotExist(err) {
+		// Sin bundle.zip no hay salida de aapt2: el enlazador Go dejó AXML y resources.arsc.
+		// Esta es la rama que cierra la frontera 5.33 (§128) sin bundletool ni proto de aapt2.
+		if _, err := os.Stat(filepath.Join("build", "resources.arsc")); err == nil {
+			if err := ensamblarAABDesdeGo("build", salida); err != nil {
+				LogF("build", err.Error(), "(el bundle se arma desde la salida del enlazador Go)")
+			}
+			LogI("build", salida, "ensamblado desde el enlazador Go, sin aapt2 ni bundletool")
+			return
+		}
+	}
 	if err := ensamblarAAB(entrada, salida); err != nil {
 		LogF("build", err.Error(), "(el bundle se arma con --aab y el enlazador aapt2)")
 	}
