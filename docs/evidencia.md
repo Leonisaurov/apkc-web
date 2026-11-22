@@ -8303,3 +8303,22 @@ GOTMPDIR=$HOME/.cache/apkc-web/gotmp sh tools/entorno.sh gate
 compilada y firmada en el sitio y verificada por apksigner; `gate` rc=0 con `pestaña: 83
 comprobaciones`. Lección registrada: el CSP aplicado por el service worker no se manifiesta hasta
 que el SW controla la página, así que comprobar solo la primera carga no basta.
+
+## 184. Publicación del sitio integrado
+
+Medido el 2026-11-21. Publicación manual, no automática: `tools/entorno.sh publicar` reconstruye el
+wasm desde el árbol integrado, empaqueta `studio/` desde el HEAD confirmado del submódulo, sube a
+`https://apkc-studio.surge.sh/` y corre la prueba del sitio sobre el paquete local. El dominio se
+comprueba después contra el host real, no contra el paquete.
+
+```sh
+GOTMPDIR=$HOME/.cache/apkc-web/gotmp sh tools/entorno.sh publicar
+CHROME_BIN=/usr/bin/chromium SITIO_URL=https://apkc-studio.surge.sh/ \
+  ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar \
+  APKSIGNER=$ANDROID_HOME/build-tools/35.0.1/apksigner node studio/prueba-sitio.js
+```
+
+**Resultado**: el paquete local dio `10 comprobaciones bien, 0 mal` con 47 peticiones, 0 fuera del
+origen; el host publicado dio también `10 comprobaciones bien, 0 mal`, APK de 9217 bytes firmada y
+verificada por apksigner, SW que controla la página y `crossOriginIsolated:true`. Noviembre de
+2026: la firma (§181) y ART en CI (§178) siguen siendo fronteras escritas, no piezas terminadas.
