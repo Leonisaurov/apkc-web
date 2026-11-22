@@ -5635,6 +5635,11 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	for i := len(c.interior) - 1; i >= 0; i-- {
 		anadir(internoDe(c.interior[i].paquete, c.interior[i].nombre))
 	}
+	if c.anonima && c.encierre != nil && c.encierre.anonima {
+		// la anonima interior lista primero a su padre anonimo y despues a si misma (medido en el
+		// InnerClasses de Capa$1$1 con javac 17: `#23; // Capa$1` y `#2; // Capa$1$1`)
+		anadir(internoDe(c.encierre.paquete, c.encierre.nombre))
+	}
 	if strings.Contains(c.nombre, "$") {
 		anadir(interno)
 	}
@@ -5872,7 +5877,10 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	}
 	attrs := attrInfo(e.pool, "Code", codigo)
 	conte := 1
-	if !estatica {
+	// Una anonima dentro de otra no lleva MethodParameters: javac 17 lo escribe en la primera pero
+	// no en la que se crea dentro de ella (medido con `javap -v` sobre Capa$1 y Capa$1$1).
+	bajoAnonima := e.c.encierre != nil && e.c.encierre.anonima
+	if !estatica && !bajoAnonima {
 		// MethodParameters: el `this$0` sale `final mandated` (0x8010) y cada `val$x`
 		// `final synthetic` (0x1010); medido en `Captura3$1` (parrafo 100).
 		mp := []byte{byte(1 + len(e.c.capturas))}
@@ -5883,7 +5891,13 @@ func (e *emisor) initCaptura() ([]byte, error) {
 			mp = append(mp, u2be(uint16(accFinal|accSynthetic))...)
 		}
 		attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
-		conte = 2
+		conte++
+	}
+	if bajoAnonima {
+		// el constructor de la anonima interior lleva `Signature: ()V`, que dexado es la anotacion
+		// `{"()V"}`; medido en Capa$1$1 con javac 17 --release 8
+		attrs = append(attrs, attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8("()V"))))...)
+		conte++
 	}
 	return e.methodInfo("<init>", desc, 0, attrs, conte), nil
 }

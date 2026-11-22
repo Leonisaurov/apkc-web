@@ -407,8 +407,11 @@ type jclas struct {
 	// (parrafo 42). encierre y metodoEncierre son de donde salio, y se guardan punteros porque el descriptor
 	// del exterior se calcula despues, en el emisor.
 	anonima        bool
-	encierre       *jclas
-	metodoEncierre *jmetodo
+	// siguienteAnonima cuenta las anonimas creadas dentro de esta clase: javac las nombra
+	// Exterior$1$1, Exterior$1$2… cuando la clase que las crea ya es anonima (medido con javac 17)
+	siguienteAnonima int
+	encierre         *jclas
+	metodoEncierre   *jmetodo
 	// capturas: las locales/parámetros effectively-final que la anonima usa y que javac baja a
 	// campos `val$x` y parámetros del constructor (5.14).
 	capturas []captura
@@ -2442,14 +2445,17 @@ func (a *analizadorJava) claseAnonima(nombre string) (*jclas, error) {
 	if a.claseActual == nil {
 		return nil, fmt.Errorf("linea %d: una clase anonima fuera de una declaracion de clase no es Java", a.actual().donde.linea)
 	}
-	if strings.Contains(a.claseActual.nombre, "$") {
-		return nil, fmt.Errorf("linea %d: una anonima dentro de otra anonima no esta medida: javac nombra Exterior$1$2 y aqui el contador es por clase de primera nivel", a.actual().donde.linea)
-	}
-	if a.claseActual != nil && a.claseActual.nombre != a.exterior {
+	nombreAnonima := a.exterior + "$" + strconv.Itoa(a.anonima)
+	if a.claseActual.anonima {
+		// una anonima dentro de otra lleva el nombre de la que la crea y su propio contador:
+		// Capa$1$1, no Capa$2 (medido con javac 17 --release 8 sobre Capa.java)
+		nombreAnonima = a.claseActual.nombre + "$" + strconv.Itoa(a.claseActual.siguienteAnonima+1)
+		a.claseActual.siguienteAnonima++
+	} else if a.claseActual.nombre != a.exterior {
 		return nil, fmt.Errorf("linea %d: una anonima creada dentro de una clase anidada no esta medida (javac la nombra Exterior$Anidada$1)", a.actual().donde.linea)
 	}
 	c := &jclas{
-		nombre:         a.exterior + "$" + strconv.Itoa(a.anonima),
+		nombre:         nombreAnonima,
 		implementa:     []string{nombre},
 		paquete:        a.paquete,
 		linea:          a.actual().donde.linea,
