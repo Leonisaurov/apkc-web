@@ -13,6 +13,10 @@ package main
 //   - El rectángulo es una aproximación declarada: cuenta las views de un LinearLayout, estima el
 //     tamaño del texto (el dinámico si lo hay) y recorta a la pantalla. No es una medida del
 //     framework; estilos fieles, imágenes, `gravity` fino y tema del sistema quedan fuera de la fase.
+//   - Un dex cuya ejecución se sale de sus propios bytes (un payload de switch que no cabe, un
+//     registro fuera del marco) no se ejecuta a medias: el comando lo rechaza con error y código 2.
+//     Lo que sí sigue saliendo es el modelo de un apk cuya app llama a una API fuera del subconjunto:
+//     ahí el intérprete deja avisos y el `ejecucion.error` correspondiente, sin romper la vista.
 //   - Solo se lee una configuración por tipo: la base. `--layout` recibe la clave de un recurso,
 //     no un calificador, así que un `layout-land` con la misma clave que la base no se puede pedir
 //     aparte: se toma la primera entrada que la tabla traiga para esa clave.
@@ -212,6 +216,12 @@ func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVis
 			if d, err := readDex(dexBytes); err == nil {
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
 				modelo.Ejecucion, layoutID = ejecutaOnCreate(d, tabla, preferida)
+				// un dex mal formado no se ejecuta a medias ni se tapa con un modelo que parecería
+				// medido: el comando lo rechaza. Una API fuera del subconjunto, en cambio, solo deja
+				// avisos y el modelo sale igual.
+				if modelo.Ejecucion != nil && modelo.Ejecucion.malformado {
+					return nil, fmt.Errorf("el classes.dex no es ejecutable: %s", modelo.Ejecucion.Error)
+				}
 			} else {
 				modelo.Ejecucion = &resultadoEjecucion{Error: "el classes.dex no se deja leer: " + err.Error()}
 			}

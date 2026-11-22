@@ -57,6 +57,45 @@ type resultadoEjecucion struct {
 	Capturas      []capturaTexto `json:"capturas,omitempty"`
 	Avisos        []string       `json:"avisos,omitempty"`
 	Error         string         `json:"error,omitempty"`
+
+	// malformado separa dos clases de fallo que no son lo mismo: «la app llama a algo que el MVP no
+	// cubre» (se sigue con el modelo y rc 0) y «estos bytes no son un dex ejecutable», que el comando
+	// rechaza. No viaja al JSON: el consumidor ve `error` y el código de salida.
+	malformado bool
+}
+
+// errorDexMalformado marca los fallos estructurales: un payload de switch que no cabe en el cuerpo o
+// un registro fuera del marco no son una app fuera del subconjunto, son bytes que no se pueden
+// ejecutar. Se distinguen para que `preview` los rechace en vez de imprimir un modelo a medias.
+type errorDexMalformado struct{ motivo string }
+
+func (e *errorDexMalformado) Error() string { return e.motivo }
+
+// malformado arma uno de esos errores con el formato de siempre.
+func malformado(formato string, args ...any) error {
+	return &errorDexMalformado{motivo: fmt.Sprintf(formato, args...)}
+}
+
+// esMalformado dice si el error, o algo que envuelve, es de los que invalidan los bytes. Se recorre
+// con Unwrap en vez de `errors.As` para no arrastrar la reflexión de ese helper al binario de wasm.
+func esMalformado(err error) bool {
+	for err != nil {
+		if _, ok := err.(*errorDexMalformado); ok {
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
+}
+
+// falla anota el error de la ejecución y recuerda si es de los que invalidan los bytes.
+func (r *resultadoEjecucion) falla(err error) {
+	r.Error = err.Error()
+	r.malformado = esMalformado(err)
 }
 
 // marcaAncha ocupa el segundo registro de un valor de 64 bits, para que un `move-wide` copie los dos
@@ -306,7 +345,7 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 	res := &resultadoEjecucion{Metodo: "onCreate"}
 	prog, err := cargaPrograma(d)
 	if err != nil {
-		res.Error = err.Error()
+		res.falla(err)
 		return res, 0
 	}
 	m := nuevaMaquina(prog, tabla)
@@ -321,7 +360,7 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 	obj := &objetoDalvik{clase: clase, campos: map[string]any{}}
 	if ctor := cl.metodos["<init>()V"]; ctor != nil {
 		if _, err := m.ejecutaCuerpo(clase, ctor, []any{obj}, []string{clase}); err != nil {
-			res.Error = err.Error()
+			res.falla(err)
 			res.Pasos = m.pasos
 			return res, m.layoutID
 		}
@@ -332,7 +371,7 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 		main := cl.metodos["main([Ljava/lang/String;)V"]
 		vacio := &arregloDalvik{tipo: "[Ljava/lang/String;", datos: []any{}}
 		if _, err := m.ejecutaCuerpo(clase, main, []any{vacio}, []string{"[Ljava/lang/String;"}); err != nil {
-			res.Error = err.Error()
+			res.falla(err)
 		}
 	} else {
 		onCreate := cl.metodos["onCreate(Landroid/os/Bundle;)V"]
@@ -340,7 +379,7 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 			res.Error = fmt.Sprintf("%s no tiene onCreate(Landroid/os/Bundle;)V", claseCorta(clase))
 		} else if _, err := m.ejecutaCuerpo(clase, onCreate, []any{obj, nil},
 			[]string{clase, "Landroid/os/Bundle;"}); err != nil {
-			res.Error = err.Error()
+			res.falla(err)
 		}
 	}
 
@@ -460,13 +499,16 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 	}
 	m.profundidad++
 	defer func() { m.profundidad-- }()
-	// un dex mal formado puede nombrar un registro fuera del marco; se convierte en error dicho, no
-	// en un panic que se lleve por delante el modelo de la vista
+	// El decodificador comprueba cada acceso a las palabras del code_item y rechaza por nombre lo que
+	// no cabe (payloads de switch incluidos). Este recover es la última red: si algo se escapa, se
+	// dice en qué unidad y con qué opcode, y se marca como dex malformado para que el comando lo
+	// rechace; no se disfraza de error de negocio ni se atribuye sin pruebas a los registros.
+	pcEnCurso, opEnCurso := 0, byte(0)
 	defer func() {
 		if r := recover(); r != nil {
 			res = nil
-			err = fmt.Errorf("%s.%s: instrucción con un registro fuera del marco (%v)",
-				claseCorta(clase), met.nombre, r)
+			err = malformado("%s.%s: el intérprete se detuvo en la unidad %d (opcode %#02x) por un fallo interno: %v",
+				claseCorta(clase), met.nombre, pcEnCurso, opEnCurso, r)
 		}
 	}()
 
@@ -509,6 +551,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 		u := ins[pc]
 		op := byte(u)
 		aa := int(u >> 8)
+		pcEnCurso, opEnCurso = pc, op
 		segunda := func() (uint16, error) {
 			if pc+1 >= len(ins) {
 				return 0, fmt.Errorf("%s.%s: el opcode %#02x pide una palabra y el código termina",
@@ -1062,53 +1105,68 @@ func registros35c(u, tercera uint16) []int {
 // saltoDeSwitch lee el payload de un switch y devuelve el desplazamiento que toca desde la
 // instrucción del switch, o 3 si el valor no cae en ningún brazo (el tamaño de la propia
 // instrucción: la ejecución sigue detrás).
+//
+// Un payload malformado se RECHAZA con error y no se ejecuta a medias. Las dos formas no miden lo
+// mismo: la packed lleva cabecera de dos palabras (ident, tamaño), la primera clave y n destinos de
+// dos palabras (2 + 2 + 2n), y la sparse lleva la cabecera, n claves y n destinos (2 + 4n). Antes se
+// validaba solo base+2+n, que deja fuera la primera clave y los destinos: un packed-switch con dos
+// brazos declarados y un único par de destinos leía ins[dst+1] fuera del cuerpo.
 func (m *maquinaDalvik) saltoDeSwitch(ins []uint16, pc int, compacto bool, valor any) (int, error) {
 	if pc+1 >= len(ins) {
-		return 0, fmt.Errorf("código cortado en un switch")
+		return 0, malformado("código cortado en un switch: la instrucción en la unidad %d no tiene su desplazamiento", pc)
 	}
 	base := pc + int(int16(ins[pc+1]))
 	if base < 0 || base+1 >= len(ins) {
-		return 0, fmt.Errorf("el payload del switch cae fuera del código")
+		return 0, malformado("el payload del switch de la unidad %d cae fuera del código de %d palabras", pc, len(ins))
 	}
 	ident := ins[base]
+	nombre := "packed-switch"
 	if compacto && ident != 0x0100 {
-		return 0, fmt.Errorf("un packed-switch apunta a un payload %#04x", ident)
+		return 0, malformado("un packed-switch apunta al payload %#04x y no a 0x0100", ident)
 	}
-	if !compacto && ident != 0x0200 {
-		return 0, fmt.Errorf("un sparse-switch apunta a un payload %#04x", ident)
+	if !compacto {
+		nombre = "sparse-switch"
+		if ident != 0x0200 {
+			return 0, malformado("un sparse-switch apunta al payload %#04x y no a 0x0200", ident)
+		}
 	}
 	clave, err := aInt32(valor)
 	if err != nil {
 		return 0, fmt.Errorf("switch: %w", err)
 	}
 	n := int(ins[base+1])
-	if base+2+n > len(ins) {
-		return 0, fmt.Errorf("el payload del switch declara %d brazos y no caben", n)
+	necesarias := base + 4 + 2*n
+	if !compacto {
+		necesarias = base + 2 + 4*n
+	}
+	if necesarias > len(ins) {
+		return 0, malformado("payload de %s truncado: declara %d brazos y necesita %d palabras, el cuerpo tiene %d",
+			nombre, n, necesarias, len(ins))
 	}
 	if compacto {
 		primera := int32(uint32(ins[base+2]) | uint32(ins[base+3])<<16)
 		indice := int(clave - primera)
-		if indice >= 0 && indice < n {
-			dst := base + 4 + 2*indice
-			if dst < len(ins) {
-				// los destinos del payload son relativos a la INSTRUCCIÓN del switch, no al payload
-				return int(int32(uint32(ins[dst]) | uint32(ins[dst+1])<<16)), nil
-			}
+		if indice < 0 || indice >= n {
+			return 3, nil
 		}
-		return 3, nil
+		dst := base + 4 + 2*indice
+		if dst+1 >= len(ins) {
+			return 0, malformado("el destino del brazo %d de un packed-switch cae fuera del cuerpo", indice)
+		}
+		// los destinos del payload son relativos a la INSTRUCCIÓN del switch, no al payload
+		return int(int32(uint32(ins[dst]) | uint32(ins[dst+1])<<16)), nil
 	}
 	for k := 0; k < n; k++ {
 		kpos := base + 2 + 2*k
-		if kpos+1 >= len(ins) {
-			break
-		}
 		claveK := int32(uint32(ins[kpos]) | uint32(ins[kpos+1])<<16)
-		if claveK == clave {
-			dpos := base + 2 + 2*n + 2*k
-			if dpos+1 < len(ins) {
-				return int(int32(uint32(ins[dpos]) | uint32(ins[dpos+1])<<16)), nil
-			}
+		if claveK != clave {
+			continue
 		}
+		dpos := base + 2 + 2*n + 2*k
+		if dpos+1 >= len(ins) {
+			return 0, malformado("el destino del brazo %d de un sparse-switch cae fuera del cuerpo", k)
+		}
+		return int(int32(uint32(ins[dpos]) | uint32(ins[dpos+1])<<16)), nil
 	}
 	return 3, nil
 }

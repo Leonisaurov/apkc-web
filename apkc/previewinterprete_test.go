@@ -12,6 +12,8 @@ package main
 // `total.setText("Pulsos: " + pulsos)` sale capturado.
 
 import (
+	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -118,7 +120,10 @@ func layoutDelContador() documentoAXML {
 }
 
 // manifiestoDelContador: la actividad lanzadora es `.MainActivity`.
-func manifiestoDelContador() documentoAXML {
+func manifiestoDelContador() documentoAXML { return manifiestoConActividad(".MainActivity") }
+
+// manifiestoConActividad arma el mismo manifiesto con otra actividad lanzadora.
+func manifiestoConActividad(actividad string) documentoAXML {
 	return documentoAXML{
 		ns:   []declaracionNS{{prefijo: "android", uri: uriAndroid, linea: 1}},
 		utf8: false,
@@ -141,7 +146,7 @@ func manifiestoDelContador() documentoAXML {
 							nombre: "activity",
 							linea:  11,
 							attrs: []atributoEscribir{
-								{ns: "android", nombre: "name", id: 0x01010003, tipo: tipoCadena, texto: ".MainActivity"},
+								{ns: "android", nombre: "name", id: 0x01010003, tipo: tipoCadena, texto: actividad},
 							},
 							hijos: []*elementoEscribir{
 								{
@@ -277,7 +282,8 @@ func TestElInterpreteEjecutaOnCreateYCapturaElSetText(t *testing.T) {
 // apk armado en memoria con los escritores del fork y el classes.dex del Contador. El nodo conserva
 // el texto declarado y añade el que la app escribió.
 func TestElPreviewLlevaElTextoDinamicoAlModelo(t *testing.T) {
-	manifiesto, err := escribeAXML(manifiestoDelContador())
+	// la lanzadora es Casos: es donde vive el switch, y así lo recorre también el comando entero
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
 	if err != nil {
 		t.Fatalf("el manifiesto: %v", err)
 	}
@@ -536,5 +542,236 @@ public class Recurso extends Activity {
 	if len(res.Capturas) != 1 || res.Capturas[0].Texto != "Hola desde un recurso" ||
 		res.Capturas[0].ID != "id/total" {
 		t.Fatalf("la captura es %+v y se esperaba el texto del recurso sobre id/total", res.Capturas)
+	}
+}
+
+// TestElSwitchRechazaUnPayloadTruncado: la cabecera del intérprete promete rechazar por nombre, no
+// paniquear. Un payload que declara más brazos de los que caben se dice con su error, y los dos
+// payloads bien formados siguen saltando a donde toca.
+func TestElSwitchRechazaUnPayloadTruncado(t *testing.T) {
+	m := nuevaMaquina(&programaDalvik{dex: &dexFile{}, clases: map[string]*claseDalvik{}}, nil)
+
+	// pc 0, desplazamiento 4: ident en 4, tamaño en 5, primera clave en 6-7 y un destino por brazo
+	packed := []uint16{
+		0x2b00, 4,
+		0, 0,
+		0x0100, 2, // ident en 4 y dos brazos
+		1, 0, // primera clave = 1
+		5, 0, // destino del brazo 0
+		7, 0, // destino del brazo 1
+	}
+	if salto, err := m.saltoDeSwitch(packed, 0, true, int32(2)); err != nil || salto != 7 {
+		t.Errorf("packed-switch con la clave 2: salto %d, err %v", salto, err)
+	}
+	if salto, err := m.saltoDeSwitch(packed, 0, true, int32(9)); err != nil || salto != 3 {
+		t.Errorf("packed-switch con una clave que no está: salto %d, err %v", salto, err)
+	}
+
+	// sparse: ident en 2, tamaño en 3, dos claves en 4-7 y dos destinos en 8-11
+	sparse := []uint16{
+		0x2c00, 2,
+		0x0200, 2,
+		1, 0, 9, 0,
+		5, 0, 7, 0,
+	}
+	if salto, err := m.saltoDeSwitch(sparse, 0, false, int32(9)); err != nil || salto != 7 {
+		t.Errorf("sparse-switch con la clave 9: salto %d, err %v", salto, err)
+	}
+
+	// el mismo packed sin el último par de destinos: declara 2 brazos y solo caben uno
+	packedCortado := packed[:len(packed)-2]
+	if _, err := m.saltoDeSwitch(packedCortado, 0, true, int32(2)); err == nil {
+		t.Error("se aceptó un payload de packed-switch truncado")
+	} else if !strings.Contains(err.Error(), "payload de packed-switch truncado") {
+		t.Errorf("el error del packed-switch truncado es %q", err)
+	}
+	var malo *errorDexMalformado
+	if !errors.As(func() error { _, e := m.saltoDeSwitch(packedCortado, 0, true, int32(2)); return e }(), &malo) {
+		t.Error("el payload truncado no se marcó como dex malformado")
+	}
+
+	sparseCortado := sparse[:len(sparse)-2]
+	if _, err := m.saltoDeSwitch(sparseCortado, 0, false, int32(9)); err == nil {
+		t.Error("se aceptó un payload de sparse-switch truncado")
+	} else if !strings.Contains(err.Error(), "payload de sparse-switch truncado") {
+		t.Errorf("el error del sparse-switch truncado es %q", err)
+	}
+
+	// un ident equivocado tampoco se ejecuta
+	if _, err := m.saltoDeSwitch(packed, 0, false, int32(1)); err == nil ||
+		!strings.Contains(err.Error(), "apunta al payload") {
+		t.Errorf("un sparse-switch sobre un payload packed dio %v", err)
+	}
+	// y un desplazamiento al final del cuerpo
+	if _, err := m.saltoDeSwitch(packed, 0, true, int32(1)); err != nil {
+		t.Errorf("el packed-switch válido falló: %v", err)
+	}
+	if _, err := m.saltoDeSwitch(packed[:2], 0, true, int32(1)); err == nil {
+		t.Error("se aceptó un switch cuyo payload cae fuera del cuerpo")
+	}
+}
+
+// fuenteCasosSwitch es una actividad con un switch en un método propio: su dex lleva un
+// packed-switch real, que es lo que se corrompe para la prueba de punta a punta.
+const fuenteCasosSwitch = `package com.hola.contador;
+
+import android.app.*;
+import android.os.*;
+import android.widget.*;
+
+public class Casos extends Activity {
+    int valor(int x) {
+        switch (x) { case 1: return 10; case 2: return 20; default: return 0; }
+    }
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        TextView total = (TextView) findViewById(R.id.total);
+        total.setText("valor " + valor(2));
+    }
+}
+`
+
+// rompePayloadDeSwitch devuelve una copia del dex con el tamaño del payload del packed-switch del
+// método dado puesto a 100: los bytes siguen leyéndose como dex, pero el payload ya no cabe.
+func rompePayloadDeSwitch(t *testing.T, dex []byte, metodo string) []byte {
+	t.Helper()
+	d, err := readDex(dex)
+	if err != nil {
+		t.Fatalf("el dex no se relee: %v", err)
+	}
+	datos, err := d.methodsDeCadaClase()
+	if err != nil {
+		t.Fatalf("el class_data: %v", err)
+	}
+	for _, c := range d.classes {
+		cd := datos[c.name]
+		for _, m := range append(append([]encodedMethod{}, cd.directs...), cd.virtuals...) {
+			if m.codeOff == 0 || int(m.methodIdx) >= len(d.methods) {
+				continue
+			}
+			if d.methods[m.methodIdx].name != metodo {
+				continue
+			}
+			item, err := d.readCodeItem(m.codeOff)
+			if err != nil {
+				t.Fatalf("%s.%s: %v", c.name, metodo, err)
+			}
+			for pc := 0; pc+1 < len(item.insns); pc++ {
+				if byte(item.insns[pc]) != 0x2b {
+					continue
+				}
+				base := pc + int(int16(item.insns[pc+1]))
+				if base < 0 || base+3 >= len(item.insns) {
+					t.Fatalf("el payload del switch cae fuera del cuerpo")
+				}
+				pos := int(m.codeOff) + 16 + 2*(base+1)
+				salida := append([]byte(nil), dex...)
+				if pos+2 > len(salida) {
+					t.Fatalf("el tamaño del payload queda fuera del fichero")
+				}
+				salida[pos] = 100
+				salida[pos+1] = 0
+				return salida
+			}
+			t.Fatalf("%s no tiene packed-switch (0x2b) en el método %s", c.name, metodo)
+		}
+	}
+	t.Fatalf("no se encontró el método %s con cuerpo", metodo)
+	return nil
+}
+
+// TestElPreviewRechazaUnSwitchDePayloadRoto es la prueba de punta a punta: el opcode real 0x2b con
+// el payload mal alineado hace que `preview` devuelva error controlado, con el mensaje del payload y
+// sin panic. El mismo apk sin corromper captura su texto, para que se vea que lo que rompe es el
+// payload y no otra cosa.
+func TestElPreviewRechazaUnSwitchDePayloadRoto(t *testing.T) {
+	fuentes := append(fuentesDelContador(t), fuenteJava{nombre: "Casos.java", contenido: fuenteCasosSwitch})
+	dex := dexDeFuentes(t, fuentes...)
+	// la lanzadora es Casos: es donde vive el switch, y así lo recorre también el comando entero
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layout, err := escribeAXML(layoutDelContador())
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	apkCon := func(clases []byte) []byte {
+		return zipDeEntradas(t, map[string][]byte{
+			"AndroidManifest.xml": manifiesto,
+			"resources.arsc":      arsc,
+			"res/layout/main.xml": layout,
+			"classes.dex":         clases,
+		})
+	}
+
+	d, err := readDex(rompePayloadDeSwitch(t, dex, "valor"))
+	if err != nil {
+		t.Fatalf("el dex parcheado no se relee: %v", err)
+	}
+	tabla, err := leeTabla(arsc)
+	if err != nil {
+		t.Fatalf("la tabla no se relee: %v", err)
+	}
+	// primero el bueno: Casos escribe «valor 20»
+	dbuena, err := readDex(dex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, _ := ejecutaOnCreate(dbuena, tabla, "Lcom/hola/contador/Casos;")
+	if res.Error != "" || len(res.Capturas) != 1 || res.Capturas[0].Texto != "valor 20" {
+		t.Fatalf("el dex sin corromper no capturó «valor 20»: %+v (%s)", res.Capturas, res.Error)
+	}
+	// y ahora el roto: error controlado, del payload y marcado como malformado
+	res, _ = ejecutaOnCreate(d, tabla, "Lcom/hola/contador/Casos;")
+	if res.Error == "" {
+		t.Fatal("el payload truncado se ejecutó sin error")
+	}
+	if !strings.Contains(res.Error, "payload de packed-switch truncado") {
+		t.Errorf("el error es %q y se esperaba el del payload", res.Error)
+	}
+	if !res.malformado {
+		t.Error("el fallo del payload no se marcó como dex malformado")
+	}
+	if len(res.Capturas) != 0 {
+		t.Errorf("se capturó texto de una ejecución que se detuvo: %+v", res.Capturas)
+	}
+
+	// el mismo apk sin corromper: el comando captura «valor 20» en el TextView
+	bueno, err := modeloVistaDeAPK(apkCon(dex), "")
+	if err != nil {
+		t.Fatalf("el apk sin corromper se rechazó: %v", err)
+	}
+	if bueno.Ejecucion == nil || bueno.Ejecucion.Error != "" || len(bueno.Ejecucion.Capturas) != 1 {
+		t.Fatalf("el apk sin corromper no capturó nada: %+v", bueno.Ejecucion)
+	}
+	if got := bueno.Raiz.Hijos[0].TextoDinamico; got != "valor 20" {
+		t.Errorf("el texto dinámico del apk bueno es %q", got)
+	}
+
+	// el comando entero, con el dex roto metido en un apk, tiene que rechazarlo
+	apk := apkCon(rompePayloadDeSwitch(t, dex, "valor"))
+	if destino := os.Getenv("APKC_FIXTURE_MALO"); destino != "" {
+		// la prueba del código de salida se hace desde la shell; sin la variable no se escribe nada
+		if err := os.WriteFile(destino, apk, 0644); err != nil {
+			t.Fatalf("no se pudo escribir el apk de la sonda: %v", err)
+		}
+	}
+	if _, err := modeloVistaDeAPK(apk, ""); err == nil {
+		t.Fatal("modeloVistaDeAPK aceptó un dex con el payload del switch truncado")
+	} else if !strings.Contains(err.Error(), "el classes.dex no es ejecutable") ||
+		!strings.Contains(err.Error(), "payload de packed-switch truncado") {
+		t.Errorf("el rechazo del comando dice %q", err)
+	}
+	// y sin ejecutar, el layout del mismo apk sigue leyéndose: la bandera de escape no interpreta
+	if _, err := modeloVistaDeAPKCon(apk, "", false); err != nil {
+		t.Errorf("con --sin-ejecutar el apk se rechazó: %v", err)
 	}
 }
