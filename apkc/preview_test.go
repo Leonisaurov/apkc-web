@@ -212,9 +212,14 @@ func TestPreviewSobreUnAPKDeLosEscritores(t *testing.T) {
 	if texto.Ancho != "wrap_content" || texto.Alto != "wrap_content" {
 		t.Errorf("el TextView declara %s x %s", texto.Ancho, texto.Alto)
 	}
-	// el TextView va arriba y el Button debajo: la orientación vertical del layout manda
-	if texto.Rect.Y != 0 || boton.Rect.Y != texto.Rect.Alto {
-		t.Errorf("en vertical se esperaba el Button en y=%d y está en %d", texto.Rect.Alto, boton.Rect.Y)
+	// el TextView y el Button se centran los dos: el layout declara gravity="center" y el bloque de
+	// hijos queda en el medio de la pantalla (640 - 24 - 48 = 568, entre 2 = 284)
+	if texto.Rect.Y != 284 || boton.Rect.Y != texto.Rect.Y+texto.Rect.Alto {
+		t.Errorf("con gravity=center se esperaba el TextView en y=284 y el Button en y=%d; están en %d y %d",
+			texto.Rect.Y+texto.Rect.Alto, texto.Rect.Y, boton.Rect.Y)
+	}
+	if m.Raiz.Gravity != "center" {
+		t.Errorf("la raíz declara gravity=center y el modelo dice %q", m.Raiz.Gravity)
 	}
 }
 

@@ -10,9 +10,10 @@ package main
 //   - El layout se elige por nombre (por defecto el que se llama `main`) salvo que la app lo diga:
 //     desde la Fase 2 el intérprete de previewinterprete.go lee el id del `setContentView` y manda
 //     sobre el nombre. Sin `classes.dex`, el criterio sigue siendo el nombre.
-//   - El rectángulo es una aproximación declarada: cuenta las views de un LinearLayout, estima el
-//     tamaño del texto (el dinámico si lo hay) y recorta a la pantalla. No es una medida del
-//     framework; estilos fieles, imágenes, `gravity` fino y tema del sistema quedan fuera de la fase.
+//   - El rectángulo es una colocación declarada, no una medida del framework: se aplican las reglas
+//     de LinearLayout (orientación, gravity, layout_gravity, layout_weight, padding y márgenes) y el
+//     apilado de FrameLayout, con el tamaño del texto estimado (el dinámico si lo hay). Estilos
+//     fieles, imágenes, líneas de texto partidas, RelativeLayout y el tema del sistema quedan fuera.
 //   - Un dex cuya ejecución se sale de sus propios bytes (un payload de switch que no cabe, un
 //     registro fuera del marco) no se ejecuta a medias: el comando lo rechaza con error y código 2.
 //     Lo que sí sigue saliendo es el modelo de un apk cuya app llama a una API fuera del subconjunto:
@@ -30,6 +31,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -46,9 +48,38 @@ const (
 	dpPorCaracter     = 8
 	dpRellenoTexto    = 16
 	profundidadMaxima = 8
+
+	// la densidad con la que un `px` del layout se lleva a dp: la pantalla del modelo es mdpi
+	// (360x640 dp a 160 dpi), que es la que declara esta aproximación
+	dpiPantalla = 160
+
+	// los dos valores de espera de layout_width/layout_height, con el signo que les da aapt2
+	medidaMatch = -1
+	medidaWrap  = -2
+
+	// tipos de Res_value que la colocación necesita y que axmlwriter.go no nombra
+	tipoFlotante  byte = 0x04
+	tipoDimension byte = 0x05
 )
 
-// rectVista es el rectángulo aproximado de un nodo, en dp y relativo a la pantalla.
+// Los trozos de android:gravity que se aplican, con los valores de Gravity del framework: los tres
+// bits bajos son la gravedad horizontal y los del medio la vertical (CENTER es 0x11, medido en el
+// xmltree del layout del studio).
+const (
+	gravityCentroHorizontal  = 0x01
+	gravityIzquierda         = 0x03
+	gravityDerecha           = 0x05
+	gravityRellenoHorizontal = 0x07
+	gravityCentroVertical    = 0x10
+	gravityArriba            = 0x30
+	gravityAbajo             = 0x50
+	gravityRellenoVertical   = 0x70
+	gravityMascaraHorizontal = 0x07
+	gravityMascaraVertical   = 0x70
+	gravityBanderaDireccion  = 0x00800000
+)
+
+// rectVista es el rectángulo de un nodo, en dp y relativo a la pantalla.
 type rectVista struct {
 	X     int `json:"x"`
 	Y     int `json:"y"`
@@ -56,10 +87,23 @@ type rectVista struct {
 	Alto  int `json:"alto"`
 }
 
+// ladosVista es un relleno o un margen: los cuatro lados en dp, en el orden en que se leen.
+type ladosVista struct {
+	Izq int `json:"izq"`
+	Arr int `json:"arr"`
+	Der int `json:"der"`
+	Aba int `json:"aba"`
+}
+
+func (l ladosVista) horizontal() int { return l.Izq + l.Der }
+func (l ladosVista) vertical() int   { return l.Arr + l.Aba }
+
 // nodoVista es una view del modelo: su tipo, su identificador resuelto, el texto resuelto, lo que
-// declara de tamaño, el rectángulo y sus hijos. Los campos sin namespace no se serializan.
-// `textoDinamico` es la Fase 2: lo que el intérprete vio escribir a la app en esa view, separado del
-// `texto` que declara el layout para que el modelo no confunda lo declarado con lo ejecutado.
+// declara de tamaño y de colocación, el rectángulo y sus hijos. Los campos sin namespace no se
+// serializan. `textoDinamico` es la Fase 2: lo que el intérprete vio escribir a la app en esa view,
+// separado del `texto` que declara el layout para que el modelo no confunda lo declarado con lo
+// ejecutado. `gravity`, `padding`, `margen` y `peso` son lo que la colocación real necesita y lo que
+// el pintor puede consumir sin volver a leer el AXML.
 type nodoVista struct {
 	Tipo          string       `json:"tipo"`
 	ID            string       `json:"id,omitempty"`
@@ -69,10 +113,23 @@ type nodoVista struct {
 	Estilo        string       `json:"estilo,omitempty"`
 	Ancho         string       `json:"ancho,omitempty"`
 	Alto          string       `json:"alto,omitempty"`
+	Gravity       string       `json:"gravity,omitempty"`
+	Peso          float64      `json:"peso,omitempty"`
+	Padding       *ladosVista  `json:"padding,omitempty"`
+	Margen        *ladosVista  `json:"margen,omitempty"`
 	Rect          rectVista    `json:"rect"`
 	Hijos         []*nodoVista `json:"hijos,omitempty"`
 
 	orientacion string // "vertical", "horizontal" o "" (se apilan en el origen)
+
+	declAncho     int        // medidaMatch, medidaWrap o el dp declarado
+	declAlto      int        // lo mismo para el alto
+	gravityBits   int32      // android:gravity de la view, ya como bits
+	layoutGravity int32      // android:layout_gravity, o -1 cuando no se declara
+	pad           ladosVista // el relleno efectivo, en dp
+	margen        ladosVista // el margen efectivo, en dp
+	medAncho      int        // el tamaño medido, que es el que ocupa en la colocación
+	medAlto       int
 }
 
 // modeloVista es el JSON que sale por stdout. `aproximado` viaja en verdadero siempre: los
@@ -587,12 +644,13 @@ func (c *contextoVista) resuelve(v valor, pool []string, profundidad int) string
 
 // nodoDe traduce un elemento del layout al modelo, sin colocarlo. El tipo es el nombre del elemento
 // tal como lo escribió el fuente (LinearLayout, TextView, Button…); el ancho y el alto se guardan
-// como los declara el layout para que el consumidor sepa de dónde sale la aproximación.
+// como los declara el layout para que el consumidor sepa de dónde sale la medida, y la colocación se
+// queda con los mismos números para no volver a leer el AXML.
 func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	if e == nil {
 		return nil
 	}
-	n := &nodoVista{Tipo: e.nombre}
+	n := &nodoVista{Tipo: e.nombre, declAncho: medidaWrap, declAlto: medidaWrap, layoutGravity: -1}
 	if id, ok := e.atributo(uriDeRecursos, "id"); ok {
 		n.ID = c.texto(id)
 		n.IDRef = fmt.Sprintf("%#08x", id.datos)
@@ -604,16 +662,42 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 		n.Estilo = c.texto(estilo)
 	}
 	if ancho, ok := e.atributo(uriDeRecursos, "layout_width"); ok {
-		n.Ancho = valorDeMedida(ancho)
+		n.Ancho, n.declAncho = c.valorDeMedida(ancho)
 	}
 	if alto, ok := e.atributo(uriDeRecursos, "layout_height"); ok {
-		n.Alto = valorDeMedida(alto)
+		n.Alto, n.declAlto = c.valorDeMedida(alto)
+	}
+	if gravity, ok := e.atributo(uriDeRecursos, "gravity"); ok {
+		if bits, ok := enteroDeValor(gravity); ok {
+			n.gravityBits = bits
+			n.Gravity = nombreDeGravity(bits)
+		} else {
+			n.Gravity = c.texto(gravity)
+		}
+	}
+	if gravity, ok := e.atributo(uriDeRecursos, "layout_gravity"); ok {
+		if bits, ok := enteroDeValor(gravity); ok {
+			n.layoutGravity = bits
+		}
+	}
+	if peso, ok := e.atributo(uriDeRecursos, "layout_weight"); ok {
+		n.Peso = c.numeroDe(peso)
+	}
+	if pad, ok := c.ladosDe(e, "padding"); ok {
+		n.pad = pad
+		copia := pad
+		n.Padding = &copia
+	}
+	if margen, ok := c.ladosDe(e, "layout_margin"); ok {
+		n.margen = margen
+		copia := margen
+		n.Margen = &copia
 	}
 	if orientacion, ok := e.atributo(uriDeRecursos, "orientation"); ok {
 		// el enlace escribe el enum como entero: 0 es horizontal y 1 vertical, que son las dos
 		// constantes de LinearLayout; si viniera como texto se usa tal cual
-		if orientacion.tipo == tipoEnteroDec {
-			switch int32(orientacion.datos) {
+		if bits, ok := enteroDeValor(orientacion); ok {
+			switch bits {
 			case 0:
 				n.orientacion = "horizontal"
 			case 1:
@@ -623,8 +707,16 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 			n.orientacion = c.texto(orientacion)
 		}
 	}
-	if n.orientacion == "" && n.Tipo == "ScrollView" {
-		n.orientacion = "vertical"
+	if n.orientacion == "" {
+		// el defecto del framework: LinearLayout horizontal salvo RadioGroup y los dos ScrollView
+		switch n.Tipo {
+		case "LinearLayout":
+			n.orientacion = "horizontal"
+		case "RadioGroup", "ScrollView":
+			n.orientacion = "vertical"
+		case "HorizontalScrollView":
+			n.orientacion = "horizontal"
+		}
 	}
 	for _, h := range e.hijos {
 		if hijo := c.nodoDe(h); hijo != nil {
@@ -634,141 +726,565 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	return n
 }
 
-// valorDeMedida: el layout_width/height llega como número (dp) o como referencia a match_parent
-// (-1) o wrap_content (-2); se devuelve la palabra que el modelo enseña.
-func valorDeMedida(v valor) string {
+// ladosDe lee un relleno o un margen completo: la forma corta (padding, layout_margin) y las de un
+// lado, que se aplican encima. La dirección se toma como izquierda-a-derecha, que es la del modelo:
+// `start` es el lado izquierdo y `end` el derecho.
+func (c *contextoVista) ladosDe(e *elementoLeido, prefijo string) (ladosVista, bool) {
+	l := ladosVista{}
+	declarado := false
+	pon := func(nombre string, aplica func(int)) {
+		v, ok := e.atributo(uriDeRecursos, nombre)
+		if !ok {
+			return
+		}
+		if dp, ok := c.dpDe(v); ok {
+			aplica(dp)
+			declarado = true
+		}
+	}
+	pon(prefijo, func(dp int) { l = ladosVista{Izq: dp, Arr: dp, Der: dp, Aba: dp} })
+	pon(prefijo+"Horizontal", func(dp int) { l.Izq, l.Der = dp, dp })
+	pon(prefijo+"Vertical", func(dp int) { l.Arr, l.Aba = dp, dp })
+	pon(prefijo+"Start", func(dp int) { l.Izq = dp })
+	pon(prefijo+"End", func(dp int) { l.Der = dp })
+	pon(prefijo+"Left", func(dp int) { l.Izq = dp })
+	pon(prefijo+"Right", func(dp int) { l.Der = dp })
+	pon(prefijo+"Top", func(dp int) { l.Arr = dp })
+	pon(prefijo+"Bottom", func(dp int) { l.Aba = dp })
+	if !declarado {
+		return ladosVista{}, false
+	}
+	return l, true
+}
+
+// enteroDeValor: los enum del framework (gravity, orientation) llegan como entero. El aapt2 del SDK
+// escribe `gravity="center"` como 0x11 hexadecimal y el enlazador en Go de este fork deja el mismo
+// valor con su tipo; las dos formas se aceptan.
+func enteroDeValor(v valor) (int32, bool) {
 	switch v.tipo {
-	case tipoEnteroDec:
-		switch int32(v.datos) {
-		case -1:
-			return "match_parent"
-		case -2:
-			return "wrap_content"
+	case tipoEnteroDec, tipoEnteroHex:
+		return int32(v.datos), true
+	}
+	return 0, false
+}
+
+// numeroDe lee un número que puede venir como flotante (aapt2 escribe `layout_weight="1"` como el
+// float32 0x3f800000), como entero (el enlazador en Go) o como cadena.
+func (c *contextoVista) numeroDe(v valor) float64 {
+	switch v.tipo {
+	case tipoFlotante:
+		return float64(math.Float32frombits(v.datos))
+	case tipoEnteroDec, tipoEnteroHex:
+		return float64(int32(v.datos))
+	case tipoCadena:
+		if c.axml == nil {
+			return 0
 		}
-		return strconv.FormatInt(int64(int32(v.datos)), 10) + "dp"
+		if f, err := strconv.ParseFloat(strings.TrimSpace(c.texto(v)), 64); err == nil {
+			return f
+		}
+	}
+	return 0
+}
+
+// valorDeMedida: el layout_width/height llega como número (dp, o -1/-2 para match_parent y
+// wrap_content), como dimensión o como referencia a un `@dimen`; se devuelve la palabra que el
+// modelo enseña y su valor en dp, que es el que usa la colocación.
+func (c *contextoVista) valorDeMedida(v valor) (string, int) {
+	if bits, ok := enteroDeValor(v); ok {
+		switch bits {
+		case medidaMatch:
+			return "match_parent", medidaMatch
+		case medidaWrap:
+			return "wrap_content", medidaWrap
+		}
+		if bits >= 0 {
+			return strconv.Itoa(int(bits)) + "dp", int(bits)
+		}
+	}
+	if dp, ok := c.dpDe(v); ok {
+		return strconv.Itoa(dp) + "dp", dp
+	}
+	return "", medidaWrap
+}
+
+// valorDeMedida es la forma que enseña un layout_width/height sin tabla detrás: la usan las pruebas
+// del lector, que leen el AXML sin resources.arsc.
+func valorDeMedida(v valor) string {
+	texto, _ := (&contextoVista{}).valorDeMedida(v)
+	return texto
+}
+
+// dpDe lleva a dp el valor de una dimensión. Tres formas medidas sobre el APK del studio:
+//   - TYPE_DIMENSION (0x05) con la mantisa y la unidad en un entero complejo, que es lo que escribe
+//     el aapt2 del SDK (`16dp` = 0x00001001, `8dp` = 0x00000801, `200dp` = 0x0000c801);
+//   - una cadena con sufijo (`"16dp"`), que es lo que deja el enlazador en Go de este fork —medido
+//     con `aapt2 dump xmltree`, que la imprime como `"16dp" (Raw: "16dp")`;
+//   - una referencia a `@dimen/…`, que se sigue en la tabla.
+func (c *contextoVista) dpDe(v valor) (int, bool) { return c.dpDeCon(v, 0) }
+
+func (c *contextoVista) dpDeCon(v valor, profundidad int) (int, bool) {
+	switch v.tipo {
+	case tipoDimension:
+		return dpDeComplejo(v.datos)
+	case tipoCadena:
+		if c.axml == nil {
+			return 0, false
+		}
+		return dpDeTexto(c.texto(v))
+	case tipoEnteroDec, tipoEnteroHex:
+		return int(int32(v.datos)), true
+	case tipoFlotante:
+		return int(math.Round(float64(math.Float32frombits(v.datos)))), true
 	case tipoReferencia:
-		return "wrap_content"
+		if c.tabla == nil || profundidad >= profundidadMaxima {
+			return 0, false
+		}
+		enlace, ok := c.tabla.valorDeId(v.datos)
+		if !ok {
+			return 0, false
+		}
+		// el enlace vive en el pool global de la tabla, no en el del AXML
+		if enlace.tipo == tipoCadena && int(enlace.datos) < len(c.tabla.global.cadenas) {
+			return dpDeTexto(c.tabla.global.cadenas[enlace.datos])
+		}
+		return c.dpDeCon(enlace, profundidad+1)
 	}
-	return ""
+	return 0, false
 }
 
-// coloca reparte los hijos dentro del rectángulo del padre. `disponible` es lo que le queda al
-// padre; un hijo con match_parent lo ocupa entero. Lo que un wrap_content no quepa se recorta.
-func coloca(n *nodoVista, x, y, disponibleAncho, disponibleAlto int) {
-	ancho, alto := tamanoDe(n, disponibleAncho, disponibleAlto)
-	if ancho > disponibleAncho && disponibleAncho > 0 {
-		ancho = disponibleAncho
-	}
-	if alto > disponibleAlto && disponibleAlto > 0 {
-		alto = disponibleAlto
-	}
-	n.Rect = rectVista{X: x, Y: y, Ancho: ancho, Alto: alto}
-	if len(n.Hijos) == 0 {
-		return
-	}
-	switch n.orientacion {
-	case "vertical":
-		cursor := 0
-		for _, h := range n.Hijos {
-			coloca(h, x, y+cursor, ancho, alto-cursor)
-			cursor += h.Rect.Alto
-		}
-	case "horizontal":
-		cursor := 0
-		for _, h := range n.Hijos {
-			coloca(h, x+cursor, y, ancho-cursor, alto)
-			cursor += h.Rect.Ancho
-		}
+// dpDeComplejo decodifica un TYPE_DIMENSION con la cuenta de `complexToFloat` del framework: 8 bits
+// de unidad, 4 de radix y 24 de mantisa. A 160 dpi (la densidad que declara el modelo) un `px` es un
+// dp; `sp` se toma con fontScale 1 y `pt`, `in` y `mm` se llevan por su equivalencia.
+func dpDeComplejo(datos uint32) (int, bool) {
+	unidad := datos & 0xf
+	radix := (datos >> 4) & 0x3
+	multiplicador := [...]float64{1.0 / 256, 1.0 / (1 << 15), 1.0 / (1 << 23), 1.0 / (1 << 31)}[radix]
+	valor := float64(int32(datos&0xffffff00)) * multiplicador
+	dp := 0.0
+	switch unidad {
+	case 0: // px: a dpiPantalla, un px es un dp
+		dp = valor * 160.0 / dpiPantalla
+	case 1: // dip/dp
+		dp = valor
+	case 2: // sp: fontScale 1
+		dp = valor
+	case 3: // pt
+		dp = valor * dpiPantalla / 72
+	case 4: // in
+		dp = valor * dpiPantalla
+	case 5: // mm
+		dp = valor * dpiPantalla / 25.4
 	default:
-		// un contenedor sin orientación (FrameLayout, RelativeLayout) apila en el origen
-		for _, h := range n.Hijos {
-			coloca(h, x, y, ancho, alto)
-		}
+		return 0, false
 	}
+	return int(math.Round(dp)), true
 }
 
-// tamanoDe: el tamaño que ocupa un nodo. Un contenedor con wrap_content mide la suma de sus hijos
-// como los pediría cada uno; una view hoja mide su texto y el alto de su tipo.
-func tamanoDe(n *nodoVista, disponibleAncho, disponibleAlto int) (int, int) {
-	contenidoAncho, contenidoAlto := contenidoDelNodo(n, disponibleAncho, disponibleAlto)
-	ancho := medidaDeclarada(n.Ancho, disponibleAncho, contenidoAncho)
-	alto := medidaDeclarada(n.Alto, disponibleAlto, contenidoAlto)
-	if ancho < 0 {
-		ancho = 0
+// dpDeTexto lee las dimensiones que viajan como cadena, con el sufijo que admite el formato.
+func dpDeTexto(s string) (int, bool) {
+	s = strings.TrimSpace(s)
+	unidades := [...]struct {
+		sufijo string
+		factor float64
+	}{
+		{"dip", 1}, {"dp", 1}, {"sp", 1}, {"px", 1},
+		{"pt", dpiPantalla / 72.0}, {"in", dpiPantalla}, {"mm", dpiPantalla / 25.4},
 	}
-	if alto < 0 {
-		alto = 0
+	for _, u := range unidades {
+		if !strings.HasSuffix(s, u.sufijo) {
+			continue
+		}
+		n, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(s, u.sufijo)), 64)
+		if err != nil {
+			return 0, false
+		}
+		return int(math.Round(n * u.factor)), true
 	}
-	return ancho, alto
+	return 0, false
 }
 
-func contenidoDelNodo(n *nodoVista, disponibleAncho, disponibleAlto int) (int, int) {
-	if len(n.Hijos) > 0 || esContenedor(n.Tipo) {
-		vertical := n.orientacion == "vertical"
-		if n.orientacion == "" && n.Tipo != "LinearLayout" {
-			// apilado en el origen: el contenedor mide el mayor de sus hijos
-			ancho, alto := 0, 0
-			for _, h := range n.Hijos {
-				hw, hh := tamanoDe(h, disponibleAncho, disponibleAlto)
-				if hw > ancho {
-					ancho = hw
-				}
-				if hh > alto {
-					alto = hh
-				}
-			}
-			return ancho, alto
-		}
-		ancho, alto := 0, 0
-		for _, h := range n.Hijos {
-			hw, hh := tamanoDe(h, disponibleAncho, disponibleAlto)
-			if vertical {
-				if hw > ancho {
-					ancho = hw
-				}
-				alto += hh
-				continue
-			}
-			if hh > alto {
-				alto = hh
-			}
-			ancho += hw
-		}
-		return ancho, alto
+// nombreDeGravity: los bits de android:gravity como la palabra que enseña el modelo, para que el
+// pintor sepa cómo alinear el texto dentro de su rectángulo.
+func nombreDeGravity(bits int32) string {
+	if bits == 0 {
+		return ""
 	}
-	// una view hoja: el ancho lo estima el texto que se va a ver y el alto su tipo
-	alto := dpAltoTexto
-	if n.Tipo == "Button" {
-		alto = dpAltoBoton
+	if bits&gravityMascaraHorizontal == gravityCentroHorizontal && bits&gravityMascaraVertical == gravityCentroVertical {
+		return "center"
 	}
+	partes := []string{}
+	switch {
+	case bits&gravityMascaraHorizontal == gravityCentroHorizontal:
+		partes = append(partes, "center_horizontal")
+	case bits&gravityMascaraHorizontal == gravityIzquierda:
+		if bits&gravityBanderaDireccion != 0 {
+			partes = append(partes, "start")
+		} else {
+			partes = append(partes, "left")
+		}
+	case bits&gravityMascaraHorizontal == gravityDerecha:
+		if bits&gravityBanderaDireccion != 0 {
+			partes = append(partes, "end")
+		} else {
+			partes = append(partes, "right")
+		}
+	case bits&gravityMascaraHorizontal == gravityRellenoHorizontal:
+		partes = append(partes, "fill_horizontal")
+	}
+	switch bits & gravityMascaraVertical {
+	case gravityCentroVertical:
+		partes = append(partes, "center_vertical")
+	case gravityArriba:
+		partes = append(partes, "top")
+	case gravityAbajo:
+		partes = append(partes, "bottom")
+	case gravityRellenoVertical:
+		partes = append(partes, "fill_vertical")
+	}
+	if len(partes) == 0 {
+		return fmt.Sprintf("0x%02x", bits)
+	}
+	return strings.Join(partes, "|")
+}
+
+// verticalDeGravity y horizontalDeGravity dejan solo el trozo que manda en cada eje. La bandera de
+// dirección relativa (start/end) no cambia la cuenta en un layout de izquierda a derecha.
+func horizontalDeGravity(bits int32) int32 { return bits & gravityMascaraHorizontal }
+func verticalDeGravity(bits int32) int32   { return bits & gravityMascaraVertical }
+
+// espec es el límite con el que un padre mide a un hijo: `limita` en falso es el UNSPECIFIED del
+// framework, que deja al hijo medir su contenido sin techo, y `exacto` es el EXACTLY, que manda
+// aunque el layout declare wrap_content (es el que usa el reparto del peso).
+type espec struct {
+	tam    int
+	limita bool
+	exacto bool
+}
+
+// especDeHijo reproduce getChildMeasureSpec: un tamaño fijo manda, match_parent ocupa el hueco que
+// el padre deja y wrap_content se queda en él como mucho.
+func especDeHijo(esp espec, relleno, margenes, decl int) espec {
+	disponible := esp.tam - relleno - margenes
+	if disponible < 0 {
+		disponible = 0
+	}
+	switch {
+	case decl >= 0:
+		return espec{tam: decl, limita: true, exacto: true}
+	case decl == medidaMatch:
+		// un match_parent sin techo del padre mide su contenido, como el UNSPECIFIED del framework
+		if !esp.limita {
+			return espec{limita: false}
+		}
+		return espec{tam: disponible, limita: true, exacto: true}
+	}
+	if esp.limita {
+		return espec{tam: disponible, limita: true}
+	}
+	return espec{limita: false}
+}
+
+// tamanoPropio: el tamaño declarado manda; un espec EXACTLY manda sobre wrap_content; wrap_content
+// toma el contenido medido, recortado al techo del padre, y match_parent ocupa lo que el padre da.
+func tamanoPropio(decl int, esp espec, contenido int) int {
+	switch {
+	case decl >= 0:
+		return decl
+	case esp.exacto:
+		return esp.tam
+	case decl == medidaMatch:
+		if esp.limita {
+			return esp.tam
+		}
+		return contenido
+	}
+	if contenido < 0 {
+		contenido = 0
+	}
+	if esp.limita && contenido > esp.tam {
+		return esp.tam
+	}
+	return contenido
+}
+
+// contenidoHoja estima lo que mide una view sin hijos: el ancho por el texto que se va a ver y el
+// alto por su tipo. Es la parte declarada como aproximada del modelo.
+func contenidoHoja(n *nodoVista) (int, int) {
 	visible := n.Texto
 	if n.TextoDinamico != "" {
 		visible = n.TextoDinamico
 	}
-	ancho := len([]rune(visible))*dpPorCaracter + dpRellenoTexto
+	alto := dpAltoTexto
+	if n.Tipo == "Button" {
+		alto = dpAltoBoton
+	}
+	// el relleno del texto: el declarado o, sin él, el que trae el tema
+	relleno := n.pad.horizontal()
+	if relleno == 0 {
+		relleno = dpRellenoTexto
+	}
+	ancho := len([]rune(visible))*dpPorCaracter + relleno
 	if ancho < 2*dpRellenoTexto {
 		ancho = 2 * dpRellenoTexto
 	}
-	return ancho, alto
+	return ancho, alto + n.pad.vertical()
 }
 
-// esContenedor: los tipos de layout del framework se reconocen por el sufijo, que es la única
-// forma de no llevar dentro la lista de clases de la plataforma.
-func esContenedor(tipo string) bool {
-	return strings.HasSuffix(tipo, "Layout") || tipo == "ScrollView"
+// tipoDeContenedor: los tipos del framework se reconocen por el sufijo y el nombre, que es la única
+// forma de no llevar dentro la lista de clases de la plataforma. Lo que no es lineal se apila.
+func tipoDeContenedor(tipo string) string {
+	switch tipo {
+	case "LinearLayout", "RadioGroup", "ScrollView", "HorizontalScrollView":
+		return "lineal"
+	case "FrameLayout":
+		return "frame"
+	}
+	if strings.HasSuffix(tipo, "Layout") {
+		return "apilado"
+	}
+	return ""
 }
 
-func medidaDeclarada(decl string, disponible, contenido int) int {
-	switch decl {
-	case "", "wrap_content":
-		return contenido
-	case "match_parent", "fill_parent":
-		return disponible
+// medir calcula el tamaño de un nodo y deja medidos sus hijos, como el `onMeasure` del framework:
+// un contenedor mide a sus hijos con SU espec y después decide cuánto ocupa él.
+func (n *nodoVista) medir(espAncho, espAlto espec) {
+	if tipoDeContenedor(n.Tipo) == "" && len(n.Hijos) == 0 {
+		contenidoAncho, contenidoAlto := contenidoHoja(n)
+		n.medAncho = tamanoPropio(n.declAncho, espAncho, contenidoAncho)
+		n.medAlto = tamanoPropio(n.declAlto, espAlto, contenidoAlto)
+		return
 	}
-	if dp, err := strconv.Atoi(strings.TrimSuffix(decl, "dp")); err == nil {
-		return dp
+	if tipoDeContenedor(n.Tipo) == "lineal" {
+		n.medirLineal(n.orientacion != "horizontal", espAncho, espAlto)
+		return
 	}
-	return contenido
+	n.medirApilado(espAncho, espAlto)
+}
+
+// medirLineal es measureVertical/measureHorizontal de LinearLayout: recorre los hijos acumulando su
+// tamaño y sus márgenes, reparte el hueco sobrante entre los que tienen peso y mide el contenedor
+// por su contenido cuando es wrap_content.
+func (n *nodoVista) medirLineal(vertical bool, espAncho, espAlto espec) {
+	padAncho, padAlto := n.pad.horizontal(), n.pad.vertical()
+	espPrincipal := espAlto
+	if !vertical {
+		espPrincipal = espAncho
+	}
+	total := 0
+	sumaPesos := 0.0
+	type hijoConPeso struct {
+		n        *nodoVista
+		espAncho espec
+		espAlto  espec
+	}
+	conPeso := []hijoConPeso{}
+	for _, h := range n.Hijos {
+		espHijoAncho := especDeHijo(espAncho, padAncho, h.margen.horizontal(), h.declAncho)
+		espHijoAlto := especDeHijo(espAlto, padAlto, h.margen.vertical(), h.declAlto)
+		h.medir(espHijoAncho, espHijoAlto)
+		if vertical {
+			total += h.medAlto + h.margen.vertical()
+		} else {
+			total += h.medAncho + h.margen.horizontal()
+		}
+		if h.Peso > 0 {
+			sumaPesos += h.Peso
+			conPeso = append(conPeso, hijoConPeso{n: h, espAncho: espHijoAncho, espAlto: espHijoAlto})
+		}
+	}
+	// el hueco que sobra del techo del padre se reparte en proporción al peso, y el hijo se vuelve a
+	// medir con el tamaño exacto que le tocó (así un contenedor con peso mide bien a sus hijos)
+	if sumaPesos > 0 && espPrincipal.limita {
+		restante := espPrincipal.tam - padAncho - total
+		if vertical {
+			restante = espPrincipal.tam - padAlto - total
+		}
+		if restante > 0 {
+			for i := range conPeso {
+				extra := int(float64(restante) * conPeso[i].n.Peso / sumaPesos)
+				h := conPeso[i].n
+				if vertical {
+					h.medir(conPeso[i].espAncho, espec{tam: h.medAlto + extra, limita: true, exacto: true})
+				} else {
+					h.medir(espec{tam: h.medAncho + extra, limita: true, exacto: true}, conPeso[i].espAlto)
+				}
+				total += extra
+			}
+		}
+	}
+	contenidoAncho, contenidoAlto := 0, 0
+	if vertical {
+		contenidoAlto = total
+		for _, h := range n.Hijos {
+			if h.medAncho+h.margen.horizontal() > contenidoAncho {
+				contenidoAncho = h.medAncho + h.margen.horizontal()
+			}
+		}
+	} else {
+		contenidoAncho = total
+		for _, h := range n.Hijos {
+			if h.medAlto+h.margen.vertical() > contenidoAlto {
+				contenidoAlto = h.medAlto + h.margen.vertical()
+			}
+		}
+	}
+	n.medAncho = tamanoPropio(n.declAncho, espAncho, contenidoAncho+padAncho)
+	n.medAlto = tamanoPropio(n.declAlto, espAlto, contenidoAlto+padAlto)
+}
+
+// medirApilado es el camino de FrameLayout y del resto de contenedores que no son lineales: todos
+// los hijos se miden contra el padre y el contenedor mide el mayor. Un hijo con match_parent se
+// vuelve a medir contra el tamaño ya decidido, que es lo que hace FrameLayout.
+func (n *nodoVista) medirApilado(espAncho, espAlto espec) {
+	padAncho, padAlto := n.pad.horizontal(), n.pad.vertical()
+	maxAncho, maxAlto := 0, 0
+	for _, h := range n.Hijos {
+		h.medir(especDeHijo(espAncho, padAncho, h.margen.horizontal(), h.declAncho),
+			especDeHijo(espAlto, padAlto, h.margen.vertical(), h.declAlto))
+		if h.medAncho+h.margen.horizontal() > maxAncho {
+			maxAncho = h.medAncho + h.margen.horizontal()
+		}
+		if h.medAlto+h.margen.vertical() > maxAlto {
+			maxAlto = h.medAlto + h.margen.vertical()
+		}
+	}
+	n.medAncho = tamanoPropio(n.declAncho, espAncho, maxAncho+padAncho)
+	n.medAlto = tamanoPropio(n.declAlto, espAlto, maxAlto+padAlto)
+	for _, h := range n.Hijos {
+		if h.declAncho != medidaMatch && h.declAlto != medidaMatch {
+			continue
+		}
+		espA := especDeHijo(espec{tam: n.medAncho, limita: true, exacto: true}, padAncho, h.margen.horizontal(), h.declAncho)
+		espH := especDeHijo(espec{tam: n.medAlto, limita: true, exacto: true}, padAlto, h.margen.vertical(), h.declAlto)
+		h.medir(espA, espH)
+	}
+}
+
+// coloca mide la raíz contra la pantalla y reparte las posiciones: es lo que hace el framework en
+// `onMeasure` y `onLayout`, en ese orden.
+func coloca(n *nodoVista, x, y, disponibleAncho, disponibleAlto int) {
+	n.medir(espec{tam: disponibleAncho, limita: true, exacto: true},
+		espec{tam: disponibleAlto, limita: true, exacto: true})
+	n.colocar(x, y)
+}
+
+// colocar deja el rectángulo del nodo y coloca a sus hijos según el contenedor que sea.
+func (n *nodoVista) colocar(x, y int) {
+	n.Rect = rectVista{X: x, Y: y, Ancho: n.medAncho, Alto: n.medAlto}
+	if len(n.Hijos) == 0 {
+		return
+	}
+	switch tipoDeContenedor(n.Tipo) {
+	case "lineal":
+		if n.orientacion == "horizontal" {
+			n.colocarHorizontal()
+		} else {
+			n.colocarVertical()
+		}
+	case "frame":
+		n.colocarFrame()
+	default:
+		// RelativeLayout y el resto: sin resolver las relaciones, se apilan en el origen
+		for _, h := range n.Hijos {
+			h.colocar(x+n.pad.Izq+h.margen.Izq, y+n.pad.Arr+h.margen.Arr)
+		}
+	}
+}
+
+// colocarVertical es layoutVertical: la gravedad mayor centra o pega abajo el bloque de hijos y la
+// menor (o el layout_gravity de cada uno) coloca cada hijo en el eje horizontal. El bloque se centra
+// en el hueco interior —descontado el relleno—, que es la lectura simétrica de la regla; el padding
+// junto a gravity="center" no se pudo medir contra un aparato y queda como frontera declarada.
+func (n *nodoVista) colocarVertical() {
+	interiorAncho := n.medAncho - n.pad.horizontal()
+	interiorAlto := n.medAlto - n.pad.vertical()
+	total := 0
+	for _, h := range n.Hijos {
+		total += h.medAlto + h.margen.vertical()
+	}
+	cursor := n.Rect.Y + n.pad.Arr
+	switch verticalDeGravity(n.gravityBits) {
+	case gravityAbajo:
+		cursor += interiorAlto - total
+	case gravityCentroVertical:
+		cursor += (interiorAlto - total) / 2
+	}
+	menor := horizontalDeGravity(n.gravityBits)
+	for _, h := range n.Hijos {
+		cursor += h.margen.Arr
+		g := h.layoutGravity
+		if g < 0 {
+			g = menor
+		}
+		izq := n.Rect.X + n.pad.Izq + h.margen.Izq
+		switch horizontalDeGravity(g) {
+		case gravityCentroHorizontal:
+			izq = n.Rect.X + n.pad.Izq + (interiorAncho-h.medAncho)/2 + h.margen.Izq - h.margen.Der
+		case gravityDerecha:
+			izq = n.Rect.X + n.pad.Izq + interiorAncho - h.medAncho + h.margen.Izq - h.margen.Der
+		}
+		h.colocar(izq, cursor)
+		cursor += h.medAlto + h.margen.Aba
+	}
+}
+
+// colocarHorizontal es layoutHorizontal, el espejo del anterior.
+func (n *nodoVista) colocarHorizontal() {
+	interiorAncho := n.medAncho - n.pad.horizontal()
+	interiorAlto := n.medAlto - n.pad.vertical()
+	total := 0
+	for _, h := range n.Hijos {
+		total += h.medAncho + h.margen.horizontal()
+	}
+	cursor := n.Rect.X + n.pad.Izq
+	switch horizontalDeGravity(n.gravityBits) {
+	case gravityDerecha:
+		cursor += interiorAncho - total
+	case gravityCentroHorizontal:
+		cursor += (interiorAncho - total) / 2
+	}
+	menor := verticalDeGravity(n.gravityBits)
+	for _, h := range n.Hijos {
+		cursor += h.margen.Izq
+		g := h.layoutGravity
+		if g < 0 {
+			g = menor
+		}
+		arr := n.Rect.Y + n.pad.Arr + h.margen.Arr
+		switch verticalDeGravity(g) {
+		case gravityCentroVertical:
+			arr = n.Rect.Y + n.pad.Arr + (interiorAlto-h.medAlto)/2 + h.margen.Arr - h.margen.Aba
+		case gravityAbajo:
+			arr = n.Rect.Y + n.pad.Arr + interiorAlto - h.medAlto + h.margen.Arr - h.margen.Aba
+		}
+		h.colocar(cursor, arr)
+		cursor += h.medAncho + h.margen.Der
+	}
+}
+
+// colocarFrame es layoutChildren de FrameLayout: cada hijo va en el origen del relleno y su
+// layout_gravity lo desplaza dentro del hueco del padre.
+func (n *nodoVista) colocarFrame() {
+	interiorAncho := n.medAncho - n.pad.horizontal()
+	interiorAlto := n.medAlto - n.pad.vertical()
+	for _, h := range n.Hijos {
+		izq := n.Rect.X + n.pad.Izq + h.margen.Izq
+		arr := n.Rect.Y + n.pad.Arr + h.margen.Arr
+		switch horizontalDeGravity(h.layoutGravity) {
+		case gravityCentroHorizontal:
+			izq = n.Rect.X + n.pad.Izq + (interiorAncho-h.medAncho)/2 + h.margen.Izq - h.margen.Der
+		case gravityDerecha:
+			izq = n.Rect.X + n.pad.Izq + interiorAncho - h.medAncho + h.margen.Izq - h.margen.Der
+		}
+		switch verticalDeGravity(h.layoutGravity) {
+		case gravityCentroVertical:
+			arr = n.Rect.Y + n.pad.Arr + (interiorAlto-h.medAlto)/2 + h.margen.Arr - h.margen.Aba
+		case gravityAbajo:
+			arr = n.Rect.Y + n.pad.Arr + interiorAlto - h.medAlto + h.margen.Arr - h.margen.Aba
+		}
+		h.colocar(izq, arr)
+	}
 }
 
 func contarNodos(n *nodoVista) int {
