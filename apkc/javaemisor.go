@@ -548,8 +548,8 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 		ctx.registrarSentencia(v.cuerpo)
 		ctx.registrarExpresion(v.cond)
 	case jtry:
-		if v.recurso != nil {
-			ctx.registrarSentencia(*v.recurso)
+		for i := range v.recursos {
+			ctx.registrarSentencia(v.recursos[i])
 		}
 		ctx.registrarSentencia(v.cuerpo)
 		for _, c := range v.atrapas {
@@ -4532,7 +4532,7 @@ func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally b
 	case jtry:
 		// un `try` interior con `catch` sigue fuera; uno que solo tiene `finally` deja que la salida
 		// cruce los dos bloques (javac los copia de dentro a fuera, §139)
-		anidado := bajoOtroTry || len(v.atrapas) > 0 || v.recurso != nil
+		anidado := bajoOtroTry || len(v.atrapas) > 0 || len(v.recursos) > 0
 		apunta(motivoPendiente(v.cuerpo, enBucle, anidado, dentroDelFinally))
 		for _, c := range v.atrapas {
 			apunta(motivoPendiente(c.atrapa, enBucle, true, dentroDelFinally))
@@ -4567,32 +4567,51 @@ func bloqueVacio(s jstmt) bool {
 	return ok && len(b.sentencias) == 0
 }
 
-// intentaRecurso: `try (R r = expr) { cuerpo }` en la forma de javac 17 (medida con `javap -c -v`
-// sobre `Res.java`, § pendiente de medir en evidencia). El recurso se declara fuera del rango
-// protegido; el cuerpo lleva un manejador `Throwable` que guarda la excepcion primaria en un local,
-// cierra el recurso dentro de un segundo rango protegido y, si `close()` tambien falla, le añade la
-// segunda excepcion con `Throwable.addSuppressed` antes de re-lanzar la primera:
+// intentaRecurso: `try (R r = expr; …) { cuerpo }` en la forma de javac 17 (medida con
+// `javap -c -p -v` sobre una sonda de dos recursos, §194). Cada recurso abre un nivel anidado: se
+// declara fuera del rango protegido, y ese rango empieza justo después de la declaración y cubre el
+// nivel interior entero (las declaraciones de dentro, el cuerpo, los cierres y los manejadores
+// internos). El manejador de cada nivel guarda la excepción primaria en un local, cierra su recurso
+// dentro de un segundo rango protegido y, si `close()` también falla, le añade la segunda con
+// `Throwable.addSuppressed` antes de re-lanzar la primera. Con dos recursos `x` e `y`:
 //
-//	0  expr; astore r
-//	2  cuerpo                      [2,6) -> 19 Throwable
-//	6  aload r; ifnull salida
-//	10 aload r; close; goto salida
-//	19 astore primary
-//	20 aload r; ifnull relanza
-//	24 aload r; close              [24,30) -> 33 Throwable
-//	30 goto relanza
-//	33 astore suppressed
-//	34 primary.addSuppressed(suppressed)
-//	39 primary; athrow
-//	41 salida: …
+//	0  a; astore x
+//	2  b; astore y
+//	4  cuerpo                                [4,12) -> 25 Throwable
+//	12 aload y; ifnull salida
+//	16 aload y; close; goto salida
+//	25 astore primary
+//	27 aload y; ifnull relanza
+//	31 aload y; close                        [31,37) -> 40 Throwable
+//	37 goto relanza
+//	40 astore suppressed
+//	42 primary.addSuppressed(suppressed)
+//	49 primary; athrow
+//	52 aload x; ifnull salida                [2,52) -> 65 Throwable
+//	56 aload x; close; goto salida
+//	65 astore el hueco de `y` (javac lo reutiliza)
+//	66 aload x; ifnull relanza
+//	70 aload x; close                        [70,76) -> 79 Throwable
+//	76 goto relanza
+//	79 astore suppressed
+//	81 primary.addSuppressed(suppressed)
+//	87 primary; athrow
+//	89 salida: …
 //
-// Solo se mide el caso de un recurso sin `catch` ni `finally` propios y con un cuerpo que cae: las
-// salidas abruptas y los recursos multiples siguen en el desugaring funcional del parser.
+// Las filas de la tabla salen de dentro hacia fuera, que es el orden en que javac las escribe. Solo
+// se mide sin `catch` ni `finally` propios y con un cuerpo que cae: las salidas abruptas siguen
+// fuera del subconjunto.
 func (e *emisor) intentaRecurso(v jtry) error {
 	if len(v.atrapas) > 0 || v.finalmente != nil {
 		return fmt.Errorf("linea %d: un try-with-resources con `catch` o `finally` propios no esta medido", v.donde.linea)
 	}
-	r := v.recurso
+	return e.recursoAnidado(v, v.recursos, v.cuerpo)
+}
+
+// recursoAnidado emite el nivel del primer recurso de `recursos` y, dentro de su rango protegido, el
+// nivel siguiente (o el cuerpo, en el más interno).
+func (e *emisor) recursoAnidado(v jtry, recursos []jdecl, cuerpo jstmt) error {
+	r := &recursos[0]
 	desc, err := e.ctx.descriptorDe(r.tipo)
 	if err != nil {
 		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
@@ -4617,11 +4636,16 @@ func (e *emisor) intentaRecurso(v jtry) error {
 	if !ok {
 		return fmt.Errorf("linea %d: el recurso %s no quedó en un local", v.donde.linea, r.nombre)
 	}
+	base := e.siguiente
 	salida := e.nuevaEtiqueta()
 	relanza := e.nuevaEtiqueta()
 
 	inicio := len(e.codigo)
-	if err := e.stm(v.cuerpo); err != nil {
+	if len(recursos) > 1 {
+		if err := e.recursoAnidado(v, recursos[1:], cuerpo); err != nil {
+			return err
+		}
+	} else if err := e.stm(cuerpo); err != nil {
 		return err
 	}
 	fin := len(e.codigo)
@@ -4633,7 +4657,12 @@ func (e *emisor) intentaRecurso(v jtry) error {
 	e.invoca(opCierre, dueño, "close", "()V", 1)
 	e.saltoEmite(opGOTO, salida, 0)
 
-	// manejador de la excepcion del cuerpo: la guarda como primaria
+	// manejador de la excepcion del cuerpo: la guarda como primaria. El local sale del hueco que el
+	// nivel interior ya soltó: javac reutiliza el del recurso (`astore_3` en la sonda de dos
+	// recursos), y `reserva` es monótona, así que hay que retroceder a mano
+	if len(recursos) > 1 {
+		e.siguiente = base
+	}
 	hPrimary := len(e.codigo)
 	e.marcaLinea(v.lineaAviso)
 	indicePrimary := e.reserva("", "Ljava/lang/Throwable;")
@@ -4676,7 +4705,7 @@ func (e *emisor) intentaRecurso(v jtry) error {
 // que guarda la excepción en un local que nadie mas usa, copia el bloque, y la re-lanza. Las filas de
 // la tabla salen en ese orden: los tipos del try, el `any` del try, y el `any` de cada cuerpo del catch.
 func (e *emisor) intenta(v jtry) error {
-	if v.recurso != nil {
+	if len(v.recursos) > 0 {
 		return e.intentaRecurso(v)
 	}
 	// un `catch (A | B e)` lleva una entrada por tipo y un solo manejador, con la excepcion guardada

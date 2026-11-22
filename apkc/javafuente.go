@@ -263,9 +263,9 @@ type jtry struct {
 	atrapas []capturaTry
 	// finalmente es el bloque que se copia en cada camino, o nil si el fuente no lo escribe
 	finalmente jstmt
-	// recurso no es nil en un try-with-resources de un solo recurso: el emisor escribe la forma de
-	// javac con `Throwable.addSuppressed` en vez del desugaring funcional a try/finally
-	recurso     *jdecl
+	// recursos son los del `try (…)`, en el orden del fuente (vacio en un try sin recursos). El
+	// emisor escribe la forma anidada de javac con `Throwable.addSuppressed`, un nivel por recurso
+	recursos    []jdecl
 	lineaAviso  int
 	lineaCierre int
 	donde       pos
@@ -1681,10 +1681,9 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		return jhacer{cuerpo: cuerpo, cond: cond, donde: pos{linea}}, true, nil
 	case a.es('k', "try"):
 		a.avanzar()
-		// try-with-resources: `try (T r = expr; …) { … }`. Se baja a declaraciones seguidas de un
-		// try/finally que llama a `close()` si el recurso no es null. Es un desugaring FUNCIONAL: no
-		// escribe el `addSuppressed` de javac, así que el dex no es byte a byte el suyo cuando el cuerpo
-		// y el cierre fallan a la vez; la frontera está documentada en el test.
+		// try-with-resources: `try (T r = expr; …) { … }`. Los recursos se guardan en orden y es el
+		// emisor quien escribe la forma de javac (un nivel anidado por recurso, con
+		// `Throwable.addSuppressed`), igual que en el caso de uno solo
 		recursos := []jdecl{}
 		if a.es('p', "(") {
 			a.avanzar()
@@ -1783,36 +1782,9 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		if len(atrapas) == 0 && finalmente == nil && len(recursos) == 0 {
 			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch`, `finally` ni recursos no es Java valido", linea)
 		}
-		resultado := jstmt(jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente, lineaAviso: lineaAviso, lineaCierre: lineaCierre, donde: pos{linea}})
-		if len(recursos) == 1 {
-			// un solo recurso: el emisor reproduce la forma de javac, que guarda la excepcion del
-			// cuerpo en un local y, si `close()` tambien falla, le/addSuppressed la del cierre
-			return jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente,
-				recurso: &recursos[0], lineaAviso: lineaAviso, lineaCierre: lineaCierre,
-				donde: pos{linea}}, true, nil
-		}
-		if len(recursos) > 1 {
-			// mas de un recurso: desugaring funcional a try/finally anidados, sin `addSuppressed`
-			// (frontera documentada en javaemisor_tryresources_test.go)
-			for i := len(recursos) - 1; i >= 0; i-- {
-				nombre := recursos[i].nombre
-				ref := jacceso{nombre: nombre, donde: pos{linea}}
-				cond := joperador{izq: ref, op: "!=", der: jlit{tipoJ: 'n', donde: pos{linea}}, donde: pos{linea}}
-				cierre := jif{cond: cond, entonces: jstmtExpr{e: jllamada{base: ref, nombre: "close", args: []jexpr{}, donde: pos{linea}}}, donde: pos{linea}}
-				resultado = jtry{cuerpo: resultado,
-					finalmente:  jbloque{sentencias: []jstmt{cierre}, donde: pos{linea}},
-					lineaAviso:  linea,
-					lineaCierre: linea,
-					donde:       pos{linea}}
-			}
-			sentencias := make([]jstmt, 0, len(recursos)+1)
-			for _, r := range recursos {
-				sentencias = append(sentencias, r)
-			}
-			sentencias = append(sentencias, resultado)
-			return jbloque{sentencias: sentencias, donde: pos{linea}}, true, nil
-		}
-		return resultado, true, nil
+		return jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente,
+			recursos: recursos, lineaAviso: lineaAviso, lineaCierre: lineaCierre,
+			donde: pos{linea}}, true, nil
 	case a.es('k', "throw"):
 		a.avanzar()
 		e, err := a.expresion()

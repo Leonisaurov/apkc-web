@@ -90,9 +90,9 @@ func TestTryWithResourcesAddSuppressed(t *testing.T) {
 	}
 }
 
-// dos recursos: se cierran en orden inverso. Se compara otra vez contra la forma manual anidada.
-// FRONTERA: con mas de un recurso el emisor sigue con el desugaring funcional a try/finally y no
-// escribe `addSuppressed`; el dex no es byte a byte el de javac cuando cuerpo y cierre fallan a la vez.
+// dos recursos: cada uno abre un nivel anidado, se cierran en orden inverso y cada manejador añade
+// la excepción del cierre con `addSuppressed`. El oráculo es javac 17, igual que en el caso de uno
+// solo: el dex del emisor tiene que salir byte a byte el suyo.
 const tryResourcesDos = `import java.io.Closeable;
 public class Res {
   static void use(Closeable c) {}
@@ -102,18 +102,12 @@ public class Res {
 }
 `
 
-const tryResourcesDosManual = `import java.io.Closeable;
-public class Res {
-  static void use(Closeable c) {}
-  static void t(Closeable a, Closeable b) throws Exception {
-    Closeable x = a;
-    Closeable y = b;
-    try {
-      try { use(x); use(y); } finally { if (y != null) y.close(); }
-    } finally { if (x != null) x.close(); }
-  }
-}
-`
+// tryResourcesDosJavac17: `javac -g:lines,source Res.java` con javac 17.0.21 y `base64 -w0`.
+// Medido con `javap -c -p -v`: las declaraciones en 0-3, el cuerpo protegido [4,12) -> 25, el cierre
+// de `y` en [31,37) -> 40, el rango exterior [2,52) -> 65 y su cierre en [70,76) -> 79; el manejador
+// exterior hace `astore_3`, el hueco que dejó `y`, y `locals=6`. La tabla de excepciones va de dentro
+// hacia fuera.
+const tryResourcesDosJavac17 = "yv66vgAAAD0AIgoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAA1JlcwEAA3VzZQEAFihMamF2YS9pby9DbG9zZWFibGU7KVYLAA4ADwcAEAwAEQAGAQARamF2YS9pby9DbG9zZWFibGUBAAVjbG9zZQcAEwEAE2phdmEvbGFuZy9UaHJvd2FibGUKABIAFQwAFgAXAQANYWRkU3VwcHJlc3NlZAEAGChMamF2YS9sYW5nL1Rocm93YWJsZTspVgEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQApKExqYXZhL2lvL0Nsb3NlYWJsZTtMamF2YS9pby9DbG9zZWFibGU7KVYBAA1TdGFja01hcFRhYmxlAQAKRXhjZXB0aW9ucwcAHwEAE2phdmEvbGFuZy9FeGNlcHRpb24BAApTb3VyY2VGaWxlAQAIUmVzLmphdmEAIQAIAAIAAAAAAAMAAQAFAAYAAQAYAAAAHQABAAEAAAAFKrcAAbEAAAABABkAAAAGAAEAAAACAAgACwAMAAEAGAAAABkAAAABAAAAAbEAAAABABkAAAAGAAEAAAADAAgAGgAbAAIAGAAAAO8AAgAGAAAAWipNK04suAAHLbgABy3GACctuQANAQCnAB46BC3GABUtuQANAQCnAAw6BRkEGQW2ABQZBL8sxgAkLLkADQEApwAbTizGABQsuQANAQCnAAs6BC0ZBLYAFC2/sQAEAAQADAAZABIAHwAlACgAEgACADQAQQASAEYATABPABIAAgAZAAAACgACAAAABQBZAAYAHAAAAFMACP8AGQAEBwAOBwAOBwAOBwAOAAEHABL/AA4ABQcADgcADgcADgcADgcAEgABBwASCPkAAkwHABL/AA0ABAcADgcADgcADgcAEgABBwASB/kAAQAdAAAABAABAB4AAQAgAAAAAgAh"
 
 func codeDeFuenteUnica(t *testing.T, fuente, metodo string) codeItem {
 	t.Helper()
@@ -143,27 +137,18 @@ func codeDeFuenteUnica(t *testing.T, fuente, metodo string) codeItem {
 	return item
 }
 
-func comparaCode(t *testing.T, uno, dos codeItem) {
-	t.Helper()
-	if uno.registersSize != dos.registersSize || uno.insSize != dos.insSize || uno.outsSize != dos.outsSize {
-		t.Errorf("cabecera %d/%d/%d contra %d/%d/%d", uno.registersSize, uno.insSize, uno.outsSize,
-			dos.registersSize, dos.insSize, dos.outsSize)
-	}
-	if uno.triesSize != dos.triesSize {
-		t.Errorf("%d try_item contra %d", uno.triesSize, dos.triesSize)
-	}
-	if len(uno.insns) != len(dos.insns) {
-		t.Errorf("%d palabras contra %d", len(uno.insns), len(dos.insns))
-		return
-	}
-	for i := range uno.insns {
-		if uno.insns[i] != dos.insns[i] {
-			t.Errorf("la palabra %d es %#04x contra %#04x", i, uno.insns[i], dos.insns[i])
-			return
-		}
-	}
-}
-
+// TestTryWithResourcesDos: con dos recursos, el dex del emisor es byte a byte el de javac 17. El
+// `.class` sale con cuatro filas de excepción —el cuerpo y el cierre de `y`, y el cuerpo y el cierre
+// de `x`— de dentro hacia fuera.
 func TestTryWithResourcesDos(t *testing.T) {
-	comparaCode(t, codeDeFuenteUnica(t, tryResourcesDos, "t"), codeDeFuenteUnica(t, tryResourcesDosManual, "t"))
+	nuestro, suyo := dexDeFuenteUnica(t, tryResourcesDos, tryResourcesDosJavac17)
+	if !bytes.Equal(nuestro, suyo) {
+		t.Fatalf("el dex mide %d bytes y el de javac %d; el primero que difiere es el %d",
+			len(nuestro), len(suyo), primerByteDistinto(nuestro, suyo))
+	}
+	if item := codeDeFuenteUnica(t, tryResourcesDos, "t"); item.triesSize != 6 {
+		// el `.class` lleva 4 filas (dos por recurso); al traducir, el rango exterior solapa con los
+		// interiores y el dexer lo parte: [2,4), [4,12), [12,31), [31,37), [37,52) y [70,76)
+		t.Errorf("%d try_item, medidos 6 (4 filas del .class partidas por el solape)", item.triesSize)
+	}
 }
