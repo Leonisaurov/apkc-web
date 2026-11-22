@@ -8463,3 +8463,33 @@ python3 ~/.config/opencode/validate_config.py
 configuración de OpenCode `TODO VÁLIDO` (12 agentes, `git push global = ask`). Lección: el worktree
 aislado evitó pisadas entre agentes, pero no evita que un agente se quede sin pasos o devuelva un
 informe inútil; el árbol del worktree es la fuente de verdad, no el informe.
+
+## 191. Verificación del host publicado: transporte HTTP/2 truncado, no falso verde
+
+Medido el 2026-11-21. Tras publicar con `tools/entorno.sh publicar`, la prueba contra
+`https://apkc-studio.surge.sh/` **no** dio 10/10: el paquete local sí (10/10, 41 peticiones, 0 fuera
+del origen), pero el host real dio 8/10. Con chromium por defecto (HTTP/2) la compilación fallaba
+primero con `FALLO DEL HOSPEDADOR: Failed to fetch` y, tras corregir la carga, con
+`WebAssembly.instantiate(): section (code 10, "Code") extends past end of the module (length 9361416,
+remaining bytes 5343765)`: el cuerpo del wasm llega truncado aunque el `fetch` devuelve 200.
+
+`critico` atacó la hipótesis y dio **INCIERTO** en lo fuerte, con dos hallazgos: (1) **CONFIRMADO**
+que HTTP/2 trunca el gz — `curl (92) … error -532`, 1093696 bytes descargados frente a 3496258 por
+`--http1.1`, y el hash de este último coincide con el local `e72ec244…`; (2) **CONFIRMADO** que
+`hospedador.js:151-155` no validaba los bytes y su fallback era inalcanzable si `arrayBuffer()`
+lanzaba. Se aplicó solo (2): `try/catch` alrededor de la descompresión, comprobación de la cabecera
+`00 61 73 6d` y mensaje explícito si el `.wasm` sin comprimir también llega truncado. La sospecha de
+que el SW sirviera una versión vieja quedó **DESCARTADA** por la igualdad de hashes.
+
+```sh
+curl -sS -o /dev/null -w "%{http_code} %{size_download}" https://apkc-studio.surge.sh/apkc.wasm.gz
+curl --http1.1 -sS -o /dev/null -w "%{http_code} %{size_download}" https://apkc-studio.surge.sh/apkc.wasm.gz
+CHROME_BIN=/usr/bin/chromium SITIO_URL=https://apkc-studio.surge.sh/ node studio/prueba-sitio.js
+```
+
+**Resultado**: sitio publicado y accesible; verificación local 10/10; verificación del host en este
+entorno 8/10 por truncamiento HTTP/2 de un fichero de 3,5 MB, confirmado con `curl`. Frontera
+abierta, no disfrazada de verde: no se afirma que el sitio falle para otros navegadores o redes, ni
+se afirma que esté 10/10 en el host desde este entorno. Queda pendiente repetir el `fetch` dentro del
+worker real con red verificada y medir el SW tras estabilizar la recarga, que son las dos condiciones
+que `critico` puso para cerrar la hipótesis.
