@@ -102,8 +102,9 @@ func (l ladosVista) vertical() int   { return l.Arr + l.Aba }
 // declara de tamaño y de colocación, el rectángulo y sus hijos. Los campos sin namespace no se
 // serializan. `textoDinamico` es la Fase 2: lo que el intérprete vio escribir a la app en esa view,
 // separado del `texto` que declara el layout para que el modelo no confunda lo declarado con lo
-// ejecutado. `gravity`, `padding`, `margen` y `peso` son lo que la colocación real necesita y lo que
-// el pintor puede consumir sin volver a leer el AXML.
+// ejecutado. `gravity`, `padding`, `margen` y `peso` son lo que la colocación verificada contra la
+// cuenta documentada de AOSP/aapt2 necesita (sin oráculo de aparato), y lo que el pintor puede
+// consumir sin volver a leer el AXML.
 type nodoVista struct {
 	Tipo          string       `json:"tipo"`
 	ID            string       `json:"id,omitempty"`
