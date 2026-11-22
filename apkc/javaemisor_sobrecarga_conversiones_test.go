@@ -130,6 +130,65 @@ func TestVarargsFlagsDelMethodInfo(t *testing.T) {
 	}
 }
 
+// Sondas del boxing seguido del ensanchamiento de referencia (JVMS 5.3, 15.12.2.4): un `int` cabe en
+// un parámetro `Object` —o en el elemento `Object` de un varargs— pasando primero por `Integer`. Es la
+// conversión que javac 17 escribe antes de `String.format`, y la que faltaba cuando la sobrecarga era
+// varargs: §194.
+const (
+	boxObjectFuente   = `public class S { static void f(Object o){} static void t(){ f(7); } }`
+	formatDosFuente   = `public class S { static void t(){ String.format("%d %s", 1, "x"); } }`
+	formatUnoFuente   = `public class S { static void t(){ String.format("hola"); } }`
+	objectFijaFuente  = `public class S { static void f(Object o){} static void f(Object... o){} static void t(){ f("x"); f(); } }`
+	objectArrayFuente = `public class S { static Object[] t(){ return new Object[]{7, "x"}; } }`
+	printlnFuente     = `public class S { static void t(){ System.out.println("hola"); } }`
+	receptorFuente    = `public class S { int f; void var(int... xs){} void t(){ var(1,2); } }`
+	ceroFuente        = `public class S { static void ref(String... xs){} static void t(){ ref(); } }`
+	anchasFuente      = `public class S { static void l(long... x){} static void d(double... x){} static void c(char... x){} static void t(){ l(1L,2L); d(1.0,2.0); c('a','b'); } }`
+	fijaFuente        = `public class S { static void f(int... x){} static void f(int a,int b){} static void t(){ f(1,2); f(1,2,3); } }`
+)
+
+const (
+	boxObjectJavac   = "yv66vgAAADQAGAoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAEWphdmEvbGFuZy9JbnRlZ2VyAQAHdmFsdWVPZgEAFihJKUxqYXZhL2xhbmcvSW50ZWdlcjsKAA4ADwcAEAwAEQASAQABUwEAAWYBABUoTGphdmEvbGFuZy9PYmplY3Q7KVYBAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQABdAEAClNvdXJjZUZpbGUBAAZTLmphdmEAIQAOAAIAAAAAAAMAAQAFAAYAAQATAAAAHQABAAEAAAAFKrcAAbEAAAABABQAAAAGAAEAAAABAAgAEQASAAEAEwAAABkAAAABAAAAAbEAAAABABQAAAAGAAEAAAABAAgAFQAGAAEAEwAAACEAAQAAAAAACRAHuAAHuAANsQAAAAEAFAAAAAYAAQAAAAEAAQAWAAAAAgAX"
+	formatDosJavac   = "yv66vgAAADQAHgoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCAAIAQAFJWQgJXMKAAoACwcADAwADQAOAQARamF2YS9sYW5nL0ludGVnZXIBAAd2YWx1ZU9mAQAWKEkpTGphdmEvbGFuZy9JbnRlZ2VyOwgAEAEAAXgKABIAEwcAFAwAFQAWAQAQamF2YS9sYW5nL1N0cmluZwEABmZvcm1hdAEAOShMamF2YS9sYW5nL1N0cmluZztbTGphdmEvbGFuZy9PYmplY3Q7KUxqYXZhL2xhbmcvU3RyaW5nOwcAGAEAAVMBAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQABdAEAClNvdXJjZUZpbGUBAAZTLmphdmEAIQAXAAIAAAAAAAIAAQAFAAYAAQAZAAAAHQABAAEAAAAFKrcAAbEAAAABABoAAAAGAAEAAAABAAgAGwAGAAEAGQAAAC8ABQAAAAAAFxIHBb0AAlkDBLgACVNZBBIPU7gAEVexAAAAAQAaAAAABgABAAAAAQABABwAAAACAB0="
+	formatUnoJavac   = "yv66vgAAADQAFgoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCAAIAQAEaG9sYQoACgALBwAMDAANAA4BABBqYXZhL2xhbmcvU3RyaW5nAQAGZm9ybWF0AQA5KExqYXZhL2xhbmcvU3RyaW5nO1tMamF2YS9sYW5nL09iamVjdDspTGphdmEvbGFuZy9TdHJpbmc7BwAQAQABUwEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAKU291cmNlRmlsZQEABlMuamF2YQAhAA8AAgAAAAAAAgABAAUABgABABEAAAAdAAEAAQAAAAUqtwABsQAAAAEAEgAAAAYAAQAAAAEACAATAAYAAQARAAAAIwACAAAAAAALEgcDvQACuAAJV7EAAAABABIAAAAGAAEAAAABAAEAFAAAAAIAFQ=="
+	objectFijaJavac  = "yv66vgAAADQAFwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCAAIAQABeAoACgALBwAMDAANAA4BAAFTAQABZgEAFShMamF2YS9sYW5nL09iamVjdDspVgoACgAQDAANABEBABYoW0xqYXZhL2xhbmcvT2JqZWN0OylWAQAEQ29kZQEAD0xpbmVOdW1iZXJUYWJsZQEAAXQBAApTb3VyY2VGaWxlAQAGUy5qYXZhACEACgACAAAAAAAEAAEABQAGAAEAEgAAAB0AAQABAAAABSq3AAGxAAAAAQATAAAABgABAAAAAQAIAA0ADgABABIAAAAZAAAAAQAAAAGxAAAAAQATAAAABgABAAAAAQCIAA0AEQABABIAAAAZAAAAAQAAAAGxAAAAAQATAAAABgABAAAAAQAIABQABgABABIAAAAlAAEAAAAAAA0SB7gACQO9AAK4AA+xAAAAAQATAAAABgABAAAAAQABABUAAAACABY="
+	objectArrayJavac = "yv66vgAAADQAFwoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAEWphdmEvbGFuZy9JbnRlZ2VyAQAHdmFsdWVPZgEAFihJKUxqYXZhL2xhbmcvSW50ZWdlcjsIAA4BAAF4BwAQAQABUwEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAVKClbTGphdmEvbGFuZy9PYmplY3Q7AQAKU291cmNlRmlsZQEABlMuamF2YQAhAA8AAgAAAAAAAgABAAUABgABABEAAAAdAAEAAQAAAAUqtwABsQAAAAEAEgAAAAYAAQAAAAEACAATABQAAQARAAAAKgAEAAAAAAASBb0AAlkDEAe4AAdTWQQSDVOwAAAAAQASAAAABgABAAAAAQABABUAAAACABY="
+	printlnJavac     = "yv66vgAAADQAHAoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCQAIAAkHAAoMAAsADAEAEGphdmEvbGFuZy9TeXN0ZW0BAANvdXQBABVMamF2YS9pby9QcmludFN0cmVhbTsIAA4BAARob2xhCgAQABEHABIMABMAFAEAE2phdmEvaW8vUHJpbnRTdHJlYW0BAAdwcmludGxuAQAVKExqYXZhL2xhbmcvU3RyaW5nOylWBwAWAQABUwEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAKU291cmNlRmlsZQEABlMuamF2YQAhABUAAgAAAAAAAgABAAUABgABABcAAAAdAAEAAQAAAAUqtwABsQAAAAEAGAAAAAYAAQAAAAEACAAZAAYAAQAXAAAAIQACAAAAAAAJsgAHEg22AA+xAAAAAQAYAAAABgABAAAAAQABABoAAAACABs="
+	receptorJavac    = "yv66vgAAADQAFAoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAAVMBAAN2YXIBAAUoW0kpVgEAAWYBAAFJAQAEQ29kZQEAD0xpbmVOdW1iZXJUYWJsZQEAAXQBAApTb3VyY2VGaWxlAQAGUy5qYXZhACEACAACAAAAAQAAAA0ADgAAAAMAAQAFAAYAAQAPAAAAHQABAAEAAAAFKrcAAbEAAAABABAAAAAGAAEAAAABAIAACwAMAAEADwAAABkAAAACAAAAAbEAAAABABAAAAAGAAEAAAABAAAAEQAGAAEADwAAACgABQABAAAAECoFvApZAwRPWQQFT7YAB7EAAAABABAAAAAGAAEAAAABAAEAEgAAAAIAEw=="
+	ceroJavac        = "yv66vgAAADQAFAoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWBwAIAQAQamF2YS9sYW5nL1N0cmluZwoACgALBwAMDAANAA4BAAFTAQADcmVmAQAWKFtMamF2YS9sYW5nL1N0cmluZzspVgEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAKU291cmNlRmlsZQEABlMuamF2YQAhAAoAAgAAAAAAAwABAAUABgABAA8AAAAdAAEAAQAAAAUqtwABsQAAAAEAEAAAAAYAAQAAAAEAiAANAA4AAQAPAAAAGQAAAAEAAAABsQAAAAEAEAAAAAYAAQAAAAEACAARAAYAAQAPAAAAIAABAAAAAAAIA70AB7gACbEAAAABABAAAAAGAAEAAAABAAEAEgAAAAIAEw=="
+	anchasJavac      = "yv66vgAAADQAHgoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWBQAAAAAAAAACCgAKAAsHAAwMAA0ADgEAAVMBAAFsAQAFKFtKKVYGQAAAAAAAAAAKAAoAEgwAEwAUAQABZAEABShbRClWCgAKABYMABcAGAEAAWMBAAUoW0MpVgEABENvZGUBAA9MaW5lTnVtYmVyVGFibGUBAAF0AQAKU291cmNlRmlsZQEABlMuamF2YQAhAAoAAgAAAAAABQABAAUABgABABkAAAAdAAEAAQAAAAUqtwABsQAAAAEAGgAAAAYAAQAAAAEAiAANAA4AAQAZAAAAGQAAAAEAAAABsQAAAAEAGgAAAAYAAQAAAAEAiAATABQAAQAZAAAAGQAAAAEAAAABsQAAAAEAGgAAAAYAAQAAAAEAiAAXABgAAQAZAAAAGQAAAAEAAAABsQAAAAEAGgAAAAYAAQAAAAEACAAbAAYAAQAZAAAASQAFAAAAAAAxBbwLWQMKUFkEFAAHULgACQW8B1kDD1JZBBQAD1K4ABEFvAVZAxBhVVkEEGJVuAAVsQAAAAEAGgAAAAYAAQAAAAEAAQAcAAAAAgAd"
+	fijaJavac        = "yv66vgAAADQAFQoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWCgAIAAkHAAoMAAsADAEAAVMBAAFmAQAFKElJKVYKAAgADgwACwAPAQAFKFtJKVYBAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQABdAEAClNvdXJjZUZpbGUBAAZTLmphdmEAIQAIAAIAAAAAAAQAAQAFAAYAAQAQAAAAHQABAAEAAAAFKrcAAbEAAAABABEAAAAGAAEAAAABAIgACwAPAAEAEAAAABkAAAABAAAAAbEAAAABABEAAAAGAAEAAAABAAgACwAMAAEAEAAAABkAAAACAAAAAbEAAAABABEAAAAGAAEAAAABAAgAEgAGAAEAEAAAADAABAAAAAAAGAQFuAAHBrwKWQMET1kEBU9ZBQZPuAANsQAAAAEAEQAAAAYAAQAAAAEAAQATAAAAAgAU"
+)
+
+// TestBoxingHaciaObjectoEnVarargs: el boxing no acaba en su envoltorio sino que sigue por la cadena
+// de referencias hasta el parámetro o el elemento del varargs (`Integer` -> `Object`). Las seis
+// primeras son las que estaban rechazadas: `String.format("%d %s", 1, "x")` no tenía candidata
+// aplicable porque `asignable("I", "Ljava/lang/Object;")` daba falso, y `f(7)` con `f(Object)` no
+// emitía `Integer.valueOf`. Las demás son el control de lo ya medido (§194): `f(Object)` gana a
+// `f(Object...)` en la fase 1, `println("hola")` sigue eligiendo `(Ljava/lang/String;)V`, el receptor
+// de instancia, el varargs vacío, los anchos y `f(int,int)` frente a `f(int...)`.
+func TestBoxingHaciaObjectoEnVarargs(t *testing.T) {
+	casos := []struct{ nombre, fuente, javac string }{
+		{"boxing_a_objecto", boxObjectFuente, boxObjectJavac},
+		{"format_dos_varargs", formatDosFuente, formatDosJavac},
+		{"format_uno_varargs", formatUnoFuente, formatUnoJavac},
+		{"object_fija_vs_varargs", objectFijaFuente, objectFijaJavac},
+		{"object_array", objectArrayFuente, objectArrayJavac},
+		{"println", printlnFuente, printlnJavac},
+		{"receptor_instancia", receptorFuente, receptorJavac},
+		{"string_cero_args", ceroFuente, ceroJavac},
+		{"long_double_char", anchasFuente, anchasJavac},
+		{"fija_vs_varargs", fijaFuente, fijaJavac},
+	}
+	for _, c := range casos {
+		nuestro, suyo := dexDeCaso(t, c.fuente, c.javac)
+		if !bytes.Equal(nuestro, suyo) {
+			t.Errorf("%s: el dex mide %d bytes y el de javac %d; el primero que difiere es el %d",
+				c.nombre, len(nuestro), len(suyo), primerByteDistinto(nuestro, suyo))
+		}
+	}
+}
+
 // TestVarargsTieneQueSerElUltimo: `int... xs, int y` no es Java (JLS 8.4.1) y el parser lo rechaza
 // nombrando el parámetro varargs en vez de aceptar una firma que javac no admite.
 func TestVarargsTieneQueSerElUltimo(t *testing.T) {

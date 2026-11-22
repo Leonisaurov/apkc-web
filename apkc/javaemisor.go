@@ -1133,8 +1133,14 @@ func (ctx *contextoJava) asignable(desde, hasta string) bool {
 	if ampliacionPrimitiva[desde+">"+hasta] {
 		return true
 	}
-	if box, ok := boxingDe[desde]; ok && box == hasta {
-		return true
+	// Boxing **seguido del ensanchamiento de referencia** (JVMS 5.3 y la conversión de invocación de
+	// 15.12.2.4): un `int` no cabe solo en `Integer`, también en `Object`, `Number` o `Comparable`
+	// pasando por `Integer`. Es lo que hacía falta para que `String.format("%d %s", 1, "x")` viera
+	// aplicable `format(String, Object...)`: sin esto `asignable("I", "Ljava/lang/Object;")` era falso
+	// y la fase 3 descartaba la única candidata varargs (§194). La recursión no puede morderse la cola
+	// porque el envoltorio ya es de referencia: esa rama no vuelve a entrar aquí.
+	if box, ok := boxingDe[desde]; ok {
+		return ctx.asignable(box, hasta)
 	}
 	if !esTipoDeReferencia(desde) || !esTipoDeReferencia(hasta) {
 		return false
@@ -3302,7 +3308,10 @@ func (e *emisor) empaquetaVarargs(rest []jexpr, arreglo string) error {
 		if err != nil {
 			return err
 		}
-		if d != elem {
+		// El valor no tiene que ser **idéntico** al elemento: `Integer` cabe en un `Object[]` (y un
+		// `int` llega aquí ya envuelto por `expA`), igual que `String` cabe en `Object[]` o `int[]` en
+		// `Object[][]`. La igualdad de descriptores rechazaba justo el boxing hacia `Object` del §194.
+		if !e.ctx.asignable(d, elem) {
 			return fmt.Errorf("el parametro varargs es %s y el argumento %d es %s", elem, i, d)
 		}
 		e.emite(guarda)
@@ -3630,7 +3639,9 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if d != elem {
+		// igual que en `empaquetaVarargs`: `Integer` cabe en un `Object[]`, y `expA` ya envolvió el
+		// primitivo si hacía falta (§194).
+		if !e.ctx.asignable(d, elem) {
 			return "", fmt.Errorf("linea %d: el arreglo es %s y el elemento %d es %s", v.donde.linea, elem, i, d)
 		}
 		e.emite(guarda)
@@ -3965,6 +3976,15 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	// boxing: javac 17 escribe `Integer.valueOf` (y el resto de envoltorios) antes de la llamada a la
 	// sobrecarga que toma un Objeto; medido con `javap -c` sobre `box(7)`.
 	if box, ok := boxingDe[d]; ok && box == deseado {
+		dueño := box[1 : len(box)-1]
+		e.invoca(opInvokestat, dueño, "valueOf", "("+d+")"+box, 1)
+		return box, nil
+	}
+	// boxing y después ensanchamiento de referencia: el hueco es `Object` (o `Number`, o el elemento
+	// `Object` de un varargs) y lo que sale es un primitivo. javac escribe el mismo `Integer.valueOf` y
+	// deja sobre la pila el envoltorio; el descriptor que se devuelve es el del envoltorio, que es el
+	// que de verdad hay arriba, y quien compara lo acepta por `asignable` (§194).
+	if box, ok := boxingDe[d]; ok && e.ctx.asignable(box, deseado) {
 		dueño := box[1 : len(box)-1]
 		e.invoca(opInvokestat, dueño, "valueOf", "("+d+")"+box, 1)
 		return box, nil
