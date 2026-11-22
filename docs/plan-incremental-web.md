@@ -341,7 +341,8 @@ Tests que lo cierran:
   reenlazó».
 - `studio/prueba-pestana.js` (sección `12c`, paso `f`): lo mismo dentro de chromium, con la cadena
   buscada en los bytes de `/proyecto/build/resources.arsc` y las entradas del apk comparadas con la
-  pasada anterior. `pestaña: 177 comprobaciones`.
+  pasada anterior. `pestaña: 177 comprobaciones` (la cifra de esta medición, §201-§202; el árbol de
+  hoy da 192).
 
 Reproducción del hallazgo (sonda de shell, fuera del repo, con el binario de turno):
 
@@ -391,7 +392,8 @@ Cada fase se cierra con su comando en verde sobre el árbol final; ninguna se ma
 analogía.
 
 - **I1, pasar `--inc` desde la pestaña. HECHA.** `--inc` en la lista de `build` de
-  `studio/pestana.js`; gate verde (177 comprobaciones) y apk igual entrada por entrada.
+  `studio/pestana.js`; gate verde (177 comprobaciones **al cerrar esta fase**; el árbol de
+  hoy da 192) y apk igual entrada por entrada.
   Prueba: sección `12c` de `studio/prueba-pestana.js`. Reproducción: `sh banco/incremental.sh`.
 - **I2, medir en chromium y OPFS. HECHA.** Resultado: 1831 → 1034 ms con `--inc` solo (−44 %),
   1357 → 201 ms con I3 (−85 %), apk igual entrada por entrada. Criterio ≥15 % superado.

@@ -34,7 +34,8 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
   (1 354 339 de 26 361 808 bytes, 3837 clases, ~50 ms, 0 peticiones), `Tab` acepta y entra en el
   undo tree, `Esc` cierra y las flechas recorren sin disparar otro `check`. El linter de XML
   (`xml-editor.js`) entró en la misma tanda: es local, no lanza `apkc check` y sus filas dicen
-  `XML`. El gate final da `pestaña: 170 comprobaciones` (§202). Fronteras: sin completado tras `v.`, bloques `/* … */` de varias
+  `XML`. El gate final dio `pestaña: 170 comprobaciones` (§202, la cifra de entonces; con el árbol
+  de hoy son 192). Fronteras: sin completado tras `v.`, bloques `/* … */` de varias
   líneas no detectados y recursos cacheados hasta `refrescar()`.
 
 ### Deuda conocida dentro de D1
