@@ -8895,3 +8895,84 @@ sentencia sin mover la `LineNumberTable`, que se compara byte a byte. (2) Si el 
 usa algo que el enlazador de Go no escribe (un drawable XML, por ejemplo), no hay `R` y el informe
 lo dice en `recursos`; el error que sale entonces es el de verdad, nunca un verde falso.
 
+## 201. Vista previa del APK: fases 1 a 3
+
+Medido el 2026-11-22. Cierra las fases 1 a 3 de `docs/plan-vista-previa.md` con su comando: el
+comando nuevo del fork que lee un apk ya construido y devuelve el modelo de su primera pantalla
+(`apkc/preview.go`), el intérprete Dalvik que ejecuta `onCreate` y una interacción
+(`apkc/previewinterprete.go`) y la tercera vista de `studio/` que lo pinta en un canvas de solo
+lectura (`studio/vista-previa.js`). Las cifras de abajo salen del apk de la plantilla Contador que
+genera el propio gate, medido el 2026-11-22 sobre este árbol con Go 1.27.4.
+
+```sh
+APK=$TMP/studio-e2e-contador/com.hola.contador/build/app.apk
+cd apkc && go build -o "$TMP/apkc-preview" .
+"$TMP/apkc-preview" preview --sin-ejecutar "$APK" | wc -c          # 661
+"$TMP/apkc-preview" preview "$APK" | wc -c                          # 897
+"$TMP/apkc-preview" preview "$APK"                                  # el modelo, una línea de JSON
+"$TMP/apkc-preview" preview --sin-ejecutar "$APK" | grep -c ejecucion # 0: la bandera no interpreta
+APKC_FIXTURE_MALO=$TMP/apk-switch-roto.apk go test -count=1 \
+  -run TestElPreviewRechazaUnSwitchDePayloadRoto .                  # deja el apk con el payload roto
+"$TMP/apkc-preview" preview "$TMP/apk-switch-roto.apk"; echo rc=$?  # rc=2 y el error por su nombre
+"$TMP/apkc-preview" preview --sin-ejecutar "$TMP/apk-switch-roto.apk" >/dev/null; echo rc=$?      # 0
+cd ../shim && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" .
+node navegador-sim.js --montar "$APK:/app.apk" "$TMP/apkc-wasm.wasm" preview /app.apk
+```
+
+1. **Fase 1, el modelo del layout.** `apkc preview --sin-ejecutar` sobre la plantilla Contador
+   devuelve **661 bytes** de JSON, `nodos: 3`, un `TextView` con `texto: "Pulsos: 0"` y un `Button`
+   con `"Pulsar"`, rc 0. El id del framework que el layout trae como estilo sale sin resolver a
+   propósito, con su referencia cruda: `"estilo": "@0x01030042"`. El lector del pool UTF-8 se mide
+   contra los **100 bytes** del trozo `RES_STRING_POOL` que escribió aapt2 35.0.1, con `ñ` y 😀
+   (el emoji como par sustituto CESU-8, tres bytes por unidad): `go test -run
+   TestPreviewLeeElPoolQueEscribeAapt2 -v .` y el resto de `preview_test.go`, en verde en
+   `go test -count=1 ./...`.
+2. **Fase 2, el intérprete.** `apkc preview` sobre el mismo apk devuelve **897 bytes**: 3 nodos y
+   un bloque `ejecucion` con `pasos: 43`, `interacciones: 1` y una captura `TextView.setText` sobre
+   `id/total` con `"Pulsos: 1"`, que además queda en el nodo como `textoDinamico`. El layout lo
+   elige el id que el intérprete ve pasar por `setContentView`, no el nombre; `--sin-ejecutar`
+   devuelve el modelo de la Fase 1 y ni siquiera la clave `ejecucion`. Un dex cuyo payload de
+   `packed-switch` no cabe en su propio cuerpo **se rechaza**, no se ejecuta a medias: rc 2 con
+   `el classes.dex no es ejecutable: en com.hola.contador.Casos.valor: payload de packed-switch
+   truncado: declara 100 brazos y necesita 216 palabras, el cuerpo tiene 20`, sin pánico, y la misma
+   apk con `--sin-ejecutar` sigue leyéndose con rc 0.
+3. **Fase 3, la vista.** La barra de actividad tiene **tres** vistas (Inicio, Editor y Vista), el
+   canvas lleva `role="img"` y no es arrastrable ni editable, y el gate cierra con **98
+   comprobaciones** de pestaña y `e2e: todo en orden`. Al compilar, el canvas pinta el modelo
+   (`3 nodos` en `#vista-previa-estado`) y no ensucia la consola ni `#ultimo-codigo`; un `preview`
+   forzado a fallar deja el panel con su motivo y **no toca** ni la consola ni el último código. El
+   texto de la app se pinta con `ctx.fillText` y en el DOM solo se escribe con `textContent`
+   (`studio/vista-previa.js:259`, `:169`), así que el HTML de un layout no puede inyectar marcado.
+   La recarga offline sirve `vista-previa.js` desde el service worker y repinta el último modelo.
+4. **Lo que cuesta el binario.** Sobre compilaciones `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build`
+   sin `-s -w` (la forma que documenta el gate), del árbol sin vista previa (`eef01b9`) al que trae
+   el lector y el comando (`32851f4`) el wasm crece **+73 884 B** y su gzip `-9` **+21 897 B**; del
+   árbol sin intérprete (`c40efc9`) al actual (`4d6dc89`) crece **+365 037 B** y **+77 833 B**. El
+   binario final que empaqueta `tools/entorno.sh wasm` (con `-s -w`) mide **13 815 947 B** y
+   **3 621 793 B** comprimido.
+
+```sh
+git archive eef01b9 apkc | tar -x -C "$TMP/base-preview"
+( cd "$TMP/base-preview/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$TMP/wasm-0.wasm" . )
+# ídem con 32851f4 y c40efc9, y el árbol actual: $TMP/wasm-1.wasm, $TMP/wasm-2.wasm, $TMP/wasm-3.wasm
+for f in "$TMP"/wasm-0.wasm "$TMP"/wasm-1.wasm "$TMP"/wasm-2.wasm "$TMP"/wasm-3.wasm; do
+  stat -c %s "$f"; gzip -9 -c "$f" | wc -c
+done
+( cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -ldflags='-s -w' -o "$TMP/wasm-final.wasm" . )
+stat -c %s "$TMP/wasm-final.wasm"; gzip -9 -c "$TMP/wasm-final.wasm" | wc -c
+```
+
+**Resultado**: gate rc=0 con `pestaña: 98 comprobaciones` y `e2e: todo en orden`; el comando del
+preview sale rc 0 en el hospedador con forma de navegador (`[apkc] finished in` 37,7-43,1 ms en
+cinco ejecuciones) y en nativo; `go test -count=1 ./...` de `apkc/` en verde, que incluye el lector
+del pool de aapt2, el intérprete, el rechazo del payload truncado y el modelo del apk. Frontera: el
+layout se elige por `--layout` y, sin él, por el id de `setContentView` o por el nombre `main`; el
+`setContentView` solo aporta el id, nada más; los ids del framework no se resuelven a su nombre y
+salen como `@0x01030042`; no hay `gravity` fino, imágenes, tema del sistema ni fuentes reales, y
+los rectángulos son la aproximación declarada (`aproximado: true`), así que este `§` no afirma
+render fiel. El intérprete no hace JNI, no carga `.so`, no admite multidex y rechaza las excepciones
+por su nombre. El informe previo del builder dio +74 488 B y +18 198 B para la Fase 1: con este
+árbol y este toolchain no se reproducen (dan +73 884 B y +21 897 B), y la cifra que vale es la
+medida aquí. No se probó a propósito una inyección de HTML en un layout: se sostiene por
+construcción (canvas y `textContent`), no por una sonda.
+

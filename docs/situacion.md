@@ -613,10 +613,15 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   advisories del detector de interfaz. Lo demás no se cuenta como cerrado.
 - **Punto de entrada para la próxima sesión (§198)**: gate en verde con 87 comprobaciones de pestaña,
   sitio local y host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado.
-  Para seguir, lee primero §194 (deuda), §199 (cierre Java), §197 (carga y caché) y §198 (comandos de
-  reproducción); el inventario de la Fase 5 y la tabla de estados de `docs/plan.md` ya incluyen esta
-  tanda.
-- **Objetivo próximo: vista previa del APK** (`docs/plan-vista-previa.md`): la propuesta del usuario
-  se naturalizó sobre el estado de §198 —cifras reales del binario, comandos con las rutas actuales,
-  lector DEX del fork reutilizado y restricciones R1-R8— y quedó como fila 7 de la tabla de estados
-  de `docs/plan.md`. Fase 0 hecha; fases 1-4 pendientes y sin medir.
+  Para seguir, lee primero §194 (deuda), §199 (cierre Java), §200 (diagnóstico), §197 (carga y caché)
+  y §198 (comandos de reproducción); el inventario de la Fase 5 y la tabla de estados de `docs/plan.md`
+  ya incluyen esta tanda.
+- **Vista previa del APK: fases 0-4 cerradas (§201)** (`docs/plan-vista-previa.md`): `apkc preview`
+  lee un apk ya construido y devuelve el modelo de su primera pantalla —661 bytes sin ejecutar, 897
+  con el intérprete, 3 nodos en la plantilla Contador—, el intérprete corre `onCreate` y una
+  interacción (43 pasos, `textoDinamico: "Pulsos: 1"` sobre `id/total`) y rechaza por su nombre un
+  dex con el payload de `packed-switch` truncado, y `studio/` pinta el modelo en una tercera vista
+  con canvas de solo lectura. Gate en verde con 98 comprobaciones de pestaña; el wasm crece +73 884
+  B por el lector y +365 037 B por el intérprete. Fronteras: aproximación declarada, sin `gravity`
+  fino, imágenes ni tema, ids del framework como `@0x01030042`, e intérprete sin JNI, `.so`,
+  multidex ni excepciones. Nada de WineDroid (GPL): es código propio MIT.
