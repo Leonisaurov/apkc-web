@@ -753,3 +753,11 @@ COOP/COEP en el borde; la página no cambia, solo deja de necesitar la recarga.
   dos días, y la Fase 3 cuesta semanas.
 - `apkc` no se modifican sus mensajes ni sus comandos desde aquí: se pide, se aprueba, y se commitea
   en `../apkc` con su propio gate.
+
+## Deuda abierta tras esta ronda
+
+No se marca como hecha: va con su medición y su comando en `docs/evidencia.md` §194. Varargs en
+resolución de sobrecargas; `try-with-resources` con varios recursos sin `addSuppressed`; jobs `art` y
+`safari` informativos en CI; host publicado verificado solo al 8/10 desde este entorno por truncamiento
+HTTP/2; nombre de la política de Trusted Types y hash de `wasm_exec.js` sin fijar; diagnóstico en vivo
+y paleta sin prueba versionada; dos advisories del detector de interfaz (0 warnings).

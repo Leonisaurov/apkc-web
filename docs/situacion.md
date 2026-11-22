@@ -606,3 +606,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   privada instanciada desde fuera, boxing/ensanchamiento/arreglos en sobrecargas y la anónima dentro
   de anónima, todas byte a byte contra javac 17; solo quedan los varargs como frontera (§193). El
   gate integrado sigue en verde con 85 comprobaciones de pestaña.
+- **Deuda abierta (§194)**: varargs en sobrecargas, `try-with-resources` con varios recursos sin
+  `addSuppressed`, jobs `art`/`safari` informativos, verificación del host al 8/10 por HTTP/2, dos
+  hallazgos del informe de seguridad sin prueba versionada y dos advisories del detector de interfaz.
+  Nada de eso se cuenta como cerrado.

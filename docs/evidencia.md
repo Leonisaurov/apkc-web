@@ -8546,3 +8546,37 @@ GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh gate
 **Resultado**: `ok github.com/ajinasokan/apkc 8.497s` sobre el árbol integrado, suite wasm `PASS` y
 gate rc=0 con `pestaña: 85 comprobaciones`, cuatro plantillas verificadas y el `.aab` ensamblado en
 Go validado. Frontera que queda: varargs en sobrecargas; las otras tres piezas no tienen deuda.
+
+## 194. Deuda abierta al cierre de esta ronda
+
+Medido el 2026-11-21. Se enumera lo que **no** está cerrado, con el comando que lo reproduce, para
+no confundir «frontera escrita» con «hecho».
+
+1. **Varargs en resolución de sobrecargas**. `resuelveSobrecarga` acepta boxing, ensanchamiento y
+   arreglos (§193), pero un parámetro `int... xs` se rechaza en el parser con `un parametro necesita
+   nombre`. Lo fija `TestLosVarargsSiguenSiendoFrontera`.
+2. **`try-with-resources` con varios recursos**. El de un recurso es byte a byte de javac con
+   `addSuppressed`; los múltiples siguen con el desugaring funcional de §179 (sin `addSuppressed`).
+3. **CI sin ART ni Safari reales**. Los jobs `art` y `safari` son informativos: ART sí se verificó en
+   la Blackview (§192), pero un runner no tiene esa tableta; en macOS Playwright ejecuta su WebKit,
+   no `Safari.app`. `publicar` depende solo de `pesado`.
+4. **Host publicado verificado solo al 8/10 desde este entorno**. HTTP/2 trunca el wasm (§191); el
+   sitio empaquetado en local da 10/10. No se afirma que el host falle para otros navegadores ni que
+   esté 10/10 desde aquí.
+5. **Dos hallazgos del informe de seguridad sin cerrar**: el nombre de la política de Trusted Types
+   no está fijado por una prueba versionada (`tt.js` usa `apkc-studio` y el head usa `apkc-sw`), y
+   `wasm_exec.js` no se fija por hash. B1 (meta CSP) y B4 (cota de ZIP) sí están cerrados.
+6. **Pruebas no versionadas**: el diagnóstico en vivo y la paleta se verificaron con un guion CDP
+   temporal; no hay prueba committed para ellos. `pestaña.js` sí tiene la prueba de redacción de
+   contraseñas.
+7. **Detector de interfaz**: `impeccable detect --json studio/index.html studio/style.css studio/temas.js`
+   devuelve **0 warnings** y **2 advisories**: `3.4:1 — #ffffff sobre #2e92d5` (azul calculado para
+   un hover, no literal del código) y `repeating-gradient decorative stripes` en `.marca-error`
+   (`style.css:1008`, subrayado funcional de error, no decoración). Se decide no nominar publicación
+   por un advisory estético; queda escrito.
+
+```sh
+grep -n 'TestLosVarargsSiguenSiendoFrontera' apkc/javaemisor_sobrecarga_conversiones_test.go
+grep -n 'continue-on-error' .github/workflows/gate.yml
+impeccable detect --json studio/index.html studio/style.css studio/temas.js
+```
