@@ -945,10 +945,10 @@ type candidato struct {
 // coincide **exactamente** con los descriptores de los argumentos. Medido el 2026-11-01 (parrafo 62):
 // `System.out.println(que)` con `que` de tipo String bajaba `println:(Z)V` —la primera declarada en
 // PrintStream— porque el recorrido paraba en el primer nombre con la aridad debida; javac escribe
-// `println:(Ljava/lang/String;)V`, y el dex lo refleja palabra a palabra. La eleccion por **subtipo**
-// (`setText(CharSequence)` con un String, que no tiene candidata exacta y hoy se resuelve por haber una
-// sola), el `boxing` y los varargs **no estan medidos**: con varias candidatas y ninguna exacta se
-// rechaza por nombre, con las candidatas a la vista.
+// `println:(Ljava/lang/String;)V`, y el dex lo refleja palabra a palabra. Ademas se mide la eleccion
+// por subtipo (`setText(CharSequence)` con un String), el boxing (`box(7)` -> `box(Integer)`) y el
+// ensanchamiento (`ens(7)` -> `ens(long)`), con la conversion que javac escribe; los varargs siguen
+// fuera de la frontera 5.26 y se rechazan por nombre en el parser.
 func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []string) (candidato, error) {
 	cands, err := ctx.candidatos(interno, nombre, argc)
 	if err != nil {
@@ -1047,11 +1047,30 @@ func (ctx *contextoJava) masEspecifico(a, b string) bool {
 	return true
 }
 
-// asignable: si un valor del tipo `desde` cabe en un parámetro del tipo `hasta`. Identidad, y entre
-// referencias la subida por la cadena de padres y por las interfaces. Los arrays y el ensanchamiento de
-// primitivos no están medidos: salen `false`, y eso deja la llamada en el rechazo por nombre.
+// ampliaciones y boxing que javac admite en la resolucion de sobrecargas (JVMS 5.3): el emisor ya
+// sabia escribir las conversiones en `expA`, aqui solo se dice que son aplicables para elegir candidata.
+var ampliacionPrimitiva = map[string]bool{
+	"I>J": true, "I>F": true, "I>D": true, "J>F": true, "J>D": true, "F>D": true,
+	"B>I": true, "S>I": true, "C>I": true, "Z>I": true,
+}
+
+var boxingDe = map[string]string{
+	"I": "Ljava/lang/Integer;", "J": "Ljava/lang/Long;", "F": "Ljava/lang/Float;",
+	"D": "Ljava/lang/Double;", "Z": "Ljava/lang/Boolean;", "C": "Ljava/lang/Character;",
+	"S": "Ljava/lang/Short;", "B": "Ljava/lang/Byte;",
+}
+
+// asignable: si un valor del tipo `desde` cabe en un parámetro del tipo `hasta`. Identidad,
+// ensanchamiento de primitivos, boxing y, entre referencias, la subida por la cadena de padres y por
+// las interfaces (arrays incluidos, porque comparten la subida a Object).
 func (ctx *contextoJava) asignable(desde, hasta string) bool {
 	if desde == hasta {
+		return true
+	}
+	if ampliacionPrimitiva[desde+">"+hasta] {
+		return true
+	}
+	if box, ok := boxingDe[desde]; ok && box == hasta {
 		return true
 	}
 	if !esTipoDeReferencia(desde) || !esTipoDeReferencia(hasta) {
@@ -2918,7 +2937,7 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			if cand.acceso&accStatic == 0 {
 				return "", fmt.Errorf("linea %d: %s no es estatico y desde un metodo estatico hace falta receptor", l.donde.linea, l.nombre)
 			}
-			if _, err := e.argumentos(l.args); err != nil {
+			if _, err := e.argumentosEsperados(l.args, cand.desc); err != nil {
 				return "", err
 			}
 			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
@@ -2990,14 +3009,14 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 				l.donde.linea, l.nombre, argc, e.interno, err)
 		}
 		if cand.acceso&accStatic != 0 {
-			if _, err := e.argumentos(l.args); err != nil {
+			if _, err := e.argumentosEsperados(l.args, cand.desc); err != nil {
 				return "", err
 			}
 			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
 			return vueltaDe(cand.desc), nil
 		}
 		e.cargaDe(0, "L")
-		if _, err := e.argumentos(l.args); err != nil {
+		if _, err := e.argumentosEsperados(l.args, cand.desc); err != nil {
 			return "", err
 		}
 		opcode := byte(opInvokevirt)
@@ -3058,6 +3077,26 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 	}
 	e.invoca(opcode, receptor, l.nombre, cand.desc, argc+1)
 	return vueltaDe(cand.desc), nil
+}
+
+// argumentosEsperados: baja los argumentos con el tipo que la sobrecarga ya elegida espera. Es lo
+// que permite escribir el boxing y el ensanchamiento como javac: la promocion de un literal se decide
+// sobre la constante (`ldc2_w 7l`), no con una conversion detras (`bipush 7; i2l`).
+func (e *emisor) argumentosEsperados(args []jexpr, desc string) ([]string, error) {
+	_, _, ps := splitDescriptor(desc)
+	tipos := make([]string, 0, len(args))
+	for i, arg := range args {
+		esperado := ""
+		if i < len(ps) {
+			esperado = ps[i]
+		}
+		d, err := e.expA(arg, esperado)
+		if err != nil {
+			return nil, err
+		}
+		tipos = append(tipos, d)
+	}
+	return tipos, nil
 }
 
 // argumentos: baja los argumentos al pico y devuelve sus descriptores, que es lo que necesita
@@ -3641,6 +3680,13 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	}
 	if d == deseado {
 		return d, nil
+	}
+	// boxing: javac 17 escribe `Integer.valueOf` (y el resto de envoltorios) antes de la llamada a la
+	// sobrecarga que toma un Objeto; medido con `javap -c` sobre `box(7)`.
+	if box, ok := boxingDe[d]; ok && box == deseado {
+		dueño := box[1 : len(box)-1]
+		e.invoca(opInvokestat, dueño, "valueOf", "("+d+")"+box, 1)
+		return box, nil
 	}
 	// Enschar un `char` a `int` no escribe nada: `int n = c;` es `iload_0; istore_1` y `aEntero(char)` es
 	// `iload_0; ireturn`, medidos en el parrafo 87. Lo mismo vale para `byte` y `short`: la sonda
