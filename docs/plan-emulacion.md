@@ -1,10 +1,10 @@
 # Plan de emulación de apps propias en la vista previa
 
-**Estado: plan abierto.** Todas las fases E1…E7 están **pendientes** hasta que su comando de
-aceptación pase en verde sobre el árbol final. Este fichero es un plan, no evidencia: lo que aquí se
-afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que se
-comprobará. Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla de
-`docs/plan.md` cuando la fase se cierre.
+**Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
+medida en §205; E2…E7 están **pendientes** hasta que su comando de aceptación pase en verde sobre el
+árbol final. Este fichero es un plan, no evidencia: lo que aquí se afirme sobre coste, compatibilidad
+o formato es una hipótesis y lleva el comando con el que se comprobará. Las mediciones reales van a
+`docs/evidencia.md`; el estado de las fases, a la tabla de `docs/plan.md` cuando la fase se cierre.
 
 Fecha: 2026-11-22. Origen de la petición: el usuario quiere **que emule mucho más**, con prioridad
 clara en **diseño de la app, funcionalidad, fidelidad y funcionamiento**. Las APIs externas de
