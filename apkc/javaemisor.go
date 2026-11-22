@@ -938,6 +938,11 @@ func (e *emisor) usarDescriptor(desc string) {
 type candidato struct {
 	desc   string
 	acceso int
+	// varargs: la declaracion trae `...` (en el fuente) o ACC_VARARGS (en el jar). empaquetar: esta
+	// llamada concreta baja los argumentos sobrantes a un arreglo nuevo, que es la forma que escribe
+	// javac; una llamada varargs con un arreglo del tipo declarado no empaqueta y se pasa tal cual.
+	varargs    bool
+	empaquetar bool
 }
 
 // buscarMetodo recorre la clase y sus padres por nombre y aridad, y elige la sobrecarga. Con **una**
@@ -947,10 +952,10 @@ type candidato struct {
 // PrintStream— porque el recorrido paraba en el primer nombre con la aridad debida; javac escribe
 // `println:(Ljava/lang/String;)V`, y el dex lo refleja palabra a palabra. Ademas se mide la eleccion
 // por subtipo (`setText(CharSequence)` con un String), el boxing (`box(7)` -> `box(Integer)`) y el
-// ensanchamiento (`ens(7)` -> `ens(long)`), con la conversion que javac escribe; los varargs siguen
-// fuera de la frontera 5.26 y se rechazan por nombre en el parser.
+// ensanchamiento (`ens(7)` -> `ens(long)`), con la conversion que javac escribe. Las candidatas varargs
+// entran en la fase 3 de JVMS 15.12.2.4 (§194): solo si ninguna de aridad fija es aplicable.
 func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []string) (candidato, error) {
-	cands, err := ctx.candidatos(interno, nombre, argc)
+	cands, err := ctx.candidatosDe(interno, nombre, argc, true)
 	if err != nil {
 		return candidato{}, err
 	}
@@ -959,7 +964,14 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 			interno, nombre, argc, interno)
 	}
 	if len(cands) == 1 {
-		return cands[0], nil
+		c := cands[0]
+		if c.varargs {
+			// con una sola candidata no hay eleccion, pero si hay que decidir la forma: un arreglo del
+			// tipo declarado se pasa tal cual y cualquier otra cosa se empaqueta.
+			_, _, ps := splitDescriptor(c.desc)
+			c.empaquetar = len(ps) == 0 || len(tipos) != len(ps) || tipos[len(ps)-1] != ps[len(ps)-1]
+		}
+		return c, nil
 	}
 	exactas := []candidato{}
 	for _, c := range cands {
@@ -1006,22 +1018,50 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 		return aplicables[0], nil
 	}
 	if len(aplicables) > 1 {
-		mas := []candidato{}
-		for _, a := range aplicables {
-			especifica := true
-			for _, b := range aplicables {
-				if a.desc == b.desc || ctx.masEspecifico(a.desc, b.desc) {
-					continue
-				}
-				especifica = false
+		if unica, ok := ctx.masEspecificaDe(aplicables); ok {
+			return unica, nil
+		}
+	}
+	// fase 3 (JVMS 15.12.2.4): solo si no habia ninguna candidata de aridad fija aplicable. Los
+	// `len(ps)-1` primeros argumentos van a los parametros fijos y el resto, cada uno convertible al
+	// tipo ELEMENTO del ultimo parametro, se empaqueta en un arreglo nuevo.
+	varargs := []candidato{}
+	for _, c := range cands {
+		if !c.varargs {
+			continue
+		}
+		_, _, ps := splitDescriptor(c.desc)
+		if len(ps) == 0 || len(ps[len(ps)-1]) == 0 || ps[len(ps)-1][0] != '[' {
+			continue
+		}
+		n := len(ps) - 1
+		if argc < n {
+			continue
+		}
+		elemento := ps[n][1:]
+		cabe := true
+		for i := 0; i < n; i++ {
+			if !ctx.asignable(tipos[i], ps[i]) {
+				cabe = false
 				break
 			}
-			if especifica {
-				mas = append(mas, a)
+		}
+		for i := n; cabe && i < argc; i++ {
+			if !ctx.asignable(tipos[i], elemento) {
+				cabe = false
 			}
 		}
-		if len(mas) == 1 {
-			return mas[0], nil
+		if cabe {
+			c.empaquetar = true
+			varargs = append(varargs, c)
+		}
+	}
+	if len(varargs) == 1 {
+		return varargs[0], nil
+	}
+	if len(varargs) > 1 {
+		if unica, ok := ctx.masEspecificaDe(varargs); ok {
+			return unica, nil
 		}
 	}
 	posibles := make([]string, 0, len(cands))
@@ -1030,6 +1070,29 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 	}
 	return candidato{}, fmt.Errorf("%s.%s tiene %d sobrecargas de %d argumentos (%s) y los tipos llamados son (%s): ninguna es la mas especifica para este subconjunto",
 		interno, nombre, len(cands), argc, strings.Join(posibles, " "), strings.Join(tipos, " "))
+}
+
+// masEspecificaDe: la unica candidata que cabe en todas las demas (JVMS 15.12.2.5). Devuelve falso si
+// no hay ninguna o si hay empate.
+func (ctx *contextoJava) masEspecificaDe(cands []candidato) (candidato, bool) {
+	mas := []candidato{}
+	for _, a := range cands {
+		especifica := true
+		for _, b := range cands {
+			if a.desc == b.desc || ctx.masEspecifico(a.desc, b.desc) {
+				continue
+			}
+			especifica = false
+			break
+		}
+		if especifica {
+			mas = append(mas, a)
+		}
+	}
+	if len(mas) == 1 {
+		return mas[0], true
+	}
+	return candidato{}, false
 }
 
 // masEspecifico: si cada parametro de `a` cabe en el de `b` (y alguno no al revés, o son iguales).
@@ -1127,10 +1190,28 @@ func esTipoDeReferencia(desc string) bool {
 	return len(desc) > 0 && (desc[0] == 'L' || desc[0] == '[')
 }
 
-// candidatos: las sobrecargas de nombre y aridad dados, en el orden de la jerarquia (la clase propia
+// aridadSirve: si una sobrecarga de `n` parametros puede servir a una llamada de `argc`. La aridad
+// exacta sirve siempre; una varargs tambien con menos argumentos, porque los que falten pueden venir
+// en un arreglo vacio (JVMS 15.12.2.4, `argc >= n-1`). La comprobacion de tipos la hace buscarMetodo.
+func aridadSirve(n int, varargs bool, argc int) bool {
+	if varargs && n > 0 {
+		return argc >= n-1
+	}
+	return n == argc
+}
+
+// candidatos: las sobrecargas de nombre y aridad exactos, en el orden de la jerarquia (la clase propia
 // primero, luego el `android.jar`) y deduplicadas por descriptor, que es como javac ve un mismo metodo
-// declarado y heredado.
+// declarado y heredado. Es la vista estricta que usan los estimadores de tipo; la resolucion de una
+// llamada usa `candidatosDe` con los varargs incluidos.
 func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candidato, error) {
+	return ctx.candidatosDe(interno, nombre, argc, false)
+}
+
+// candidatosDe: lo mismo, y con `conVarargs` tambien las declaraciones `...` para las que alcanza esta
+// aridad. Las varargs se marcan para que buscarMetodo decida en su fase 3 y para que la emision sepa
+// que hay que empaquetar (§194).
+func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarargs bool) ([]candidato, error) {
 	sal := []candidato{}
 	vistas := map[string]bool{}
 	poner := func(c candidato) {
@@ -1144,7 +1225,7 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 	for visits := 0; actual != "" && visits < 32; visits++ {
 		propia, esPropia := ctx.clasePropia(actual)
 		if !esPropia {
-			cs, err := ctx.busc.candidatosDelJar(actual, nombre, argc)
+			cs, err := ctx.busc.candidatosDelJar(actual, nombre, argc, conVarargs)
 			if err != nil {
 				return nil, err
 			}
@@ -1154,7 +1235,10 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 			return sal, nil
 		}
 		for _, m := range propia.metodos {
-			if m.nombre != nombre || len(m.params) != argc {
+			if m.nombre != nombre {
+				continue
+			}
+			if !(len(m.params) == argc || (conVarargs && aridadSirve(len(m.params), m.varargs, argc))) {
 				continue
 			}
 			d, err := ctx.descDeMetodo(m)
@@ -1177,7 +1261,7 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 			if m.esFinal {
 				acceso |= accFinal
 			}
-			poner(candidato{desc: d, acceso: acceso})
+			poner(candidato{desc: d, acceso: acceso, varargs: m.varargs})
 		}
 		if nombre == "<init>" && propia.encierre != nil && !propia.anonima {
 			// el constructor de una anidada no estatica lo sintetiza el emisor con el exterior delante;
@@ -1210,7 +1294,7 @@ func (ctx *contextoJava) candidatos(interno, nombre string, argc int) ([]candida
 }
 
 // candidatosDelJar: lo mismo sobre las clases del `android.jar`, subiendo por la cadena de padres.
-func (b *buscadorDeClases) candidatosDelJar(interno, nombre string, argc int) ([]candidato, error) {
+func (b *buscadorDeClases) candidatosDelJar(interno, nombre string, argc int, conVarargs bool) ([]candidato, error) {
 	sal := []candidato{}
 	vistas := map[string]bool{}
 	actual := interno
@@ -1220,11 +1304,16 @@ func (b *buscadorDeClases) candidatosDelJar(interno, nombre string, argc int) ([
 			return nil, err
 		}
 		for _, m := range c.Methods {
-			if m.Name != nombre || cuentaArgumentosJava(m.Desc) != argc || vistas[m.Desc] {
+			varargs := m.Access&accVarargs != 0
+			match := cuentaArgumentosJava(m.Desc) == argc
+			if !match && conVarargs {
+				match = aridadSirve(cuentaArgumentosJava(m.Desc), varargs, argc)
+			}
+			if m.Name != nombre || !match || vistas[m.Desc] {
 				continue
 			}
 			vistas[m.Desc] = true
-			sal = append(sal, candidato{desc: m.Desc, acceso: m.Access})
+			sal = append(sal, candidato{desc: m.Desc, acceso: m.Access, varargs: varargs})
 		}
 		if c.Super == "" {
 			break
@@ -2885,6 +2974,16 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		// clase (parrafo 91). La delegacion no baja los inicializadores de campo; eso lo hace el
 		// constructor al que se delega.
 		e.cargaDe(0, "L")
+		if e.hayEmpaquetadoEn(e.interno, "<init>", l.args) {
+			// un `this(...)` con un constructor varargs: la aridad del fuente no es la del descriptor,
+			// asi que se resuelve con los tipos estimados antes de bajar los argumentos (§194)
+			cand, n, err := e.argumentosResueltos(e.interno, "<init>", l.args)
+			if err != nil {
+				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+			}
+			e.invoca(opInvokespec, e.interno, "<init>", cand.desc, n+1)
+			return "V", nil
+		}
 		tipos, err := e.argumentos(l.args)
 		if err != nil {
 			return "", err
@@ -2905,6 +3004,15 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 		}
 		e.cargaDe(0, "L")
+		if e.hayEmpaquetadoEn(dueño, l.nombre, l.args) {
+			// `super(...)` con un constructor varargs del padre: mismo orden que `this(...)`
+			cand, n, err := e.argumentosResueltos(dueño, l.nombre, l.args)
+			if err != nil {
+				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+			}
+			e.invoca(opInvokespec, dueño, l.nombre, cand.desc, n+1)
+			return vueltaDe(cand.desc), nil
+		}
 		tipos, err := e.argumentos(l.args)
 		if err != nil {
 			return "", err
@@ -2937,10 +3045,11 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			if cand.acceso&accStatic == 0 {
 				return "", fmt.Errorf("linea %d: %s no es estatico y desde un metodo estatico hace falta receptor", l.donde.linea, l.nombre)
 			}
-			if _, err := e.argumentosEsperados(l.args, cand.desc); err != nil {
+			n, err := e.argumentosDeLlamada(l.args, cand)
+			if err != nil {
 				return "", err
 			}
-			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
+			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, n)
 			return vueltaDe(cand.desc), nil
 		}
 		// Una anonima resuelve el nombre suelto primero en si misma y, si no hay ninguna candidata, en la
@@ -2965,28 +3074,30 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 						l.donde.linea, l.nombre, argc, e.interno, externo, err)
 				}
 				if cand.acceso&accStatic != 0 {
-					if _, err := e.argumentos(l.args); err != nil {
+					n, err := e.argumentosDeLlamada(l.args, cand)
+					if err != nil {
 						return "", err
 					}
 					if cand.acceso&accPrivate != 0 {
 						// tambien un estatico privado pasa por su accessor, que no lleva receptor
 						nombreAcc, descAcc := e.ctx.accesorPara(externo, l.nombre, cand.desc, false, false, true)
-						e.invoca(opInvokestat, externo, nombreAcc, descAcc, argc)
+						e.invoca(opInvokestat, externo, nombreAcc, descAcc, n)
 					} else {
-						e.invoca(opInvokestat, externo, l.nombre, cand.desc, argc)
+						e.invoca(opInvokestat, externo, l.nombre, cand.desc, n)
 					}
 					return vueltaDe(cand.desc), nil
 				}
 				e.cargaDe(0, "L")
 				e.getfield(e.pool.campo(e.interno, "this$0", "L"+externo+";"))
-				if _, err := e.argumentos(l.args); err != nil {
+				n, err := e.argumentosDeLlamada(l.args, cand)
+				if err != nil {
 					return "", err
 				}
 				if cand.acceso&accPrivate != 0 {
 					nombreAcc, descAcc := e.ctx.accesorPara(externo, l.nombre, cand.desc, false, false, false)
-					e.invoca(opInvokestat, externo, nombreAcc, descAcc, argc+1)
+					e.invoca(opInvokestat, externo, nombreAcc, descAcc, n+1)
 				} else {
-					e.invoca(opInvokevirt, externo, l.nombre, cand.desc, argc+1)
+					e.invoca(opInvokevirt, externo, l.nombre, cand.desc, n+1)
 				}
 				return vueltaDe(cand.desc), nil
 			}
@@ -3009,14 +3120,16 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 				l.donde.linea, l.nombre, argc, e.interno, err)
 		}
 		if cand.acceso&accStatic != 0 {
-			if _, err := e.argumentosEsperados(l.args, cand.desc); err != nil {
+			n, err := e.argumentosDeLlamada(l.args, cand)
+			if err != nil {
 				return "", err
 			}
-			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, argc)
+			e.invoca(opInvokestat, e.interno, l.nombre, cand.desc, n)
 			return vueltaDe(cand.desc), nil
 		}
 		e.cargaDe(0, "L")
-		if _, err := e.argumentosEsperados(l.args, cand.desc); err != nil {
+		n, err := e.argumentosDeLlamada(l.args, cand)
+		if err != nil {
 			return "", err
 		}
 		opcode := byte(opInvokevirt)
@@ -3024,11 +3137,22 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			// un metodo privado de la propia clase se invoca con `invokespecial`, medido en el parrafo 72
 			opcode = opInvokespec
 		}
-		e.invoca(opcode, e.interno, l.nombre, cand.desc, argc+1)
+		e.invoca(opcode, e.interno, l.nombre, cand.desc, n+1)
 		return vueltaDe(cand.desc), nil
 	}
 	if acc, esAcceso := l.base.(jacceso); esAcceso && acc.base == nil && e.locales[acc.nombre].desc == "" {
 		if interno, err := e.ctx.resolverSimple(acc.nombre); err == nil {
+			if e.hayEmpaquetadoEn(interno, l.nombre, l.args) {
+				cand, n, err := e.argumentosResueltos(interno, l.nombre, l.args)
+				if err != nil {
+					return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+				}
+				if cand.acceso&accStatic == 0 {
+					return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
+				}
+				e.invoca(opInvokestat, interno, l.nombre, cand.desc, n)
+				return vueltaDe(cand.desc), nil
+			}
 			tipos, err := e.argumentos(l.args)
 			if err != nil {
 				return "", err
@@ -3052,13 +3176,24 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		return "", fmt.Errorf("linea %d: no se puede llamar %s sobre un %s", l.donde.linea, l.nombre, d)
 	}
 	receptor := d[1 : len(d)-1]
-	tipos, err := e.argumentos(l.args)
-	if err != nil {
-		return "", err
-	}
-	cand, err := e.ctx.buscarMetodo(receptor, l.nombre, argc, tipos)
-	if err != nil {
-		return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+	var cand candidato
+	n := argc
+	if e.hayEmpaquetadoEn(receptor, l.nombre, l.args) {
+		// una candidata varargs del receptor: los tipos hay que estimarlos antes, porque la aridad
+		// del `invoke` la fija el descriptor y no el fuente (§194)
+		cand, n, err = e.argumentosResueltos(receptor, l.nombre, l.args)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+		}
+	} else {
+		tipos, err := e.argumentos(l.args)
+		if err != nil {
+			return "", err
+		}
+		cand, err = e.ctx.buscarMetodo(receptor, l.nombre, argc, tipos)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+		}
 	}
 	accesosReceptor, err := e.ctx.accesosDe(receptor)
 	if err != nil {
@@ -3075,7 +3210,7 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		// `this.metodoPrivado()`: javac tambien escribe `invokespecial` (parrafo 72)
 		opcode = opInvokespec
 	}
-	e.invoca(opcode, receptor, l.nombre, cand.desc, argc+1)
+	e.invoca(opcode, receptor, l.nombre, cand.desc, n+1)
 	return vueltaDe(cand.desc), nil
 }
 
@@ -3097,6 +3232,162 @@ func (e *emisor) argumentosEsperados(args []jexpr, desc string) ([]string, error
 		tipos = append(tipos, d)
 	}
 	return tipos, nil
+}
+
+// argumentosDeLlamada: baja los argumentos con la forma que javac escribe para la candidata elegida.
+// Con aridad fija cada argumento ocupa el parametro que le toca (`argumentosEsperados`, que es lo que
+// permite bajar el literal ya promovido). Con una candidata varargs empaquetada, los fijos van uno a
+// uno y el resto entra en un arreglo nuevo, elemento a elemento: `cargaEntero(n); newarray/anewarray;
+// dup; indice; valor; *astore`, la misma cadena de `new T[] {…}` (§194). Devuelve la aridad que ve el
+// `invoke`, que es la del descriptor y no la del fuente.
+func (e *emisor) argumentosDeLlamada(args []jexpr, cand candidato) (int, error) {
+	_, _, ps := splitDescriptor(cand.desc)
+	if !cand.empaquetar || len(ps) == 0 {
+		if _, err := e.argumentosEsperados(args, cand.desc); err != nil {
+			return 0, err
+		}
+		return len(args), nil
+	}
+	fijos := len(ps) - 1
+	if len(args) < fijos {
+		return 0, fmt.Errorf("la candidata %s necesita %d argumentos y se llamaron %d", cand.desc, fijos, len(args))
+	}
+	for i := 0; i < fijos; i++ {
+		if _, err := e.expA(args[i], ps[i]); err != nil {
+			return 0, err
+		}
+	}
+	if err := e.empaquetaVarargs(args[fijos:], ps[fijos]); err != nil {
+		return 0, err
+	}
+	return len(ps), nil
+}
+
+// empaquetaVarargs: el arreglo que javac crea para una llamada varargs. Es la cadena de `nuevoArreglo`
+// con los elementos del fuente: la cuenta, el `newarray` (0xbc) o `anewarray` (0xbd) del tipo ELEMENTO
+// y, por cada argumento, `dup`, su indice, el valor convertido y `iastore`/`aastore`. Medido con javac
+// 17 sobre `var(1,2,3)` y `ref("a","b")` (§194).
+func (e *emisor) empaquetaVarargs(rest []jexpr, arreglo string) error {
+	if len(arreglo) == 0 || arreglo[0] != '[' || len(arreglo) < 2 {
+		return fmt.Errorf("el parametro varargs %s no es un arreglo", arreglo)
+	}
+	elem := arreglo[1:]
+	e.cargaEntero(int32(len(rest)))
+	if elem[0] == 'L' || elem[0] == '[' {
+		interno := elem
+		if elem[0] == 'L' {
+			interno = elem[1 : len(elem)-1]
+			e.usar(interno)
+		}
+		idx := e.pool.clase(interno)
+		e.emite(0xbd, byte(idx>>8), byte(idx))
+	} else {
+		atype, ok := atypeDe[elem[0]]
+		if !ok {
+			return fmt.Errorf("un arreglo varargs de %s no esta medido", elem)
+		}
+		e.emite(0xbc, atype)
+	}
+	e.baja(1) // la cuenta
+	e.sube()  // el arreglo
+	guarda, ok := guardadoDeArreglo(elem[0])
+	if !ok {
+		return fmt.Errorf("un arreglo varargs de %s no esta medido", elem)
+	}
+	for i, x := range rest {
+		e.emite(opDup)
+		e.sube()
+		e.cargaEntero(int32(i))
+		d, err := e.expA(x, elem)
+		if err != nil {
+			return err
+		}
+		if d != elem {
+			return fmt.Errorf("el parametro varargs es %s y el argumento %d es %s", elem, i, d)
+		}
+		e.emite(guarda)
+		e.baja(2)
+		e.bajaPor(elem)
+	}
+	return nil
+}
+
+// guardadoDeArreglo: el `*astore` que guarda un elemento del tipo dado. `castore` para `char`, que es
+// lo que javac escribe en `new char[] {'a','b'}` (parrafo 87), y `aastore` para referencias y arreglos.
+func guardadoDeArreglo(elem byte) (byte, bool) {
+	switch elem {
+	case 'I':
+		return 0x4f, true
+	case 'J':
+		return 0x50, true
+	case 'F':
+		return 0x51, true
+	case 'D':
+		return 0x52, true
+	case 'C':
+		return 0x55, true
+	case 'L', '[':
+		return 0x53, true
+	}
+	return 0, false
+}
+
+// hayEmpaquetado: si alguna candidata varargs obliga a empaquetar esta llamada. Es la pregunta que
+// decide el orden de emision: con empaquetado hay que estimar los tipos y resolver ANTES de bajar los
+// argumentos; sin el, el camino de siempre (bajarlos y resolver con sus descriptores) vale igual.
+func (e *emisor) hayEmpaquetado(args []jexpr, cands []candidato) bool {
+	for _, c := range cands {
+		if !c.varargs {
+			continue
+		}
+		_, _, ps := splitDescriptor(c.desc)
+		if len(ps) == 0 {
+			continue
+		}
+		n := len(ps) - 1
+		if len(args) < n {
+			continue
+		}
+		if len(args) == len(ps) {
+			// si el ultimo argumento ya es el arreglo declarado, javac no empaqueta: lo pasa tal cual
+			if d, ok := e.tipoPrevisto(args[n]); ok && d == ps[n] {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// hayEmpaquetadoEn: lo mismo, mirando las candidatas de `clase.nombre` con esta aridad.
+func (e *emisor) hayEmpaquetadoEn(clase, nombre string, args []jexpr) bool {
+	cands, err := e.ctx.candidatosDe(clase, nombre, len(args), true)
+	if err != nil {
+		return false
+	}
+	return e.hayEmpaquetado(args, cands)
+}
+
+// argumentosResueltos: estima los tipos de los argumentos (sin escribir nada), resuelve la sobrecarga
+// y baja los argumentos con la forma de la candidata. Devuelve la candidata y la aridad del `invoke`.
+func (e *emisor) argumentosResueltos(clase, nombre string, args []jexpr) (candidato, int, error) {
+	tipos := make([]string, 0, len(args))
+	for _, arg := range args {
+		d, err := e.tipoEstimado(arg)
+		if err != nil {
+			return candidato{}, 0, err
+		}
+		tipos = append(tipos, d)
+	}
+	cand, err := e.ctx.buscarMetodo(clase, nombre, len(args), tipos)
+	if err != nil {
+		return candidato{}, 0, err
+	}
+	n, err := e.argumentosDeLlamada(args, cand)
+	if err != nil {
+		return candidato{}, 0, err
+	}
+	return cand, n, nil
 }
 
 // argumentos: baja los argumentos al pico y devuelve sus descriptores, que es lo que necesita
@@ -3241,6 +3532,11 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 			return "", fmt.Errorf("linea %d: no se puede construir %s desde %s sin el exterior %s", n.donde.linea, interno, e.interno, externo)
 		}
 	}
+	if cand.empaquetar {
+		// un `new X(...)` que tenga que empaquetar varargs no está medido: se rechaza con nombre en vez
+		// de escribir bytes que no serían los de javac
+		return "", fmt.Errorf("linea %d: el constructor varargs de %s no esta medido", n.donde.linea, interno)
+	}
 	if _, err := e.argumentos(n.args); err != nil {
 		return "", err
 	}
@@ -3322,23 +3618,8 @@ func (e *emisor) nuevoArreglo(v jnuevoArreglo) (string, error) {
 		return "[" + elem, nil
 	}
 	// la cadena de javac: por cada elemento, `dup`, indice, valor y `iastore`/`aastore` (parrafo 73)
-	var guarda byte
-	switch elem[0] {
-	case 'I':
-		guarda = 0x4f
-	case 'J':
-		guarda = 0x50
-	case 'F':
-		guarda = 0x51
-	case 'D':
-		guarda = 0x52
-	case 'C':
-		// `castore` 0x55 en la cadena del inicializador: `new char[] {'a','b'}` es `iconst_2; newarray
-		// char; dup; iconst_0; bipush 97; castore; dup; iconst_1; bipush 98; castore` (parrafo 87)
-		guarda = 0x55
-	case 'L', '[':
-		guarda = 0x53
-	default:
+	guarda, ok := guardadoDeArreglo(elem[0])
+	if !ok {
 		return "", fmt.Errorf("linea %d: un arreglo de %s no esta medido", v.donde.linea, v.tipo)
 	}
 	for i, x := range v.elementos {
@@ -6206,6 +6487,11 @@ func (e *emisor) flagsDeMetodo(m jmetodo) int {
 	}
 	if m.esFinal {
 		acc |= accFinal
+	}
+	if m.varargs {
+		// javac 17 marca el method_info de un `T... xs` con ACC_VARARGS (§194); el dex conserva el
+		// bit, asi que sin esto el method_info no coincide byte a byte.
+		acc |= accVarargs
 	}
 	return acc
 }

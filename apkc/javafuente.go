@@ -370,7 +370,10 @@ type jmetodo struct {
 	// deprecado: @Deprecated deja un atributo Deprecated y un RuntimeVisibleAnnotations (§170).
 	deprecado bool
 	// lanza: las clases del atributo Exceptions de un `throws A, B` (parrafo 92).
-	lanza       []string
+	lanza []string
+	// varargs: el ultimo parametro venia con `...` (`int... xs`). El tipo guardado ya es el arreglo
+	// (`int[]`), que es lo que javac describe en el method_info, y la firma lleva ACC_VARARGS (§194).
+	varargs     bool
 	anotaciones []anotacionJ
 	linea       int
 	// lineaFin es la llave que cierra el cuerpo: javac anota ahi el `return` implicito de un metodo void,
@@ -1180,10 +1183,29 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 			if err != nil {
 				return m, err
 			}
+			esVarargs := false
+			if a.es('p', "...") {
+				// `tipo... nombre` es azucar del ultimo parametro: el tipo que se guarda es el arreglo
+				// que javac escribe en el descriptor (`[I`, `[Ljava/lang/String;`) y la firma lleva
+				// ACC_VARARGS, que es lo que fija el bit 0x0080 del method_info (§194).
+				a.avanzar()
+				esVarargs = true
+				tipo += "[]"
+			}
 			if a.actual().kind != 'i' {
 				return m, fmt.Errorf("linea %d: un parametro necesita nombre", a.actual().donde.linea)
 			}
-			m.params = append(m.params, jparam{tipo: tipo, nombre: a.avanzar().valor, donde: pos{linea}})
+			nombre := a.avanzar().valor
+			m.params = append(m.params, jparam{tipo: tipo, nombre: nombre, donde: pos{linea}})
+			if esVarargs {
+				// JLS 8.4.1: solo el ultimo parametro puede ser varargs. Si sigue otro, se rechaza
+				// nombrando el que lo era en vez de aceptar una firma que javac no admite.
+				if a.es('p', ",") {
+					return m, fmt.Errorf("linea %d: el parametro varargs %s tiene que ser el ultimo",
+						a.actual().donde.linea, nombre)
+				}
+				m.varargs = true
+			}
 			if !a.es('p', ",") {
 				break
 			}
