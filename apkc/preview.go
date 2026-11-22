@@ -12,8 +12,9 @@ package main
 //   - El rectángulo es una aproximación declarada: cuenta las views de un LinearLayout, estima el
 //     tamaño del texto y recorta a la pantalla. No es una medida del framework; estilos fieles,
 //     imágenes, `gravity` fino y tema del sistema quedan fuera de la fase.
-//   - Solo se lee una configuración por tipo: la base. Un `layout-land` se resuelve solo si se
-//     pide por nombre.
+//   - Solo se lee una configuración por tipo: la base. `--layout` recibe la clave de un recurso,
+//     no un calificador, así que un `layout-land` con la misma clave que la base no se puede pedir
+//     aparte: se toma la primera entrada que la tabla traiga para esa clave.
 //
 // Todo el código es propio (MIT). No hay ninguna petición de red ni proceso: el comando lee bytes
 // del zip con archive/zip, que ya usa el resto del fork para firmar y verificar.

@@ -84,34 +84,42 @@ func leePool(b []byte, off int) (tablaCadenas, error) {
 	return p, nil
 }
 
-// leeCadena: la forma del formato, con sus dos prefijos de longitud. En UTF-8 van la cuenta de
-// bytes y la de unidades utf-16; en UTF-16 solo la cuenta de caracteres. El terminador es un cero,
-// y por eso el modo UTF-8 no puede contener un 00 suelto.
+// leeCadena: la forma del formato, con sus dos prefijos de longitud. En UTF-8 van primero la
+// cuenta de unidades utf-16 y después la de bytes; en UTF-16 solo la cuenta de caracteres. El
+// terminador es un cero, y por eso el modo UTF-8 no puede contener un 00 suelto.
+//
+// El orden es el de ResStringPool::string8At de Android (u16len primero, byte length después) y
+// está medido sobre un resources.arsc de aapt2 35.0.1 con «Hola & adiós ñ»: los dos prefijos valen
+// 14 y 16, y el offset de la cadena más 16 —no 14— es el cero que cierra. Leer el primero como
+// bytes partía la cadena y decía «does not end with a zero byte».
 func leeCadena(b []byte, desde, hasta int, esUTF8 bool) (string, int, error) {
 	if desde >= hasta || desde >= len(b) {
 		return "", desde, fmt.Errorf("string offset %d is outside [%d,%d)", desde, 0, hasta)
 	}
 	if esUTF8 {
 		p := desde
-		n1, p, err := prefijo(b, p, hasta)
+		unidades, p, err := prefijo(b, p, hasta) // la cuenta utf-16 que declara el formato
 		if err != nil {
 			return "", p, err
 		}
-		_, p, err = prefijo(b, p, hasta) // las unidades utf-16: leidas para saber donde empieza la cadena
+		n, p, err := prefijo(b, p, hasta) // los bytes UTF-8, que son los que se copian
 		if err != nil {
 			return "", p, err
 		}
-		if p+n1 > hasta {
-			return "", p, fmt.Errorf("a %d byte string at %d runs past the pool", n1, desde)
+		if p+n > hasta {
+			return "", p, fmt.Errorf("a %d byte string at %d runs past the pool", n, desde)
 		}
-		s := string(b[p : p+n1])
-		if p+n1 >= hasta {
+		if p+n >= hasta {
 			return "", p, fmt.Errorf("the string at %d has no terminator", desde)
 		}
-		if b[p+n1] != 0 {
+		if b[p+n] != 0 {
 			return "", p, fmt.Errorf("the string at %d does not end with a zero byte", desde)
 		}
-		return s, p + n1 + 1, nil
+		s := string(b[p : p+n])
+		if utf16Len(s) != unidades {
+			return "", p, fmt.Errorf("the string at %d claims %d utf-16 units and its %d bytes hold %d", desde, unidades, n, utf16Len(s))
+		}
+		return s, p + n + 1, nil
 	}
 	n, p, err := prefijoU16(b, desde, hasta)
 	if err != nil {

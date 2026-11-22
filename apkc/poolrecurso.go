@@ -7,7 +7,8 @@ package main
 //
 // Lo que se copio de los bytes y no de un manual: el orden de los campos de la cabecera, que los
 // offsets son RELATIVOS al inicio de los datos (no al inicio del trozo), que el modo UTF-8 escribe
-// DOS longitudes (bytes y unidades utf-16) y el UTF-16 una sola, y que cada cadena termina con un
+// DOS longitudes (unidades utf-16 y después bytes; el orden se midió con «Hola & adiós ñ» en un
+// resources.arsc de aapt2 35.0.1) y el UTF-16 una sola, y que cada cadena termina con un
 // cero - dos bytes cero en UTF-16 - y el area se rellena hasta multiple de cuatro.
 
 import (
@@ -68,11 +69,14 @@ func escribePool(cadenas []string, utf8 bool) []byte {
 	return append(out, datos...)
 }
 
-// apilarLargosUTF8: dos longitudes de una o dos unidades, con el bit alto avisando de que sigue
-// otra. Medido con cadenas cortas; la forma larga es la misma regla leida al reves por el lector.
+// apilarLargosUTF8: las dos longitudes del pool UTF-8, en el orden del formato de Android
+// (ResStringPool::string8At): primero la cuenta de unidades utf-16 y después la de bytes. Con texto
+// ASCII las dos coinciden y el orden no se ve —que es por lo que el fixture del §26, todo ASCII,
+// salía byte a byte con el orden invertido—; con «Hola & adiós ñ» valen 14 y 16 y el cero solo cae
+// tras los 16 bytes. Medido sobre el resources.arsc de aapt2 35.0.1 del crítico de la Fase 1.
 func apilarLargosUTF8(b []byte, bytes, unidades int) []byte {
-	b = pilaUnaLongitud(b, bytes)
-	return pilaUnaLongitud(b, unidades)
+	b = pilaUnaLongitud(b, unidades)
+	return pilaUnaLongitud(b, bytes)
 }
 
 func pilaUnaLongitud(b []byte, n int) []byte {

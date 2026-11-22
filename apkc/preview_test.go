@@ -14,6 +14,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -302,4 +304,181 @@ func mustBase64(t *testing.T, s string, mide int) []byte {
 		t.Fatalf("el fixture mide %d bytes y se esperaban %d", len(b), mide)
 	}
 	return b
+}
+
+// Cadenas que no son ASCII: en el pool UTF-8 de Android el primer prefijo de una cadena cuenta
+// unidades utf-16 y el segundo bytes, y con estos textos dejan de coincidir. «Hola & adiós ñ» mide
+// 14 unidades y 16 bytes; el emoji, dos unidades por cuatro bytes.
+const (
+	textoAcentos = "Hola & adiós ñ"
+	textoEmoji   = "hola \U0001F600"
+	textoAmp     = "&amp;"
+)
+
+// TestPreviewLeeElPoolUTF8ConAcentosYEmoji ataca la causa aislada del fallo de la Fase 1: leeCadena
+// tomaba el primer prefijo como bytes y rompía con cualquier carácter multibyte. El pool se prueba
+// suelto y dentro de los dos contenedores que lo usan: un AXML (UTF-8 como un layout y UTF-16 como
+// el manifiesto) y un resources.arsc.
+func TestPreviewLeeElPoolUTF8ConAcentosYEmoji(t *testing.T) {
+	// el pool suelto, con la forma del formato y la terminación en cero en el sitio que toca
+	datosPool := escribePool([]string{"id", textoAcentos, textoEmoji, textoAmp}, true)
+	p, err := leePool(datosPool, 0)
+	if err != nil {
+		t.Fatalf("el pool UTF-8 con acentos no se deja leer: %v", err)
+	}
+	esperadas := []string{"id", textoAcentos, textoEmoji, textoAmp}
+	if len(p.cadenas) != len(esperadas) {
+		t.Fatalf("el pool devuelve %d cadenas y se escribieron %d", len(p.cadenas), len(esperadas))
+	}
+	for i, esperada := range esperadas {
+		if p.cadenas[i] != esperada {
+			t.Errorf("cadena #%d leída como %q, escrita %q", i, p.cadenas[i], esperada)
+		}
+	}
+
+	// el mismo pool dentro de un AXML UTF-8, el modo del layout
+	doc := documentoAXML{
+		ns:   []declaracionNS{{prefijo: "android", uri: uriAndroid, linea: 1}},
+		utf8: true,
+		raiz: &elementoEscribir{
+			nombre: "LinearLayout",
+			linea:  1,
+			attrs: []atributoEscribir{
+				{ns: "android", nombre: "layout_width", id: 0x010100f4, tipo: tipoEnteroDec, datos: 0xffffffff},
+			},
+			hijos: []*elementoEscribir{
+				{nombre: "TextView", linea: 2, attrs: []atributoEscribir{
+					{ns: "android", nombre: "text", id: 0x0101014f, tipo: tipoCadena, texto: textoAcentos}}},
+				{nombre: "TextView", linea: 3, attrs: []atributoEscribir{
+					{ns: "android", nombre: "text", id: 0x0101014f, tipo: tipoCadena, texto: textoEmoji}}},
+				{nombre: "TextView", linea: 4, attrs: []atributoEscribir{
+					{ns: "android", nombre: "text", id: 0x0101014f, tipo: tipoCadena, texto: textoAmp}}},
+			},
+		},
+	}
+	datosAXML, err := escribeAXML(doc)
+	if err != nil {
+		t.Fatalf("el AXML con acentos: %v", err)
+	}
+	axml, err := leeAXML(datosAXML)
+	if err != nil {
+		t.Fatalf("el AXML con acentos no se deja leer: %v", err)
+	}
+	ctx := &contextoVista{axml: axml}
+	arbol, err := ctx.arbol()
+	if err != nil {
+		t.Fatalf("el árbol del AXML con acentos: %v", err)
+	}
+	if len(arbol.hijos) != 3 {
+		t.Fatalf("el layout trae %d hijos y se escribieron 3", len(arbol.hijos))
+	}
+	for i, esperada := range []string{textoAcentos, textoEmoji, textoAmp} {
+		if leida := ctx.textoDeAtributo(arbol.hijos[i], uriDeRecursos, "text"); leida != esperada {
+			t.Errorf("el texto #%d se lee como %q y se escribió %q", i, leida, esperada)
+		}
+	}
+
+	// y el modo UTF-16 del manifiesto, que tiene que seguir intacto: un prefijo y dos bytes por
+	// unidad, también con caracteres fuera del plano base
+	manifiesto := manifiestoDelStudio()
+	manifiesto.raiz.hijos[1].attrs[0].texto = textoAcentos // application/label
+	datosManifiesto, err := escribeAXML(manifiesto)
+	if err != nil {
+		t.Fatalf("el manifiesto UTF-16 con acentos: %v", err)
+	}
+	axmlManifiesto, err := leeAXML(datosManifiesto)
+	if err != nil {
+		t.Fatalf("el manifiesto UTF-16 con acentos no se deja leer: %v", err)
+	}
+	ctxManifiesto := &contextoVista{axml: axmlManifiesto}
+	arbolManifiesto, err := ctxManifiesto.arbol()
+	if err != nil {
+		t.Fatalf("el árbol del manifiesto: %v", err)
+	}
+	app := arbolManifiesto.hijo("application")
+	if app == nil {
+		t.Fatal("el manifiesto no trae application")
+	}
+	if leida := ctxManifiesto.textoDeAtributo(app, uriDeRecursos, "label"); leida != textoAcentos {
+		t.Errorf("el label UTF-16 se lee como %q y se escribió %q", leida, textoAcentos)
+	}
+
+	// y dentro de un resources.arsc: el global y las claves son los dos pools UTF-8 de la tabla
+	tb := tablaDelStudio()
+	tb.global = append(tb.global, textoAcentos, textoEmoji)
+	tb.claves = append(tb.claves, textoAcentos, textoEmoji)
+	datosTabla, err := escribeTablaRecursos(tb)
+	if err != nil {
+		t.Fatalf("la tabla con acentos: %v", err)
+	}
+	tr, err := leeTabla(datosTabla)
+	if err != nil {
+		t.Fatalf("la tabla con acentos no se deja leer: %v", err)
+	}
+	if n := len(tr.global.cadenas); n != 3 || tr.global.cadenas[1] != textoAcentos || tr.global.cadenas[2] != textoEmoji {
+		t.Errorf("el pool global lee %d cadenas: %q", n, tr.global.cadenas)
+	}
+	if n := len(tr.claves); n != 5 || tr.claves[3] != textoAcentos || tr.claves[4] != textoEmoji {
+		t.Errorf("el pool de claves lee %d cadenas: %q", n, tr.claves)
+	}
+}
+
+// apkDelStudioConTexto es el apk de los escritores con el texto del TextView y el label del
+// manifiesto cambiados, y la misma cadena añadida al pool global de la tabla: los tres sitios por
+// los que pasa una cadena de la aplicación.
+func apkDelStudioConTexto(t *testing.T, texto string) []byte {
+	t.Helper()
+	manifiesto := manifiestoDelStudio()
+	manifiesto.raiz.hijos[1].attrs[0].texto = texto // application/label
+	manifiestoBytes, err := escribeAXML(manifiesto)
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layout := layoutDelStudio()
+	layout.raiz.hijos[0].attrs[3].texto = texto // TextView/android:text
+	layoutBytes, err := escribeAXML(layout)
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	tb := tablaDelStudio()
+	tb.global = append(tb.global, texto)
+	arsc, err := escribeTablaRecursos(tb)
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	return zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiestoBytes,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layoutBytes,
+	})
+}
+
+// TestPreviewSobreUnAPKConTextoNoASCII: de extremo a extremo, el mismo camino que hace el comando.
+// Con el lector que tomaba el primer prefijo como bytes, este apk —que se arma con los escritores
+// del fork, no con aapt2— fallaba al leer la tabla con «does not end with a zero byte». No se
+// ejecuta el binario: lo que devolvía rc 2 era este error, y el comando solo lo imprime.
+func TestPreviewSobreUnAPKConTextoNoASCII(t *testing.T) {
+	apk := apkDelStudioConTexto(t, textoAcentos)
+	m, err := modeloVistaDeAPK(apk, "")
+	if err != nil {
+		t.Fatalf("el apk con «%s» no se deja leer: %v", textoAcentos, err)
+	}
+	if m.Raiz == nil || len(m.Raiz.Hijos) != 2 {
+		t.Fatalf("el modelo no trae los dos hijos del layout: %+v", m.Raiz)
+	}
+	if leida := m.Raiz.Hijos[0].Texto; leida != textoAcentos {
+		t.Errorf("el TextView se lee como %q y se escribió %q", leida, textoAcentos)
+	}
+	if m.Paquete != "com.hola.apkcstudio" || m.Layout != "res/layout/main.xml" {
+		t.Errorf("paquete %q y layout %q", m.Paquete, m.Layout)
+	}
+	// el JSON que imprime el comando también lleva el texto. `encoding/json` escapa el `&`, así
+	// que se busca la parte acentuada, que es la que el lector partía.
+	salida, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(salida), "adiós ñ") {
+		t.Errorf("el JSON no trae el texto acentuado: %s", salida)
+	}
 }
