@@ -1,9 +1,9 @@
 # Plan de incremental para el modo web (`build --linker go --compiler go`)
 
-**Estado: decidido, sin implementar.** La decisión de la primera fase está tomada y medida; las
-fases I1 a I5 están pendientes. Este fichero es un plan con mediciones: cada cifra lleva el comando
-que la reproduce (regla 1 del `AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y
-no se usa para decidir.
+**Estado: I1 e I2 hechas, I3 hecha en parte; I4 e I5 pendientes.** `--inc` está activo en la
+pestaña y el ahorro se midió en chromium/OPFS; el cuello que queda está en compilar y dexar. Este
+fichero es un plan con mediciones: cada cifra lleva el comando que la reproduce (regla 1 del
+`AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y no se usa para decidir.
 
 Fecha: 2026-11-22. Origen: comprobar si `--inc` ayuda a la pestaña y, si no, diseñar un incremento
 propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `web`, sobre el fork
