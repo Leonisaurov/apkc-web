@@ -232,7 +232,7 @@ func (m *marcoRecursos) leeBloque(arsc []byte, off, hs, size int, claves []strin
 	cuenta := int(u32re(arsc, off+12))
 	entriesStart := int(u32re(arsc, off+16))
 	if flags&0x02 != 0 {
-		return fmt.Errorf("el tipo %d viene en tabla rala (flags %#02x): la forma no esta medida en este telefono", idTipo, flags)
+		return fmt.Errorf("el tipo %d viene en tabla rala (flags %#02x): esa forma no esta medida; usa un android.jar de API 34, cuya tabla es densa", idTipo, flags)
 	}
 	if idTipo == 0 || int(idTipo) > len(m.tipos) {
 		return fmt.Errorf("el bloque de tipo %d no tiene nombre entre %d", idTipo, len(m.tipos))

@@ -9000,3 +9000,147 @@ clases en ~50 ms y 0 peticiones; `Tab` entra en el undo tree. Fronteras del modo
 aproximación declarada (dp≈px, texto a 7 px/carácter), sin `ConstraintLayout`, estilos ni temas;
 los eventos siguen solo en «Render (eventos)».
 
+
+## 202. El producto entero: gate final, editor de layout y recorrido de punta a punta
+
+Medido el 2026-11-22 sobre la rama `web` con HEAD del padre en el commit que trae este `§` y
+submódulo `studio/` en `eff7852`. Cierra tres cosas a la vez: el gate rojo que dejó la fusión del
+emulador, la integración del editor de layout (`4bc13cf`, del worktree `editor-layout`) y la pasada
+de coherencia que el usuario pidió con «no hay una naturalidad en la funcionalidad total». El número
+de comprobaciones que vale es el de aquí; los de `§201` y anteriores son los de su árbol.
+
+### El gate final, con su comando
+
+`PREFIX` y `TMP` propios y creados antes, puertos libres (los de los worktrees, no):
+
+```sh
+mkdir -p "$HOME/.cache/apkc-web-final/tmp"
+tcr -c 2 -m 2G -r 400M -- env HOME_APKC_WEB="$HOME" CHROME_BIN=/usr/bin/chromium \
+  GOGC=50 GOMAXPROCS=2 APKC_HARNESS="$HOME/.cache/apkc-web/apkc-harness" \
+  PREFIX="$HOME/.cache/apkc-web-final" STUDIO_SERVIDOR_PORT=9001 STUDIO_PORT=9501 \
+  STUDIO_NAV_PORT=9002 STUDIO_CREAR_PORT=9003 STUDIO_CREAR_CDP=9502 \
+  sh tools/entorno.sh gate
+```
+
+Salida literal de las tres líneas que cuentan:
+
+```text
+  crear: todo en orden (35 comprobaciones)
+  pestaña: 170 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
+e2e: todo en orden
+```
+
+rc 0. Además de la pestaña: las cuatro plantillas verificadas con `apksigner`/`zipalign`/`aapt2`,
+release con `CN=Release de prueba` (v1+v2+v3), `.idsig` de la v4 aprobado por `apksigner` y por
+`apkc verify`, `.aab` firmado como JAR v1 sin bloque v2/v3, rotación v3.1 con linaje y v4 de dos
+firmantes, EC P-256/P-384, la v1 SHA-1 y el icono PNG literal. `zipcheck.py` corrió porque
+`APKC_HARNESS` apunta a un clon existente; sin él `e2e.sh` avisa y omite ese oráculo.
+
+### Por qué el gate estaba rojo, con la línea que lo rompía
+
+La fusión del emulador (`e929a7c`, `6f456c8`) convirtió `pintarRender()` en un bucle
+`for (const superficie of SUPERFICIES)` y dejó el `tail` de la versión anterior fuera del bucle:
+`const canvas` quedó declarado dentro y se usaba fuera.
+
+```text
+ReferenceError: canvas is not defined
+    at pintarRender (http://127.0.0.1:9001/previa-panel.js:1013:34)
+    at Object.iniciar (http://127.0.0.1:9001/previa-panel.js:1291:5)
+    at HTMLDocument.<anonymous> (http://127.0.0.1:9001/pestana.js:2763:18)
+```
+
+Lo cazó una sonda CDP (`Runtime.enable` + `Runtime.exceptionThrown`) sobre la página recién cargada,
+con el mismo arnés que `studio/prueba-crear.js`. La traza es del árbol **anterior** a `9512567`: en el
+árbol de este `§` esa línea ya no existe. La consecuencia no era el panel: la excepción
+abortaba `inicializar()` en `pestana.js:2763`, así que no se cableaban árbol, subida, pestañas ni
+keystore (todos registrados después) y `documentoActivo()` devolvía `null`:
+
+```text
+FALLO: excepcion en la pagina: TypeError: Cannot read properties of null (reading 'hist')
+    at <anonymous>:11:42            # studio/prueba-crear.js:508
+```
+
+Se reproduce con `APKC_WASM="$PREFIX/tmp/apkc-wasm.wasm" node studio/prueba-crear.js` sobre el árbol
+anterior a `9512567`. El arreglo: pintado y `canvas.__espacio` dentro del bucle, uno por superficie,
+más `PREVIA_PANEL.iniciar()` en `try/catch` para que un fallo del panel no deje sin enganchar el
+resto del editor.
+
+### El editor de layout, integrado
+
+`git merge --no-ff tmp-layout-final` sobre el árbol que ya tenía emulador y autocompletado. Cuatro
+ficheros con conflicto, resueltos combinando: `previa-panel.js`, `prueba.js`, `AGENTS.md` y
+`EDITOR.md`. Dos hallazgos de la fusión, los dos en `previa-panel.js`:
+
+1. **`arrastre` estaba ocupado.** Los tiradores del marco ya usaban `let arrastre`; el modo editar
+   traía otro con el mismo nombre, y compartirlo habría movido el nodo al arrastrar el tirador y el
+   marco al arrastrar un nodo. El del nodo pasa a `arrastreNodo`.
+2. **el contorno se pinta en las dos superficies.** `pintarVivo()` recorre `SUPERFICIES` y dibuja la
+   selección con la caja de cada canvas, no solo en el del editor.
+
+Comprobado por las comprobaciones que el gate cuenta en la pestaña, entre ellas: «el lápiz enciende
+el modo editar (paleta y estado)», «arrastrar una vista dentro de un FrameLayout escribe su margen y
+mueve el dibujo», «Supr borra el nodo seleccionado del XML y del dibujo, y el undo tree lo
+devuelve», «clic selecciona con contorno y Esc lo suelta sin tocar el texto» y «cambiar a Emulador
+apaga el modo editar y no deja la paleta abierta».
+
+### La pasada de naturalidad, con lo que se midió
+
+Se recorrió el producto en chromium con el arnés CDP de `prueba-pestana.js` (crear → editar Java y
+XML → diagnóstico → autocompletado → compilar → vista previa → emulador con un clic → Pantalla →
+modo editar y añadir → redimensionar). Las capturas no se versionan (regla 2), así que lo que queda
+como evidencia es lo que se puede comprobar con un comando o una comprobación del gate:
+
+1. **El estado se quedaba en «compilando».** `compilarCon` escribía `nota("compilando …")` y nunca
+   el resultado. Ahora:
+
+   ```sh
+   grep -n 'la compilación falló\|en build/app.apk, firmado' studio/pestana.js
+   # 2603:  if (!r || r.codigo !== 0) nota("la compilación falló; el motivo está en la consola");
+   # 2604:  else nota("apk " + tipo + " en build/app.apk, firmado; consola con el detalle");
+   ```
+
+2. **El aviso de crear pedía lo que ya había hecho.** Decía «abre un fichero del árbol y edítalo»
+   cuando el manifiesto ya estaba abierto en el Editor; ahora lo dice (y `prueba-navegador.js` lo
+   imprime: `aviso: proyecto creado: manifiesto, layout y MainActivity, abiertos en el Editor`).
+
+3. **Dos nombres para el mismo modo.** La línea de estado del emulador decía «Vista previa
+   (aproximada) de …» mientras la pestaña activa se llamaba Emulador; ahora dice «Emulador
+   aproximado de …». Y la columna de Pantalla avisa de que habla del emulador.
+
+4. **La compilación de la pestaña se caía con el SDK del escritorio.** `servidor.js` servía el
+   `platforms/` más nuevo; con SDK 36, `android.jar` trae la tabla de recursos en forma rala y el
+   enlazador en Go no la lee:
+
+   ```sh
+   cd "$TMP/studio-e2e-java/com.hola.apkcstudio"
+   "$APKC" build --linker go --compiler go --android-jar "$HOME/opt/android-sdk/platforms/android-36/android.jar" \
+     --sdk-version 34 --codename 14 --keystore "$HOME/.android/debug.keystore"
+   # rc=1
+   # [build] la tabla de ids del framework: el tipo 1 viene en tabla rala (flags 0x02): esa forma no
+   # esta medida; usa un android.jar de API 34, cuya tabla es densa
+   ```
+
+   `servidor.js` ahora prefiere `android-34` (el mismo criterio que `tools/sdk34.sh` en el gate) y el
+   error dice qué jar sirve. Medido con el servidor de desarrollo:
+
+   ```sh
+   cd studio && APKC_WASM="$APKC_WASM" node servidor.js 9006 &
+   node -e 'fetch("http://127.0.0.1:9006/android-jar-info").then(r=>r.text()).then(console.log)'
+   # {"disponible":true,"version":34,"bytes":26361808}
+   ```
+
+5. **La paleta del modo editar** pone su título en su propia fila; los cinco tipos ya no se mezclan
+   con «Añadir» en el mismo renglón.
+
+6. **Vocabulario de las pruebas.** Dos comprobaciones seguían llamando «Render (eventos)» al
+   Emulador y «vista previa» a Pantalla; se renombraron (no cambian lo que comprueban).
+
+**Fronteras de este `§`.** (1) Las capturas de pantalla del recorrido no se versionan y no son
+citable; lo que sostiene la pasada son las comprobaciones del gate y los comandos de arriba. (2) El
+modo editar no reparenta nodos, no conoce `ConstraintLayout`, estilos ni temas, y en un
+`LinearLayout` mover es reordenar (no hay posición libre): está en `EDITOR.md`. (3) La vista
+**Pantalla** sigue siendo de solo lectura a propósito: el lápiz vive en el panel del editor. (4) No
+se probó con un SDK que solo tenga 35/36 instalado: ahí la compilación de la pestaña falla con el
+mensaje de tabla rala, que es una frontera del enlazador, no un defecto de la interfaz. (5) Los dos
+planes que no se implementaron siguen siendo planes: `docs/plan-incremental-web.md` (I1-I5) y
+`docs/plan-android-jar-propio.md` (J2 sin empezar).

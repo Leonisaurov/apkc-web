@@ -13,6 +13,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
 | `docs/plan-mejoras.md` | mejoras posteriores a la publicación, en el orden acordado P3 → P2 → P1 | leerlo antes de seguir con esa cola |
+| `docs/plan-incremental-web.md` y `docs/plan-android-jar-propio.md` | lo **decidido y sin implementar**: un incremental propio para el modo web (I1-I5; mide por qué el `--inc` no sirve en la pestaña) y un `android.jar` redistribuible desde fuentes de AOSP (J2 sin empezar) | leerlos antes de tocar tiempos de compilación o el empaquetado del jar |
 | `apps.md` | informe de ejecutar apps Android desde Termux/chroot: qué falla, por qué y el `am` con `BOOTCLASSPATH` | leerlo y reproducir sus comandos |
 | `tools/entorno.sh` | el entorno del repo en un solo sitio (`HOME`, `PREFIX`, `ANDROID_HOME`, `PATH`) y las tareas `test`, `wasm`, `gate`, `banco`, `jar`, `harness`, `sitio`, `publicar`, `doctor` y `env` | `tools/entorno.sh doctor` |
 | `tools/sdk34.sh` | SDK espejo con solo `build-tools/34.0.0` y `android-34`: `apkc` elige la build-tools más alta y sin esto un escritorio con 36.0.0 pediría android-36 | `sh tools/sdk34.sh "$TMP/apkc-sdk34"` |

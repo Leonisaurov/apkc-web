@@ -10,7 +10,57 @@ párrafo de `docs/evidencia.md` que el bullet cita con su `§`: ahí está el co
 lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla manda sobre este documento.
 
 **Cómo se mantiene.** Aquí no entran bullets nuevos. Una medición se escribe como `§` en
-`docs/evidencia.md` y, si cambia algo operativo, actualiza su fila en el inventario del plan.
+`docs/evidencia.md` y, si cambia algo operativo, actualiza su fila en el inventario del plan. La
+excepción es la sección «El estado final, en un recorrido»: no es una medición nueva, es el índice del
+producto —qué se hace, en qué orden y con qué comando se comprueba—, y sus cifras son las del `§` que
+cita (§202). La lista de bullets de abajo es el histórico y no se reescribe: lo que cambió se anota en
+el bullet que lo contaba y se cierra en el `§` correspondiente.
+
+## El estado final, en un recorrido (2026-11-22)
+
+El producto se usa de una sola manera y se comprueba de una sola vez. El gate que lo cierra se lanza
+con `PREFIX` propio y puertos libres —nunca un entorno compartido con otro gate—, y estas son sus
+líneas reales (medición completa en `docs/evidencia.md` §202):
+
+```sh
+PREFIX=$HOME/.cache/apkc-web-final sh tools/entorno.sh gate
+# crear: todo en orden (35 comprobaciones)
+# pestaña: 170 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
+# e2e: todo en orden
+```
+
+El recorrido, en el orden en que se hace:
+
+1. **Inicio** crea el proyecto en OPFS desde el formulario (nombre, `package` e icono opcional) y
+   entra al **Editor** con el `AndroidManifest.xml` abierto; el aviso dice eso mismo, no otra cosa.
+2. **Editor**: explorador de OPFS a la izquierda (cerrado al empezar, `build/` marcado como
+   generado), pestañas por fichero con carga diferida y undo tree en IndexedDB. Al teclear, el
+   panel de **Diagnóstico** pinta lo que dice `apkc check` dentro de la pestaña, y el autocompletado
+   ofrece recursos del proyecto y APIs del `android.jar` en `.java`, y etiquetas, atributos y
+   valores en `.xml`, cada rama con su contexto y sin cruzarse.
+3. **Vista previa** (el panel de la derecha, y a página completa en **Pantalla**): dibuja el
+   `res/layout` del editor sin compilar. Con el **lápiz** se enciende el modo editar: paleta de
+   cinco tipos, arrastre que escribe márgenes en un marco o reordena en un `LinearLayout`, `Supr`
+   para borrar; todo pasa por `EDITOR.cambiar()`, así que entra en el undo tree y el fichero queda
+   sucio hasta que se guarda. La vista Pantalla es de solo lectura.
+4. **Emulador** (pestaña del mismo panel): al compilar, `apkc preview` devuelve el modelo de la
+   pantalla y el panel pinta la app —no una aproximación del XML— con su **registro** (escrituras
+   de vista, pasos, avisos) y su **consola** (`println` y `Log.*`, con su secuencia), separadas de
+   la consola de los comandos de compilación. Pulsar una vista con `OnClickListener` manda el clic a
+   `apkc preview --pulsar` y la pantalla responde («Pulsos: 1»).
+5. **Compilar** (el botón Compilar de la barra del fichero abre la pestaña del mismo nombre) escoge la clave (depuración generada en la pestaña o
+   keystore de release), compila y firma con `build --linker go --compiler go`, verifica con el
+   lector propio y deja `app.apk` enlazado en la barra de descargas; la barra de estado termina
+   diciendo el resultado, no se queda en «compilando».
+6. **Cerrar y volver**: las pestañas, la carpeta abierta y el ancho del panel sobreviven a la
+   recarga; el proyecto vive en OPFS y se exporta e importa como `.zip`.
+
+Lo que ese recorrido **no** hace, con su comando o su `§`: ART y Safari reales en CI (§194), el
+host real con truncamiento (§196, §198), los dos advisories del detector de interfaz
+(`INFORMA-SEGURIDAD.md`), el incremental propio para el modo web (`docs/plan-incremental-web.md`,
+pendiente de implementar) y el `android.jar` propio redistribuible (`docs/plan-android-jar-propio.md`,
+J2 sin empezar). Fuera del gate por falta de red: `zipcheck.py` solo si el clon de
+`apkc-harness` está en `$APKC_HARNESS` —sin él `e2e.sh` avisa y omite ese oráculo, no lo finge.
 
 ## Lo que ya se sabe, para no reabrirlo
 
@@ -611,11 +661,10 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   el diagnóstico/paleta versionado (§197) y el host a 10/10 (§196 y §198). Siguen abiertos los jobs
   `art`/`safari` informativos, dos hallazgos del informe de seguridad sin prueba versionada y dos
   advisories del detector de interfaz. Lo demás no se cuenta como cerrado.
-- **Punto de entrada para la próxima sesión (§198)**: gate en verde con 87 comprobaciones de pestaña,
-  sitio local y host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado.
-  Para seguir, lee primero §194 (deuda), §199 (cierre Java), §200 (diagnóstico), §197 (carga y caché)
-  y §198 (comandos de reproducción); el inventario de la Fase 5 y la tabla de estados de `docs/plan.md`
-  ya incluyen esta tanda.
+- **Punto de entrada, en su día (§198)**: gate en verde con 87 comprobaciones de pestaña, sitio local y
+  host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado. Sirve por sus
+  comandos de reproducción, no por sus cifras: el punto de entrada vigente es el recorrido de arriba
+  y §202. Sigue mandando §194 (deuda) y el inventario de la Fase 5 de `docs/plan.md`.
 - **Vista previa del APK: fases 0-4 cerradas (§201)** (`docs/plan-vista-previa.md`): `apkc preview`
   lee un apk ya construido y devuelve el modelo de su primera pantalla —661 bytes sin ejecutar, 897
   con el intérprete, 3 nodos en la plantilla Contador—, el intérprete corre `onCreate` y una
@@ -623,7 +672,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   dex con el payload de `packed-switch` truncado, y `studio/` pinta el modelo en una tercera vista
   con canvas de solo lectura, vista dividida en el editor, modo «En vivo» que dibuja el layout
   editado sin enseñar código XML y consola de eventos. Gate en verde con 137 comprobaciones de
-  pestaña sobre el árbol final (105 al cerrar §201); el wasm crece +73 884
+  pestaña aquel día (105 al cerrar §201); el árbol final, con el editor de layout y el emulador
+  integrados, lo cierra §202 con 170. El wasm crece +73 884
   B por el lector y +365 037 B por el intérprete. Fronteras: aproximación declarada, sin `gravity`
   fino, imágenes ni tema, ids del framework como `@0x01030042`, e intérprete sin JNI, `.so`,
   multidex ni excepciones. Nada de WineDroid (GPL): es código propio MIT.

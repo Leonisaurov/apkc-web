@@ -32,8 +32,9 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
 - **D3 hecha el 2026-11-22** (§201, ampliación final). El editor sugiere recursos del proyecto
   (`R.layout.*`, `R.id.*`) y APIs del `android.jar` sin red: el jar se indexa por trozos
   (1 354 339 de 26 361 808 bytes, 3837 clases, ~50 ms, 0 peticiones), `Tab` acepta y entra en el
-  undo tree, `Esc` cierra y las flechas recorren sin disparar otro `check`. El gate final da
-  `pestaña: 137 comprobaciones`. Fronteras: sin completado tras `v.`, bloques `/* … */` de varias
+  undo tree, `Esc` cierra y las flechas recorren sin disparar otro `check`. El linter de XML
+  (`xml-editor.js`) entró en la misma tanda: es local, no lanza `apkc check` y sus filas dicen
+  `XML`. El gate final da `pestaña: 170 comprobaciones` (§202). Fronteras: sin completado tras `v.`, bloques `/* … */` de varias
   líneas no detectados y recursos cacheados hasta `refrescar()`.
 
 ### Deuda conocida dentro de D1
