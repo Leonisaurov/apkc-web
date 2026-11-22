@@ -621,7 +621,8 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   con el intérprete, 3 nodos en la plantilla Contador—, el intérprete corre `onCreate` y una
   interacción (43 pasos, `textoDinamico: "Pulsos: 1"` sobre `id/total`) y rechaza por su nombre un
   dex con el payload de `packed-switch` truncado, y `studio/` pinta el modelo en una tercera vista
-  con canvas de solo lectura. Gate en verde con 98 comprobaciones de pestaña; el wasm crece +73 884
+  con canvas de solo lectura. Gate en verde con 105 comprobaciones de pestaña sobre el árbol
+  integrado (98 en el árbol de la Fase 4, §201); el wasm crece +73 884
   B por el lector y +365 037 B por el intérprete. Fronteras: aproximación declarada, sin `gravity`
   fino, imágenes ni tema, ids del framework como `@0x01030042`, e intérprete sin JNI, `.so`,
   multidex ni excepciones. Nada de WineDroid (GPL): es código propio MIT.

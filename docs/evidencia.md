@@ -8976,3 +8976,13 @@ por su nombre. El informe previo del builder dio +74 488 B y +18 198 B para la F
 medida aquí. No se probó a propósito una inyección de HTML en un layout: se sostiene por
 construcción (canvas y `textContent`), no por una sonda.
 
+**Sobre el árbol integrado** (Fase 3 y §200 juntas), el gate se volvió a correr con `GOGC=50
+GOMAXPROCS=2 sh tools/entorno.sh gate`: `vista previa: 3 nodos, res/layout/main.xml,
+LinearLayout[TextView,Button], id/total con textoDinamico "Pulsos: 1"`, `pestaña: 105
+comprobaciones` y `e2e: todo en orden`, rc 0. El número sube de 98 porque las comprobaciones del
+diagnóstico con la vista previa abierta (§200) se suman a las de la vista; la primera integración
+dio 104 bien y 1 mal por una expectativa que buscaba `linea 4` cuando el mensaje ya decía
+`vivo.java:4`, y se corrigió aceptando los dos formatos (`studio/prueba-pestana.js`, commit
+`66c2a6b` del submódulo). La medición de 98 es la del árbol de la Fase 4 antes de integrar §200;
+la del árbol final es esta.
+
