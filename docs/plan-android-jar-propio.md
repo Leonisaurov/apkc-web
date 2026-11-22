@@ -1,10 +1,11 @@
 # Plan: un `android.jar` propio para la pestaña
 
 Estado: generador implementado y validado en local (2026-11-22). El workflow de
-GitHub Actions se ha ejecutado una vez y **ha fallado** por una ruta relativa
-(run 45059765189); el arreglo está en el worktree y pendiente de push. No hay
-run verde: J4 sigue sin cerrar. Este documento conserva la investigación, el
-resultado real de J2 y J3 y el diagnóstico del primer intento de J4.
+GitHub Actions está **en verde** en el run 45062792689 y el artifact coincide
+con el jar local (`e2ddfb5…`/`817171a…`): **J4 cerrada**. J5 está probada en
+local (171 comprobaciones, `e2e: todo en orden`) y pendiente en el sitio
+publicado. Este documento conserva la investigación, el resultado de J2/J3/J4 y
+las fronteras de J5.
 
 ## Resumen ejecutivo
 
@@ -29,10 +30,10 @@ Lo medido en local:
   --linker go --compiler go` deja el mismo `classes.dex` y el mismo
   `resources.arsc` que con el jar completo.
 - El jar generado con esas 15 clases y la tabla de recursos completa pesa
-  **111.673 bytes**; el jar completo, con las 4.873 clases públicas y la misma
-  tabla, pesa **2.829.065 bytes**. El jar de solo las clases (sin recursos)
+  **111.997 bytes**; el jar completo, con las 4.873 clases públicas y la misma
+  tabla, pesa **2.916.833 bytes**. El jar de solo las clases (sin recursos)
   medía 65.028 bytes; con la tabla de recursos (301.784 bytes) el jar mínimo
-  comprimido pasa a 111.673 bytes.
+  comprimido pasa a 111.997 bytes.
 - El `resources.arsc` es el 62 % del jar de la SDK (16.390.624 bytes) y es lo
   único que `apkc/marco.go` necesita para los ids del framework. La tabla
   propia completa mide **301.784 bytes**, con 3.758 recursos y 1.897 atributos,
@@ -67,8 +68,8 @@ go -C tools/androidjar run . \
 
 | Jar | Clases | Recursos | `resources.arsc` | Tamaño | SHA-256 |
 | --- | --- | --- | --- | --- | --- |
-| completo | 4.873 | 3.758 | 301.784 B | 2.829.065 B | `211507a880f02c2736939add2d8d990b5b8abfcbcec883f0c0757c4766e0803a` |
-| mínimo | 15 | 3.758 | 301.784 B | 111.673 B | `a77c8ce0fb80b0682dea5c8962dc33e1318e2cb44eb2971925be19a9d4492313` |
+| completo | 4.873 | 3.758 | 301.784 B | 2.916.833 B | `e2ddfb55b63b32890cb77e55d9249dabc521e78510fd35d0c2a3e639bd7c8827` |
+| mínimo | 15 | 3.758 | 301.784 B | 111.997 B | `817171a3e4cf3fdf8d1334a6222742f83be63db9788ebf9fac63b666ef41952c` |
 
 El jar completo no contiene `res/` ni `NOTICES/` de la SDK: solo clases
 generadas, `resources.arsc`, `NOTICE`, `LICENSE` y (en el directorio de salida)
@@ -87,12 +88,12 @@ prueba:
 - `HOME=… go test -C apkc -run TestMarco` pasa con el jar generado:
   `TestMarcoDelAndroidJar`, `TestMarcoRechaza` y `TestMarcoValoresDeAtributo`.
 
-**Lo que no se ha verificado**: el primer run real falló (§0.2) y el arreglo
-del workflow todavía no se ha empujado; no hay artifact ni hash de CI. El
-autocompletado y el `e2e.sh` local sí se probaron con el jar generado (§0.3):
-171 comprobaciones y 0 fallos en `prueba-pestana.js`, y `e2e: todo en orden`
-usando el `apkc` de `emulador-clics` porque el de este worktree no tiene
-`--pulsar`. El sitio publicado sigue sin probar.
+**Lo verificado**: J4 con el run `45062792689`, artifact descargado y hashes
+iguales a los locales (§0.4). J5 con el jar generado en local: 171
+comprobaciones y 0 fallos en `prueba-pestana.js`, y `e2e: todo en orden` usando
+el `apkc` de `emulador-clics` porque el de este worktree no tiene `--pulsar`
+(§0.3). **Lo que falta**: probar el jar en el sitio publicado con
+`prueba-sitio.js`; por eso J5 no se cierra entera.
 
 ### 0.1. Intento de ejecución de J4 (2026-11-22)
 
@@ -166,8 +167,8 @@ Al reproducir J5 apareció un segundo defecto del generador: al leer
 descriptores quedaban como `LString;` en vez de `Ljava/lang/String;`, y
 `PrintStream.println(String)` no resolvía. Se añadió `arreglaDescriptor`, que
 reescribe los nombres simples dentro de `L...;` una vez leído todo el fichero.
-Eso cambia el artefacto: el jar de este árbol es **211507a…** (completo) y
-**a77c8ce…** (mínimo), no los 9103b3a…/5d69f0b… del primer intento ni los
+Eso cambia el artefacto: el jar de este árbol es **e2ddfb5…** (completo) y
+**817171a…** (mínimo), no los 9103b3a…/5d69f0b… del primer intento ni los
 56e45ad…/725d8a2… intermedios. Ninguno de esos hashes es un artifact de CI:
 el run falló antes de subirlo.
 
@@ -180,7 +181,7 @@ nuevo; sin ese run, J4 sigue **NO verificada**.
 
 ### 0.3. J5 local: autocompletado con el jar generado
 
-Se probó la pestaña con el jar completo (`211507a…`, 2.829.065 B) montado como
+Se probó la pestaña con el jar completo (`e2ddfb5…`, 2.916.833 B) montado como
 `ANDROID_JAR`, en un `PREFIX` propio y puertos `18793`/`19347`:
 
 ```sh
@@ -233,6 +234,44 @@ e2e: todo en orden
 **Frontera**: la pestaña y el `e2e` local están cerrados con el jar generado,
 pero el **sitio publicado** no se ha probado con este jar. J5 queda hecha en su
 parte local y pendiente en la de publicación.
+
+### 0.4. J4 cerrada: run 45062792689 en verde
+
+El workflow se relanzó en `web` (`50c0aa9` y luego `730e0d5`, que fija Go
+1.27.4 para que el Deflate sea reproducible) y pasó entero:
+
+- URL: <https://github.com/Leonisaurov/apkc-web/actions/runs/45062792689>
+- Run: `45062792689`; `generar` en 22 s y `verificar` en 47 s.
+- Artifact descargado con
+  `gh run download 45062792689 --name android-stub-34`.
+- Tamaños y hashes del artifact:
+
+```text
+2.916.833 B  android-stub-34-full.jar  e2ddfb55b63b32890cb77e55d9249dabc521e78510fd35d0c2a3e639bd7c8827
+  111.997 B  android-stub-34-min.jar   817171a3e4cf3fdf8d1334a6222742f83be63db9788ebf9fac63b666ef41952c
+```
+
+Los dos coinciden con los generados en local con el mismo Go y con el
+`SHA256SUMS` que el workflow publica. `unzip -t` no da errores; el jar lleva
+`LICENSE` y `NOTICE`, y no lleva `res/` ni `NOTICES/` de la SDK.
+
+Con el artifact mínimo:
+
+```sh
+apkc compile --android-jar android-stub-34-min.jar -o out src
+diff -r out out-sdk                 # sin salida
+apkc build --linker go --compiler go --android-jar android-stub-34-min.jar …
+# build/resources.arsc  bb0d10a345812e456330a42c4d0eff1983bce55d71bb9f9d831255cd5c5536d0
+# build/classes.dex     966b43c7394fbba0012304e067e1359935c6cfee7dc741d942a71fbebb99bd92
+```
+
+El run anterior `45062398416` también terminó verde, pero su artifact
+(`5f66878…`/`b27d514…`) cambió de hash entre ejecuciones porque las entradas
+del zip llevaban `time.Now`; el generador ya fija la fecha y `730e0d5` fija Go
+1.27.4, que es lo que hace reproducible el artifact de este run.
+
+**J4 cerrada** con este run. J5 sigue con la parte local hecha y la publicación
+pendiente.
 
 ## 1. Qué contiene el jar que consume la pestaña
 
@@ -451,10 +490,10 @@ El studio usa el jar para dos cosas distintas y conviene separarlas:
 
 1. **`android-stub-min.jar`**: 15 clases medidas + tabla de recursos pública.
    Es lo que necesita `apkc compile` y `apkc build --linker go` para las
-   plantillas. Medido: **111.673 bytes**.
+   plantillas. Medido: **111.997 bytes**.
 2. **`android-stub-full.jar`**: todas las clases públicas de `current.txt` y
    `libcore-current.txt` sin `Code`, para que el autocompletado siga ofreciendo
-   las clases y métodos del framework. Medido: **2.829.065 bytes** y 4.873
+   las clases y métodos del framework. Medido: **2.916.833 bytes** y 4.873
    clases. Falta probar el autocompletado de la pestaña (J5).
 
 El jar actual de la SDK se sigue aceptando como fichero del usuario para quien
@@ -735,10 +774,11 @@ Cada fase se cierra con su comando en verde y su párrafo en
   `sha256sum -c`.
 - Criterio de rechazo: un workflow escrito no es un workflow verde. Si el job
   no pasa, la fase sigue pendiente.
-- **Estado: NO verificada.** El run `45059765189` falló en `generar` por una
-  ruta relativa (`cp: cannot stat 'dist/full/android-stub-34.jar'`); ver §0.2.
-  El arreglo está en el worktree y necesita push y un run nuevo. No hay
-  artifact ni hash de CI.
+- **Estado: hecha.** Run `45062792689` en verde: `generar` y `verificar`
+  pasan, el artifact se descarga y sus hashes coinciden con los locales
+  (`e2ddfb5…`/`817171a…`). Ver §0.4. Los runs anteriores `45059765189` (fallo
+  por ruta relativa) y `45062398416` (verde pero no reproducible) quedan como
+  historia, no como aceptación.
 
 ### J5. Consumo desde el sitio
 
@@ -804,7 +844,7 @@ lleva el comando que la comprobará.
    ids de §33; `TestMarco` pasa. Comando:
    `unzip -p android-stub-34-min.jar resources.arsc | wc -c` y
    `HOME=… go test -C apkc -run TestMarco`.
-3. **HECHO**: el jar completo pesa 2.829.065 bytes. Lo que **no** se ha
+3. **HECHO**: el jar completo pesa 2.916.833 bytes. Lo que **no** se ha
    probado es el autocompletado de la pestaña con él: eso es J5.
    Comando pendiente: `studio/prueba-pestana.js`, apartado de autocompletado.
 4. **HECHO**: los 23 nombres de tipo se emiten aunque `public-final.xml` solo
