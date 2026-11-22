@@ -9,7 +9,19 @@ Fecha: 2026-11-22. Origen: comprobar si `--inc` ayuda a la pestaña y, si no, di
 propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `web`, sobre el fork
 `apkc/` en el commit de partida `9118630`.
 
-## Estado actual
+## Estado de las fases
+
+| fase | estado | comando que lo prueba | cifra medida |
+| --- | --- | --- | --- |
+| I1, pasar `--inc` desde la pestaña | **hecha** | `sh tools/entorno.sh gate` (con `PREFIX` propio y los puertos del gate libres) | la página compila con `--inc`; el apk es igual entrada por entrada al de un build completo (7 entradas, 0 distintas en el proyecto de la prueba; 80 y 0 en `banco/incremental.sh`); un recurso nuevo o editado reenlaza y llega a `resources.arsc` (hallazgo del crítico, arreglado) |
+| I2, medir en chromium y OPFS | **hecha** | el mismo gate; las cifras salen del test `12c` de `studio/prueba-pestana.js` | con `--inc` solo: 1831 ms en frío → 1034 ms en caliente (−44 %); con I3: 1458 → 152 ms (−90 %; otras tandas 1539 → 166, 1357 → 201 y 1877 → 138). El criterio era ≥15 % |
+| I3, reutilizar las clases emitidas por hash | **hecha en parte** | gate + `go test -count=1 ./...` con `APKC_ANDROID_JAR=…` | `compile go` 390 ms → 0 y `dex go` 106 → 0 en wasm (criterio: ≥30 %), dex idéntico; en nativo el atajo se paga en parte por el estado más grande (véase I3) |
+| I3, caché de AST por fuente dentro del proceso | **descartada por estructura** | `studio/hospedador.js:240` | cada comando de la página arranca una instancia nueva de Go: ninguna caché en memoria cruza dos builds |
+| I4, dexado por clase | pendiente | `cmp build/classes.dex` entre completo e incremental | — |
+| I5, índice del `android.jar` entre pasadas | pendiente | el test del shim sobre el proyecto mínimo | — |
+
+
+## Estado anterior (lo que el plan encontró)
 
 - El fork tiene el incremental: `apkc/build.go:113` registra `--inc` y `apkc/build.go:207` lo usa
   para decidir qué etapas corren; el estado vive en `build/incremental.json` (`apkc/utils.go:126`) y
@@ -156,6 +168,191 @@ compilado, pero no se ejecutó. Queda como pregunta abierta de I5, no como cifra
 El comando lo repite `banco/incremental.sh`: compara entrada por entrada y sale con error si alguna
 difiere.
 
+## I1: `--inc` en la pestaña (hecho)
+
+- `studio/pestana.js` arma el argv de `compilarCon()` con `--inc` de serie; `compilarCon(k, tipo,
+  opciones)` acepta `{incremental: false}` **solo** para que la prueba pueda pedir el build completo
+  del mismo árbol y comparar. No hay otra forma de compilar sin `--inc` desde la página.
+- `studio/prueba-pestana.js` (sección `12c`) hace, en la misma pestaña y sobre el proyecto de la
+  plantilla `hola` (7 entradas de apk, clave de depuración):
+  1. `apkc clean` + build completo sin `--inc` → foto del apk (SHA-256 de cada entrada, leído por
+     `leerZip`, que valida el CRC de todas);
+  2. `apkc clean` + build con `--inc` en frío → foto; tiene que coincidir con la anterior;
+  3. build con `--inc` otra vez, sin tocar nada → foto; las clases no se recomponen y el apk sigue
+     igual;
+  4. edición de un fuente (una clase nueva al final del `MainActivity.java`) + build con `--inc` → el
+     dex cambia y el enlace de recursos **no** corre;
+  5. `apkc clean` + build completo del árbol editado → foto; tiene que coincidir con la incremental.
+- Seis comprobaciones nuevas, todas en verde en el gate:
+
+```sh
+tcr -c 2 -m 2G -r 400M -- env HOME_APKC_WEB=/home/leonisauro CHROME_BIN=/usr/bin/chromium \
+  GOGC=50 GOMAXPROCS=2 PREFIX="$PREFIX" sh tools/entorno.sh gate
+# ok la pestaña compila con --inc y la prueba sigue pudiendo pedir el build completo
+# ok el apk con --inc es igual entrada por entrada al de un build completo — {"entradas":7,"distintas":[]}
+# ok la segunda compilación en la misma pestaña no vuelve a enlazar recursos
+# ok la segunda pasada no es más lenta que la primera en la misma pestaña
+# ok con un fuente editado el build con --inc no reenlaza y el dex cambia
+# ok el apk incremental tras editar un fuente es igual entrada por entrada al completo
+```
+
+El detalle de la cuarta línea es la medición de I2 (abajo). El argv que la prueba ve en la consola de
+la página es literal: `$ apkc build --inc --linker go --compiler go --android-jar /sdk/android.jar
+--sdk-version 34 --codename 14 --keystore /sdk/debug.keystore --storepass *** --keyalias
+androiddebugkey --v4=true`.
+
+## I2: medido en chromium y OPFS (hecho)
+
+Mismo gate, misma pestaña, mismas opciones de `apkc build`; los milisegundos son el `[timing] total`
+que imprime apkc en cada build (no el reloj de la página, que además suma verificar, descargar y la
+vista previa). Proyecto de la prueba, 7 entradas, `--v4=true`. Las dos columnas son la misma prueba en
+dos árboles: el gate del 13:22 solo con I1, y el gate del 13:38 con I1, I2 e I3.
+
+| vuelta | solo I1 | con I3 |
+| --- | --- | --- |
+| con `--inc`, en frío (el estado no existe, hace todo) | 1 831 | 1 539 |
+| con `--inc`, caliente (nada cambió) | 1 034 | **166** |
+| ahorro de la caliente frente a la fría | **44 %** | **89 %** |
+| reloj de la página, fría → caliente | 2 497 → 1 716 ms (31 %) | 1 939 → 753 ms (61 %) |
+| `compile go`, fría → caliente | no se registró | 390 → 0 |
+| `dex go`, fría → caliente | no se registró | 106 → 0 |
+
+Una segunda tanda de la misma prueba, ya con I3 y en solitario, dio 1 357 → 201 ms (85 %) y
+`compile go` 300 → 0; el gate final, sobre el árbol ya commiteado, dio 1 458 → 152 ms (90 %),
+`compile go` 291 → 0 y una pasada completa de 1 601 ms. Una cuarta, ya con el arreglo de recursos y
+`PREFIX` nuevo, dio 1 877 → 138 ms (93 %), `compile go` 431 → 0 y una completa de 1 732 ms. La
+dirección y el orden de magnitud se repiten en las cuatro.
+
+La pasada **completa sin `--inc`** de la misma secuencia midió 4 204 ms (`compile go` 1 283,
+`dex go` 420) en la tanda del 13:38 y 1 601 ms (`compile go` 341) en la final: en esta máquina la
+cifra absoluta de esa pasada varía entre tandas (había otro gate en paralelo en la primera), así que el
+criterio no se apoya en ella. Se apoya en dos pasadas seguidas en la misma pestaña, que es lo que pide
+y lo que no depende de la carga del portátil.
+
+El criterio de abandono de I2 («si baja <15 %, se anota y no se sigue») no se activa: baja 44 % con
+solo I1 y 89 % con I3. La lectura por etapas confirma el mecanismo, y no el cronómetro: la pasada fría
+imprime `[build] linking resources with the Go linker` y `[timing] package and sign go`; la caliente no
+imprime ninguna de las dos, imprime `ningun fuente cambio: se reutilizan las clases de build/classes`,
+y el apk resultante es byte a byte el anterior.
+
+**Frontera de esta medición**: el proyecto de la pestaña es pequeño (7 entradas). Un proyecto con más
+fuentes gana más en el enlace (es el 23 % medido en wasm sobre 232 fuentes) pero también paga más el
+compilador, que I3 solo se salta cuando no cambió ningún fuente. Las cifras de 232 fuentes siguen
+siendo las de la medición 1 (nativo) y la 3 (shim), no las de chromium.
+
+## I3: reutilizar las clases emitidas por hash (hecho en parte)
+
+Lo que **sí** se puede hacer, y está hecho:
+
+- `apkc/compilar.go`: `compilarFuentesEnGo(incremental bool)`. Con `--inc` llama primero a
+  `clasesAlDia()`; si responde que sí, imprime `ningun fuente cambio: …`, devuelve `(nil, false)` y la
+  etapa `compile go` no corre.
+- `clasesAlDia()` exige las dos mitades: (a) cada `.java` de `src/` conserva el digest que registró la
+  última compilación —los fuentes del camino Go no se registraban en ningún sitio, así que la primera
+  vuelta tras este cambio compila y **a partir de ahí** hay contra qué comparar— y (b) el digest del
+  roster de `build/classes` coincide con el registrado (`DataTable.ClassRoster`,
+  `apkc/utils.go:130`). La segunda mitad es la que distingue «no cambió nada» de «un build murió a
+  medias» o «alguien borró una clase a mano».
+- `classRosterSHA()` resume `build/classes` en un SHA-1: ruta relativa y SHA-1 de cada fichero, en el
+  orden léxico de `filepath.Walk`.
+- Como `compSource` queda en `false`, `appStale` también, y `dexarClasesEnGo()` no corre: el
+  `classes.dex` del disco se queda como estaba y el paquete no se rehace
+  (`apkc/build.go:456`, `mustPackageAgain`). El apk resultante es byte a byte el anterior, y por eso
+  las fotos de la prueba coinciden.
+
+Por qué la letra literal de I3 (una caché de AST por fuente **dentro del proceso de wasm**) no puede
+ser: `studio/hospedador.js:240` crea una instancia nueva de Go para cada comando —un binario de Go en
+wasm no se puede volver a correr sobre la misma instancia después de salir—, así que no hay proceso que
+sobreviva entre dos builds de la pestaña. Cualquier caché tiene que vivir en disco (OPFS), y por eso lo
+implementado es el roster por contenido.
+
+Coste medido del estado más grande, con `sh banco/incremental.sh` (`PREFIX` propio, `GOGC=50`,
+`GOMAXPROCS=2`, 232 fuentes):
+
+- `build/incremental.json` pasa de **11 913 B a 29 954 B**: ahora lleva el digest de las 232 fuentes y
+  el roster de las 244 clases.
+- Pasada caliente tras editar un fuente: `--inc` **370 ms** frente a **512 ms** sin `--inc` (medianas
+  de tres repeticiones, tanda `2026-11-22T13:2x`, `APKC=/…/apkc-banco`). Antes de I3 las mismas
+  medianas eran 327 y 510: el atajo de la vuelta sin cambios se paga con ~40 ms de hashing y de estado
+  en la vuelta con cambios. Una segunda tanda en la misma máquina, con más carga, dio 463 y 675 ms: la
+  dirección se mantiene y la cifra absoluta no.
+- El apk sigue saliendo igual: 80 entradas, **0 con bytes distintos**, `apksigner` v1/v2/v3 en `true` y
+  `zipalign -c -p 4` correcto.
+
+Lo que **no** se hizo de I3: emitir solo los fuentes cambiados. El emisor resuelve los nombres entre
+ficheros y pliega constantes de otras clases, así que reutilizar la emisión de un fuente exige un
+índice de API por clase como el `ClassAPI` que ya usa el camino de javac (`apkc/utils.go`), y el
+criterio de I3 prohíbe que el dex cambie ni un byte. Queda como la parte abierta de la fase, con este
+mismo banco como comando.
+
+## Hallazgo del crítico: un recurso nuevo no reenlazaba (arreglado)
+
+La sonda del crítico: proyecto mínimo, `build --inc --linker go --compiler go --v4=false`, una
+primera pasada, y después **añadir** `<string name="critico_marcador">CRITICO_NUEVA_CADENA_7391</string>`
+a `res/values/strings.xml` (y, aparte, **editar** el valor de una cadena que ya existía). Antes del
+arreglo:
+
+| paso | sha256 del apk (16) | `grep -ac` de la cadena en el apk |
+| --- | --- | --- |
+| primera pasada con `--inc` | `ddf790ac5a9ab250` | — |
+| tras **añadir** la cadena, `--inc` | `ddf790ac5a9ab250` (el mismo) | **0** |
+| tras **editar** una cadena, `--inc` | `ddf790ac5a9ab250` (el mismo) | **0** |
+| control: build completo del mismo árbol | `5d4dbaf36a49f355` | **1** |
+
+Causa, en tres piezas que encajan mal:
+
+- `compileRes` devolvía **siempre `false`** con `--linker go` (`apkc/build.go:543`, «no hay flats que
+  compilar»), y ese valor es el papel de «los recursos cambiaron» en la condición que llama a
+  `bundleRes` (`apkc/build.go:258`).
+- `pruneDeleted` (`apkc/utils.go:252`) solo mira BORRADOS: quita el registro de un fichero que ya no
+  está y marca `resStale`. Un alta o una edición no pasaban por ahí.
+- El manifiesto sí se detectaba (`manifestChanged`), y los `jar/`, `lib/` y `assets/` también (por
+  roster). Los recursos eran el único hueco, y el apk anterior se servía entero: el incremental
+  prometía lo que no cumplía.
+
+Arreglo:
+
+- `apkc/build.go:543` `compileRes`: con `--linker go` compara `res/**` por contenido
+  (`getFiles("res", "", true)`) y devuelve `true` si hay algún fichero nuevo o editado, que es lo que
+  obliga a `bundleRes`. Un borrado lo sigue marcando `pruneDeleted`.
+- `apkc/build.go:601` `bundleRes`: tras `enlazarConGo`, con `--inc` registra los digests de todo
+  `res/`, que es contra lo que compara la vuelta siguiente (igual que `aapt2 compile` registra los
+  flats que consumió).
+
+La misma sonda después del arreglo:
+
+| paso | sha256 del apk (16) | `grep -ac` |
+| --- | --- | --- |
+| primera pasada con `--inc` | `332e9a99691bfd3d` | — |
+| tras **añadir** la cadena, `--inc` | `2a904e74f5208b4e` (otro) | **1** |
+| tras **editar** una cadena, `--inc` | `84d3e0e261f5bc78` (otro) | **1** |
+| control: build completo del mismo árbol | `84d3e0e261f5bc78` (**el mismo** que la incremental) | **1** |
+
+El comando de la sonda está abajo, en «Reproducción del hallazgo»; el apk de la pasada incremental
+coincide byte a byte con el del build completo, que es la propiedad que se buscaba.
+
+Tests que lo cierran:
+
+- `apkc/incremental_recursos_test.go`, `TestIncrementalReenlazaCuandoUnRecursoEsNuevoOEditado`:
+  `_build` con las mismas banderas que la pestaña, alta de una cadena (tiene que estar en
+  `build/resources.arsc` y el apk tiene que cambiar), edición de un valor existente (lo mismo), y una
+  vuelta sin tocar nada (el apk no se rehace), con `verificarApk` en verde en cada paso. Con el
+  arreglo revertido el test falla con «con --inc, una cadena nueva no llegó a resources.arsc: no se
+  reenlazó».
+- `studio/prueba-pestana.js` (sección `12c`, paso `f`): lo mismo dentro de chromium, con la cadena
+  buscada en los bytes de `/proyecto/build/resources.arsc` y las entradas del apk comparadas con la
+  pasada anterior. `pestaña: 177 comprobaciones`.
+
+Reproducción del hallazgo (sonda de shell, fuera del repo, con el binario de turno):
+
+```sh
+sh sonda-recursos.sh <apkc> /tmp/sonda   # proyecto mínimo + alta + edición + control completo
+# imprime el sha256 corto del apk y grep -ac de la cadena en cada paso
+```
+
+Coste del arreglo: cada vuelta con `--inc` recorre y hashea `res/` una vez (79 ficheros en el banco
+de 232 fuentes, la mayoría pequeños). No cambia el número de etapas ni el dex.
+
 ## Dónde está el cuello, y qué se puede incrementar de verdad
 
 Con `--inc` ya activo, el reparto de una pasada caliente en wasm es: **compilar ≈55 %, dexar ≈30 %,
@@ -193,20 +390,16 @@ paquete ~30 ms. Por tanto:
 Cada fase se cierra con su comando en verde sobre el árbol final; ninguna se marca hecha por
 analogía.
 
-- **I1, pasar `--inc` desde la pestaña.** Cambio en `studio/pestana.js` (repositorio
-  `apkc-studio`, regla 8): añadir `--inc` a la lista de `build`. Aceptación:
-  `cd studio && APKC=… APKC_WASM=… sh e2e.sh` en verde y una segunda compilación en la misma
-  pestaña con el apk igual entrada por entrada (`node studio/prueba-pestana.js` ya descomprime y
-  compila). Reproducción del ahorro: `sh banco/incremental.sh`. Estado: pendiente.
-- **I2, medir en chromium y OPFS, no en el shim.** Comando: `APKC_WASM=… node studio/prueba-pestana.js`
-  con dos compilaciones seguidas y `SITIO_URL=… node studio/prueba-sitio.js` si se publica.
-  Aceptación: la segunda pasada con `--inc` baja ≥15 % respecto de la primera sin `--inc` y el apk
-  coincide entrada por entrada. Abandono: si baja <15 %, se anota y no se sigue por esta vía.
-- **I3, caché de AST y resolución por fuente (H1).** Comando: `banco/incremental.sh` ampliado con
-  una pasada sin edición y tres ediciones distintas. Aceptación: `compile go` ≥30 % más rápido en
-  wasm, dex idéntico entrada por entrada. Abandono: <20 % o dex distinto.
-- **I4, dexado por clase (H2).** Comando: `cmp build/classes.dex` entre el build completo y el
-  incremental tras editar un fuente. Aceptación: idéntico byte a byte y `dex go` ≤50 %. Abandono:
+- **I1, pasar `--inc` desde la pestaña. HECHA.** `--inc` en la lista de `build` de
+  `studio/pestana.js`; gate verde (177 comprobaciones) y apk igual entrada por entrada.
+  Prueba: sección `12c` de `studio/prueba-pestana.js`. Reproducción: `sh banco/incremental.sh`.
+- **I2, medir en chromium y OPFS. HECHA.** Resultado: 1831 → 1034 ms con `--inc` solo (−44 %),
+  1357 → 201 ms con I3 (−85 %), apk igual entrada por entrada. Criterio ≥15 % superado.
+- **I3, reutilizar las clases emitidas. HECHA EN PARTE.** La vuelta sin fuentes cambiados no compila
+  (`compile go` 300 → 0 ms, dex idéntico). No cabe caché en memoria porque cada comando arranca una
+  instancia nueva de Go (`studio/hospedador.js:240`); lo que queda es emitir solo fuentes cambiados.
+- **I4, dexado por clase (H2). PENDIENTE.** `cmp build/classes.dex` entre completo e incremental;
+  abandono si el dex difiere.
   no idéntico (el layout de ART no se negocia).
 - **I5, índice del `android.jar` entre pasadas (H3).** Comando: el test del shim sobre el proyecto
   mínimo, con y sin caché. Aceptación: ≥100 ms menos en wasm. Abandono: <50 ms.

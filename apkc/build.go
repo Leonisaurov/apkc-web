@@ -544,8 +544,20 @@ func compileRes(incremental bool, linker string) bool {
 	defer timeIt("aapt2 compile")()
 	if linker == linkerGo {
 		// the Go linker reads res/*.xml directly: there is no flat file and nothing to
-		// compile, which is what the paragraph 24 measurement said (.flat only feeds aapt2 link)
-		return false
+		// compile, which is what the paragraph 24 measurement said (.flat only feeds aapt2 link).
+		// It still reads res/ as an input of the table it writes, so a resource that is new or
+		// edited has to force the link as much as a deleted one does: with the role of "the flats
+		// changed" left unanswered here, the only resource change the incremental build noticed
+		// was a deletion (pruneDeleted), and a new string stayed out of resources.arsc while the
+		// previous apk was served again untouched.
+		if !incremental {
+			return true
+		}
+		cambiados, _ := getFiles("res", "", true)
+		if len(cambiados) > 0 {
+			LogD("Incremental", len(cambiados), "resource files changed: relinking")
+		}
+		return len(cambiados) > 0
 	}
 	res, _ := getFiles("res", "", incremental)
 	if len(res) < 1 {
@@ -584,6 +596,12 @@ func bundleRes(o buildOpts, incremental bool) bool {
 		changed, err := enlazarConGo(".", androidJar, opts)
 		if err != nil {
 			LogF("build", err.Error())
+		}
+		if incremental {
+			// the link read res/: what it saw is the content the next round compares
+			// against, exactly like aapt2 compile records the flats it consumed
+			res, _ := getFiles("res", "", false)
+			updateRecords(res)
 		}
 		return changed
 	}
