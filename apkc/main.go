@@ -121,9 +121,11 @@ check  - read one .java file and print, as one line of JSON on stdout, the error
          the emitter find, without writing any .class (--android-jar to resolve names; without a
          jar only the parser is checked). No process is started, so it runs inside the tab.
 preview - read one apk and print, as one line of JSON on stdout, the model of its first screen:
-         type, id, text, children and an approximate rectangle per node. The layout is chosen by
-         name (--layout, main by default) because the real reference lives in setContentView,
-         which is Phase 2 of docs/plan-vista-previa.md. No process is started either.
+         type, id, text, children and an approximate rectangle per node. The layout is the one
+         the app's onCreate passes to setContentView (the Dalvik interpreter of Phase 2 reads it
+         from classes.dex), and the text the app writes with TextView.setText travels in
+         ejecucion.capturas and in each node's textoDinamico (--sin-ejecutar keeps Phase 1's
+         model). No process is started either.
 version - print the commit this binary was built from
 `)
 }

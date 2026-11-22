@@ -7,11 +7,12 @@ package main
 // nombre está en la tabla.
 //
 // Lo que esta fase NO hace, dicho para que no se lea como un fallo:
-//   - No interpreta DEX. El layout se elige por nombre (por defecto el que se llama `main`) porque
-//     la referencia de verdad vive en el `setContentView` de la actividad, y eso es la Fase 2.
+//   - El layout se elige por nombre (por defecto el que se llama `main`) salvo que la app lo diga:
+//     desde la Fase 2 el intérprete de previewinterprete.go lee el id del `setContentView` y manda
+//     sobre el nombre. Sin `classes.dex`, el criterio sigue siendo el nombre.
 //   - El rectángulo es una aproximación declarada: cuenta las views de un LinearLayout, estima el
-//     tamaño del texto y recorta a la pantalla. No es una medida del framework; estilos fieles,
-//     imágenes, `gravity` fino y tema del sistema quedan fuera de la fase.
+//     tamaño del texto (el dinámico si lo hay) y recorta a la pantalla. No es una medida del
+//     framework; estilos fieles, imágenes, `gravity` fino y tema del sistema quedan fuera de la fase.
 //   - Solo se lee una configuración por tipo: la base. `--layout` recibe la clave de un recurso,
 //     no un calificador, así que un `layout-land` con la misma clave que la base no se puede pedir
 //     aparte: se toma la primera entrada que la tabla traiga para esa clave.
@@ -53,16 +54,19 @@ type rectVista struct {
 
 // nodoVista es una view del modelo: su tipo, su identificador resuelto, el texto resuelto, lo que
 // declara de tamaño, el rectángulo y sus hijos. Los campos sin namespace no se serializan.
+// `textoDinamico` es la Fase 2: lo que el intérprete vio escribir a la app en esa view, separado del
+// `texto` que declara el layout para que el modelo no confunda lo declarado con lo ejecutado.
 type nodoVista struct {
-	Tipo   string       `json:"tipo"`
-	ID     string       `json:"id,omitempty"`
-	IDRef  string       `json:"idRef,omitempty"`
-	Texto  string       `json:"texto,omitempty"`
-	Estilo string       `json:"estilo,omitempty"`
-	Ancho  string       `json:"ancho,omitempty"`
-	Alto   string       `json:"alto,omitempty"`
-	Rect   rectVista    `json:"rect"`
-	Hijos  []*nodoVista `json:"hijos,omitempty"`
+	Tipo          string       `json:"tipo"`
+	ID            string       `json:"id,omitempty"`
+	IDRef         string       `json:"idRef,omitempty"`
+	Texto         string       `json:"texto,omitempty"`
+	TextoDinamico string       `json:"textoDinamico,omitempty"`
+	Estilo        string       `json:"estilo,omitempty"`
+	Ancho         string       `json:"ancho,omitempty"`
+	Alto          string       `json:"alto,omitempty"`
+	Rect          rectVista    `json:"rect"`
+	Hijos         []*nodoVista `json:"hijos,omitempty"`
 
 	orientacion string // "vertical", "horizontal" o "" (se apilan en el origen)
 }
@@ -70,14 +74,15 @@ type nodoVista struct {
 // modeloVista es el JSON que sale por stdout. `aproximado` viaja en verdadero siempre: los
 // rectángulos son una estimación y el consumidor no tiene que adivinarlo.
 type modeloVista struct {
-	Paquete    string     `json:"paquete"`
-	Version    string     `json:"version,omitempty"`
-	Actividad  string     `json:"actividad,omitempty"`
-	Layout     string     `json:"layout"`
-	Pantalla   rectVista  `json:"pantalla"`
-	Aproximado bool       `json:"aproximado"`
-	Nodos      int        `json:"nodos"`
-	Raiz       *nodoVista `json:"raiz"`
+	Paquete    string              `json:"paquete"`
+	Version    string              `json:"version,omitempty"`
+	Actividad  string              `json:"actividad,omitempty"`
+	Layout     string              `json:"layout"`
+	Pantalla   rectVista           `json:"pantalla"`
+	Aproximado bool                `json:"aproximado"`
+	Nodos      int                 `json:"nodos"`
+	Ejecucion  *resultadoEjecucion `json:"ejecucion,omitempty"`
+	Raiz       *nodoVista          `json:"raiz"`
 }
 
 // elementoLeido es un elemento del árbol del AXML con sus atributos ya resueltos a cadenas del
@@ -108,15 +113,19 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
-default) because the real reference lives in the activity's setContentView, which is Phase 2. No
-process is started and nothing is written, so it runs inside the tab.
+default) unless the app's onCreate calls setContentView with a resource id, which the Dalvik
+interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and one
+click per registered listener, and reports the text the app writes (TextView.setText) in
+ejecucion.capturas and in each node's textoDinamico. No process is started and nothing is written,
+so it runs inside the tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
+	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
 	if err := set.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
@@ -130,7 +139,7 @@ process is started and nothing is written, so it runs inside the tab.
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
-	modelo, err := modeloVistaDeAPK(datos, *layout)
+	modelo, err := modeloVistaDeAPKCon(datos, *layout, !*sinEjecutar)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
@@ -143,9 +152,16 @@ process is started and nothing is written, so it runs inside the tab.
 	fmt.Println(string(salida))
 }
 
-// modeloVistaDeAPK es el cuerpo del comando, separado de los argumentos para poder probarlo con los
-// bytes de un apk sin pasar por el sistema de ficheros.
+// modeloVistaDeAPK es el cuerpo del comando con el intérprete de la Fase 2 activo. Se queda como
+// envoltorio para que las pruebas de la Fase 1 no cambien de forma de llamada.
 func modeloVistaDeAPK(datos []byte, layout string) (*modeloVista, error) {
+	return modeloVistaDeAPKCon(datos, layout, true)
+}
+
+// modeloVistaDeAPKCon es el cuerpo del comando, separado de los argumentos para poder probarlo con
+// los bytes de un apk sin pasar por el sistema de ficheros. `ejecutar` decide si se interpreta
+// classes.dex; sin él, el modelo es exactamente el de la Fase 1.
+func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(datos), int64(len(datos)))
 	if err != nil {
 		return nil, fmt.Errorf("el apk no es un zip: %w", err)
@@ -176,6 +192,7 @@ func modeloVistaDeAPK(datos []byte, layout string) (*modeloVista, error) {
 		Aproximado: true,
 		Pantalla:   rectVista{Ancho: dpPantallaAncho, Alto: dpPantallaAlto},
 	}
+	nombreActividad := ""
 	if paquete, ok := arbolManifiesto.atributo("", "package"); ok {
 		modelo.Paquete = ctxManifiesto.texto(paquete)
 	}
@@ -183,10 +200,25 @@ func modeloVistaDeAPK(datos []byte, layout string) (*modeloVista, error) {
 		modelo.Version = ctxManifiesto.texto(version)
 	}
 	if actividad, ok := actividadLanzadora(arbolManifiesto, ctxManifiesto); ok {
-		modelo.Actividad = ctxManifiesto.textoDeAtributo(actividad, uriDeRecursos, "name")
+		nombreActividad = ctxManifiesto.textoDeAtributo(actividad, uriDeRecursos, "name")
+		modelo.Actividad = nombreActividad
 	}
 
-	rutaLayout, err := rutaDelLayout(tabla, zr, layout)
+	// Fase 2: la actividad se ejecuta antes de elegir el layout, porque el `setContentView` dice cuál
+	// es. Si no hay classes.dex o el dex no se deja ejecutar, el modelo de la Fase 1 sigue saliendo.
+	var layoutID uint32
+	if ejecutar {
+		if dexBytes, err := entradaDeZip(zr, "classes.dex"); err == nil {
+			if d, err := readDex(dexBytes); err == nil {
+				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
+				modelo.Ejecucion, layoutID = ejecutaOnCreate(d, tabla, preferida)
+			} else {
+				modelo.Ejecucion = &resultadoEjecucion{Error: "el classes.dex no se deja leer: " + err.Error()}
+			}
+		}
+	}
+
+	rutaLayout, err := rutaDelLayoutDeLaActividad(tabla, zr, layout, layoutID)
 	if err != nil {
 		return nil, err
 	}
@@ -208,10 +240,70 @@ func modeloVistaDeAPK(datos []byte, layout string) (*modeloVista, error) {
 		return nil, fmt.Errorf("el layout %s no tiene raíz", rutaLayout)
 	}
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
+	anotaTextoDinamico(raiz, modelo.Ejecucion)
+	// el rectángulo se calcula con el texto que se va a ver: si la app lo cambió, la medida del
+	// layout declarado ya no es la de la pantalla que el modelo describe
+	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
 	modelo.Layout = rutaLayout
 	modelo.Raiz = raiz
 	modelo.Nodos = contarNodos(raiz)
 	return modelo, nil
+}
+
+// descriptorDeClase lleva el nombre del manifiesto (`.MainActivity` o `com.x.MainActivity`) al
+// descriptor de un type_id del dex.
+func descriptorDeActividad(paquete, nombre string) string {
+	if nombre == "" {
+		return ""
+	}
+	if strings.HasPrefix(nombre, ".") {
+		nombre = paquete + nombre
+	} else if !strings.Contains(nombre, ".") {
+		nombre = paquete + "." + nombre
+	}
+	return "L" + strings.ReplaceAll(nombre, ".", "/") + ";"
+}
+
+// anotaTextoDinamico copia a cada nodo la última escritura que el intérprete capturó sobre su id.
+// El match es por el id de recurso, que es lo que comparten el layout y el `findViewById`.
+func anotaTextoDinamico(n *nodoVista, ejecucion *resultadoEjecucion) {
+	if n == nil || ejecucion == nil {
+		return
+	}
+	for _, c := range ejecucion.Capturas {
+		if c.IDRef == "" || c.IDRef != n.IDRef || c.Origen != "TextView.setText" {
+			continue
+		}
+		n.TextoDinamico = c.Texto
+	}
+	for _, h := range n.Hijos {
+		anotaTextoDinamico(h, ejecucion)
+	}
+}
+
+// rutaDelLayoutDeLaActividad elige el layout: `--layout` manda si se pidió uno, y si no, el id que
+// el intérprete vio pasar por `setContentView`. Cuando ese id no se puede resolver (sin tabla, o una
+// entrada compleja) se cae al criterio de la Fase 1, por nombre, en vez de fallar el comando.
+func rutaDelLayoutDeLaActividad(tabla *tablaRecursos, zr *zip.Reader, pedido string, layoutID uint32) (string, error) {
+	if pedido == "" && layoutID != 0 && tabla != nil {
+		if ruta, err := rutaDeLayoutPorId(tabla, layoutID); err == nil {
+			return ruta, nil
+		}
+	}
+	return rutaDelLayout(tabla, zr, pedido)
+}
+
+// rutaDeLayoutPorId resuelve el id de un `R.layout.*` a la entrada del apk. La tabla guarda la ruta
+// como cadena del pool global; si el enlace solo dejó la clave, se arma con la forma que usa aapt2.
+func rutaDeLayoutPorId(tabla *tablaRecursos, id uint32) (string, error) {
+	bl, e, ok := tabla.entradaDeId(id)
+	if !ok || e.ausente || e.compleja || bl.nombre != "layout" {
+		return "", fmt.Errorf("%#08x no es una entrada de layout con valor simple", id)
+	}
+	if e.valor.tipo == tipoCadena && int(e.valor.datos) < len(tabla.global.cadenas) {
+		return tabla.global.cadenas[e.valor.datos], nil
+	}
+	return "res/layout/" + tabla.clave(e) + ".xml", nil
 }
 
 // entradaDeZip devuelve el contenido descomprimido de la entrada con ese nombre exacto.
@@ -634,12 +726,16 @@ func contenidoDelNodo(n *nodoVista, disponibleAncho, disponibleAlto int) (int, i
 		}
 		return ancho, alto
 	}
-	// una view hoja: el ancho lo estima el texto y el alto su tipo
+	// una view hoja: el ancho lo estima el texto que se va a ver y el alto su tipo
 	alto := dpAltoTexto
 	if n.Tipo == "Button" {
 		alto = dpAltoBoton
 	}
-	ancho := len([]rune(n.Texto))*dpPorCaracter + dpRellenoTexto
+	visible := n.Texto
+	if n.TextoDinamico != "" {
+		visible = n.TextoDinamico
+	}
+	ancho := len([]rune(visible))*dpPorCaracter + dpRellenoTexto
 	if ancho < 2*dpRellenoTexto {
 		ancho = 2 * dpRellenoTexto
 	}
