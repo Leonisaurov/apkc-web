@@ -193,7 +193,9 @@ STUDIO_SERVIDOR_PORT=18793 STUDIO_PORT=19347 \
 node studio/prueba-pestana.js
 ```
 
-Resultado real: **171 comprobaciones bien, 0 mal**. Entre ellas:
+Resultado real de `prueba-pestana.js` con ese jar: **157 comprobaciones bien,
+0 mal**. El `e2e.sh` completo, que además ejecuta release, `.aab` y v4, reporta
+**171 comprobaciones** y `e2e: todo en orden`. Entre ellas:
 
 - `el índice del android.jar se lee de OPFS por trozos y sin una sola petición`
   — 3.372 clases indexadas, 496.700 bytes leídos, 0 peticiones.
