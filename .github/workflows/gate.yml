@@ -121,8 +121,9 @@ jobs:
           name: sitio
           path: ${{ runner.temp }}/sitio
 
-  # WebKit es el motor de Safari. Es una comprobación informativa en un runner Linux: no es
-  # Safari real (no se puede ejecutar macOS en los runners de este repo), por eso no bloquea.
+  # WebKit es el motor de Safari. Esta comprobación corre en un runner Linux con el WebKit de
+  # Playwright: no es Safari real. El job `safari` repite la prueba en macos-latest y dice qué
+  # ejecutable se usó. Los dos son informativos por la misma razón (§181).
   webkit:
     needs: pesado
     runs-on: ubuntu-latest
@@ -134,13 +135,135 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - run: npx -y playwright@latest install webkit --with-deps
+      # `npx -y ... install` deja el paquete en la caché de npm, no en node_modules: sin este paso
+      # `import("playwright")` de prueba-webkit.js falla y el trabajo se omite solo (falso verde).
+      - run: npm install --no-save --no-package-lock playwright@latest
+      - run: npx playwright install webkit --with-deps
       - uses: actions/download-artifact@v4
         with:
           name: sitio
           path: sitio
       - name: WebKit sobre el sitio publicado
         run: node studio/prueba-webkit.js
+
+  # Safari real no se puede automatizar con Playwright: en macos-latest lo que se ejecuta es el
+  # motor WebKit empaquetado por Playwright, que es el mismo motor pero no la app Safari. Por eso
+  # el job informa de la identidad del ejecutable antes de nada y no bloquea: sin evidencia de que
+  # se esté corriendo Safari.app no tiene sentido exigirlo como gate (§181).
+  safari:
+    needs: pesado
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: sitio
+          path: sitio
+      - name: Playwright y su WebKit
+        run: |
+          npm install --no-save --no-package-lock playwright@latest
+          npx playwright install webkit
+      - name: identidad del motor (WebKit de Playwright o Safari real)
+        run: node tools/safari-info.mjs
+      - name: el sitio sobre WebKit en macOS
+        env:
+          SITIO_DIR: ${{ github.workspace }}/sitio
+        run: node studio/prueba-webkit.js
+      - name: por qué este job no bloquea
+        if: failure()
+        run: |
+          echo "safari: informativo. Playwright no automatiza Safari.app; ejecuta su propio WebKit."
+          echo "Un fallo aquí no impide la release: no hay evidencia de que se corra Safari real."
+
+  # ART de verdad: un emulador x86_64 con KVM ejecuta app_process64 y dexdump sobre los dex del
+  # banco (banco/art.sh). KVM depende del hardware del runner y arrancar un system-image puede
+  # fallar por razones ajenas al código, así que el job es continue-on-error y `publicar` no
+  # depende de él: informa, no bloquea. Sin /dev/kvm se omite y se dice por qué.
+  art:
+    needs: rapido
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apkc/go.mod
+          cache-dependency-path: apkc/go.sum
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: KVM del runner
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "kvm=si" >> "$GITHUB_OUTPUT"
+            echo "KVM disponible: el emulador puede arrancar con aceleración"
+          else
+            echo "kvm=no" >> "$GITHUB_OUTPUT"
+            echo "KVM no disponible: /dev/kvm no existe o no es legible/escribible."
+            echo "Sin KVM un system-image x86_64 no arranca en tiempo razonable; se omite el banco ART."
+          fi
+      - name: SDK y emulador con KVM
+        if: steps.kvm.outputs.kvm == 'si'
+        run: |
+          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          export ANDROID_HOME="$HOME/android-sdk"
+          mkdir -p "$ANDROID_HOME"
+          sudo chmod a+rw /dev/kvm
+          SDKM=$(ls -d /usr/local/lib/android/sdk/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)
+          echo "sdkmanager: $SDKM"
+          yes | "$SDKM" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
+          "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" "emulator" \
+            "platforms;android-34" "build-tools;34.0.0" "system-images;android-34;google_apis;x86_64"
+          AVM=$(ls -d /usr/local/lib/android/sdk/cmdline-tools/*/bin/avdmanager 2>/dev/null | sort -V | tail -1)
+          echo no | "$AVM" create avd -n apkc-art \
+            -k "system-images;android-34;google_apis;x86_64" --device pixel_5
+          nohup "$ANDROID_HOME/emulator/emulator" -avd apkc-art -no-window -no-audio \
+            -no-boot-anim -gpu swiftshader_indirect -accel on >"$RUNNER_TEMP/emulator.log" 2>&1 &
+          "$ANDROID_HOME/platform-tools/adb" start-server
+          listo=no
+          for i in $(seq 1 120); do
+            if [ "$("$ANDROID_HOME/platform-tools/adb" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              listo=si
+              break
+            fi
+            sleep 5
+          done
+          echo "emulador arrancado: $listo"
+          [ "$listo" = "si" ]
+          "$ANDROID_HOME/platform-tools/adb" shell getprop ro.build.version.sdk
+      - name: banco ART (app_process64 y dexdump)
+        if: steps.kvm.outputs.kvm == 'si'
+        env:
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          # JAVA_HOME lo exporta actions/setup-java para los pasos siguientes; no se copia aquí.
+          APKC: ${{ runner.temp }}/apkc-art
+        run: |
+          (cd apkc && go build -o "$RUNNER_TEMP/apkc-art" .)
+          sh banco/art.sh
+      - name: subir el log del emulador si falla
+        if: failure() && steps.kvm.outputs.kvm == 'si'
+        uses: actions/upload-artifact@v4
+        with:
+          name: art-emulator-log
+          path: ${{ runner.temp }}/emulator.log
+          if-no-files-found: ignore
+      - name: por qué este job no bloquea
+        if: failure()
+        run: |
+          echo "art: informativo. Falló el arranque con KVM, el SDK/emulador o el banco ART."
+          echo "La firma y la página ya están verificadas por los jobs rapido y pesado; publicar no depende de art."
 
   # El release no puede saltarse el gate: si el pesado falla, este job no arranca. Publica el
   # sitio empaquetado como artefacto de la release; el host definitivo sigue sin decidirse.
