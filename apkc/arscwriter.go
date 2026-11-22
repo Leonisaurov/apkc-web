@@ -115,10 +115,18 @@ func escribeTablaRecursos(t tablaEscribir) ([]byte, error) {
 	if len(t.tipos) > len(t.nombresTipo) {
 		return nil, fmt.Errorf("%d tipos escritos con %d nombres", len(t.tipos), len(t.nombresTipo))
 	}
-	for i, ti := range t.tipos {
-		if int(ti.id) != i+1 {
-			return nil, fmt.Errorf("el tipo #%d declara id %d: aapt2 numera los tipos por su lugar en la tabla de nombres", i, ti.id)
+	anterior := 0
+	for _, ti := range t.tipos {
+		// aapt2 reserva un id por tipo declarado, incluso si todas sus entradas se descartan por
+		// falta de valor base: deja un hueco con un nombre de relleno `?N` (medido con un bool y
+		// un integer que solo existen en values-es; string quedo con id 3)
+		if int(ti.id) < 1 || int(ti.id) > len(t.nombresTipo) {
+			return nil, fmt.Errorf("el tipo con id %d esta fuera de la tabla de %d nombres", ti.id, len(t.nombresTipo))
 		}
+		if int(ti.id) <= anterior {
+			return nil, fmt.Errorf("el tipo con id %d no va despues del %d", ti.id, anterior)
+		}
+		anterior = int(ti.id)
 		if len(ti.bloques) == 0 {
 			return nil, fmt.Errorf("el tipo %d no tiene ninguna configuracion", ti.id)
 		}
@@ -329,8 +337,9 @@ func tamanoPantallaDe(c string) uint8 {
 // camposConfig: los campos del ResTable_config que este enlazador escribe, en el orden en que
 // ResTable_config::compare los compara (locale, screenType, input, screenSize, version,
 // screenLayout, screenLayout2, colorMode, uiMode, smallestScreenWidthDp, screenSizeDp). Los que no
-// están medidos quedan a cero. `locale` empaqueta language en los dos bytes altos y country en los
-// dos bajos; `screenType` empaqueta orientation | touchscreen<<8 | density<<16.
+// están medidos quedan a cero. `locale` es el u32 que resulta de los cuatro bytes language/country
+// en little endian; `screenType` empaqueta orientation | touchscreen<<8 | density<<16 y `input`
+// empaqueta keyboard | navigation<<8 | inputFlags<<16.
 type camposConfig struct {
 	locale        uint32
 	screenType    uint32
@@ -341,6 +350,78 @@ type camposConfig struct {
 	uiMode        uint32
 	smallestWidth uint32
 	screenSizeDp  uint32
+}
+
+// uiModeDe: los valores del byte +29 medidos con aapt2 de build-tools 35.0.1: desk=2, car=3,
+// television=4, appliance=5, watch=6 y el bit de night 0x20. Se combinan con OR, así car-night da
+// 0x23, que es lo que escribe aapt2. La versión implícita de cualquier uiMode es 8 (FROYO).
+func uiModeDe(c string) uint8 {
+	var v uint8
+	for _, p := range strings.Split(c, "-") {
+		switch p {
+		case "desk":
+			v |= 0x02
+		case "car":
+			v |= 0x03
+		case "television":
+			v |= 0x04
+		case "appliance":
+			v |= 0x05
+		case "watch":
+			v |= 0x06
+		case "night":
+			v |= 0x20
+		}
+	}
+	return v
+}
+
+// pantallaTactilDe: touchscreen en +13 del ResTable_config, medido con build-tools 35.0.1:
+// notouch=1, stylus=2 y finger=3.
+func pantallaTactilDe(c string) uint8 {
+	for _, p := range strings.Split(c, "-") {
+		switch p {
+		case "notouch":
+			return 1
+		case "stylus":
+			return 2
+		case "finger":
+			return 3
+		}
+	}
+	return 0
+}
+
+// tecladoDe: keyboard en +16, medido: nokeys=1, qwerty=2 y 12key=3.
+func tecladoDe(c string) uint8 {
+	for _, p := range strings.Split(c, "-") {
+		switch p {
+		case "nokeys":
+			return 1
+		case "qwerty":
+			return 2
+		case "12key":
+			return 3
+		}
+	}
+	return 0
+}
+
+// navegacionDe: navigation en +17, medido: nonav=1, dpad=2, trackball=3 y wheel=4.
+func navegacionDe(c string) uint8 {
+	for _, p := range strings.Split(c, "-") {
+		switch p {
+		case "nonav":
+			return 1
+		case "dpad":
+			return 2
+		case "trackball":
+			return 3
+		case "wheel":
+			return 4
+		}
+	}
+	return 0
 }
 
 func esLengua(s string) bool {
@@ -382,6 +463,14 @@ func camposDeConfig(c string) camposConfig {
 			f.screenType |= 2
 		case densidadDe(p) != 0:
 			f.screenType |= uint32(densidadDe(p)) << 16
+		case pantallaTactilDe(p) != 0:
+			f.screenType |= uint32(pantallaTactilDe(p)) << 8
+		case tecladoDe(p) != 0:
+			f.input |= uint32(tecladoDe(p))
+		case navegacionDe(p) != 0:
+			f.input |= uint32(navegacionDe(p)) << 8
+		case uiModeDe(p) != 0:
+			f.uiMode = uint32(uiModeDe(c))
 		case strings.HasPrefix(p, "sw") && anchoMinimoDe(p) != 0:
 			f.smallestWidth = uint32(anchoMinimoDe(p))
 		case tamanoPantallaDe(p) != 0:
@@ -392,19 +481,27 @@ func camposDeConfig(c string) camposConfig {
 				f.version = uint32(n)
 			}
 		case esLengua(p):
-			f.locale = uint32(p[0])<<24 | uint32(p[1])<<16
+			// locale es el u32 little endian de los cuatro bytes language[2] country[2], que es
+			// lo que compara ResTable_config::compare (medido con es y es-rMX)
+			f.locale = uint32(p[0]) | uint32(p[1])<<8
 			if i+1 < len(partes) && len(partes[i+1]) == 3 &&
 				(partes[i+1][0] == 'r' || partes[i+1][0] == 'R') {
-				f.locale |= uint32(partes[i+1][1])<<8 | uint32(partes[i+1][2])
+				f.locale |= uint32(partes[i+1][1])<<16 | uint32(partes[i+1][2])<<24
 			}
 		}
 	}
 	if f.version == 0 {
 		switch {
-		case f.screenLayout != 0, f.screenType&0xffff0000 != 0:
-			f.version = 4
 		case f.smallestWidth != 0:
+			// sw/w/h dp nacieron en la API 13 (§159)
 			f.version = 13
+		case f.uiMode != 0:
+			// medido con build-tools 35.0.1: car, desk, night, television, appliance y watch
+			// escriben sdkVersion 8 en +24 y la bandera 0x1400 en el spec
+			f.version = 8
+		case f.screenLayout != 0, f.screenType&0xffff0000 != 0:
+			// el tamaño de pantalla y la densidad nacieron en la API 4 (§137)
+			f.version = 4
 		}
 	}
 	return f
@@ -449,6 +546,20 @@ func configDe(calificador string) []byte {
 	if t := tamanoPantallaDe(calificador); t != 0 {
 		// screenLayout en +28: small=1, large=3, xlarge=4
 		binary.LittleEndian.PutUint32(b[28:], uint32(t))
+	}
+	// touchscreen en +13, keyboard en +16 y navigation en +17: medidos con build-tools 35.0.1
+	if t := pantallaTactilDe(calificador); t != 0 {
+		b[13] = t
+	}
+	if t := tecladoDe(calificador); t != 0 {
+		b[16] = t
+	}
+	if t := navegacionDe(calificador); t != 0 {
+		b[17] = t
+	}
+	if m := uiModeDe(calificador); m != 0 {
+		// uiMode en +29 (no en +36): medido byte a byte con aapt2 35.0.1
+		b[29] = m
 	}
 	binary.LittleEndian.PutUint16(b[24:], uint16(camposDeConfig(calificador).version))
 	return b

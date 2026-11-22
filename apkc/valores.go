@@ -53,7 +53,9 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 	// «removing resource … without required default value» y no entra ni en la tabla ni en el pool
 	// (medido en el parrafo 94). La base define el conjunto de claves de cada tipo.
 	base := map[string]bool{}
+	todosTiposBrutos := map[string]bool{}
 	for _, r := range recursos {
+		todosTiposBrutos[r.tipo] = true
 		if r.config == "" {
 			base[r.tipo+"\x00"+r.clave] = true
 		}
@@ -67,9 +69,13 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 	}
 	recursos = filtrados
 
+	// aapt2 da un id a cada tipo declarado ANTES de descartar las claves sin valor base, y deja el
+	// hueco con un nombre de relleno `?N` en la tabla de nombres de tipo (medido con build-tools
+	// 35.0.1: un bool y un integer que solo existen en values-es dejaron `?1`, `?2` y string quedo
+	// con id 3). Por eso los nombres se sacan de los recursos sin filtrar.
 	nombresTipos := map[string]bool{}
-	for _, r := range recursos {
-		nombresTipos[r.tipo] = true
+	for n := range todosTiposBrutos {
+		nombresTipos[n] = true
 	}
 	for _, f := range layouts {
 		nombresTipos[tipoDeRecurso(f.nombre)] = true
@@ -77,11 +83,29 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 	for _, f := range ficheros {
 		nombresTipos[tipoDeRecurso(f.nombre)] = true
 	}
-	tipos := []string{}
+	todosLosTipos := make([]string, 0, len(nombresTipos))
 	for n := range nombresTipos {
-		tipos = append(tipos, n)
+		todosLosTipos = append(todosLosTipos, n)
 	}
-	sort.Strings(tipos)
+	sort.Strings(todosLosTipos)
+	conEntradas := map[string]bool{}
+	for _, r := range recursos {
+		conEntradas[r.tipo] = true
+	}
+	for _, f := range layouts {
+		conEntradas[tipoDeRecurso(f.nombre)] = true
+	}
+	for _, f := range ficheros {
+		conEntradas[tipoDeRecurso(f.nombre)] = true
+	}
+	tipos := make([]string, len(todosLosTipos))
+	for i, n := range todosLosTipos {
+		if conEntradas[n] {
+			tipos[i] = n
+		} else {
+			tipos[i] = fmt.Sprintf("?%d", i+1)
+		}
+	}
 
 	// los ids de los recursos, que hacen falta antes de escribir los mapas de `enum`/`flags`: el
 	// tipo es la posicion alfabetica mas uno y la entrada su posicion entre las claves ordenadas
@@ -301,12 +325,14 @@ func tablaDeRecursos(recursos []recursoEntabla, layouts, ficheros []fuenteXML, s
 
 // claveDeConfig: la clave con la que aapt2 ordena las configuraciones dentro de un tipo. Es la
 // comparación lexicográfica de ResTable_config::compare de AOSP, medida con build-tools 35.0.1:
-// locale → screenType → (input, screenSize) → version → screenLayout → uiMode → smallestWidth.
-// `grupo` es el locale, `numero` la densidad (los 16 bits altos de screenType) y `texto` todos los
-// campos en hexadecimal de anchura fija. Así comparar la terna equivale a comparar los campos en
-// orden, sin desbordar un `int` de 32 bits en wasm con `nodpi` (screenType 0xffff0000). Por eso
-// `port` (screenType=1) va después de `v33` (screenType=0, version=33) y `v21` antes que
-// `small-v21` (misma versión, screenLayout 0 frente a 1).
+// imsi → locale → screenType → input → screenSize → version → screenLayout → screenLayout2 →
+// colorMode → uiMode → smallestWidth → screenSizeDp. Los campos que este enlazador no escribe
+// (imsi, screenSize, screenLayout2, colorMode, screenSizeDp) quedan a cero. `grupo` es el locale,
+// `numero` la densidad (los 16 bits altos de screenType) y `texto` todos los campos en hexadecimal
+// de anchura fija. Así comparar la terna equivale a comparar los campos en orden, sin desbordar un
+// `int` de 32 bits en wasm con `nodpi` (screenType 0xffff0000). Por eso un `finger` (screenType
+// 0x00000300) va después de `land` (screenType 2), `qwerty` (input 2) antes que `dpad` (input 0x200),
+// `car` (version 8, uiMode 3) antes que `v21` (version 21) y `es` (locale) después de todos.
 func claveDeConfig(cfg string) (grupo, numero int, texto string) {
 	f := camposDeConfig(cfg)
 	grupo, numero = int(f.locale), int(f.screenType>>16)
@@ -317,11 +343,11 @@ func claveDeConfig(cfg string) (grupo, numero int, texto string) {
 }
 
 // mascaraConfig: las banderas del spec_map que aapt2 pone para cada configuración medida. Son la
-// unión de las banderas de todos los calificadores del nombre: locale 0x0004, orientación 0x0080,
-// densidad 0x0100, versión 0x0400, screenLayout 0x0800 y smallestScreenWidthDp 0x2000. Las
-// versiones implícitas (densidad y tamaño de pantalla desde la API 4, sw desde la 13) aportan el
-// 0x0400 de la versión: hdpi sale 0x0500 (§103), sw600dp 0x2400 (§159) y small 0x0c00, medido con
-// build-tools 35.0.1.
+// unión de las banderas de todos los calificadores del nombre: locale 0x0004, touchscreen 0x0008,
+// keyboard 0x0010, navigation 0x0040, orientación 0x0080, densidad 0x0100, versión 0x0400,
+// screenLayout 0x0800, uiMode 0x1000 y smallestScreenWidthDp 0x2000. Medido uno a uno con
+// build-tools 35.0.1: touchscreen 0x0008, keyboard 0x0010, navigation 0x0040, uiMode 0x1400 (la
+// versión implícita 8 se suma), small 0x0c00, mdpi 0x0500, sw600dp 0x2400 y v21 0x0400.
 func mascaraConfig(cfg string) uint32 {
 	f := camposDeConfig(cfg)
 	var banderas uint32
@@ -330,9 +356,21 @@ func mascaraConfig(cfg string) uint32 {
 	}
 	if f.screenType != 0 {
 		if f.screenType&0xffff0000 != 0 {
-			banderas |= 0x0100
-		} else {
-			banderas |= 0x0080
+			banderas |= 0x0100 // densidad
+		}
+		if f.screenType&0x000000ff != 0 {
+			banderas |= 0x0080 // orientación
+		}
+		if f.screenType&0x0000ff00 != 0 {
+			banderas |= 0x0008 // touchscreen
+		}
+	}
+	if f.input != 0 {
+		if f.input&0x000000ff != 0 {
+			banderas |= 0x0010 // keyboard
+		}
+		if f.input&0x0000ff00 != 0 {
+			banderas |= 0x0040 // navigation
 		}
 	}
 	if f.version != 0 {
@@ -340,6 +378,9 @@ func mascaraConfig(cfg string) uint32 {
 	}
 	if f.screenLayout != 0 {
 		banderas |= 0x0800
+	}
+	if f.uiMode != 0 {
+		banderas |= 0x1000
 	}
 	if f.smallestWidth != 0 {
 		banderas |= 0x2000

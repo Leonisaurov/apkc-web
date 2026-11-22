@@ -74,38 +74,79 @@ var tiposDeResQueSeEnlazan = map[string]bool{
 	"menu": true, "xml": true, "raw": true,
 }
 
-// calificadorExtraDeCarpeta: reconoce las carpetas `layout-small`, `values-v21`,
-// `drawable-large-v4`, etc., que los casos medidos antes no cubren. Devuelve el tipo base, el
-// calificador (con el `-vN` explícito, que configDe necesita para escribir sdkVersion) y si aapt2
-// añade `-v4` a la ruta del apk: lo añade cuando el tamaño de pantalla está y no hay versión
-// explícita, igual que con la densidad (medido con build-tools 35.0.1).
-func calificadorExtraDeCarpeta(nombre string) (tipo, config string, autoVersion, ok bool) {
+// parteEsCalificador: un segmento del sufijo de una carpeta que este enlazador sabe traducir a un
+// campo del ResTable_config. Incluye los medidos antes (idioma, región, orientación, densidad,
+// tamaño, sw y -vN) y los nuevos: touchscreen, keyboard, navigation y uiMode.
+func parteEsCalificador(p string) bool {
+	if p == "" {
+		return false
+	}
+	switch p {
+	case "port", "land", "square",
+		"notouch", "stylus", "finger",
+		"nokeys", "qwerty", "12key",
+		"nonav", "dpad", "trackball", "wheel",
+		"desk", "car", "television", "appliance", "watch", "night",
+		"small", "large", "xlarge":
+		return true
+	}
+	if densidadDe(p) != 0 || uiModeDe(p) != 0 || pantallaTactilDe(p) != 0 ||
+		tecladoDe(p) != 0 || navegacionDe(p) != 0 {
+		return true
+	}
+	if strings.HasPrefix(p, "sw") && anchoMinimoDe(p) != 0 {
+		return true
+	}
+	if esLengua(p) {
+		return true
+	}
+	if len(p) == 3 && (p[0] == 'r' || p[0] == 'R') {
+		return true // región de values-es-rMX
+	}
+	return len(p) >= 2 && p[0] == 'v' && soloDigitos(p[1:])
+}
+
+// versionImplicitaDeCalificador: el `-vN` que aapt2 añade a la ruta del apk cuando el calificador
+// no trae versión explícita. Medido con build-tools 35.0.1: densidad y tamaño 4, sw 13, uiMode 8.
+func versionImplicitaDeCalificador(config string) uint16 {
+	for _, p := range strings.Split(config, "-") {
+		if len(p) >= 2 && p[0] == 'v' && soloDigitos(p[1:]) {
+			return 0
+		}
+	}
+	return uint16(camposDeConfig(config).version)
+}
+
+// calificadorExtraDeCarpeta: reconoce las carpetas con calificador (`layout-small`, `values-v21`,
+// `values-car-night`, `layout-qwerty-v21`, …). Devuelve el tipo base, el calificador (con el `-vN`
+// explícito, que configDe necesita para escribir sdkVersion) y el `-vN` que aapt2 añade a la ruta
+// del apk cuando la versión es implícita.
+func calificadorExtraDeCarpeta(nombre string) (tipo, config string, autoVersion uint16, ok bool) {
 	i := strings.IndexByte(nombre, '-')
 	if i <= 0 {
-		return "", "", false, false
+		return "", "", 0, false
 	}
 	tipo, sufijo := nombre[:i], nombre[i+1:]
 	if !tiposDeResQueSeEnlazan[tipo] {
-		return "", "", false, false
+		return "", "", 0, false
 	}
 	partes := strings.Split(sufijo, "-")
-	partesVistas, version, pantalla := 0, false, false
+	partesVistas := 0
 	for _, p := range partes {
-		switch {
-		case tamanoPantallaDe(p) != 0:
-			pantalla = true
-			partesVistas++
-		case strings.HasPrefix(p, "v") && soloDigitos(p[1:]):
-			version = true
-			partesVistas++
-		default:
-			return "", "", false, false
+		// el idioma y la región solo se midieron en values; un layout-es sigue siendo una
+		// configuración que este enlazador no escribe
+		if tipo != "values" && (esLengua(p) || len(p) == 3 && (p[0] == 'r' || p[0] == 'R')) {
+			return "", "", 0, false
 		}
+		if !parteEsCalificador(p) {
+			return "", "", 0, false
+		}
+		partesVistas++
 	}
 	if partesVistas == 0 {
-		return "", "", false, false
+		return "", "", 0, false
 	}
-	return tipo, sufijo, pantalla && !version, true
+	return tipo, sufijo, versionImplicitaDeCalificador(sufijo), true
 }
 
 // tipoDeRecurso: la carpeta de res/ que da el tipo, sin calificador. Un nombre con guion todavía no
@@ -145,36 +186,12 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			return nil, nil, nil, manifiesto, fmt.Errorf("res/%s no es una carpeta de recursos", e.Name())
 		}
 		tipo, config := e.Name(), ""
-		autoVersion := false
+		var autoVersion uint16
 		if !tiposDeResQueSeEnlazan[tipo] {
-			// `values-es` (idioma), `layout-land` (orientación) y `drawable-hdpi` (densidad) son las
-			// configuraciones medidas (parrafos 94 y 103). Cualquier otra sigue fuera.
-			switch {
-			case strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+2:
-				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
-			case strings.HasPrefix(e.Name(), "values-") && len(e.Name()) == len("values-")+6 &&
-				e.Name()[len("values-")+2:len("values-")+4] == "-r":
-				// values-es-rMX: idioma + región
-				tipo, config = "values", strings.TrimPrefix(e.Name(), "values-")
-			case e.Name() == "layout-land":
-				tipo, config = "layout", "land"
-			case e.Name() == "layout-port":
-				tipo, config = "layout", "port"
-			case strings.HasPrefix(e.Name(), "layout-sw") &&
-				anchoMinimoDe(strings.TrimPrefix(e.Name(), "layout-")) != 0:
-				// layout-sw600dp y el -v13 que aapt2 añade a la ruta (§159)
-				tipo, config = "layout", quitaVersion(strings.TrimPrefix(e.Name(), "layout-"))
-			case strings.HasPrefix(e.Name(), "drawable-") &&
-				densidadDe(quitaVersion(strings.TrimPrefix(e.Name(), "drawable-"))) != 0:
-				// drawable-nodpi, drawable-tvdpi y sus equivalentes -v4 (§159)
-				tipo, config = "drawable", quitaVersion(strings.TrimPrefix(e.Name(), "drawable-"))
-				autoVersion = true
-			default:
-				if t, c, auto, ok := calificadorExtraDeCarpeta(e.Name()); ok {
-					tipo, config, autoVersion = t, c, auto
-				} else {
-					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe values, values-xx, layout, layout-land, menu, xml, drawable, drawable-hdpi, mipmap y raw. Otra densidad, orientacion o version de API es una configuracion que no esta medida (parrafo 28); anim y font tampoco", e.Name())
-				}
+			if t, c, auto, ok := calificadorExtraDeCarpeta(e.Name()); ok {
+				tipo, config, autoVersion = t, c, auto
+			} else {
+				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe una configuración por carpeta: values, layout, menu, xml, drawable, mipmap y raw con idioma, región, orientación, densidad, tamaño, sw, touchscreen, keyboard, navigation, uiMode y -vN; anim y font tampoco", e.Name())
 			}
 		}
 		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
@@ -186,11 +203,11 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
 			}
 			carpetaSalida := e.Name()
-			if autoVersion {
-				// la densidad y el tamaño de pantalla nacieron en la API 4: aapt2 deja
-				// `drawable-hdpi-v4` y `layout-small-v4` también con --no-auto-version
-				// (parrafo 103 y medido con build-tools 35.0.1)
-				carpetaSalida += "-v4"
+			if autoVersion != 0 {
+				// aapt2 añade la version implicita del calificador a la ruta del apk incluso con
+				// --no-auto-version: 4 para densidad y tamaño, 13 para sw y 8 para uiMode
+				// (parrafo 103, §159 y medido con build-tools 35.0.1)
+				carpetaSalida += fmt.Sprintf("-v%d", autoVersion)
 			}
 			ruta := filepath.Join("res", carpetaSalida, f.Name())
 			contenido, err := os.ReadFile(filepath.Join(res, e.Name(), f.Name()))

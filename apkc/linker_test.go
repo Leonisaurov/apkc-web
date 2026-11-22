@@ -107,7 +107,7 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 		{
 			"una carpeta de densidad, que es una segunda configuracion y aqui se emite una sola",
 			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/layout-es/main.xml": `<FrameLayout/>`},
-			"configuracion",
+			"configuración",
 		},
 		{
 			"un recurso que no es xml dentro de layout",
