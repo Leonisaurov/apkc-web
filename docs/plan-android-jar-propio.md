@@ -1,10 +1,10 @@
 # Plan: un `android.jar` propio para la pestaña
 
 Estado: generador implementado y validado en local (2026-11-22). El workflow de
-GitHub Actions está escrito y su YAML está validado con PyYAML, pero **no se ha
-ejecutado en GitHub**: no se afirma que el job esté verde. Este documento
-conserva la investigación, añade el resultado real de J2 y J3 y deja J4 y J5
-como fases de CI y de sitio.
+GitHub Actions se ha ejecutado una vez y **ha fallado** por una ruta relativa
+(run 45059765189); el arreglo está en el worktree y pendiente de push. No hay
+run verde: J4 sigue sin cerrar. Este documento conserva la investigación, el
+resultado real de J2 y J3 y el diagnóstico del primer intento de J4.
 
 ## Resumen ejecutivo
 
@@ -67,8 +67,8 @@ go -C tools/androidjar run . \
 
 | Jar | Clases | Recursos | `resources.arsc` | Tamaño | SHA-256 |
 | --- | --- | --- | --- | --- | --- |
-| completo | 4.873 | 3.758 | 301.784 B | 2.810.522 B | `9103b3aa7a301325a6bd78d0b05f9640b82ff345af185adbf1f68bc8a3097186` |
-| mínimo | 15 | 3.758 | 301.784 B | 111.607 B | `5d69f0bf7c833c0229cf07391a0cc1ce48029496d32d5b5ba2964fce6e76ac40` |
+| completo | 4.873 | 3.758 | 301.784 B | 2.811.239 B | `56e45ad385e8648f09652457ade03ca8c764b84ef5fc5c77b266b2aa4fd03d46` |
+| mínimo | 15 | 3.758 | 301.784 B | 111.609 B | `725d8a266809208d32ee538ab9b5a2cca30a2c351aa09eb979f32793790a97b9` |
 
 El jar completo no contiene `res/` ni `NOTICES/` de la SDK: solo clases
 generadas, `resources.arsc`, `NOTICE`, `LICENSE` y (en el directorio de salida)
@@ -87,10 +87,11 @@ prueba:
 - `HOME=… go test -C apkc -run TestMarco` pasa con el jar generado:
   `TestMarcoDelAndroidJar`, `TestMarcoRechaza` y `TestMarcoValoresDeAtributo`.
 
-**Lo que no se ha verificado**: el workflow no se ha lanzado en GitHub. El YAML
-se validó con `python3 -c 'import yaml; yaml.safe_load(...)'`, que comprueba
-sintaxis, no que los jobs pasen. J4 sigue pendiente hasta que un run real esté
-en verde.
+**Lo que no se ha verificado**: el primer run real falló (§0.2) y el arreglo
+del workflow todavía no se ha empujado; no hay artifact ni hash de CI. El
+autocompletado con el jar generado sí se probó en local (§0.3): 157
+comprobaciones y 0 fallos en `prueba-pestana.js`. El `e2e.sh` completo no pasa
+por una incompatibilidad previa de `apkc preview --pulsar`, ajena al jar.
 
 ### 0.1. Intento de ejecución de J4 (2026-11-22)
 
@@ -134,6 +135,89 @@ gh run download --repo Leonisaurov/apkc-web --name android-stub-34
 
 La alternativa es llevar el workflow a `main` (rama por defecto), que cambia el
 alcance del push. Ninguna de las dos se ha ejecutado.
+
+### 0.2. Primer run real de J4: falló (45059765189)
+
+El push del usuario puso `origin/web` en `b6a1634` y el workflow quedó
+disponible. El run se lanzó y falló:
+
+- URL: <https://github.com/Leonisaurov/apkc-web/actions/runs/45059765189>
+- Run: `45059765189`; job `generar` (ID 137322843571), 22 s.
+- Job `verificar`: no llegó a ejecutarse porque `generar` falló.
+
+Log real:
+
+```text
+android-stub-34.jar: 4873 clases, 3758 recursos, 1897 atributos
+android-stub-34.jar: 15 clases, 3758 recursos, 1897 atributos
+cp: cannot stat 'dist/full/android-stub-34.jar': No such file or directory
+##[error]Process completed with exit code 1.
+```
+
+Causa: el paso usa `go -C tools/androidjar run .` y `-out dist/full`; `go -C`
+cambia el directorio de trabajo al módulo, así que el generador escribió en
+`tools/androidjar/dist/full`, no en `dist/full` del repositorio. El generador
+en sí hizo su trabajo (4.873 y 15 clases), pero el `cp` posterior no encontró
+el fichero.
+
+Al reproducir J5 apareció un segundo defecto del generador: al leer
+`libcore-current.txt` antes de que `java.lang.*` estuviera en el mapa, algunos
+descriptores quedaban como `LString;` en vez de `Ljava/lang/String;`, y
+`PrintStream.println(String)` no resolvía. Se añadió `arreglaDescriptor`, que
+reescribe los nombres simples dentro de `L...;` una vez leído todo el fichero.
+Eso cambia el artefacto: el jar de este árbol es **56e45ad…** (completo) y
+**725d8a2…** (mínimo), no los 9103b3a…/5d69f0b… del primer intento.
+
+**Arreglo en el worktree**: el paso ahora calcula `OUT="$GITHUB_WORKSPACE/dist"`
+y pasa rutas absolutas a `-out`; el job `verificar` usa
+`JAR="$GITHUB_WORKSPACE/dist/android-stub-34-min.jar"` y
+`SDK_JAR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/platforms/android-34/android.jar"`.
+El YAML vuelve a pasar PyYAML. Falta el push del commit del arreglo y un run
+nuevo; sin ese run, J4 sigue **NO verificada**.
+
+### 0.3. J5 local: autocompletado con el jar generado
+
+Se probó la pestaña con el jar completo (`56e45ad…`, 2.811.239 B) montado como
+`ANDROID_JAR`, en un `PREFIX` propio y puertos `18793`/`19347`:
+
+```sh
+PREFIX=/tmp/androidjar-propio/prefix-pestana3 CHROME_BIN=/usr/bin/chromium \
+APKC_WASM=/tmp/androidjar-propio/apkc-wasm.wasm \
+APK_EJEMPLO=… KS_EJEMPLO=$HOME/.android/debug.keystore \
+ANDROID_JAR=/tmp/androidjar-propio/sdk-generated/platforms/android-34/android.jar \
+STUDIO_SERVIDOR_PORT=18793 STUDIO_PORT=19347 \
+node studio/prueba-pestana.js
+```
+
+Resultado real: **157 comprobaciones bien, 0 mal**. Entre ellas:
+
+- `el índice del android.jar se lee de OPFS por trozos y sin una sola petición`
+  — 3.372 clases indexadas, 496.700 bytes leídos, 0 peticiones.
+- `las clases del android.jar completan en el editor` — `Activity` sale de la
+  lista.
+- `los método públicos de una clase del jar se leen de su .class` — 599
+  métodos de `android.view.View`.
+- `el jar generado (<5 MB) carga sus clases y R.layout sigue saliendo del
+  proyecto` — opciones `R.color`, `R.id`, `R.layout`, `R.string`, `R.style` y
+  estado `recursos del proyecto · 5 tipos`.
+
+Para que ese test sirviera con el jar propio se cambiaron dos cosas en
+`studio/prueba-pestana.js`: el tamaño esperado ya no es el literal 26361808 del
+SDK, sino `JAR_BYTES` leído del fichero, y la comprobación nueva exige que el
+jar cargado pese menos de 5 MB y que `R.layout` siga saliendo de los recursos.
+
+**Frontera**: `studio/e2e.sh` completo **no** está en verde con este worktree.
+Falla en una comprobación anterior y ajena al jar:
+
+```text
+FALLO: apkc preview --pulsar no entrega el clic de id/pulsar:
+flag provided but not defined: -pulsar
+usage: apkc preview [--layout nombre] [--sin-ejecutar] app.apk
+```
+
+El `apkc` del worktree no tiene el flag `--pulsar` que espera el `studio`
+submodule en `9f9d5c1`; no se toca `apkc/` desde este frente. Por eso **J5 no se
+cierra**: la parte de autocompletado está medida, la del gate completo no.
 
 ## 1. Qué contiene el jar que consume la pestaña
 
@@ -636,12 +720,10 @@ Cada fase se cierra con su comando en verde y su párrafo en
   `sha256sum -c`.
 - Criterio de rechazo: un workflow escrito no es un workflow verde. Si el job
   no pasa, la fase sigue pendiente.
-- **Estado: NO verificada.** El workflow está escrito y el YAML validado con
-  PyYAML, pero no está en `origin/web` (que sigue en `10e566f`) ni en la rama
-  por defecto. `gh workflow run android-jar.yml --ref web` devolvió
-  `HTTP 404: workflow android-jar.yml not found on the default branch`. No hay
-  run, artifact ni hash de CI. El comando que falta y el push que requiere
-  confirmación están en §0.1.
+- **Estado: NO verificada.** El run `45059765189` falló en `generar` por una
+  ruta relativa (`cp: cannot stat 'dist/full/android-stub-34.jar'`); ver §0.2.
+  El arreglo está en el worktree y necesita push y un run nuevo. No hay
+  artifact ni hash de CI.
 
 ### J5. Consumo desde el sitio
 
@@ -651,6 +733,11 @@ Cada fase se cierra con su comando en verde y su párrafo en
 - Comando: `SITIO_URL=https://apkc-studio.surge.sh node studio/prueba-sitio.js`.
 - Criterio de rechazo: si el SW o el host no sirven el jar con COOP/COEP, la
   página vuelve al selector de fichero y la fase no se cierra.
+- **Estado: parcial.** El autocompletado con el jar generado pasa 157/0 en
+  `prueba-pestana.js` (§0.3). El `e2e.sh` completo falla antes por el flag
+  `--pulsar` que no tiene el `apkc` de este worktree, y el sitio publicado no se
+  ha probado. La fase no se cierra hasta que el gate completo y el host estén
+  en verde.
 
 ## 7. Fronteras
 
