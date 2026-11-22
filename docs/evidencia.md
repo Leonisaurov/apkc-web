@@ -9141,6 +9141,7 @@ modo editar no reparenta nodos, no conoce `ConstraintLayout`, estilos ni temas, 
 `LinearLayout` mover es reordenar (no hay posición libre): está en `EDITOR.md`. (3) La vista
 **Pantalla** sigue siendo de solo lectura a propósito: el lápiz vive en el panel del editor. (4) No
 se probó con un SDK que solo tenga 35/36 instalado: ahí la compilación de la pestaña falla con el
-mensaje de tabla rala, que es una frontera del enlazador, no un defecto de la interfaz. (5) Los dos
-planes que no se implementaron siguen siendo planes: `docs/plan-incremental-web.md` (I1-I5) y
-`docs/plan-android-jar-propio.md` (J2 sin empezar).
+mensaje de tabla rala, que es una frontera del enlazador, no un defecto de la interfaz. (5) De los dos
+planes abiertos, el incremental sigue sin implementar (`docs/plan-incremental-web.md`, I1-I5) y el
+`android.jar` propio tiene generador validado en local (`tools/androidjar/`, J2 y J3) pero su
+workflow no se ha ejecutado en GitHub (J4 y J5): este `§` no afirma que ese job esté verde.
