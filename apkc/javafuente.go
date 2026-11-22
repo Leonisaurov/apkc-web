@@ -596,7 +596,15 @@ func tokenizarJava(fuente string) ([]tokenJava, error) {
 			return nil, fmt.Errorf("linea %d: el caracter %q no es de este subconjunto", linea, r)
 		}
 	}
-	out = append(out, tokenJava{kind: 'f', donde: pos{linea: linea, columna: columnaDe(i)}})
+	// El fin de fichero se queda en la **ultima linea con contenido**: si el fuente acaba en salto
+	// de linea, la linea siguiente esta vacia y el error de una llave sin cerrar salia una linea por
+	// debajo de la que el usuario ve (§200).
+	finLinea, finColumna := linea, columnaDe(i)
+	if recortado := strings.TrimRight(fuente, "\r\n"); len(recortado) < len(fuente) {
+		finLinea = strings.Count(recortado, "\n") + 1
+		finColumna = utf8.RuneCountInString(recortado[strings.LastIndex(recortado, "\n")+1:]) + 1
+	}
+	out = append(out, tokenJava{kind: 'f', donde: pos{linea: finLinea, columna: finColumna}})
 	return out, nil
 }
 

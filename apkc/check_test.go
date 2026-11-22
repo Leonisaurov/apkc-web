@@ -200,3 +200,39 @@ func TestCheckColumnaEnCaracteres(t *testing.T) {
 		t.Errorf("la posición es %q, medida %q", e.Posicion, quiero)
 	}
 }
+
+// TestCheckBloqueSinCerrarApuntaALaUltimaLinea: una llave sin cerrar se atribuye al fin de fichero, y
+// ese token tiene que estar en la **última línea con contenido**. Antes se contaba la línea que hay
+// tras el salto final, y el usuario veía la marca una línea por debajo del `}` que sí está escrito.
+func TestCheckBloqueSinCerrarApuntaALaUltimaLinea(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	// cinco líneas de contenido y un salto final: el `}` de x() está en la 5 y la clase queda abierta
+	fuente := `package com.hola.apkcstudio;
+
+public class MainActivity extends Activity {
+    void x() {
+    }
+`
+	r := revisarFuenteJava(fuente, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	e := r.Errores[0]
+	if e.Linea != 5 {
+		t.Errorf("el error se pone en la línea %d y la última con contenido es la 5 (%q)", e.Linea, e.Posicion)
+	}
+	// el error es del parser: lleva la línea y no la columna (frontera escrita en el plan), pero la
+	// posición no puede apuntar a la línea vacía de después del salto
+	if e.Posicion != "MainActivity.java:5" {
+		t.Errorf("la posición es %q, medida \"MainActivity.java:5\"", e.Posicion)
+	}
+	if e.Mensaje == "" || strings.Contains(e.Mensaje, "linea 5") {
+		t.Errorf("el mensaje no es una explicación limpia: %q", e.Mensaje)
+	}
+	// el fuente sin salto final tiene que seguir apuntando a su última línea
+	sinSalto := strings.TrimSuffix(fuente, "\n")
+	r = revisarFuenteJava(sinSalto, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 || r.Errores[0].Linea != 5 {
+		t.Fatalf("sin salto final el error no cae en la línea 5: %+v", r.Errores)
+	}
+}
