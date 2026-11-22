@@ -540,6 +540,9 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 		ctx.registrarSentencia(v.cuerpo)
 		ctx.registrarExpresion(v.cond)
 	case jtry:
+		if v.recurso != nil {
+			ctx.registrarSentencia(*v.recurso)
+		}
 		ctx.registrarSentencia(v.cuerpo)
 		for _, c := range v.atrapas {
 			ctx.registrarSentencia(c.atrapa)
@@ -4417,7 +4420,7 @@ func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally b
 	case jtry:
 		// un `try` interior con `catch` sigue fuera; uno que solo tiene `finally` deja que la salida
 		// cruce los dos bloques (javac los copia de dentro a fuera, §139)
-		anidado := bajoOtroTry || len(v.atrapas) > 0
+		anidado := bajoOtroTry || len(v.atrapas) > 0 || v.recurso != nil
 		apunta(motivoPendiente(v.cuerpo, enBucle, anidado, dentroDelFinally))
 		for _, c := range v.atrapas {
 			apunta(motivoPendiente(c.atrapa, enBucle, true, dentroDelFinally))
@@ -4452,6 +4455,108 @@ func bloqueVacio(s jstmt) bool {
 	return ok && len(b.sentencias) == 0
 }
 
+// intentaRecurso: `try (R r = expr) { cuerpo }` en la forma de javac 17 (medida con `javap -c -v`
+// sobre `Res.java`, § pendiente de medir en evidencia). El recurso se declara fuera del rango
+// protegido; el cuerpo lleva un manejador `Throwable` que guarda la excepcion primaria en un local,
+// cierra el recurso dentro de un segundo rango protegido y, si `close()` tambien falla, le añade la
+// segunda excepcion con `Throwable.addSuppressed` antes de re-lanzar la primera:
+//
+//	0  expr; astore r
+//	2  cuerpo                      [2,6) -> 19 Throwable
+//	6  aload r; ifnull salida
+//	10 aload r; close; goto salida
+//	19 astore primary
+//	20 aload r; ifnull relanza
+//	24 aload r; close              [24,30) -> 33 Throwable
+//	30 goto relanza
+//	33 astore suppressed
+//	34 primary.addSuppressed(suppressed)
+//	39 primary; athrow
+//	41 salida: …
+//
+// Solo se mide el caso de un recurso sin `catch` ni `finally` propios y con un cuerpo que cae: las
+// salidas abruptas y los recursos multiples siguen en el desugaring funcional del parser.
+func (e *emisor) intentaRecurso(v jtry) error {
+	if len(v.atrapas) > 0 || v.finalmente != nil {
+		return fmt.Errorf("linea %d: un try-with-resources con `catch` o `finally` propios no esta medido", v.donde.linea)
+	}
+	r := v.recurso
+	desc, err := e.ctx.descriptorDe(r.tipo)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	if len(desc) < 3 || desc[0] != 'L' || desc[len(desc)-1] != ';' {
+		return fmt.Errorf("linea %d: el recurso %s no es de referencia", v.donde.linea, r.tipo)
+	}
+	dueño := desc[1 : len(desc)-1]
+	accesos, err := e.ctx.accesosDe(dueño)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	opCierre := byte(opInvokevirt)
+	if accesos&accInterface != 0 {
+		opCierre = opInvointf
+	}
+	// la declaración va antes del rango protegido, como en javac
+	if err := e.stm(*r); err != nil {
+		return err
+	}
+	lv, ok := e.locales[r.nombre]
+	if !ok {
+		return fmt.Errorf("linea %d: el recurso %s no quedó en un local", v.donde.linea, r.nombre)
+	}
+	salida := e.nuevaEtiqueta()
+	relanza := e.nuevaEtiqueta()
+
+	inicio := len(e.codigo)
+	if err := e.stm(v.cuerpo); err != nil {
+		return err
+	}
+	fin := len(e.codigo)
+
+	// camino normal: `if (r != null) r.close();` y salto a la salida
+	e.cargaDe(lv.indice, desc)
+	e.saltoEmite(opIFNULL, salida, 1)
+	e.cargaDe(lv.indice, desc)
+	e.invoca(opCierre, dueño, "close", "()V", 1)
+	e.saltoEmite(opGOTO, salida, 0)
+
+	// manejador de la excepcion del cuerpo: la guarda como primaria
+	hPrimary := len(e.codigo)
+	e.marcaLinea(v.lineaAviso)
+	indicePrimary := e.reserva("", "Ljava/lang/Throwable;")
+	e.sube()
+	e.guardaDe(indicePrimary, "Ljava/lang/Throwable;")
+
+	// cierre dentro del rango protegido: si falla, la segunda excepcion es suprimida
+	e.cargaDe(lv.indice, desc)
+	e.saltoEmite(opIFNULL, relanza, 1)
+	inicioCierre := len(e.codigo)
+	e.cargaDe(lv.indice, desc)
+	e.invoca(opCierre, dueño, "close", "()V", 1)
+	finCierre := len(e.codigo)
+	e.saltoEmite(opGOTO, relanza, 0)
+	hClose := len(e.codigo)
+	indiceSuprimida := e.reserva("", "Ljava/lang/Throwable;")
+	e.sube()
+	e.guardaDe(indiceSuprimida, "Ljava/lang/Throwable;")
+	e.cargaDe(indicePrimary, "Ljava/lang/Throwable;")
+	e.cargaDe(indiceSuprimida, "Ljava/lang/Throwable;")
+	e.invoca(opInvokevirt, "java/lang/Throwable", "addSuppressed", "(Ljava/lang/Throwable;)V", 2)
+	e.cierra(relanza)
+	e.marcaLinea(v.lineaCierre)
+	e.cargaDe(indicePrimary, "Ljava/lang/Throwable;")
+	e.emite(0xbf) // athrow
+	e.baja(1)
+
+	e.cierra(salida)
+	e.excepciones = append(e.excepciones,
+		entradaTry{inicio: inicio, fin: fin, handler: hPrimary, tipo: "Ljava/lang/Throwable;"},
+		entradaTry{inicio: inicioCierre, fin: finCierre, handler: hClose, tipo: "Ljava/lang/Throwable;"},
+	)
+	return nil
+}
+
 // intenta: `try { … } catch (T e) { … } [catch …] [finally { … }]`. La forma de javac, medida en el
 // parrafo 71 sobre `T` y en el 75 sobre `Fin`, `Fin2` y `Fin3`: el cuerpo protegido y despues un bloque
 // por camino —cada `catch` con su `astore` de la excepción y su cuerpo—; con `finally` la copia del
@@ -4459,6 +4564,9 @@ func bloqueVacio(s jstmt) bool {
 // que guarda la excepción en un local que nadie mas usa, copia el bloque, y la re-lanza. Las filas de
 // la tabla salen en ese orden: los tipos del try, el `any` del try, y el `any` de cada cuerpo del catch.
 func (e *emisor) intenta(v jtry) error {
+	if v.recurso != nil {
+		return e.intentaRecurso(v)
+	}
 	// un `catch (A | B e)` lleva una entrada por tipo y un solo manejador, con la excepcion guardada
 	// en un local del supertipo comun (§132). Aqui se usa `Throwable` como tipo del hueco: cualquier
 	// excepcion es asignable a el, y el dex no guarda el tipo del local (sus lineas no traen tabla de
@@ -6293,7 +6401,7 @@ func terminaEnSalida(s jstmt) bool {
 		// con `finally`, el ultimo camino que se ejecuta es la copia del bloque: si ella sale (un
 		// `throw`), el constructo sale y javac no escribe el `return` implicito —medido en
 		// `Fin4.vacioConThrowFinal`—. Si no, el constructo cae solo si caen el cuerpo y todos los
-		// `catch`
+		// `catch`. Un try-with-resources cae por el camino normal, así que se mira el cuerpo
 		if v.finalmente != nil && terminaEnSalida(v.finalmente) {
 			return true
 		}

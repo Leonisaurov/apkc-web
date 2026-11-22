@@ -262,7 +262,10 @@ type jtry struct {
 	cuerpo  jstmt
 	atrapas []capturaTry
 	// finalmente es el bloque que se copia en cada camino, o nil si el fuente no lo escribe
-	finalmente  jstmt
+	finalmente jstmt
+	// recurso no es nil en un try-with-resources de un solo recurso: el emisor escribe la forma de
+	// javac con `Throwable.addSuppressed` en vez del desugaring funcional a try/finally
+	recurso     *jdecl
 	lineaAviso  int
 	lineaCierre int
 	donde       pos
@@ -1778,8 +1781,16 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			return nil, false, fmt.Errorf("linea %d: un `try` sin `catch`, `finally` ni recursos no es Java valido", linea)
 		}
 		resultado := jstmt(jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente, lineaAviso: lineaAviso, lineaCierre: lineaCierre, donde: pos{linea}})
-		if len(recursos) > 0 {
-			// los recursos se cierran en orden inverso; cada cierre es un `if (r != null) r.close();`
+		if len(recursos) == 1 {
+			// un solo recurso: el emisor reproduce la forma de javac, que guarda la excepcion del
+			// cuerpo en un local y, si `close()` tambien falla, le/addSuppressed la del cierre
+			return jtry{cuerpo: cuerpo, atrapas: atrapas, finalmente: finalmente,
+				recurso: &recursos[0], lineaAviso: lineaAviso, lineaCierre: lineaCierre,
+				donde: pos{linea}}, true, nil
+		}
+		if len(recursos) > 1 {
+			// mas de un recurso: desugaring funcional a try/finally anidados, sin `addSuppressed`
+			// (frontera documentada en javaemisor_tryresources_test.go)
 			for i := len(recursos) - 1; i >= 0; i-- {
 				nombre := recursos[i].nombre
 				ref := jacceso{nombre: nombre, donde: pos{linea}}
