@@ -23,9 +23,9 @@ con `PREFIX` propio y puertos libres —nunca un entorno compartido con otro gat
 líneas reales (medición completa en `docs/evidencia.md` §202):
 
 ```sh
-PREFIX=$HOME/.cache/apkc-web-final sh tools/entorno.sh gate
+PREFIX=$HOME/.cache/apkc-web-clicker-final sh tools/entorno.sh gate
 # crear: todo en orden (35 comprobaciones)
-# pestaña: 170 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
+# pestaña: 184 comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada
 # e2e: todo en orden
 ```
 
@@ -56,11 +56,15 @@ El recorrido, en el orden en que se hace:
    recarga; el proyecto vive en OPFS y se exporta e importa como `.zip`.
 
 Lo que ese recorrido **no** hace, con su comando o su `§`: ART y Safari reales en CI (§194), el
-host real con truncamiento (§196, §198), los dos advisories del detector de interfaz
-(`INFORMA-SEGURIDAD.md`), el incremental propio para el modo web (`docs/plan-incremental-web.md`,
-pendiente de implementar) y el `android.jar` propio redistribuible (`docs/plan-android-jar-propio.md`,
-J2 sin empezar). Fuera del gate por falta de red: `zipcheck.py` solo si el clon de
-`apkc-harness` está en `$APKC_HARNESS` —sin él `e2e.sh` avisa y omite ese oráculo, no lo finge.
+host real con truncamiento (§196, §198) y los dos advisories del detector de interfaz
+(`INFORMA-SEGURIDAD.md`). El incremental propio (`docs/plan-incremental-web.md`) ya está activo:
+I1 e I2 hechas e I3 hecha en parte, con I4 e I5 pendientes. El `android.jar` propio ya existe y
+tiene un run de GitHub Actions en verde (`docs/plan-android-jar-propio.md`, J4 cerrada); **no se
+usa para compilar en la página**: la pestaña sigue cargando el `android.jar` de la SDK del usuario
+o del servidor (`/android-jar` → `/sdk/android.jar`, 26.361.808 bytes), y el jar generado solo se
+ha probado como oráculo y en el autocompletado (J5 local; J5 en sitio pendiente). Fuera del gate
+por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APKC_HARNESS` —sin él
+`e2e.sh` avisa y omite ese oráculo, no lo finge.
 
 ## Lo que ya se sabe, para no reabrirlo
 
@@ -670,10 +674,12 @@ J2 sin empezar). Fuera del gate por falta de red: `zipcheck.py` solo si el clon 
   con el intérprete, 3 nodos en la plantilla Contador—, el intérprete corre `onCreate` y una
   interacción (43 pasos, `textoDinamico: "Pulsos: 1"` sobre `id/total`) y rechaza por su nombre un
   dex con el payload de `packed-switch` truncado, y `studio/` pinta el modelo en una tercera vista
-  con canvas de solo lectura, vista dividida en el editor, modo «En vivo» que dibuja el layout
-  editado sin enseñar código XML y consola de eventos. Gate en verde con 137 comprobaciones de
-  pestaña aquel día (105 al cerrar §201); el árbol final, con el editor de layout y el emulador
-  integrados, lo cierra §202 con 170. El wasm crece +73 884
+  con canvas de solo lectura, vista dividida en el editor, modo «Vista previa» que dibuja el layout
+  editado sin enseñar código XML y modo «Emulador» con tres secciones independientes (Pulsar,
+  Registro, Consola). El editor de layout permite añadir y arrastrar nodos, editar sus propiedades
+  y configurar la raíz; el emulador acepta clics reales tanto del patrón anónimo como de
+  `android:onClick` en el XML (§203). Gate en verde con 184 comprobaciones de pestaña sobre el árbol
+  reconciliado (105 al cerrar §201, 170 al cerrar §202). El wasm crece +73 884
   B por el lector y +365 037 B por el intérprete. Fronteras: aproximación declarada, sin `gravity`
   fino, imágenes ni tema, ids del framework como `@0x01030042`, e intérprete sin JNI, `.so`,
   multidex ni excepciones. Nada de WineDroid (GPL): es código propio MIT.

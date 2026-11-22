@@ -9225,3 +9225,37 @@ han empaquetado ni publicado (`tools/entorno.sh sitio` + `surge . publish` queda
 Entrar en Pantalla repinta el último modelo y un modelo que no viene de un clic reinicia la lista de
 pulsos: el primer toque en el teléfono grande arranca en «Pulsos: 1» aunque antes se hubiera pulsado
 en el panel.
+
+## 204. Árbol reconciliado: estado real del gate y del `android.jar`
+
+Medido el 2026-11-22 sobre `web` @ `2c6d4a9`, tras integrar uno por uno el Clicker (§203), el
+incremental (`--inc`), el plan de dependencias y la corrección documental del workflow del jar.
+
+```sh
+mkdir -p $HOME/.cache/apkc-web-clicker-final/tmp
+HOME_APKC_WEB=$HOME CHROME_BIN=/usr/bin/chromium GOGC=50 GOMAXPROCS=2 \
+  APKC_HARNESS=$HOME/.cache/apkc-web/apkc-harness \
+  PREFIX=$HOME/.cache/apkc-web-clicker-final \
+  STUDIO_SERVIDOR_PORT=9041 STUDIO_PORT=9541 STUDIO_NAV_PORT=9042 \
+  STUDIO_CREAR_PORT=9043 STUDIO_CREAR_CDP=9542 \
+  tcr -c 2 -m 2G -r 400M -- sh tools/entorno.sh gate
+```
+
+**Resultado**: `crear: todo en orden (35 comprobaciones)`, `pestaña: 184 comprobaciones`,
+`e2e: todo en orden`, rc 0. Suite nativa `ok github.com/ajinasokan/apkc 54.149s` y suite wasm
+`PASS` (274 ficheros en memoria simulada). `git merge-base --is-ancestor origin/web HEAD` da 0 y
+`git rev-list --count HEAD..origin/web` da 0: el rebase no perdió los 9 commits remotos.
+
+**Qué usa la página para compilar**: el `android.jar` de la SDK, **no el generado**.
+`curl http://127.0.0.1:8790/android-jar-info` → `{"disponible":true,"version":34,"bytes":26361808}`
+y `studio/pestana.js:2052` fija `RUTA_JAR = "/sdk/android.jar"`, que el servidor sirve desde el
+SDK local. El jar generado por `tools/androidjar/` (run
+<https://github.com/Leonisaurov/apkc-web/actions/runs/45062792689>, artifact
+`e2ddfb55…c8827` / `817171a3…41952c`) se ha usado como oráculo de `apkc compile`/`build` y en la
+comprobación J5 del autocompletado (171 comprobaciones en local), pero **no está cableado en la
+carga normal de la pestaña**. J5 en sitio publicado sigue pendiente; el sitio sigue con la build
+anterior.
+
+**Frontera**: este párrafo no afirma CI verde aparte del run real citado, ni render fiel, ni
+paridad con ART en dispositivo; el incremental queda con I1/I2 hechas e I3 hecha en parte, I4 e I5
+pendientes.
