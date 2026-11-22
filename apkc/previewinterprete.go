@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf16"
 )
 
 const (
@@ -133,14 +134,18 @@ type marcaAncha struct{}
 
 // objetoDalvik es una instancia: su clase, sus campos (con la clave dueño.nombre, para que un campo
 // heredado no se confunda con otro), el id de recurso si vino de `findViewById`, el texto que ya se
-// le puso y el listener que se registró sobre una view.
+// le puso, la etiqueta de `setTag` y el listener que se registró sobre una view.
 type objetoDalvik struct {
 	clase  string
 	campos map[string]any
 	id     uint32
 	texto  string
-	cadena *strings.Builder
-	oyente any
+	// textoEscrito dice que alguien llamó a `setText`/`append` sobre esta vista: con eso la siembra
+	// del layout no pisa un texto vacío que la app escribió a propósito
+	textoEscrito bool
+	tag          any
+	cadena       *strings.Builder
+	oyente       any
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -300,6 +305,10 @@ type maquinaDalvik struct {
 	// las vistas que `findViewById` ya devolvió, por id: un `android:onClick` recibe la misma
 	// instancia que la app tocó, no una copia con el id puesto
 	vistas map[uint32]*objetoDalvik
+	// el `android:text` que el layout declara para cada id, por si la vista se crea después del
+	// inflado (un `findViewById` dentro del `onClick`, por ejemplo): el framework no devuelve una
+	// vista vacía, devuelve la que ya trae su texto
+	textosDeLayout map[uint32]string
 }
 
 type oyenteRegistrado struct {
@@ -313,6 +322,41 @@ type oyenteRegistrado struct {
 func nuevaMaquina(p *programaDalvik, tabla *tablaRecursos) *maquinaDalvik {
 	return &maquinaDalvik{prog: p, tabla: tabla, vistos: map[string]bool{},
 		vistas: map[uint32]*objetoDalvik{}}
+}
+
+// siembraTextosDelLayout deja en la máquina el `android:text` que el layout declara para cada id y
+// lo copia a las vistas que ya se habían pedido con `findViewById`: el inflado entrega la vista con
+// su texto puesto, no vacía. Solo rellena las que nadie escribió, porque una vista a la que el
+// `onCreate` ya le puso texto —aunque sea vacío— no puede volver al del layout.
+func (m *maquinaDalvik) siembraTextosDelLayout(textos map[uint32]string) {
+	if len(textos) == 0 {
+		return
+	}
+	m.textosDeLayout = textos
+	for id, vista := range m.vistas {
+		if !vista.textoEscrito {
+			vista.texto = textos[id]
+		}
+	}
+}
+
+// vista devuelve la vista que ese id ya tiene o la crea como la dejaría el inflado: la clase genérica
+// de View y el `android:text` que el layout declare para ese id. El id 0 no se registra: no es una
+// vista del layout y no se puede volver a encontrar.
+func (m *maquinaDalvik) vista(id uint32) *objetoDalvik {
+	if id == 0 {
+		return &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{}}
+	}
+	if v := m.vistas[id]; v != nil {
+		return v
+	}
+	v := &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{}, id: id,
+		texto: m.textosDeLayout[id]}
+	if m.vistas == nil {
+		m.vistas = map[uint32]*objetoDalvik{}
+	}
+	m.vistas[id] = v
+	return v
 }
 
 func (m *maquinaDalvik) avisa(formato string, args ...any) {
@@ -330,6 +374,7 @@ func (m *maquinaDalvik) captura(origen string, obj *objetoDalvik, texto string) 
 	c := capturaTexto{Origen: origen, Texto: texto}
 	if obj != nil {
 		obj.texto = texto
+		obj.textoEscrito = true
 		if obj.id != 0 {
 			c.IDRef = fmt.Sprintf("%#08x", obj.id)
 			if m.tabla != nil {
@@ -369,6 +414,21 @@ func (m *maquinaDalvik) anotaConsola(origen, texto string) {
 	m.consola = append(m.consola, lineaConsola{Origen: origen, Texto: texto, Secuencia: len(m.consola) + 1})
 }
 
+// textoDeId resuelve un id de recurso de tipo cadena contra la tabla: es lo que el framework hace
+// con `@string/x`. El segundo valor dice si el id era de verdad una cadena de este paquete; con
+// otro tipo (o sin tabla) no hay texto que devolver.
+func (m *maquinaDalvik) textoDeId(v any) (string, bool) {
+	id, ok := v.(int32)
+	if !ok || m.tabla == nil {
+		return "", false
+	}
+	enlace, ok := m.tabla.valorDeId(uint32(id))
+	if !ok || enlace.tipo != tipoCadena || int(enlace.datos) >= len(m.tabla.global.cadenas) {
+		return "", false
+	}
+	return m.tabla.global.cadenas[enlace.datos], true
+}
+
 // textoDe es cómo un stub imprime un valor: lo que haría `String.valueOf`.
 func textoDe(v any) string {
 	switch x := v.(type) {
@@ -387,6 +447,11 @@ func textoDe(v any) string {
 	case float64:
 		return strconv.FormatFloat(x, 'g', -1, 64)
 	case *objetoDalvik:
+		// una cadena del intérprete se imprime vacía si está vacía: devolver el nombre de la clase
+		// («java.lang.String») es lo que hacía que un `"" + getText()` se leyera como la clase
+		if x.clase == "Ljava/lang/String;" || x.clase == "Ljava/lang/CharSequence;" {
+			return x.texto
+		}
 		if x.texto != "" {
 			return x.texto
 		}
@@ -401,6 +466,37 @@ func textoDe(v any) string {
 func claseCorta(descriptor string) string {
 	s := strings.TrimSuffix(strings.TrimPrefix(descriptor, "L"), ";")
 	return strings.ReplaceAll(s, "/", ".")
+}
+
+// cadenaDe devuelve el texto de un receptor de cadena: un literal del dex o un objeto String que
+// devolvió un stub (`getText`, `getString`, `toString`). Es lo que comparten `length`, `charAt`,
+// `equals` e `isEmpty`.
+func cadenaDe(v any) (string, bool) {
+	switch x := v.(type) {
+	case string:
+		return x, true
+	case *objetoDalvik:
+		if x.clase == "Ljava/lang/String;" || x.clase == "Ljava/lang/CharSequence;" {
+			return x.texto, true
+		}
+	}
+	return "", false
+}
+
+// unidadesDeCadena es la cadena en unidades de 16 bits, que es lo que cuentan `length()` y
+// `charAt()`: ni bytes ni runes. «á» es una unidad y dos bytes, y un emoji son dos unidades.
+func unidadesDeCadena(s string) []uint16 { return utf16.Encode([]rune(s)) }
+
+// esReflexion dice si alguno de los candidatos es de reflexión (java.lang.Class o su paquete
+// java.lang.reflect): ahí el intérprete no puede saber qué se va a llamar, así que se rechaza por
+// nombre.
+func esReflexion(candidatos []string) bool {
+	for _, c := range candidatos {
+		if c == "Ljava/lang/Class;" || strings.HasPrefix(c, "Ljava/lang/reflect/") {
+			return true
+		}
+	}
+	return false
 }
 
 // ejecutaOnCreate carga el programa y corre la actividad, sin pulsar nada. Es el camino de siempre:
@@ -619,14 +715,7 @@ func (m *maquinaDalvik) registraOnClickDeclarativo(id uint32, nombre string) str
 		return fmt.Sprintf("android:onClick=%q y %s no tiene %s(View)", nombre,
 			claseCorta(m.actividad.clase), nombre)
 	}
-	vista := m.vistas[id]
-	if vista == nil {
-		vista = &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{}, id: id}
-		if m.vistas == nil {
-			m.vistas = map[uint32]*objetoDalvik{}
-		}
-		m.vistas[id] = vista
-	}
+	vista := m.vista(id)
 	m.oyentes = append(m.oyentes, oyenteRegistrado{oyente: m.actividad, vista: vista, metodo: nombre})
 	return ""
 }
@@ -1563,6 +1652,19 @@ func (m *maquinaDalvik) stubSinCuerpo(clase string, met *metodoDalvik, args []an
 	return valorCero(met.retorno), nil
 }
 
+// rechaza deja el aviso de una API que el intérprete NO emula y devuelve su cero. Se usa para las
+// que no tienen una aproximación honesta (formato, Editable/Spannable, reflexión): el aviso dice el
+// nombre y el motivo, y el cero hace que la app se pare donde el valor nulo la pare, en vez de
+// seguir con un dato inventado.
+func (m *maquinaDalvik) rechaza(nombre, proto, motivo, retorno string) (any, bool, error) {
+	if retorno != "" {
+		m.avisa("%s%s: %s; se devuelve el cero de %s", nombre, proto, motivo, retorno)
+	} else {
+		m.avisa("%s%s: %s", nombre, proto, motivo)
+	}
+	return valorCero(retorno), true, nil
+}
+
 // intentaStub resuelve las llamadas de framework que la app toca. `candidatos` son las clases por
 // las que se busca (la del objeto, la que declara el método); los sufijos bastan porque lo que
 // distingue un `setText` es el nombre y su firma, no la jerarquía entera del framework.
@@ -1576,6 +1678,14 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			}
 		}
 		return false
+	}
+	// las clases a las que se les reconoce texto y etiqueta de view: la View genérica que crea
+	// `findViewById` (que un `check-cast` especializa) y los widgets que heredan de TextView
+	esVista := func() bool {
+		return es("Landroid/view/View;", "Landroid/widget/TextView;", "Landroid/widget/Button;",
+			"Landroid/widget/EditText;", "Landroid/widget/CheckBox;", "Landroid/widget/Switch;",
+			"Landroid/widget/ImageView;", "Landroid/widget/LinearLayout;",
+			"Landroid/widget/FrameLayout;", "Landroid/widget/RelativeLayout;")
 	}
 	obj, _ := receptor.(*objetoDalvik)
 
@@ -1613,18 +1723,7 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			if err != nil {
 				return nil, true, err
 			}
-			if vista := m.vistas[uint32(id)]; vista != nil {
-				return vista, true, nil
-			}
-			vista := &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{},
-				id: uint32(id)}
-			if m.vistas == nil {
-				m.vistas = map[uint32]*objetoDalvik{}
-			}
-			if id != 0 {
-				m.vistas[uint32(id)] = vista
-			}
-			return vista, true, nil
+			return m.vista(uint32(id)), true, nil
 		}
 	case "setOnClickListener":
 		if len(vals) == 1 {
@@ -1641,14 +1740,88 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			// `setText(R.string.x)` llega como su número: se resuelve contra la tabla, que es lo
 			// que el layout hace con `@string/x`. Un literal cualquiera no cae aquí porque la
 			// tabla solo resuelve ids de SU paquete.
-			if id, ok := vals[0].(int32); ok && m.tabla != nil {
-				if v, ok := m.tabla.valorDeId(uint32(id)); ok && v.tipo == tipoCadena &&
-					int(v.datos) < len(m.tabla.global.cadenas) {
-					texto = m.tabla.global.cadenas[v.datos]
-				}
+			if resuelto, ok := m.textoDeId(vals[0]); ok {
+				texto = resuelto
 			}
 			m.captura("TextView.setText", obj, texto)
 			return nil, true, nil
+		}
+	case "getText":
+		// `TextView.getText()` devuelve el CharSequence que la vista tiene AHORA, que es lo que
+		// `setText` escribió en `obj.texto` o lo que el layout declaró. Se devuelve un objeto nuevo
+		// de clase String y no la vista: si se devolviera la vista, el `append` de la concatenación
+		// le escribiría en su `cadena` y mezclaría el texto de la vista con el del StringBuilder.
+		// Con un objeto aparte, cada llamada lleva su propio estado y `toString` lo lee tal cual. La
+		// identidad no se reproduce —dos `getText()` no son el mismo objeto, como sí lo son en el
+		// framework—; el texto sí, que es lo que se puede medir en una pantalla.
+		if len(vals) == 0 && obj != nil && esVista() {
+			return &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{},
+				texto: obj.texto}, true, nil
+		}
+	case "append":
+		// dos `append` distintos: el de StringBuilder, que es el que emite el `+` de javac, y el
+		// de TextView, que añade al texto de la vista. Se distinguen por la clase del receptor.
+		if len(vals) == 1 && obj != nil {
+			if esVista() {
+				m.captura("TextView.append", obj, obj.texto+textoDe(vals[0]))
+				return nil, true, nil
+			}
+			if obj.cadena == nil {
+				obj.cadena = &strings.Builder{}
+			}
+			obj.cadena.WriteString(textoDe(vals[0]))
+			return obj, true, nil
+		}
+	case "getString":
+		// `getString(R.string.x)` lo resuelve la actividad contra la tabla. El dueño del invoke es
+		// la clase de la actividad (el emisor no escribe `android/content/Context;`), así que se
+		// reconoce por el receptor y no por el nombre de la clase.
+		if len(vals) == 1 && obj != nil && obj == m.actividad {
+			texto, ok := m.textoDeId(vals[0])
+			if !ok {
+				return nil, true, fmt.Errorf("getString(%s): la tabla no resuelve ese id como una cadena",
+					textoDe(vals[0]))
+			}
+			return &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{},
+				texto: texto}, true, nil
+		}
+		if len(vals) > 1 && obj != nil && obj == m.actividad {
+			// con argumentos es formato (`getString(id, args)`), y el formato de cadenas no está
+			// en el subconjunto: se dice por su nombre en vez de devolver el texto sin sustituir
+			return m.rechaza(nombre, proto, "el formato de cadenas de getString no está en el subconjunto",
+				"Ljava/lang/String;")
+		}
+	case "getId":
+		if len(vals) == 0 && obj != nil {
+			return int32(obj.id), true, nil
+		}
+	case "setTag":
+		if len(vals) == 1 && obj != nil && esVista() {
+			obj.tag = vals[0]
+			return nil, true, nil
+		}
+	case "getTag":
+		// la etiqueta puede no estar puesta y entonces el framework devuelve null: aquí también,
+		// porque encadenar `getTag().toString()` sin mirarla revienta igual en el aparato
+		if len(vals) == 0 && obj != nil && esVista() {
+			return obj.tag, true, nil
+		}
+	case "getEditableText":
+		if obj != nil && esVista() {
+			return m.rechaza(nombre, proto,
+				"Editable y Spannable no están en el subconjunto: solo se emula texto plano",
+				"Landroid/text/Editable;")
+		}
+	case "fromHtml":
+		if es("Landroid/text/Html;") {
+			return m.rechaza(nombre, proto,
+				"el formato con Html no está en el subconjunto: solo se emula texto plano",
+				"Landroid/text/Spanned;")
+		}
+	case "forName", "getMethod", "getDeclaredMethod", "newInstance", "invoke":
+		if esReflexion(candidatos) {
+			return m.rechaza(nombre, proto,
+				"la reflexión no está en el subconjunto", "")
 		}
 	case "setTitle":
 		if len(vals) == 1 && es("Landroid/app/Activity;") {
@@ -1659,20 +1832,42 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 0 && es("Ljava/lang/StringBuilder;") && obj != nil && obj.cadena != nil {
 			return obj.cadena.String(), true, nil
 		}
+		// un String devuelto por `getText`/`getString` se convierte en su texto aunque esté vacío:
+		// el `textoDe` de más abajo devolvería el nombre de la clase, que es lo que hacía que un
+		// «toString» de una cadena vacía se leyera como «java.lang.String»
+		if len(vals) == 0 {
+			if s, ok := cadenaDe(receptor); ok {
+				return s, true, nil
+			}
+		}
 		if len(vals) == 0 && obj != nil {
 			return textoDe(obj), true, nil
-		}
-	case "append":
-		if len(vals) == 1 && obj != nil {
-			if obj.cadena == nil {
-				obj.cadena = &strings.Builder{}
-			}
-			obj.cadena.WriteString(textoDe(vals[0]))
-			return obj, true, nil
 		}
 	case "length":
 		if len(vals) == 0 && es("Ljava/lang/StringBuilder;") && obj != nil && obj.cadena != nil {
 			return int32(obj.cadena.Len()), true, nil
+		}
+		// `length()` de String y de CharSequence cuenta unidades de 16 bits, no bytes: «á» es una
+		// unidad y dos bytes
+		if len(vals) == 0 {
+			if s, ok := cadenaDe(receptor); ok {
+				return int32(len(unidadesDeCadena(s))), true, nil
+			}
+		}
+	case "isEmpty":
+		if len(vals) == 0 {
+			if s, ok := cadenaDe(receptor); ok {
+				return boolAInt(s == ""), true, nil
+			}
+		}
+	case "equals":
+		// el `equals` de String compara contenido; con cualquier otra cosa (o con null) es falso,
+		// que es lo que dice su contrato
+		if len(vals) == 1 {
+			if s, ok := cadenaDe(receptor); ok {
+				otro, esCadena := cadenaDe(vals[0])
+				return boolAInt(esCadena && s == otro), true, nil
+			}
 		}
 	case "d", "i", "w", "e", "v", "wtf":
 		if es("Landroid/util/Log;") {
@@ -1706,16 +1901,20 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return int32(n), true, nil
 		}
 	case "charAt":
-		if len(vals) == 1 && es("Ljava/lang/String;") {
+		if len(vals) == 1 && es("Ljava/lang/String;", "Ljava/lang/CharSequence;") {
 			i, err := aInt32(vals[0])
 			if err != nil {
 				return nil, true, err
 			}
-			s, ok := receptor.(string)
-			if !ok || int(i) < 0 || int(i) >= len(s) {
+			s, ok := cadenaDe(receptor)
+			if !ok {
+				return nil, true, fmt.Errorf("charAt sobre un receptor que no es una cadena")
+			}
+			unidades := unidadesDeCadena(s)
+			if int(i) < 0 || int(i) >= len(unidades) {
 				return nil, true, fmt.Errorf("charAt con el índice %d fuera de la cadena", i)
 			}
-			return int32(s[i]), true, nil
+			return int32(unidades[i]), true, nil
 		}
 	}
 	return nil, false, nil

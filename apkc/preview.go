@@ -311,7 +311,7 @@ func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulso
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
 				var errPulsos error
 				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreatePreparando(d, tabla, preferida, pulsos,
-					func(m *maquinaDalvik) { enlazaOnClicksDelLayout(m, zr, tabla, layout) })
+					func(m *maquinaDalvik) { preparaVistasDelLayout(m, zr, tabla, layout) })
 				if errPulsos != nil {
 					return nil, errPulsos
 				}
@@ -374,12 +374,15 @@ func descriptorDeActividad(paquete, nombre string) string {
 	return "L" + strings.ReplaceAll(nombre, ".", "/") + ";"
 }
 
-// enlazaOnClicksDelLayout recorre el layout que la app pidió con `setContentView` y registra cada
-// `android:onClick`: el inflado del framework resuelve el nombre contra el contexto de la vista (la
-// actividad) y deja el listener puesto. Sin esto, una app que declara el clic en el XML —el patrón
-// de los contadores de tutorial, `android:onClick="sumar"`— se ejecutaba con `oyentes` vacío y el
-// emulador no tenía a quién pulsar, aunque la app funcionara en el aparato.
-func enlazaOnClicksDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecursos, layout string) {
+// preparaVistasDelLayout lee el layout que la app pidió con `setContentView` y deja la máquina como
+// la dejaría el inflado: cada vista con su `android:text` y cada `android:onClick` registrado. El
+// texto se siembra porque `findViewById` devuelve la vista que ya lo trae, no una vacía: sin eso,
+// `getText()` sobre `id/total` devolvía "" y el primer `total.getText().toString()` del onClick
+// empezaba la cuenta en «, 1». El clic declarado se enlaza aquí porque el inflado resuelve el nombre
+// contra el contexto de la vista (la actividad); sin esto, una app que declara el clic en el XML —el
+// patrón de los contadores de tutorial— se ejecutaba con `oyentes` vacío y el emulador no tenía a
+// quién pulsar, aunque la app funcionara en el aparato.
+func preparaVistasDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecursos, layout string) {
 	if m == nil {
 		return
 	}
@@ -400,12 +403,23 @@ func enlazaOnClicksDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecur
 	if err != nil {
 		return
 	}
+	textos := map[uint32]string{}
 	var recorre func(*elementoLeido)
 	recorre = func(e *elementoLeido) {
 		// los hijos primero: el orden en que se enlazan no cambia el resultado, pero deja el registro
 		// con las vistas de dentro antes que su contenedor, como las recorre el inflado
 		for _, h := range e.hijos {
 			recorre(h)
+		}
+		id, conID := e.atributo(uriDeRecursos, "id")
+		if conID && id.datos != 0 {
+			// el texto se resuelve igual que en el modelo: un literal del pool del AXML o una
+			// referencia a `@string/x` de la tabla
+			if texto, ok := e.atributo(uriDeRecursos, "text"); ok {
+				if resuelto := ctx.texto(texto); resuelto != "" {
+					textos[id.datos] = resuelto
+				}
+			}
 		}
 		valor, ok := e.atributo(uriDeRecursos, "onClick")
 		if !ok {
@@ -415,8 +429,7 @@ func enlazaOnClicksDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecur
 		if metodo == "" {
 			return
 		}
-		id, ok := e.atributo(uriDeRecursos, "id")
-		if !ok || id.datos == 0 {
+		if !conID || id.datos == 0 {
 			m.avisa("android:onClick=%q en un %s sin android:id: un clic no puede llegar a una vista sin id",
 				metodo, e.nombre)
 			return
@@ -426,16 +439,19 @@ func enlazaOnClicksDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecur
 		}
 	}
 	recorre(raiz)
+	m.siembraTextosDelLayout(textos)
 }
 
 // anotaTextoDinamico copia a cada nodo la última escritura que el intérprete capturó sobre su id.
-// El match es por el id de recurso, que es lo que comparten el layout y el `findViewById`.
+// El match es por el id de recurso, que es lo que comparten el layout y el `findViewById`. Cuenta
+// tanto `setText` como `append`, porque las dos cambian lo que la pantalla enseña.
 func anotaTextoDinamico(n *nodoVista, ejecucion *resultadoEjecucion) {
 	if n == nil || ejecucion == nil {
 		return
 	}
 	for _, c := range ejecucion.Capturas {
-		if c.IDRef == "" || c.IDRef != n.IDRef || c.Origen != "TextView.setText" {
+		if c.IDRef == "" || c.IDRef != n.IDRef ||
+			(c.Origen != "TextView.setText" && c.Origen != "TextView.append") {
 			continue
 		}
 		n.TextoDinamico = c.Texto

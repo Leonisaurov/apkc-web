@@ -1149,3 +1149,289 @@ func TestElPreviewEnlazaElOnClickDeclarativoDelLayout(t *testing.T) {
 		t.Errorf("el aviso no nombra el método que falta: %v", sinOyente.Ejecucion.Avisos)
 	}
 }
+
+// fuenteGetTextDelUsuario es el onClick que falló en el aparato del usuario, con el paquete del
+// fixture: la cadena que la vista ya tenía («Pulsos: 0») se concatena con el contador, y el texto se
+// lee con `getText().toString()`, no con un campo. Antes de este arreglo, `getText` no era stub y el
+// onClick se paraba en «se llamó a java.lang.CharSequence.toString sobre un objeto nulo».
+const fuenteGetTextDelUsuario = `package com.hola.contador;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    int pulsos = 0;
+    TextView total;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pulsos = pulsos + 1;
+                total.setText(total.getText().toString() + ", " + pulsos);
+                System.out.println("Hice click");
+            }
+        });
+    }
+}
+`
+
+// textosDeLasCapturas devuelve solo lo que escribió la app sobre una vista, en orden.
+func textosDeLasCapturas(ejecucion *resultadoEjecucion) []string {
+	if ejecucion == nil {
+		return nil
+	}
+	textos := []string{}
+	for _, c := range ejecucion.Capturas {
+		if c.Origen == "TextView.setText" || c.Origen == "TextView.append" {
+			textos = append(textos, c.Texto)
+		}
+	}
+	return textos
+}
+
+// TestElInterpreteGetTextDevuelveElTextoActual es el fallo medido sobre el fuente del usuario:
+// `total.getText().toString()` tiene que devolver el texto que la vista ya trae del layout
+// («Pulsos: 0») y no "", y la segunda pulsación tiene que acumular sobre lo que dejó la primera. El
+// clic no deja avisos y su `System.out.println` sigue llegando a la consola.
+func TestElInterpreteGetTextDevuelveElTextoActual(t *testing.T) {
+	apk := apkDelContador(t,
+		fuenteJava{nombre: "R.java", contenido: rContador(t)},
+		fuenteJava{nombre: "MainActivity.java", contenido: fuenteGetTextDelUsuario})
+
+	uno, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar"})
+	if err != nil {
+		t.Fatalf("el clic en id/pulsar falló: %v", err)
+	}
+	if avisos := uno.Ejecucion.Avisos; len(avisos) != 0 {
+		t.Fatalf("un clic con el fuente del usuario deja avisos: %v", avisos)
+	}
+	if got := textosDeLasCapturas(uno.Ejecucion); len(got) != 1 || got[0] != "Pulsos: 0, 1" {
+		t.Fatalf("las escrituras del primer clic son %v y se esperaba «Pulsos: 0, 1»", got)
+	}
+	if len(uno.Ejecucion.Capturas) == 0 || uno.Ejecucion.Capturas[0].ID != "id/total" {
+		t.Errorf("la captura no es de id/total: %+v", uno.Ejecucion.Capturas)
+	}
+	if len(uno.Ejecucion.Consola) != 1 || uno.Ejecucion.Consola[0].Texto != "Hice click" {
+		t.Errorf("la consola del clic es %+v y se esperaba «Hice click»", uno.Ejecucion.Consola)
+	}
+	if uno.Raiz == nil || len(uno.Raiz.Hijos) == 0 || uno.Raiz.Hijos[0].TextoDinamico != "Pulsos: 0, 1" {
+		t.Errorf("el nodo de id/total no enseña el texto nuevo: %+v", uno.Raiz)
+	}
+
+	// el segundo clic parte de lo que dejó el primero: el estado de la vista es el real, no el del
+	// layout
+	dos, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar", "id/pulsar"})
+	if err != nil {
+		t.Fatalf("los dos clics fallaron: %v", err)
+	}
+	if got := textosDeLasCapturas(dos.Ejecucion); len(got) != 2 || got[1] != "Pulsos: 0, 1, 2" {
+		t.Fatalf("las escrituras de dos clics son %v y se esperaba la segunda «Pulsos: 0, 1, 2»", got)
+	}
+	if len(dos.Ejecucion.Consola) != 2 || dos.Ejecucion.Consola[1].Texto != "Hice click" {
+		t.Errorf("la consola de dos clics es %+v", dos.Ejecucion.Consola)
+	}
+}
+
+// maquinaDelContador arma una máquina con la tabla del Contador y una actividad, que es lo que
+// necesitan los stubs que resuelven ids o se reconocen por el receptor. No hace falta dex: los
+// stubs no lo miran.
+func maquinaDelContador(t *testing.T) *maquinaDalvik {
+	t.Helper()
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	tabla, err := leeTabla(arsc)
+	if err != nil {
+		t.Fatalf("la tabla no se relee: %v", err)
+	}
+	m := nuevaMaquina(&programaDalvik{dex: &dexFile{}, clases: map[string]*claseDalvik{}}, tabla)
+	m.actividad = &objetoDalvik{clase: "Lcom/hola/contador/MainActivity;", campos: map[string]any{}}
+	return m
+}
+
+// TestLosStubsDelInventarioDevuelvenElEstadoDeLaVista es la tabla de lo que el inventario del
+// intérprete dice que una app de contador usa: cada entrada es la llamada que emite el dex y lo que
+// tiene que devolver. Ninguna deja aviso: o se atiende con el estado real (el texto de la vista, su
+// id, su etiqueta), o está mal y el test lo dice.
+func TestLosStubsDelInventarioDevuelvenElEstadoDeLaVista(t *testing.T) {
+	m := maquinaDelContador(t)
+	vista := m.vista(0x7f010001)
+	vista.clase = "Landroid/widget/TextView;"
+	vista.texto = "Pulsos: 3"
+
+	vistaCandidatos := []string{"Landroid/widget/TextView;", "Landroid/view/View;"}
+	cadenaCandidatos := []string{"Ljava/lang/String;", "Ljava/lang/CharSequence;"}
+	llama := func(candidatos []string, nombre, proto string, vals []any, receptor any) any {
+		t.Helper()
+		v, ok, err := m.intentaStub(candidatos, nombre, proto, vals, receptor)
+		if err != nil {
+			t.Fatalf("%s: %v", nombre, err)
+		}
+		if !ok {
+			t.Fatalf("%s no lo atiende ningún stub", nombre)
+		}
+		return v
+	}
+
+	texto := llama(vistaCandidatos, "getText", "()Ljava/lang/CharSequence;", nil, vista)
+	devuelto, ok := texto.(*objetoDalvik)
+	if !ok || devuelto == vista {
+		t.Fatalf("getText devolvió %#v y tenía que ser un objeto aparte de la vista", texto)
+	}
+	if devuelto.clase != "Ljava/lang/String;" || devuelto.texto != "Pulsos: 3" {
+		t.Errorf("getText devolvió %q de clase %q", devuelto.texto, devuelto.clase)
+	}
+
+	if got := llama(cadenaCandidatos, "toString", "()Ljava/lang/String;", nil, devuelto); got != "Pulsos: 3" {
+		t.Errorf("toString del getText es %v", got)
+	}
+	// una cadena vacía se lee como "", no como el nombre de su clase
+	vacia := &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{}}
+	if got := llama(cadenaCandidatos, "toString", "()Ljava/lang/String;", nil, vacia); got != "" {
+		t.Errorf("toString de una cadena vacía es %q", got)
+	}
+	if got := llama(cadenaCandidatos, "length", "()I", nil, devuelto); got != int32(9) {
+		t.Errorf("length de «Pulsos: 3» es %v", got)
+	}
+	// length cuenta unidades de 16 bits: «á» es una, no dos bytes
+	acentuada := &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{}, texto: "á"}
+	if got := llama(cadenaCandidatos, "length", "()I", nil, acentuada); got != int32(1) {
+		t.Errorf("length de «á» es %v y tiene que ser 1", got)
+	}
+	if got := llama(cadenaCandidatos, "charAt", "(I)C", []any{int32(0)}, devuelto); got != int32('P') {
+		t.Errorf("charAt(0) es %v", got)
+	}
+	if _, ok, err := m.intentaStub(cadenaCandidatos, "charAt", "(I)C", []any{int32(99)}, devuelto); err == nil || !ok {
+		t.Errorf("charAt fuera de la cadena no dio error: ok=%v err=%v", ok, err)
+	}
+	if got := llama(cadenaCandidatos, "isEmpty", "()Z", nil, vacia); got != boolAInt(true) {
+		t.Errorf("isEmpty de \"\" es %v", got)
+	}
+	if got := llama(cadenaCandidatos, "isEmpty", "()Z", nil, devuelto); got != boolAInt(false) {
+		t.Errorf("isEmpty de «Pulsos: 3» es %v", got)
+	}
+	if got := llama(cadenaCandidatos, "equals", "(Ljava/lang/Object;)Z", []any{"Pulsos: 3"}, devuelto); got != boolAInt(true) {
+		t.Errorf("equals con el mismo texto es %v", got)
+	}
+	if got := llama(cadenaCandidatos, "equals", "(Ljava/lang/Object;)Z", []any{"otra"}, devuelto); got != boolAInt(false) {
+		t.Errorf("equals con otro texto es %v", got)
+	}
+	if got := llama(cadenaCandidatos, "equals", "(Ljava/lang/Object;)Z", []any{nil}, devuelto); got != boolAInt(false) {
+		t.Errorf("equals con null es %v", got)
+	}
+
+	// getString resuelve el id del recurso contra la tabla, como setText
+	idSaludo, ok := m.tabla.idDeNombre("string", "saludo")
+	if !ok {
+		t.Fatal("la tabla del Contador no tiene string/saludo")
+	}
+	saludo := llama([]string{"Lcom/hola/contador/MainActivity;"}, "getString", "(I)Ljava/lang/String;",
+		[]any{int32(idSaludo)}, m.actividad)
+	if obj, ok := saludo.(*objetoDalvik); !ok || obj.texto != "Hola desde un recurso" {
+		t.Errorf("getString devolvió %#v", saludo)
+	}
+
+	if got := llama(vistaCandidatos, "getId", "()I", nil, vista); got != int32(0x7f010001) {
+		t.Errorf("getId es %v y la vista se creó con 0x7f010001", got)
+	}
+	if got := llama(vistaCandidatos, "getTag", "()Ljava/lang/Object;", nil, vista); got != nil {
+		t.Errorf("getTag sin etiqueta es %v y el framework devuelve null", got)
+	}
+	llama(vistaCandidatos, "setTag", "(Ljava/lang/Object;)V", []any{"marca"}, vista)
+	if got := llama(vistaCandidatos, "getTag", "()Ljava/lang/Object;", nil, vista); got != "marca" {
+		t.Errorf("getTag después de setTag es %v", got)
+	}
+
+	// TextView.append suma al texto de la vista y se captura como una escritura más
+	llama(vistaCandidatos, "append", "(Ljava/lang/CharSequence;)V", []any{"!"}, vista)
+	if vista.texto != "Pulsos: 3!" {
+		t.Errorf("después de append el texto de la vista es %q", vista.texto)
+	}
+	if n := len(m.capturas); n == 0 || m.capturas[n-1].Origen != "TextView.append" ||
+		m.capturas[n-1].Texto != "Pulsos: 3!" {
+		t.Errorf("append no dejó su captura: %+v", m.capturas)
+	}
+
+	// el StringBuilder sigue siendo el de javac: append devuelve el mismo objeto para encadenar
+	sb := &objetoDalvik{clase: "Ljava/lang/StringBuilder;", campos: map[string]any{}}
+	if got := llama([]string{"Ljava/lang/StringBuilder;"}, "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;",
+		[]any{"a"}, sb); got != sb {
+		t.Errorf("append de StringBuilder no devuelve el mismo objeto: %#v", got)
+	}
+	llama([]string{"Ljava/lang/StringBuilder;"}, "append", "(I)Ljava/lang/StringBuilder;",
+		[]any{int32(2)}, sb)
+	if got := llama([]string{"Ljava/lang/StringBuilder;"}, "toString", "()Ljava/lang/String;", nil, sb); got != "a2" {
+		t.Errorf("toString del StringBuilder es %v", got)
+	}
+
+	if len(m.avisos) != 0 {
+		t.Errorf("la tabla de stubs deja avisos: %v", m.avisos)
+	}
+
+	// una cadena vacía se imprime vacía también al concatenar: el nombre de la clase no es su texto
+	if got := textoDe(&objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{}}); got != "" {
+		t.Errorf("textoDe de una cadena vacía es %q", got)
+	}
+}
+
+// TestLaSiembraDelLayoutNoPisaLoQueLaAppEscribio: el `android:text` del layout se copia a las vistas
+// que ya existían, pero no a la que la app ya escribió, aunque lo escrito sea vacío.
+func TestLaSiembraDelLayoutNoPisaLoQueLaAppEscribio(t *testing.T) {
+	m := maquinaDelContador(t)
+	escrita := m.vista(0x7f010001)
+	m.captura("TextView.setText", escrita, "")
+	m.siembraTextosDelLayout(map[uint32]string{0x7f010001: "Pulsos: 0", 0x7f010002: "Del layout"})
+	if escrita.texto != "" {
+		t.Errorf("la siembra pisó un setText(\"\") de la app: queda %q", escrita.texto)
+	}
+	if otra := m.vista(0x7f010002); otra.texto != "Del layout" {
+		t.Errorf("la vista creada después de la siembra arranca en %q", otra.texto)
+	}
+}
+
+// TestElInterpreteRechazaPorNombreLoQueNoEmula fija la otra mitad: lo que no tiene una aproximación
+// honesta (formato de cadenas, Editable/Spannable, Html, reflexión) no se stubbea a medias. El
+// aviso lo nombra y el test comprueba que el nombre y el motivo están.
+func TestElInterpreteRechazaPorNombreLoQueNoEmula(t *testing.T) {
+	m := maquinaDelContador(t)
+	vista := m.vista(0x7f010001)
+	vista.clase = "Landroid/widget/EditText;"
+	casos := []struct {
+		nombre     string
+		proto      string
+		vals       []any
+		candidatos []string
+		receptor   any
+		espera     string
+	}{
+		{"getString", "(I[Ljava/lang/Object;)Ljava/lang/String;", []any{int32(0x7f030000), nil},
+			[]string{"Lcom/hola/contador/MainActivity;"}, m.actividad, "formato de cadenas"},
+		{"getEditableText", "()Landroid/text/Editable;", nil,
+			[]string{"Landroid/widget/EditText;", "Landroid/widget/TextView;"}, vista, "Editable y Spannable"},
+		{"fromHtml", "(Ljava/lang/String;)Landroid/text/Spanned;", []any{"<b>x</b>"},
+			[]string{"Landroid/text/Html;"}, nil, "Html"},
+		{"forName", "(Ljava/lang/String;)Ljava/lang/Class;", []any{"java.lang.String"},
+			[]string{"Ljava/lang/Class;"}, nil, "reflexión"},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			m.avisos = nil
+			m.vistos = map[string]bool{}
+			_, ok, err := m.intentaStub(c.candidatos, c.nombre, c.proto, c.vals, c.receptor)
+			if err != nil || !ok {
+				t.Fatalf("%s se rechaza con aviso, no con error: ok=%v err=%v", c.nombre, ok, err)
+			}
+			if len(m.avisos) != 1 || !strings.Contains(m.avisos[0], c.nombre) ||
+				!strings.Contains(m.avisos[0], c.espera) {
+				t.Errorf("el aviso de %s es %v y tenía que nombrarlo con %q", c.nombre, m.avisos, c.espera)
+			}
+		})
+	}
+}
