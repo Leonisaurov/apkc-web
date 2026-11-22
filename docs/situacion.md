@@ -614,3 +614,7 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   sitio local y host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado.
   Para seguir, lee primero §194 (deuda), §197 (carga y caché) y §198 (comandos de reproducción); el
   inventario de la Fase 5 y la tabla de estados de `docs/plan.md` ya incluyen esta tanda.
+- **Objetivo próximo: vista previa del APK** (`docs/plan-vista-previa.md`): la propuesta del usuario
+  se naturalizó sobre el estado de §198 —cifras reales del binario, comandos con las rutas actuales,
+  lector DEX del fork reutilizado y restricciones R1-R8— y quedó como fila 7 de la tabla de estados
+  de `docs/plan.md`. Fase 0 hecha; fases 1-4 pendientes y sin medir.
