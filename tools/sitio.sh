@@ -94,6 +94,11 @@ csp = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + " ".join(ha
        "base-uri 'none'; frame-ancestors 'none'")
 sw = raiz / "sw.js"
 sw.write_text(sw.read_text().replace("__APKC_CSP__", csp))
+# B1: mientras el SW no controla, la primera navegación no tiene cabeceras. Un <meta> con la
+# misma política (menos frame-ancestors, que no es válido en meta) cubre esa ventana.
+meta_csp = csp.replace("; frame-ancestors 'none'", "")
+html = html.replace("<head>", '<head>\n<meta http-equiv="Content-Security-Policy" content="' + meta_csp + '">', 1)
+(raiz / "index.html").write_text(html)
 print("csp: " + csp)
 PY
 
