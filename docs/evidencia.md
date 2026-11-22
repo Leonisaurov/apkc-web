@@ -8178,3 +8178,106 @@ grep -n "require-trusted-types-for" tools/sitio.sh
 excepciones). Frontera: Safari no se ejecuta en los runners; el job de WebKit es una aproximación
 informativa y no bloquea el gate. No se añadió una cabecera CSP report-only paralela porque el SW ya
 inyecta la política única: dos políticas duplicarían los informes sin añadir cobertura.
+
+## 178. ART en CI: frontera justificada
+
+Medido el 2026-11-21. La verificación en ART se hace hoy en el aparato, por `banco/banco.sh`, con
+`dexdump` y `app_process64` del sistema (seis referencias en el guion); no hay `adb` y el banco usa
+`rish` o `/usr/sbin/sudo`. El workflow de GitHub corre en `ubuntu-latest` y no instala emulador, AVD
+ni imágenes del sistema: un runner Linux no puede ejecutar los binarios ART de un aparato Android y
+la matriz de GitHub no ofrece macOS con emulador Android en este repo.
+
+```sh
+grep -n -iE 'emulator|avd|app_process|dexdump|art' .github/workflows/gate.yml
+grep -c 'app_process64\|dexdump' banco/banco.sh
+```
+
+**Resultado**: el workflow no contiene emulador ni ART; el banco local sí (6 referencias). Frontera:
+la cobertura de ART queda ligada al aparato y no a CI. Sustituirla exigiría un runner con KVM y una
+imagen de Android arrancada, con coste de arranque y de mantenimiento fuera de la ambición del
+proyecto; se registra aquí como deuda medida, no como fase cerrada.
+
+## 179. Subconjunto Java: switch de String, var, enum, TWR, anidadas y anotaciones
+
+Medido el 2026-11-21. Se cerraron seis piezas del inventario de la Fase 5, con javac 17 y el dexer
+propio como oráculos. `switch (String)` se baja a `String.equals` más un `tableswitch` del índice del
+brazo; la ejecución en la JVM con `-Xverify:all` dio `1, 2, 9`, igual que javac. `var` infiere el
+descriptor del inicializador y el dex resultante es byte a byte el de `javac --release 11`
+(`--release 8` no conoce `var`). `enum` simple emite ACC_ENUM, `java/lang/Enum`, `$VALUES`,
+`values()`, `valueOf(String)` y el `<clinit>`, con dex byte a byte el de javac. El
+`try-with-resources` se desugara a `try/finally` con `close()` en orden inverso: es equivalente
+funcional, **sin `addSuppressed`**, así que no es el dex de javac 17 y esa diferencia queda escrita.
+Las anidadas con nombre sin `static` y `private` emiten `this$0`, `initInner()` y ACC_PRIVATE
+(byte a byte contra javac, salvo instanciar la privada desde fuera, que se rechaza con mensaje). Las
+anotaciones con elementos escriben `RuntimeVisibleAnnotations` en clase, campo y método con
+contenido semántico igual al de javac.
+
+Dos tests preexistentes asumían que las anotaciones seguían rechazándose; se actualizaron a un valor
+no simple (`@MiAnotacion(x = 1 + 2)`), que el parser rechaza con «elemento simple medido».
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar go test -count=1 ./...
+sh tools/entorno.sh wasm
+```
+
+**Resultado**: `ok github.com/ajinasokan/apkc 40.055s` y el suite wasm en el hospedador de navegador
+en verde, sin `expected magic word`. Frontera: TWR sin `addSuppressed` y la anidada privada
+instanciada desde fuera siguen siendo diferencias funcionales documentadas, no paridad con javac.
+
+## 180. Recursos: small/large/xlarge y -vN
+
+Medido el 2026-11-21 con `aapt2` de build-tools 35.0.1. La premisa del encargo situaba
+`screenLayout` en el offset +12 del `ResTable_config`; la medición lo corrige: está en **+28**
+(`small`=1, `large`=3, `xlarge`=4) y la versión implícita que aapt2 eleva es 4. `-vN` se escribe en
++24. El orden de aapt2 es locale → `screenType` → entrada/screenSize → versión → `screenLayout` →
+uiMode → smallestWidth; `claveDeConfig` se reescribió con esa clave, y el comparador de
+`tablaDeRecursos` la usa. `mascaraConfig` usa `0x0c00` para tamaño, `0x0400` para `-vN` y `0x2400`
+para `sw`. `fuentesDelProyecto` reconoce `layout-small/large/xlarge`, `values-v21`,
+`layout-small-v21` y añade `-v4` a la ruta de salida cuando el tamaño no trae versión explícita.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=$ANDROID_HOME/platforms/android-34/android.jar go test -count=1 ./...
+```
+
+**Resultado**: los tests nuevos (`valores_pantalla_version_test.go`,
+`valores_pantalla_linker_test.go`) pasan con fixtures byte a byte de aapt2 y la suite completa da
+`ok ... 40.055s`. Frontera: la clave de ordenación se midió con las combinaciones del fixture; un
+calificador nuevo fuera de ese conjunto necesita su propia medición antes de entrar en el inventario.
+
+## 181. Linaje y SourceStamp: frontera medida
+
+Medido el 2026-11-21. `apkc verify` hoy lee los atributos del bloque v3.1 pero los descarta
+(`verificar.go:730`); el formato del proof-of-rotation ya está escrito en `lineage.go` y lo valida
+`lineage_test.go`. Con `apksigner rotate` + `apksigner sign --lineage … --rotation-min-sdk-version 33`
+se obtuvo un APK que `apksigner verify --verbose --min-sdk-version 28` aprueba, con el atributo
+`0x3ba06f8c` en v3.1 y solo `0x559f8b02` en v3.0. SourceStamp usa el par `0x6dff800d` y la entrada
+ZIP `stamp-cert-sha256` (SHA-256 del DER del certificado de sello); `apksigner verify -v` lo marca
+`true`. La firma del sello cubre pares `(id de algoritmo de digest, digest)` de los esquemas v2/v3;
+el digest del esquema v1 no se identificó y `openssl dgst -verify` rechazó `MANIFEST.MF` y `.SF` como
+candidatos.
+
+```sh
+cd /tmp/opencode/sst && apksigner verify -v stamped.apk | grep -i sourcestamp
+grep -n 'proofOfRotationAttr\|rotationMinSdkAttr' apkc/lineage.go
+```
+
+**Resultado**: formato medido, **implementación no hecha**. Frontera: verificar el linaje exigiría
+enganchar la cadena de firmas en `verificarUnBloqueV3`; SourceStamp podría cubrir v2/v3 pero no v1
+sin fijar antes qué bytes se firman. Se deja como deuda medida, no como pieza cerrada.
+
+## 182. Gate final sobre el árbol integrado
+
+Medido el 2026-11-21, tras integrar las seis piezas Java, los calificadores de recursos, el fuzzing
+y los cambios de la pestaña.
+
+```sh
+GOTMPDIR=$HOME/.cache/apkc-web/gotmp sh tools/entorno.sh gate
+GOTMPDIR=$HOME/.cache/apkc-web/gotmp sh tools/entorno.sh wasm
+cd apkc && D8=$ANDROID_HOME/build-tools/35.0.1/d8 go test -run TestFuzzDiferencialContraJavacYD8 -count=1 .
+```
+
+**Resultado**: `gate` rc=0 con `pestaña: 83 comprobaciones, apk firmada dentro de chromium de 10285
+bytes y verificada`, build de la pestaña verificado por apksigner, zipalign, zipcheck y aapt2;
+`wasm` rc=0 con `PASS`; el fuzzing diferencial de 20 casos contra javac `--release 8` y d8,
+`ok ... 39.378s`. No se anuncia «0 pendientes»: la firma y ART siguen siendo fronteras escritas en
+§178 y §181.
