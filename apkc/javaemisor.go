@@ -945,15 +945,20 @@ type candidato struct {
 	empaquetar bool
 }
 
-// buscarMetodo recorre la clase y sus padres por nombre y aridad, y elige la sobrecarga. Con **una**
-// candidata devuelve esa, que es lo que este codigo habia hecho siempre; con varias se queda con la que
-// coincide **exactamente** con los descriptores de los argumentos. Medido el 2026-11-01 (parrafo 62):
-// `System.out.println(que)` con `que` de tipo String bajaba `println:(Z)V` —la primera declarada en
-// PrintStream— porque el recorrido paraba en el primer nombre con la aridad debida; javac escribe
-// `println:(Ljava/lang/String;)V`, y el dex lo refleja palabra a palabra. Ademas se mide la eleccion
-// por subtipo (`setText(CharSequence)` con un String), el boxing (`box(7)` -> `box(Integer)`) y el
-// ensanchamiento (`ens(7)` -> `ens(long)`), con la conversion que javac escribe. Las candidatas varargs
-// entran en la fase 3 de JVMS 15.12.2.4 (§194): solo si ninguna de aridad fija es aplicable.
+// buscarMetodo recorre la clase y sus padres por nombre y aridad, y elige la sobrecarga en las tres
+// fases de JVMS 15.12.2. Con **una** candidata devuelve esa, que es lo que este codigo habia hecho
+// siempre; con varias:
+//
+//	fase 1 (15.12.2.2): identidad, ensanchamiento primitivo, subida de referencias y `null`, sin boxing
+//	fase 2 (15.12.2.3): lo anterior mas boxing y desenvuelto (con su ensanchamiento detras)
+//	fase 3 (15.12.2.4): las varargs, solo si ninguna de aridad fija fue aplicable
+//
+// En cada fase, si hay varias aplicables manda `masEspecificaDe` de esa fase; si ninguna es la mas
+// especifica, la llamada es ambigua y se rechaza en vez de elegir por el orden de la jerarquia.
+// Medido el 2026-11-01 (parrafo 62) con `System.out.println(que)`: paraba en el primer nombre con la
+// aridad debida y bajaba `println:(Z)V`. Medido despues con javac 17 sobre `f(null)` con `f(String)` y
+// `f(Object)` —gana `(Ljava/lang/String;)V`—, `f(1)` con `f(Integer)` y `f(long)` —gana `(J)V`— y
+// `f('a')` con `f(Character)` y `f(int)` —gana `(I)V`—.
 func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []string) (candidato, error) {
 	cands, err := ctx.candidatosDe(interno, nombre, argc, true)
 	if err != nil {
@@ -973,54 +978,38 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 		}
 		return c, nil
 	}
-	exactas := []candidato{}
+	// aridad fija: las de aridad exacta, varargs incluidas (una `T...` con la aridad del arreglo se
+	// puede llamar como fija y pasa el arreglo tal cual).
+	fijas := make([]candidato, 0, len(cands))
 	for _, c := range cands {
-		_, _, ps := splitDescriptor(c.desc)
-		if len(ps) != len(tipos) {
+		if _, _, ps := splitDescriptor(c.desc); len(ps) == len(tipos) {
+			fijas = append(fijas, c)
+		}
+	}
+	fases := []struct {
+		nombre string
+		cabe   func(desde, hasta string) bool
+	}{
+		{"estricta", ctx.asignableEstricto},
+		{"laxa", ctx.asignable},
+	}
+	for _, fase := range fases {
+		aplicables := ctx.aplicablesDe(fijas, tipos, fase.cabe)
+		if len(aplicables) == 0 {
 			continue
 		}
-		todas := true
-		for i := range ps {
-			if ps[i] != tipos[i] {
-				todas = false
-				break
-			}
+		if len(aplicables) == 1 {
+			return aplicables[0], nil
 		}
-		if todas {
-			exactas = append(exactas, c)
-		}
-	}
-	if len(exactas) == 1 {
-		return exactas[0], nil
-	}
-	// sin candidata exacta, la regla de javac es la aplicable mas especifica (JVMS 15.12.2.5), y lo que
-	// se puede medir aquí es la parte de tipos de referencia: identidad o subida por la cadena de padres
-	// y las interfaces que el `.class` del jar declara. El caso real que lo pidió es `Menu.add("...")`
-	// del fixture: `add(CharSequence)` y `add(int)`, y el String solo cabe en la primera.
-	aplicables := []candidato{}
-	for _, c := range cands {
-		_, _, ps := splitDescriptor(c.desc)
-		if len(ps) != len(tipos) {
-			continue
-		}
-		cabe := true
-		for i := range ps {
-			if !ctx.asignable(tipos[i], ps[i]) {
-				cabe = false
-				break
-			}
-		}
-		if cabe {
-			aplicables = append(aplicables, c)
-		}
-	}
-	if len(aplicables) == 1 {
-		return aplicables[0], nil
-	}
-	if len(aplicables) > 1 {
 		if unica, ok := ctx.masEspecificaDe(aplicables); ok {
 			return unica, nil
 		}
+		posibles := make([]string, 0, len(aplicables))
+		for _, c := range aplicables {
+			posibles = append(posibles, c.desc)
+		}
+		return candidato{}, fmt.Errorf("%s.%s tiene %d sobrecargas aplicables en la fase %s a (%s) (%s) y ninguna es la mas especifica para este subconjunto",
+			interno, nombre, len(aplicables), fase.nombre, strings.Join(posibles, " "), strings.Join(tipos, " "))
 	}
 	// fase 3 (JVMS 15.12.2.4): solo si no habia ninguna candidata de aridad fija aplicable. Los
 	// `len(ps)-1` primeros argumentos van a los parametros fijos y el resto, cada uno convertible al
@@ -1072,6 +1061,29 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 		interno, nombre, len(cands), argc, strings.Join(posibles, " "), strings.Join(tipos, " "))
 }
 
+// aplicablesDe: las candidatas de aridad exacta cuyos parametros aceptan los tipos llamados con la
+// conversion de invocacion que toca (`cabe` es `asignableEstricto` en la fase 1 y `asignable` en la 2).
+func (ctx *contextoJava) aplicablesDe(cands []candidato, tipos []string, cabe func(desde, hasta string) bool) []candidato {
+	aplicables := make([]candidato, 0, len(cands))
+	for _, c := range cands {
+		_, _, ps := splitDescriptor(c.desc)
+		if len(ps) != len(tipos) {
+			continue
+		}
+		todas := true
+		for i := range ps {
+			if !cabe(tipos[i], ps[i]) {
+				todas = false
+				break
+			}
+		}
+		if todas {
+			aplicables = append(aplicables, c)
+		}
+	}
+	return aplicables
+}
+
 // masEspecificaDe: la unica candidata que cabe en todas las demas (JVMS 15.12.2.5). Devuelve falso si
 // no hay ninguna o si hay empate.
 func (ctx *contextoJava) masEspecificaDe(cands []candidato) (candidato, bool) {
@@ -1095,7 +1107,8 @@ func (ctx *contextoJava) masEspecificaDe(cands []candidato) (candidato, bool) {
 	return candidato{}, false
 }
 
-// masEspecifico: si cada parametro de `a` cabe en el de `b` (y alguno no al revés, o son iguales).
+// masEspecifico: si cada parametro de `a` cabe en el de `b` (JVMS 15.12.2.5: `Si <: Ti`, sin boxing;
+// el ensanchamiento primitivo si cuenta, y por eso `f(int)` gana a `f(long)` y `f(long)` a `f(float)`).
 func (ctx *contextoJava) masEspecifico(a, b string) bool {
 	_, _, pa := splitDescriptor(a)
 	_, _, pb := splitDescriptor(b)
@@ -1103,18 +1116,30 @@ func (ctx *contextoJava) masEspecifico(a, b string) bool {
 		return false
 	}
 	for i := range pa {
-		if !ctx.asignable(pa[i], pb[i]) {
+		if !ctx.asignableEstricto(pa[i], pb[i]) {
 			return false
 		}
 	}
 	return true
 }
 
+// tipoNulo: el tipo que se pone en la lista de una llamada por cada argumento que es el literal
+// `null`. No es un descriptor de la JVM —no existe ningun tipo `N`— justamente para que no coincida
+// con ninguna firma: la fase de coincidencia exacta no puede elegirlo y la especificidad se queda con
+// la sobrecarga mas estrecha (JVMS 15.12.2.2 y 15.12.2.5). Lo que se emite sigue siendo un
+// `aconst_null`, sin tipo propio; este marcador solo viaja en las listas de tipos.
+const tipoNulo = "N"
+
 // ampliaciones y boxing que javac admite en la resolucion de sobrecargas (JVMS 5.3): el emisor ya
 // sabia escribir las conversiones en `expA`, aqui solo se dice que son aplicables para elegir candidata.
+// La tabla es la cerradura del ensanchamiento primitivo de JLS 5.1.2: `byte` llega a `short`, `int`,
+// `long`, `float` y `double`; `char` a `int`, `long`, `float` y `double`; y `boolean` **no** ensancha
+// a nada (`f(1)` con `f(boolean)` no es Java).
 var ampliacionPrimitiva = map[string]bool{
 	"I>J": true, "I>F": true, "I>D": true, "J>F": true, "J>D": true, "F>D": true,
-	"B>I": true, "S>I": true, "C>I": true, "Z>I": true,
+	"B>S": true, "B>I": true, "B>J": true, "B>F": true, "B>D": true,
+	"S>I": true, "S>J": true, "S>F": true, "S>D": true,
+	"C>I": true, "C>J": true, "C>F": true, "C>D": true,
 }
 
 var boxingDe = map[string]string{
@@ -1123,14 +1148,27 @@ var boxingDe = map[string]string{
 	"S": "Ljava/lang/Short;", "B": "Ljava/lang/Byte;",
 }
 
-// asignable: si un valor del tipo `desde` cabe en un parámetro del tipo `hasta`. Identidad,
-// ensanchamiento de primitivos, boxing y, entre referencias, la subida por la cadena de padres y por
-// las interfaces (arrays incluidos, porque comparten la subida a Object).
+// primDeEnvoltorio: la vuelta de `boxingDe`, el primitivo que devuelve el `<x>Value()` de cada
+// envoltorio (JLS 5.1.8). Sirve para el desenvuelto de la fase 2 y para escribirlo en `expA`.
+var primDeEnvoltorio = map[string]string{
+	"Ljava/lang/Integer;": "I", "Ljava/lang/Long;": "J", "Ljava/lang/Float;": "F",
+	"Ljava/lang/Double;": "D", "Ljava/lang/Boolean;": "Z", "Ljava/lang/Character;": "C",
+	"Ljava/lang/Short;": "S", "Ljava/lang/Byte;": "B",
+}
+
+// metodoDesenvoltura: el nombre del metodo que desenvuelve cada primitivo. Medido con `javap -c` sobre
+// `void g(int)` y `void h(long)` llamados con un `Integer`: `invokevirtual Integer.intValue:()I`, y
+// detras `i2l` cuando el hueco es mas ancho.
+var metodoDesenvoltura = map[string]string{
+	"I": "intValue", "J": "longValue", "F": "floatValue", "D": "doubleValue",
+	"Z": "booleanValue", "C": "charValue", "S": "shortValue", "B": "byteValue",
+}
+
+// asignable: si un valor del tipo `desde` cabe en un parámetro del tipo `hasta` en la fase 2 de
+// JVMS 15.12.2.3: lo estricto (identidad, ensanchamiento primitivo, subida de referencias y `null`) y
+// además el boxing y el desenvuelto con su ensanchamiento detrás.
 func (ctx *contextoJava) asignable(desde, hasta string) bool {
-	if desde == hasta {
-		return true
-	}
-	if ampliacionPrimitiva[desde+">"+hasta] {
+	if ctx.asignableEstricto(desde, hasta) {
 		return true
 	}
 	// Boxing **seguido del ensanchamiento de referencia** (JVMS 5.3 y la conversión de invocación de
@@ -1138,12 +1176,42 @@ func (ctx *contextoJava) asignable(desde, hasta string) bool {
 	// pasando por `Integer`. Es lo que hacía falta para que `String.format("%d %s", 1, "x")` viera
 	// aplicable `format(String, Object...)`: sin esto `asignable("I", "Ljava/lang/Object;")` era falso
 	// y la fase 3 descartaba la única candidata varargs (§194). La recursión no puede morderse la cola
-	// porque el envoltorio ya es de referencia: esa rama no vuelve a entrar aquí.
+	// porque el envoltorio ya es de referencia: esa rama no vuelve a entrar en el boxing.
 	if box, ok := boxingDe[desde]; ok {
-		return ctx.asignable(box, hasta)
+		return ctx.asignableEstricto(box, hasta)
+	}
+	// Desenvuelto **seguido del ensanchamiento primitivo**: `Integer` cabe en un `int` por
+	// `intValue()` y en un `long` por `intValue(); i2l`. Solo hacia un primitivo: hacia una referencia
+	// ya lo resolvió (o no) el recorrido de padres de `asignableEstricto`, y volver a entrar aquí
+	// giraría en el vacío.
+	if prim, ok := primDeEnvoltorio[desde]; ok && len(hasta) == 1 {
+		return ctx.asignableEstricto(prim, hasta)
+	}
+	return false
+}
+
+// asignableEstricto: la conversión de invocación de la fase 1 (JVMS 15.12.2.2): identidad,
+// ensanchamiento primitivo, subida de referencias —los arreglos suben a `Object`, `Cloneable` y
+// `Serializable`— y el literal `null` a cualquier referencia. **Sin** boxing ni desenvuelto: con
+// `f(Integer)` y `f(long)`, un `f(1)` no ve aplicable la primera en la fase estricta y javac se queda
+// con `(J)V`. El `null` se reconoce por `tipoNulo`, que no coincide con ningún descriptor real.
+func (ctx *contextoJava) asignableEstricto(desde, hasta string) bool {
+	if desde == tipoNulo {
+		return esTipoDeReferencia(hasta)
+	}
+	if desde == hasta {
+		return true
+	}
+	if ampliacionPrimitiva[desde+">"+hasta] {
+		return true
 	}
 	if !esTipoDeReferencia(desde) || !esTipoDeReferencia(hasta) {
 		return false
+	}
+	if desde[0] == '[' {
+		// JVMS 4.10.3: todo arreglo es subtipo de Object, Cloneable y Serializable
+		return hasta == "Ljava/lang/Object;" || hasta == "Ljava/lang/Cloneable;" ||
+			hasta == "Ljava/io/Serializable;"
 	}
 	if desde[0] != 'L' || hasta[0] != 'L' {
 		return false
@@ -3382,13 +3450,14 @@ func (e *emisor) hayEmpaquetadoEn(clase, nombre string, args []jexpr) bool {
 	return e.hayEmpaquetado(args, cands)
 }
 
-// necesitaBoxingEn: si la candidata de `clase.nombre` para estos tipos estimados tiene algun
-// parametro de referencia donde el fuente pone un primitivo —o si elige una varargs que hay que
-// empaquetar—. Es la pregunta que decide, en una llamada con receptor explicito, si hay que resolver
+// necesitaBoxingEn: si la candidata de `clase.nombre` para estos tipos estimados pide una conversion
+// que solo aparece en la fase laxa —boxing o desenvuelto—, o si elige una varargs que hay que
+// empaquetar. Es la pregunta que decide, en una llamada con receptor explicito, si hay que resolver
 // ANTES de bajar los argumentos: con boxing el `Integer.valueOf` se escribe entre el valor y el
-// `invoke`, y bajar primero el literal dejaria sobre la pila un `int` que el descriptor rechaza.
+// `invoke`, y con desenvuelto pasa lo mismo con el `intValue()`. Bajar primero el literal dejaria
+// sobre la pila un valor que el descriptor rechaza (§194).
 // Lo que no se puede prever sin emitir devuelve falso y deja el camino de siempre, que baja los
-// argumentos y resuelve con sus descriptores reales (§194).
+// argumentos y resuelve con sus descriptores reales.
 func (e *emisor) necesitaBoxingEn(clase, nombre string, args []jexpr) bool {
 	tipos := make([]string, 0, len(args))
 	for _, arg := range args {
@@ -3410,10 +3479,11 @@ func (e *emisor) necesitaBoxingEn(clase, nombre string, args []jexpr) bool {
 		if i >= len(tipos) {
 			break
 		}
-		if _, primitivo := boxingDe[tipos[i]]; !primitivo {
+		if e.ctx.asignableEstricto(tipos[i], ps[i]) {
 			continue
 		}
-		if len(ps[i]) > 0 && (ps[i][0] == 'L' || ps[i][0] == '[') {
+		// cabe en la fase laxa pero no en la estricta: hay boxing o desenvuelto que escribir
+		if e.ctx.asignable(tipos[i], ps[i]) {
 			return true
 		}
 	}
@@ -3443,13 +3513,19 @@ func (e *emisor) argumentosResueltos(clase, nombre string, args []jexpr) (candid
 }
 
 // argumentos: baja los argumentos al pico y devuelve sus descriptores, que es lo que necesita
-// buscarMetodo para elegir entre sobrecargas (parrafo 62).
+// buscarMetodo para elegir entre sobrecargas (parrafo 62). El literal `null` se apunta como
+// `tipoNulo`: lo que queda en la pila es un `aconst_null` sin tipo propio, y con el descriptor
+// `Object` que devuelve `exp` la fase de coincidencia exacta elegía `f(Object)` frente a `f(String)`
+// cuando javac se queda con la mas estrecha.
 func (e *emisor) argumentos(args []jexpr) ([]string, error) {
 	tipos := make([]string, 0, len(args))
 	for _, arg := range args {
 		d, err := e.exp(arg)
 		if err != nil {
 			return nil, err
+		}
+		if esLiteralNulo(arg) {
+			d = tipoNulo
 		}
 		tipos = append(tipos, d)
 	}
@@ -3797,8 +3873,9 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 	return nil
 }
 
-// tipoEstimado: el descriptor de un argumento que va en un constructor, sin volver a emitirlo. En el
-// subconjunto medido los argumentos de un `new` son literales o variables, y ambos se saben aqui.
+// tipoEstimado: el descriptor de un argumento, sin volver a emitirlo. En el subconjunto medido los
+// argumentos de un `new` son literales o variables, y ambos se saben aqui; tambien el `new` de una
+// clase propia (`f(new S())`) y el literal `null`, que llega como `tipoNulo`.
 func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 	switch v := x.(type) {
 	case jlit:
@@ -3818,9 +3895,23 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		case 's':
 			return "Ljava/lang/String;", nil
 		case 'n':
-			return "Ljava/lang/Object;", nil
+			// `null` no tiene tipo: se apunta el marcador para que la fase de coincidencia exacta no
+			// pueda elegir `f(Object)` cuando javac se queda con `f(String)` por especificidad
+			return tipoNulo, nil
 		}
 		return "", fmt.Errorf("linea %d: un literal de clase %q no esta medido", v.donde.linea, string(v.tipoJ))
+	case jnuevo:
+		// `f(new S())`: el tipo de la expresion es el de la clase construida, no el de los argumentos
+		// del constructor. Se resuelve igual que en `nuevo`, para que la estimacion y la emision
+		// coincidan con el `new`/`dup`/`<init>` que escribe `exp`.
+		if v.cuerpo != nil {
+			return "L" + internoDe(v.cuerpo.paquete, v.cuerpo.nombre) + ";", nil
+		}
+		interno, err := e.ctx.tipoAInterno(v.tipo)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", v.donde.linea, err)
+		}
+		return "L" + interno + ";", nil
 	case jclase:
 		return "Ljava/lang/Class;", nil
 	case jacceso:
@@ -4016,6 +4107,11 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// el literal `null` no trae tipo propio: dentro de un hueco de referencia es un `null` de ese
+	// tipo, que es lo que queda en la pila con el mismo `aconst_null` que ya se emitio.
+	if esLiteralNulo(x) && esTipoDeReferencia(deseado) {
+		return deseado, nil
+	}
 	if d == deseado {
 		return d, nil
 	}
@@ -4029,11 +4125,29 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	// boxing y después ensanchamiento de referencia: el hueco es `Object` (o `Number`, o el elemento
 	// `Object` de un varargs) y lo que sale es un primitivo. javac escribe el mismo `Integer.valueOf` y
 	// deja sobre la pila el envoltorio; el descriptor que se devuelve es el del envoltorio, que es el
-	// que de verdad hay arriba, y quien compara lo acepta por `asignable` (§194).
-	if box, ok := boxingDe[d]; ok && e.ctx.asignable(box, deseado) {
+	// que de verdad hay arriba, y quien compara lo acepta por `asignable` (§194). El hueco tiene que
+	// ser de referencia: `asignable(Byte, "I")` ya es cierto por el desenvuelto, y envolver un `byte`
+	// para dejarlo donde va un `int` no es lo que hace javac.
+	if box, ok := boxingDe[d]; ok && esTipoDeReferencia(deseado) && e.ctx.asignable(box, deseado) {
 		dueño := box[1 : len(box)-1]
 		e.invoca(opInvokestat, dueño, "valueOf", "("+d+")"+box, 1)
 		return box, nil
+	}
+	// Desenvuelto, que es la vuelta del boxing: el hueco es primitivo y lo que hay en la pila es un
+	// envoltorio. javac escribe el `<x>Value()` del envoltorio y, si el hueco es más ancho, la
+	// conversión detrás: `Integer.intValue:()I` para un `int` y `Integer.intValue:()I; i2l` para un
+	// `long` (medido con `javap -c` sobre `g(i)` y `h(i)`).
+	if e.desenvuelve(d, deseado) {
+		prim := primDeEnvoltorio[d]
+		e.invoca(opInvokevirt, d[1:len(d)-1], metodoDesenvoltura[prim], "()"+prim, 1)
+		base := prim
+		if base == "B" || base == "C" || base == "S" {
+			base = "I" // la subida de byte, short y char a int no escribe ninguna conversion
+		}
+		if base != deseado {
+			e.convierte(base, deseado)
+		}
+		return deseado, nil
 	}
 	// Enschar un `char` a `int` no escribe nada: `int n = c;` es `iload_0; istore_1` y `aEntero(char)` es
 	// `iload_0; ireturn`, medidos en el parrafo 87. Lo mismo vale para `byte` y `short`: la sonda
@@ -4047,18 +4161,42 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	return d, nil
 }
 
-// convierte: la conversion numerica entre los tipos medidos, con las palabras que cambia. La rejilla
-// sale de `i2l` 0x85 (parrafo 74) y de las leidas en `FyD` (parrafo 77): `f2d` en `por`, `i2d` en
-// `divide` y `deEntero`, `d2i` en `aEntero`, `d2f` en `aFlotante`. Devuelve false si el par no esta.
-func (e *emisor) convierte(de, a string) bool {
-	codes := map[[2]byte]byte{
-		{'I', 'J'}: 0x85, {'I', 'F'}: 0x86, {'I', 'D'}: 0x87,
-		{'J', 'I'}: 0x88, {'J', 'F'}: 0x89, {'J', 'D'}: 0x8a,
-		{'F', 'I'}: 0x8b, {'F', 'J'}: 0x8c, {'F', 'D'}: 0x8d,
-		{'D', 'I'}: 0x8e, {'D', 'J'}: 0x8f, {'D', 'F'}: 0x90,
+// codigosConversion: la conversion numerica entre los tipos medidos, con la palabra que la escribe.
+// La rejilla sale de `i2l` 0x85 (parrafo 74) y de las leidas en `FyD` (parrafo 77): `f2d` en `por`,
+// `i2d` en `divide` y `deEntero`, `d2i` en `aEntero`, `d2f` en `aFlotante`.
+var codigosConversion = map[[2]byte]byte{
+	{'I', 'J'}: 0x85, {'I', 'F'}: 0x86, {'I', 'D'}: 0x87,
+	{'J', 'I'}: 0x88, {'J', 'F'}: 0x89, {'J', 'D'}: 0x8a,
+	{'F', 'I'}: 0x8b, {'F', 'J'}: 0x8c, {'F', 'D'}: 0x8d,
+	{'D', 'I'}: 0x8e, {'D', 'J'}: 0x8f, {'D', 'F'}: 0x90,
+}
+
+// desenvuelve: si el envoltorio `desde` puede llenar el hueco primitivo `hasta` con su `<x>Value()` y,
+// cuando hace falta, una conversion detras. `byte`, `short` y `char` suben a `int` sin escribir nada
+// (JVMS 2.11.1) y de ahi a los anchos; `Boolean` solo vale como `Z` y no ensancha a nada.
+func (e *emisor) desenvuelve(desde, hasta string) bool {
+	prim, ok := primDeEnvoltorio[desde]
+	if !ok || len(hasta) != 1 {
+		return false
 	}
+	if hasta == prim {
+		return true
+	}
+	base := prim
+	if base == "B" || base == "C" || base == "S" {
+		base = "I"
+	}
+	if base == hasta {
+		return true
+	}
+	_, ok = codigosConversion[[2]byte{base[0], hasta[0]}]
+	return ok
+}
+
+// convierte: escribe la conversion numerica entre los tipos medidos. Devuelve false si el par no esta.
+func (e *emisor) convierte(de, a string) bool {
 	peso := map[byte]int{'I': 1, 'F': 1, 'J': 2, 'D': 2}
-	c, ok := codes[[2]byte{de[0], a[0]}]
+	c, ok := codigosConversion[[2]byte{de[0], a[0]}]
 	if !ok {
 		return false
 	}
