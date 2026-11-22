@@ -580,3 +580,13 @@ lo rechaza, es la tabla «Inventario» de la Fase 5 de `docs/plan.md`; esa tabla
   orden.
 - Una apk mínima no se puede firmar en el cliente sin `R`: las 4 clases `R*` del recuento las genera
   `aapt2`, así que **2G y 3 van atadas** aunque se midan por separado.
+- **Los tres mundos del editor y el cierre de la cola (§176-§184)**: la página tiene tres pieles
+  seleccionables (Taller, Terminal y Azul) con firma propia en el riel y en la pestaña activa; el
+  veredicto FIX de la revisión se aplicó y el detector deja 0 warnings. Entraron la instalación PWA,
+  el idioma español/inglés, el panel de atajos y Trusted Types con CSP aplicado —los sumideros de
+  `Worker` y `URL` solo aparecieron al probar el sitio empaquetado (§183)—. El subconjunto Java sumó
+  `switch` de String, `var`, `enum`, `try-with-resources` (sin `addSuppressed`), anidadas con nombre y
+  anotaciones con elementos (§179); los recursos sumaron `small`/`large`/`xlarge` y `-vN`, con
+  `screenLayout` corregido a +28 (§180); el fuzzing diferencial de 20 casos pasa contra javac y d8
+  (§182). El sitio quedó publicado y verificado 10/10 en el host real (§184). Fronteras escritas,
+  no cerradas: ART en CI (§178) y linaje/SourceStamp en `verify` (§181).
