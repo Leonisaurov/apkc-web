@@ -14,7 +14,9 @@ package main
 // con SHA-256, una v2 con RSASSA-PKCS1-v1_5/SHA-256 de un único firmante y el `.idsig` de la v4.
 // DSA, SHA-1, varios firmantes o un certificado que no empareja con su clave pública se dicen y
 // no se aprueban. v3 y v3.1 se comprueban con el mismo digest de los tres tramos del paquete y la
-// firma sobre signedData; los atributos de rotación se leen pero no se validan contra el linaje.
+// firma sobre signedData y los atributos de rotación contra el linaje (cadena nodo a nodo,
+// certificado firmante y rotation-min-sdk-version); el SourceStamp se comprueba contra su
+// entrada ZIP y los digests de los esquemas v1, v2 y v3.
 // Tampoco se valida la cadena de confianza: el certificado de debug es auto-firmado
 // y no hay ancla que lo respalde, así que se informa de él (asunto, serie, caducidad) sin afirmar
 // que sea digno de confianza; `apksigner` hace exactamente lo mismo y lo llama "not trusted".
@@ -26,6 +28,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/base64"
@@ -44,6 +47,18 @@ const (
 	idParV3_1    = uint32(0x1b93ad61)
 	idParV4      = uint32(0x42726576)
 	idParRelleno = uint32(0x42726577)
+	// el par del bloque de firmas que lleva el SourceStamp (§181)
+	idParSourceStamp = uint32(0x6dff800d)
+
+	// los ids de esquema que el SourceStamp usa para decir a qué esquema cubre cada firma
+	esquemaSelloV1 = uint32(1)
+	esquemaSelloV2 = uint32(2)
+	esquemaSelloV3 = uint32(3)
+
+	// los ids de algoritmo de digest del contenido tal como los escribe apksig dentro
+	// del SourceStamp: 1 es el digest por trozos (v2/v3) y 4 el SHA-256 plano de v1.
+	idDigestTroceadoSHA256 = uint32(1)
+	idDigestSHA256         = uint32(4)
 
 	// el único par de algoritmo que esta herramienta escribe y sabe verificar
 	algRSASSAConSHA256 = uint32(sigAlgRSASSAWithSHA256)
@@ -56,25 +71,40 @@ const (
 // verificacion es el resultado de mirar un paquete: un veredicto por esquema con sus motivos, el
 // número de firmantes y lo que se puede decir del certificado sin prometer confianza.
 type verificacion struct {
-	entradas       int
-	entradasFirmas int
-	v1             bool
-	v2             bool
-	v3             bool
-	v31            bool
-	v4             bool
-	bundle         bool
-	v4Presente     bool
-	v1Motivos      []string
-	v2Motivos      []string
-	v3Motivos      []string
-	v31Motivos     []string
-	v4Motivos      []string
-	notas          []string
-	firmantes      int
-	firmantesV3    int
-	certificado    string
-	digestV2       []byte
+	entradas        int
+	entradasFirmas  int
+	v1              bool
+	v2              bool
+	v3              bool
+	v31             bool
+	v4              bool
+	bundle          bool
+	v4Presente      bool
+	v1Motivos       []string
+	v2Motivos       []string
+	v3Motivos       []string
+	v31Motivos      []string
+	v4Motivos       []string
+	notas           []string
+	firmantes       int
+	firmantesV3     int
+	certificado     string
+	digestV2        []byte
+	digestV3        []byte
+	sello           bool
+	selloMotivos    []string
+	rotacionBloques []rotacionBloque
+}
+
+// rotacionBloque es lo que un bloque v3/v3.1 dice de la rotación: el rango de SDK que
+// cubre, si trae la prueba del linaje y, en su caso, el rotation-min-sdk-version.
+type rotacionBloque struct {
+	es31            bool
+	minSdk          uint32
+	maxSdk          uint32
+	tienePrueba     bool
+	tieneMinSdkAttr bool
+	minSdkAttr      uint32
 }
 
 func verificar() {
@@ -117,6 +147,11 @@ func verificar() {
 		} else if len(v.v31Motivos) > 0 {
 			LogE("verify", "v3.1 (APK Signature Scheme v3.1): mal —", strings.Join(v.v31Motivos, " — "))
 		}
+		if v.sello {
+			LogI("verify", "SourceStamp: ok — certificado de sello y firmas de los esquemas verificados")
+		} else if len(v.selloMotivos) > 0 {
+			LogE("verify", "SourceStamp: mal —", strings.Join(v.selloMotivos, " — "))
+		}
 		if v.v4Presente {
 			if v.v4 {
 				LogI("verify", "v4 (APK Signature Scheme v4): ok — árbol de verity y firma del .idsig")
@@ -133,7 +168,8 @@ func verificar() {
 		LogW("verify", nota)
 	}
 	if !v.v1 || (!v.bundle && !v.v2) || (len(v.v3Motivos) > 0 && !v.v3) ||
-		(len(v.v31Motivos) > 0 && !v.v31) || (v.v4Presente && !v.v4) {
+		(len(v.v31Motivos) > 0 && !v.v31) || (v.v4Presente && !v.v4) ||
+		(len(v.selloMotivos) > 0 && !v.sello) {
 		os.Exit(1)
 	}
 }
@@ -169,6 +205,7 @@ func verificarApk(ruta string) (*verificacion, error) {
 	v.verificarV3(f, info.Size())
 	v.verificarV1(zr)
 	v.verificarV4(ruta)
+	v.verificarSourceStamp(f, zr, info.Size())
 	return v, nil
 }
 
@@ -473,6 +510,8 @@ func (v *verificacion) verificarV2(f *os.File, tamano int64) {
 			// se comprueban en verificarV3, con el mismo digest de los tres tramos del paquete
 		case idParV4:
 			v.notar("el paquete trae también una firma v4: no se verificó aquí")
+		case idParSourceStamp:
+			// se comprueba en verificarSourceStamp, junto a la entrada ZIP del certificado
 		case idParRelleno:
 		default:
 			v.notar(fmt.Sprintf("par desconocido en el bloque de firmas: 0x%08x", par.id))
@@ -675,6 +714,54 @@ func (v *verificacion) verificarV3(f *os.File, tamano int64) {
 			v.verificarUnBloqueV3(par.valor, f, eocd, bloque, tamano, true)
 		}
 	}
+	v.verificarCoherenciaRotacion()
+}
+
+// verificarCoherenciaRotacion comprueba, ya con los tres bloques leídos, que el
+// rotation-min-sdk-version del v3.0 encaja con el rango del v3.1: el uno termina
+// justo donde empieza el otro, y la prueba del linaje solo aparece en un bloque.
+func (v *verificacion) verificarCoherenciaRotacion() {
+	if len(v.rotacionBloques) == 0 {
+		return
+	}
+	var v3, v31 *rotacionBloque
+	for i := range v.rotacionBloques {
+		b := &v.rotacionBloques[i]
+		if b.es31 {
+			v31 = b
+		} else {
+			v3 = b
+		}
+		if b.tienePrueba && b.tieneMinSdkAttr {
+			if b.es31 {
+				v.maloV31("el bloque con la prueba del linaje no debe llevar rotation-min-sdk-version")
+				v.v31 = false
+			} else {
+				v.maloV3("el bloque con la prueba del linaje no debe llevar rotation-min-sdk-version")
+				v.v3 = false
+			}
+		}
+	}
+	if v3 != nil && v3.tieneMinSdkAttr {
+		if v3.minSdkAttr <= 32 {
+			v.maloV3("rotation-min-sdk-version <= 32 no necesita un bloque v3.0 con ese atributo")
+			v.v3 = false
+		}
+		if v3.maxSdk+1 != v3.minSdkAttr {
+			v.maloV3(fmt.Sprintf("el v3.0 termina en el SDK %d y el rotation-min-sdk-version dice %d",
+				v3.maxSdk, v3.minSdkAttr))
+			v.v3 = false
+		}
+		if v31 != nil && v31.minSdk != v3.minSdkAttr {
+			v.maloV31(fmt.Sprintf("el v3.1 empieza en el SDK %d y el rotation-min-sdk-version dice %d",
+				v31.minSdk, v3.minSdkAttr))
+			v.v31 = false
+		}
+	}
+	if v31 != nil && !v31.tienePrueba && v31.tieneMinSdkAttr {
+		v.maloV31("el bloque v3.1 no trae la prueba de rotación")
+		v.v31 = false
+	}
 }
 
 func (v *verificacion) verificarUnBloqueV3(blob []byte, f *os.File, eocd *registroFinal,
@@ -711,6 +798,8 @@ func (v *verificacion) verificarUnBloqueV3(blob []byte, f *os.File, eocd *regist
 		falla("al firmante v3 le faltan minSdk y maxSdk")
 		return
 	}
+	minSdk := binary.LittleEndian.Uint32(resto)
+	maxSdk := binary.LittleEndian.Uint32(resto[4:])
 	resto = resto[8:]
 	datosFirmas, resto, err := primerElemento(resto)
 	if err != nil {
@@ -727,7 +816,7 @@ func (v *verificacion) verificarUnBloqueV3(blob []byte, f *os.File, eocd *regist
 		falla("los datos-firmados v3 no traen digests: " + err.Error())
 		return
 	}
-	certsBytes, _, err := primerElemento(restoSD)
+	certsBytes, colaSD, err := primerElemento(restoSD)
 	if err != nil {
 		falla("los datos-firmados v3 no traen certificados: " + err.Error())
 		return
@@ -801,14 +890,77 @@ func (v *verificacion) verificarUnBloqueV3(blob []byte, f *os.File, eocd *regist
 		falla("el firmante v3 no trae ningún par con el algoritmo que esta orden sabe leer")
 		return
 	}
+	// Detrás de los certificados, dentro de signedData, van minSdk, maxSdk y la lista
+	// de atributos adicionales. La firma sobre `sd` ya cubre estos bytes; ahora se
+	// comprueba lo que dicen: la prueba de rotación y el rotation-min-sdk-version.
+	info := rotacionBloque{es31: es31, minSdk: minSdk, maxSdk: maxSdk}
+	if len(colaSD) < 8 {
+		falla("a los datos-firmados v3 les falta el sitio de los atributos de rotación")
+	} else {
+		if sdMin, sdMax := binary.LittleEndian.Uint32(colaSD), binary.LittleEndian.Uint32(colaSD[4:]); sdMin != minSdk || sdMax != maxSdk {
+			falla("el rango de SDK de los datos-firmados v3 no es el del firmante")
+		}
+		attrs, errAttrs := leerAtributosV3(colaSD[8:])
+		if errAttrs != nil {
+			falla("la lista de atributos de rotación no se puede leer: " + errAttrs.Error())
+		} else {
+			if valor, hay := attrs[proofOfRotationAttr]; hay {
+				info.tienePrueba = true
+				nodos, errLinaje := leerLinajeV3(valor)
+				if errLinaje != nil {
+					falla("la prueba de rotación no se puede leer: " + errLinaje.Error())
+				} else if errCadena := verificarCadenaLinaje(nodos); errCadena != nil {
+					falla("la cadena de firmas del linaje no verifica: " + errCadena.Error())
+				} else if !laHojaEsElFirmante(nodos, cert.Raw) {
+					falla("el certificado del firmante no es la hoja del linaje")
+				}
+			}
+			if valor, hay := attrs[rotationMinSdkAttr]; hay {
+				if len(valor) < 4 {
+					falla("el atributo rotation-min-sdk-version no trae su valor")
+				} else {
+					info.tieneMinSdkAttr = true
+					info.minSdkAttr = binary.LittleEndian.Uint32(valor)
+				}
+			}
+		}
+	}
+	v.rotacionBloques = append(v.rotacionBloques, info)
 	if ok {
 		if es31 {
 			v.v31 = true
 		} else {
 			v.v3 = true
 		}
+		v.digestV3 = obtenido
 		v.registrarCertificado(cert)
 	}
+}
+
+// leerAtributosV3 lee la lista de atributos adicionales de un signedData v3: una longitud
+// delante de la lista y, dentro, pares con su propia longitud, id de 32 bits y valor.
+func leerAtributosV3(b []byte) (map[uint32][]byte, error) {
+	if len(b) < 4 {
+		return nil, errors.New("falta la longitud de la lista de atributos")
+	}
+	n := int(binary.LittleEndian.Uint32(b))
+	if n+4 > len(b) {
+		return nil, fmt.Errorf("la lista de atributos pide %d bytes y quedan %d", n, len(b)-4)
+	}
+	lista := b[4 : 4+n]
+	attrs := map[uint32][]byte{}
+	for len(lista) > 0 {
+		par, resto, err := primerElemento(lista)
+		if err != nil {
+			return nil, fmt.Errorf("un atributo no se puede leer: %w", err)
+		}
+		if len(par) < 4 {
+			return nil, errors.New("un atributo no trae su id")
+		}
+		attrs[binary.LittleEndian.Uint32(par)] = par[4:]
+		lista = resto
+	}
+	return attrs, nil
 }
 
 // hashDeClave: el id de algoritmo y el hash del contenido que corresponden a la clave
@@ -821,6 +973,20 @@ func hashDeClave(pub crypto.PublicKey) (uint32, crypto.Hash, bool) {
 		if k.Curve == elliptic.P256() {
 			return algECDSAWithSHA256, crypto.SHA256, true
 		}
+		return algECDSAWithSHA512, crypto.SHA512, true
+	}
+	return 0, 0, false
+}
+
+// hashDeAlgID es la inversa de hashDeClave para los ids de algoritmo que aparecen en
+// los nodos del linaje: el nodo dice con qué algoritmo lo firmó el padre.
+func hashDeAlgID(id uint32) (uint32, crypto.Hash, bool) {
+	switch id {
+	case algRSASSAWithSHA256:
+		return algRSASSAWithSHA256, crypto.SHA256, true
+	case algECDSAWithSHA256:
+		return algECDSAWithSHA256, crypto.SHA256, true
+	case algECDSAWithSHA512:
 		return algECDSAWithSHA512, crypto.SHA512, true
 	}
 	return 0, 0, false
@@ -969,4 +1135,170 @@ func leerPares(b []byte) ([]parDeBloque, error) {
 		return nil, fmt.Errorf("sobran %d bytes al final de los pares", len(b))
 	}
 	return out, nil
+}
+
+// --- SourceStamp --------------------------------------------------------------------------------
+
+// verificarSourceStamp lee el par 0x6dff800d del bloque de firmas y comprueba dos cosas:
+// que el SHA-256 del DER del certificado de sello es la entrada ZIP `stamp-cert-sha256`,
+// y que las firmas del sello cubren los digests del contenido de los esquemas que trae
+// el paquete. Lo que se firma para cada esquema es la secuencia de pares (id de algoritmo
+// de digest, digest) que apksig codifica con `pairsOf`: id 1 para el digest por trozos
+// SHA-256 de v2 y v3, id 2 para el de SHA-512, y id 4 para el SHA-256 plano de v1 sobre
+// los bytes sin comprimir de META-INF/MANIFEST.MF. Medido con `apksigner sign
+// --stamp-signer` y `apksigner verify -v` (§181 y comprobación de este cambio).
+func (v *verificacion) verificarSourceStamp(f *os.File, zr *zip.Reader, tamano int64) {
+	eocd, err := leerRegistroFinal(f, tamano)
+	if err != nil {
+		return
+	}
+	bloque, err := leerBloqueDeFirmas(f, eocd)
+	if err != nil || bloque == nil {
+		return
+	}
+	var sello []byte
+	for _, par := range bloque.pares {
+		if par.id == idParSourceStamp {
+			sello = par.valor
+		}
+	}
+	if sello == nil {
+		return // un paquete sin SourceStamp no es un paquete malo
+	}
+	malo := func(motivo string) {
+		v.selloMotivos = append(v.selloMotivos, motivo)
+	}
+	// el valor del par trae un firmante con longitud: certificado, firmas por esquema
+	// y, opcionalmente, datos del sello firmados con sus atributos (hora de sello).
+	firmante, _, err := primerElemento(sello)
+	if err != nil {
+		malo("el bloque del SourceStamp no se puede leer: " + err.Error())
+		return
+	}
+	certDER, resto, err := primerElemento(firmante)
+	if err != nil {
+		malo("el certificado del SourceStamp no se puede leer: " + err.Error())
+		return
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		malo("el certificado del SourceStamp no se parsea: " + err.Error())
+		return
+	}
+	entrada, err := buscarEntrada(zr, "stamp-cert-sha256")
+	if err != nil {
+		malo("falta la entrada ZIP stamp-cert-sha256")
+		return
+	}
+	huella, err := contenidoDe(entrada)
+	if err != nil {
+		malo("no se puede leer stamp-cert-sha256: " + err.Error())
+		return
+	}
+	suma := sha256.Sum256(certDER)
+	if !bytes.Equal(huella, suma[:]) {
+		malo("el SHA-256 del certificado de sello no es el de stamp-cert-sha256")
+		return
+	}
+	firmasBytes, cola, err := primerElemento(resto)
+	if err != nil {
+		malo("las firmas del SourceStamp no se pueden leer: " + err.Error())
+		return
+	}
+	firmas, err := leerPares(firmasBytes)
+	if err != nil {
+		malo("las firmas del SourceStamp no se pueden partir: " + err.Error())
+		return
+	}
+	// los digests firmados se construyen con los que ya calculó la verificación de
+	// cada esquema; no se vuelve a abrir el paquete para recalcularlos.
+	porEsquema := map[uint32][]byte{}
+	if len(v.digestV2) == 32 {
+		porEsquema[esquemaSelloV2] = pairsOf([][2]interface{}{{idDigestTroceadoSHA256, v.digestV2}})
+	}
+	if len(v.digestV3) > 0 {
+		id := idDigestTroceadoSHA256
+		if len(v.digestV3) == 64 {
+			id = uint32(2) // CHUNKED_SHA512, el compañero de P-384/P-521
+		}
+		porEsquema[esquemaSelloV3] = pairsOf([][2]interface{}{{id, v.digestV3}})
+	}
+	if mf, errMF := buscarEntrada(zr, v1ManifestEntry); errMF == nil {
+		if bytesMF, errLeer := contenidoDe(mf); errLeer == nil {
+			digestMF := sha256.Sum256(bytesMF)
+			porEsquema[esquemaSelloV1] = pairsOf([][2]interface{}{{idDigestSHA256, digestMF[:]}})
+		}
+	}
+	cubiertos := 0
+	for _, par := range firmas {
+		datos, hay := porEsquema[par.id]
+		if !hay {
+			malo(fmt.Sprintf("el SourceStamp firma el esquema %d, del que no se tiene digest", par.id))
+			continue
+		}
+		firmasDelEsquema, errPares := leerPares(par.valor)
+		if errPares != nil {
+			malo("las firmas del esquema " + fmt.Sprint(par.id) + " no se pueden partir: " + errPares.Error())
+			continue
+		}
+		if errFirma := verificarFirmaSello(datos, firmasDelEsquema, cert); errFirma != nil {
+			malo(fmt.Sprintf("el SourceStamp del esquema %d no verifica: %v", par.id, errFirma))
+			continue
+		}
+		cubiertos++
+	}
+	if cubiertos == 0 {
+		malo("el SourceStamp no cubre ningún esquema que esta orden sepa verificar")
+	}
+	// después de las firmas por esquema puede venir un bloque de datos del sello con su
+	// propia firma y sus atributos. La firma cubre los bytes íntegros de ese bloque.
+	if len(cola) >= 8 {
+		datosSello, restoCola, errDatos := primerElemento(cola)
+		firmaSelloBytes, _, errFirma := primerElemento(restoCola)
+		if errDatos != nil || errFirma != nil {
+			malo("los datos firmados del SourceStamp no se pueden leer")
+		} else {
+			firmasSello, errPares := leerPares(firmaSelloBytes)
+			if errPares != nil {
+				malo("la firma de los datos del SourceStamp no se puede partir: " + errPares.Error())
+			} else if errVer := verificarFirmaSello(datosSello, firmasSello, cert); errVer != nil {
+				malo("la firma de los datos del SourceStamp no verifica: " + errVer.Error())
+			}
+		}
+	}
+	if len(v.selloMotivos) == 0 {
+		v.sello = true
+	}
+}
+
+// verificarFirmaSello comprueba una lista de pares (id de algoritmo, firma) con la clave
+// pública del certificado de sello sobre los bytes dados. Los algoritmos que no se miden
+// se ignoran, igual que hace apksig; si no queda ninguno, se dice.
+func verificarFirmaSello(datos []byte, firmas []parDeBloque, cert *x509.Certificate) error {
+	medido := 0
+	for _, par := range firmas {
+		_, h, bien := hashDeAlgID(par.id)
+		if !bien {
+			continue
+		}
+		resumen := h.New()
+		resumen.Write(datos)
+		switch pub := cert.PublicKey.(type) {
+		case *rsa.PublicKey:
+			if err := rsa.VerifyPKCS1v15(pub, h, resumen.Sum(nil), par.valor); err != nil {
+				return fmt.Errorf("la firma RSA con el algoritmo 0x%04x no verifica", par.id)
+			}
+		case *ecdsa.PublicKey:
+			if !ecdsa.VerifyASN1(pub, resumen.Sum(nil), par.valor) {
+				return fmt.Errorf("la firma ECDSA con el algoritmo 0x%04x no verifica", par.id)
+			}
+		default:
+			return errors.New("el certificado de sello no lleva una clave RSA o EC medida")
+		}
+		medido++
+	}
+	if medido == 0 {
+		return errors.New("el sello no trae ningún algoritmo de firma medido")
+	}
+	return nil
 }

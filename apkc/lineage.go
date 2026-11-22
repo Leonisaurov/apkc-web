@@ -13,8 +13,12 @@ package main
 // cuando no se piden capacidades.
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/rsa"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
 )
 
@@ -122,4 +126,112 @@ func atributosRotacionCompleta(inner []byte, minSdk int) []byte {
 	out := ponU32(nil, uint32(len(p1)+len(p2)))
 	out = append(out, p1...)
 	return append(out, p2...)
+}
+
+// --- lectura y verificación del linaje por parte de `apkc verify` --------------------------------
+
+// nodoLinajeLeido es un nodo del linaje tal como lo relee un verificador. `sd` es el
+// contenido firmado: el certificado con su longitud y el algoritmo del padre, sin la
+// longitud que lo envuelve dentro del nodo.
+type nodoLinajeLeido struct {
+	certDER   []byte
+	cert      *x509.Certificate
+	sd        []byte
+	parentAlg uint32
+	flags     uint32
+	sigAlg    uint32
+	firma     []byte
+}
+
+// leerLinajeV3 parsea el valor del atributo proof-of-rotation: la versión y la lista de
+// nodos con su longitud. Es el linaje interno, sin la magia exterior del fichero que
+// escribe `rotate`.
+func leerLinajeV3(inner []byte) ([]nodoLinajeLeido, error) {
+	if len(inner) < 4 {
+		return nil, errors.New("la prueba de rotación no trae la versión")
+	}
+	if version := binary.LittleEndian.Uint32(inner); version != linajeVersion {
+		return nil, fmt.Errorf("la prueba de rotación es de versión %d y solo se mide la %d",
+			version, linajeVersion)
+	}
+	resto := inner[4:]
+	var nodos []nodoLinajeLeido
+	for len(resto) > 0 {
+		crudo, cola, err := primerElemento(resto)
+		if err != nil {
+			return nil, fmt.Errorf("un nodo del linaje no se puede leer: %w", err)
+		}
+		sd, campos, err := primerElemento(crudo)
+		if err != nil {
+			return nil, fmt.Errorf("el contenido firmado del nodo no se puede leer: %w", err)
+		}
+		if len(campos) < 8 {
+			return nil, errors.New("al nodo del linaje le faltan los flags y el algoritmo")
+		}
+		certDER, sdResto, err := primerElemento(sd)
+		if err != nil || len(sdResto) < 4 {
+			return nil, errors.New("el signedData del nodo no trae certificado y algoritmo del padre")
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			return nil, fmt.Errorf("el certificado del nodo no se parsea: %w", err)
+		}
+		firma, _, err := primerElemento(campos[8:])
+		if err != nil {
+			return nil, fmt.Errorf("la firma del nodo no se puede leer: %w", err)
+		}
+		nodos = append(nodos, nodoLinajeLeido{
+			certDER:   certDER,
+			cert:      cert,
+			sd:        sd,
+			parentAlg: binary.LittleEndian.Uint32(sdResto),
+			flags:     binary.LittleEndian.Uint32(campos),
+			sigAlg:    binary.LittleEndian.Uint32(campos[4:]),
+			firma:     firma,
+		})
+		resto = cola
+	}
+	if len(nodos) == 0 {
+		return nil, errors.New("la prueba de rotación no trae ningún nodo")
+	}
+	return nodos, nil
+}
+
+// verificarCadenaLinaje comprueba la cadena nodo a nodo: cada nodo después del
+// primero lo firmó la clave del anterior sobre su contenido firmado, con el algoritmo
+// que el propio nodo declara como algoritmo del padre. El primero no lleva firma: es
+// el certificado original del que cuelga toda la cadena.
+func verificarCadenaLinaje(nodos []nodoLinajeLeido) error {
+	for i := 1; i < len(nodos); i++ {
+		actual, anterior := nodos[i], nodos[i-1]
+		if len(actual.firma) == 0 {
+			return fmt.Errorf("el nodo %d no trae la firma del nodo anterior", i)
+		}
+		_, h, bien := hashDeAlgID(actual.parentAlg)
+		if !bien {
+			return fmt.Errorf("el nodo %d usa el algoritmo de padre 0x%04x, que no se mide aquí",
+				i, actual.parentAlg)
+		}
+		resumen := h.New()
+		resumen.Write(actual.sd)
+		switch pub := anterior.cert.PublicKey.(type) {
+		case *rsa.PublicKey:
+			if err := rsa.VerifyPKCS1v15(pub, h, resumen.Sum(nil), actual.firma); err != nil {
+				return fmt.Errorf("la firma del nodo %d no verifica con la clave del nodo %d", i, i-1)
+			}
+		case *ecdsa.PublicKey:
+			if !ecdsa.VerifyASN1(pub, resumen.Sum(nil), actual.firma) {
+				return fmt.Errorf("la firma del nodo %d no verifica con la clave del nodo %d", i, i-1)
+			}
+		default:
+			return fmt.Errorf("el nodo %d usa una clave que esta orden no sabe verificar", i-1)
+		}
+	}
+	return nil
+}
+
+// laHojaEsElFirmante comprueba que el certificado con el que se firmó el bloque v3
+// es el último nodo del linaje, como exige la rotación.
+func laHojaEsElFirmante(nodos []nodoLinajeLeido, certDER []byte) bool {
+	return bytes.Equal(nodos[len(nodos)-1].certDER, certDER)
 }
