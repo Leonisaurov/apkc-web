@@ -105,6 +105,9 @@ jobs:
   verificar:
     needs: generar
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
 
@@ -117,12 +120,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
       - name: Instalar la SDK solo como oráculo
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
-          sdkmanager --install 'platforms;android-34' >/dev/null
+          SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | tail -1)
+          yes | "$SDKM" --licenses >/dev/null 2>&1 || true
+          "$SDKM" --install 'platforms;android-34' >/dev/null
+          test -f "$ANDROID_HOME/platforms/android-34/android.jar"
 
       - uses: actions/download-artifact@v4
         with:
