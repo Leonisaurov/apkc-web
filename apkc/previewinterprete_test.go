@@ -211,19 +211,26 @@ public class MainActivity extends Activity {
 // fuentesDelContador arma el proyecto: el R.java sale de la tabla, para que los ids no discrepen.
 func fuentesDelContador(t *testing.T) []fuenteJava {
 	t.Helper()
-	r, err := rDeTabla(tablaDelContador())
-	if err != nil {
-		t.Fatalf("el R.java no sale de la tabla: %v", err)
-	}
 	return []fuenteJava{
-		{nombre: "R.java", contenido: r},
+		{nombre: "R.java", contenido: rContador(t)},
 		{nombre: "MainActivity.java", contenido: fuenteContadorStudio},
 	}
 }
 
+// rContador es el R.java de la plantilla Contador, generado desde la tabla del propio fork.
+func rContador(t *testing.T) string {
+	t.Helper()
+	r, err := rDeTabla(tablaDelContador())
+	if err != nil {
+		t.Fatalf("el R.java no sale de la tabla: %v", err)
+	}
+	return r
+}
+
 // TestElInterpreteEjecutaOnCreateYCapturaElSetText es el criterio de aceptación de la Fase 2 sobre el
-// dex, sin apk: el onCreate del Contador corre, el layout sale de su setContentView y la pulsación
-// simulada deja `Pulsos: 1` capturado sobre el id 0x7f010001.
+// dex, sin apk: el onCreate del Contador corre, el layout sale de su setContentView y NO se pulsa
+// nada, así que no hay `setText` que capturar y la pantalla se queda en «Pulsos: 0». El listener
+// queda registrado y publicado en `oyentes`, que es a quien se le puede pedir un clic.
 func TestElInterpreteEjecutaOnCreateYCapturaElSetText(t *testing.T) {
 	d, err := readDex(dexDeFuentes(t, fuentesDelContador(t)...))
 	if err != nil {
@@ -247,18 +254,14 @@ func TestElInterpreteEjecutaOnCreateYCapturaElSetText(t *testing.T) {
 	if res.Pasos == 0 {
 		t.Error("el intérprete no contó ni un paso")
 	}
-	if res.Interacciones != 1 {
-		t.Errorf("se pulsaron %d listeners y el Contador registra uno", res.Interacciones)
+	if res.Interacciones != 0 {
+		t.Errorf("el emulador pulsó %d veces sin que nadie tocara la pantalla", res.Interacciones)
 	}
-	if len(res.Capturas) != 1 {
-		t.Fatalf("%d capturas: %+v", len(res.Capturas), res.Capturas)
+	if len(res.Capturas) != 0 {
+		t.Fatalf("sin clic no hay escrituras que capturar: %+v", res.Capturas)
 	}
-	c := res.Capturas[0]
-	if c.Origen != "TextView.setText" || c.Texto != "Pulsos: 1" {
-		t.Errorf("la captura es %q con texto %q", c.Origen, c.Texto)
-	}
-	if c.IDRef != "0x7f010001" {
-		t.Errorf("la captura apunta a %q y R.id.total es 0x7f010001", c.IDRef)
+	if len(res.Oyentes) != 1 || res.Oyentes[0].IDRef != "0x7f010000" {
+		t.Fatalf("los oyentes son %+v y el Contador registra uno sobre id/pulsar (0x7f010000)", res.Oyentes)
 	}
 	if len(res.Avisos) != 0 {
 		t.Errorf("la ejecución dejó avisos que no debería: %v", res.Avisos)
@@ -273,14 +276,14 @@ func TestElInterpreteEjecutaOnCreateYCapturaElSetText(t *testing.T) {
 		t.Fatalf("la tabla del Contador no se relee: %v", err)
 	}
 	res, _ = ejecutaOnCreate(d, tablaFork, "Lcom/hola/contador/MainActivity;")
-	if len(res.Capturas) != 1 || res.Capturas[0].ID != "id/total" {
-		t.Fatalf("con la tabla del fork la captura es %+v y se esperaba id/total", res.Capturas)
+	if len(res.Oyentes) != 1 || res.Oyentes[0].ID != "id/pulsar" {
+		t.Fatalf("con la tabla del fork el oyente es %+v y se esperaba id/pulsar", res.Oyentes)
 	}
 }
 
 // TestElPreviewLlevaElTextoDinamicoAlModelo cierra la fase de punta a punta sin sdk de por medio: un
-// apk armado en memoria con los escritores del fork y el classes.dex del Contador. El nodo conserva
-// el texto declarado y añade el que la app escribió.
+// apk armado en memoria con los escritores del fork y el classes.dex del Contador. Sin clic, el nodo
+// conserva el texto declarado y el botón queda marcado como oyente: es el emulador en reposo.
 func TestElPreviewLlevaElTextoDinamicoAlModelo(t *testing.T) {
 	// la lanzadora es Casos: es donde vive el switch, y así lo recorre también el comando entero
 	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
@@ -321,15 +324,208 @@ func TestElPreviewLlevaElTextoDinamicoAlModelo(t *testing.T) {
 	if texto.Texto != "Pulsos: 0" {
 		t.Errorf("el texto declarado del TextView es %q", texto.Texto)
 	}
-	if texto.TextoDinamico != "Pulsos: 1" {
-		t.Errorf("el texto dinámico del TextView es %q y la app escribió «Pulsos: 1»", texto.TextoDinamico)
+	if texto.TextoDinamico != "" {
+		t.Errorf("sin clic el TextView no puede tener texto dinámico: %q", texto.TextoDinamico)
+	}
+	if texto.Oyente {
+		t.Error("el TextView declara un oyente que solo tiene el botón")
 	}
 	if boton.Texto != "Pulsar" || boton.TextoDinamico != "" {
 		t.Errorf("el Button se lee como %q / %q y nadie le escribió texto", boton.Texto, boton.TextoDinamico)
 	}
-	// el ancho estimado usa el texto que se ve: «Pulsos: 1» mide lo mismo que «Pulsos: 0»
+	if !boton.Oyente {
+		t.Error("el Button registra el OnClickListener y el modelo no lo marca como oyente")
+	}
+	// el ancho estimado usa el texto que se ve: «Pulsos: 0» mide lo mismo que «Pulsos: 1»
 	if texto.Rect.Ancho != len([]rune("Pulsos: 0"))*dpPorCaracter+dpRellenoTexto {
 		t.Errorf("el ancho del TextView es %d", texto.Rect.Ancho)
+	}
+}
+
+// apkDelContador arma en memoria el apk de la plantilla Contador con las fuentes que se le den: el
+// manifiesto, la tabla y el layout son los del studio, y el dex sale del emisor del fork.
+func apkDelContador(t *testing.T, fuentes ...fuenteJava) []byte {
+	t.Helper()
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layout, err := escribeAXML(layoutDelContador())
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	return zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layout,
+		"classes.dex":         dexDeFuentes(t, fuentes...),
+	})
+}
+
+// TestElPreviewPulsaElListenerQueSeLePide es el criterio del emulador con clics: sin `--pulsar` la
+// pantalla queda en «Pulsos: 0»; con un clic en id/pulsar, en «Pulsos: 1»; y con el mismo clic dos
+// veces, en «Pulsos: 2», porque los dos se entregan dentro de la misma ejecución. El id se puede
+// pedir por nombre o por su `idRef`, y las dos formas dan el mismo JSON.
+func TestElPreviewPulsaElListenerQueSeLePide(t *testing.T) {
+	apk := apkDelContador(t, fuentesDelContador(t)...)
+	textoDinamico := func(m *modeloVista) string {
+		if m.Ejecucion == nil || m.Raiz == nil || len(m.Raiz.Hijos) == 0 {
+			t.Fatalf("el modelo no trae ejecución o hijos: %+v", m)
+		}
+		return m.Raiz.Hijos[0].TextoDinamico
+	}
+
+	reposo, err := modeloVistaDeAPKConPulsos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk en reposo no se lee: %v", err)
+	}
+	if got := textoDinamico(reposo); got != "" {
+		t.Errorf("sin clic el texto dinámico es %q", got)
+	}
+	if reposo.Ejecucion.Interacciones != 0 || len(reposo.Ejecucion.Capturas) != 0 {
+		t.Errorf("sin clic no hay interacciones ni capturas: %+v", reposo.Ejecucion)
+	}
+
+	uno, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar"})
+	if err != nil {
+		t.Fatalf("el clic en id/pulsar falló: %v", err)
+	}
+	if got := textoDinamico(uno); got != "Pulsos: 1" {
+		t.Errorf("tras un clic el texto dinámico es %q y se esperaba «Pulsos: 1»", got)
+	}
+	if uno.Ejecucion.Interacciones != 1 {
+		t.Errorf("interacciones = %d tras un clic", uno.Ejecucion.Interacciones)
+	}
+	if len(uno.Ejecucion.Capturas) != 1 || uno.Ejecucion.Capturas[0].ID != "id/total" ||
+		uno.Ejecucion.Capturas[0].Texto != "Pulsos: 1" {
+		t.Errorf("la captura del clic es %+v y se esperaba «Pulsos: 1» sobre id/total", uno.Ejecucion.Capturas)
+	}
+	if len(uno.Ejecucion.Pulsaciones) != 1 || uno.Ejecucion.Pulsaciones[0] != "id/pulsar" {
+		t.Errorf("las pulsaciones entregadas son %v", uno.Ejecucion.Pulsaciones)
+	}
+
+	// el mismo clic dos veces: el estado que ve el segundo onClick incluye el primero
+	dos, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar", "id/pulsar"})
+	if err != nil {
+		t.Fatalf("los dos clics fallaron: %v", err)
+	}
+	if got := textoDinamico(dos); got != "Pulsos: 2" {
+		t.Errorf("tras dos clics el texto dinámico es %q y se esperaba «Pulsos: 2»", got)
+	}
+	if dos.Ejecucion.Interacciones != 2 {
+		t.Errorf("interacciones = %d tras dos clics", dos.Ejecucion.Interacciones)
+	}
+	if len(dos.Ejecucion.Capturas) != 2 || dos.Ejecucion.Capturas[1].Texto != "Pulsos: 2" {
+		t.Errorf("las capturas de dos clics son %+v", dos.Ejecucion.Capturas)
+	}
+
+	// por su idRef: el mismo resultado, que es lo que publica cada nodo del modelo
+	porRef, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"0x7f010000"})
+	if err != nil {
+		t.Fatalf("el clic por idRef falló: %v", err)
+	}
+	if got := textoDinamico(porRef); got != "Pulsos: 1" {
+		t.Errorf("el clic por idRef dejó %q", got)
+	}
+	// y por el decimal del mismo id (0x7f010000 = 2130771968)
+	porDecimal, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"2130771968"})
+	if err != nil {
+		t.Fatalf("el clic por el decimal del id falló: %v", err)
+	}
+	if got := textoDinamico(porDecimal); got != "Pulsos: 1" {
+		t.Fatalf("el clic por el decimal del id dejó %q", got)
+	}
+}
+
+// TestElPreviewRechazaUnClicQueNoExiste: pedir un clic que no se puede entregar no devuelve un modelo
+// a medias. El error dice qué listeners sí están registrados, que es lo que hace falta para arreglar
+// la llamada.
+func TestElPreviewRechazaUnClicQueNoExiste(t *testing.T) {
+	apk := apkDelContador(t, fuentesDelContador(t)...)
+	if _, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/no-existe"}); err == nil {
+		t.Fatal("se aceptó un clic sobre una vista que no existe")
+	} else if !strings.Contains(err.Error(), "la tabla no tiene") {
+		t.Errorf("el error de un id que no está en la tabla es %q", err)
+	}
+	// una vista con id pero sin listener tampoco responde: el TextView no tiene onClick, y el error
+	// dice qué sí se puede pulsar
+	if _, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/total"}); err == nil {
+		t.Fatal("se aceptó un clic sobre una vista sin OnClickListener")
+	} else if !strings.Contains(err.Error(), "ninguna vista con ese id") ||
+		!strings.Contains(err.Error(), "id/pulsar") {
+		t.Errorf("el error es %q y tenía que nombrar los listeners registrados", err)
+	}
+	// y una forma que no es un id se dice, en vez de pulsar cualquier cosa
+	if _, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"pulsar"}); err == nil {
+		t.Fatal("se aceptó «pulsar» como id")
+	}
+}
+
+// TestLaConsolaSeparaLaSalidaDeLaApp: `Log.d` y `System.out.println` son la salida de la app y van a
+// `consola`, numeradas en el orden de emisión; el registro del emulador (`capturas`) las conserva
+// junto a la escritura de la view, que es lo que el panel de registro sigue leyendo.
+func TestLaConsolaSeparaLaSalidaDeLaApp(t *testing.T) {
+	const conConsola = `package com.hola.contador;
+
+import android.app.*;
+import android.os.*;
+import android.util.Log;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    int pulsos = 0;
+    TextView total;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                pulsos = pulsos + 1;
+                total.setText("Pulsos: " + pulsos);
+                Log.d("Contador", "pulso " + pulsos);
+                System.out.println("consola " + pulsos);
+            }
+        });
+    }
+}
+`
+	apk := apkDelContador(t, fuenteJava{nombre: "R.java", contenido: rContador(t)},
+		fuenteJava{nombre: "MainActivity.java", contenido: conConsola})
+	modelo, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar"})
+	if err != nil {
+		t.Fatalf("el apk con consola no se ejecuta: %v", err)
+	}
+	e := modelo.Ejecucion
+	if e == nil || e.Error != "" {
+		t.Fatalf("la ejecución falló: %+v", e)
+	}
+	if len(e.Consola) != 2 {
+		t.Fatalf("la consola trae %d líneas y la app imprime dos: %+v", len(e.Consola), e.Consola)
+	}
+	if e.Consola[0].Origen != "Log.d" || e.Consola[0].Texto != "pulso 1" || e.Consola[0].Secuencia != 1 {
+		t.Errorf("la primera línea de consola es %+v", e.Consola[0])
+	}
+	if e.Consola[1].Origen != "println" || e.Consola[1].Texto != "consola 1" || e.Consola[1].Secuencia != 2 {
+		t.Errorf("la segunda línea de consola es %+v", e.Consola[1])
+	}
+	// el registro del emulador no pierde nada: setText, el Log y el println, en ese orden
+	origenes := []string{}
+	for _, c := range e.Capturas {
+		origenes = append(origenes, c.Origen)
+	}
+	if strings.Join(origenes, ",") != "TextView.setText,Log.d,println" {
+		t.Errorf("las capturas del registro son %v", origenes)
+	}
+	if modelo.Raiz.Hijos[0].TextoDinamico != "Pulsos: 1" {
+		t.Errorf("el clic no llegó al modelo: %q", modelo.Raiz.Hijos[0].TextoDinamico)
 	}
 }
 
@@ -444,6 +640,40 @@ func TestElDescriptorDeLaActividadCubreLasTresFormas(t *testing.T) {
 	}
 	if got := descriptorDeActividad("com.hola.contador", ""); got != "" {
 		t.Errorf("sin nombre salió %q", got)
+	}
+}
+
+// TestElConstructorDeStringBuilderLlevaSuPrimerTrozo: javac compila `"Pulsos: " + pulsos` como
+// `new StringBuilder("Pulsos: ")` + `append(int)` + `toString`. Si el `<init>` se limita a no hacer
+// nada, el texto sale sin su parte literal (medido sobre el apk del Contador: «1» y no «Pulsos: 1»).
+// La forma con un entero es la CAPACIDAD, no contenido: no puede acabar dentro del texto.
+func TestElConstructorDeStringBuilderLlevaSuPrimerTrozo(t *testing.T) {
+	m := nuevaMaquina(&programaDalvik{dex: &dexFile{}, clases: map[string]*claseDalvik{}}, nil)
+	for _, caso := range []struct {
+		proto string
+		args  []any
+		quien string
+	}{
+		{"(Ljava/lang/String;)V", []any{"Pulsos: "}, "Pulsos: 1"},
+		{"()V", nil, "1"},
+		{"(I)V", []any{int32(16)}, "1"},
+	} {
+		sb := &objetoDalvik{clase: "Ljava/lang/StringBuilder;", campos: map[string]any{}}
+		candidatos := []string{"Ljava/lang/StringBuilder;"}
+		if _, ok, err := m.intentaStub(candidatos, "<init>", caso.proto, caso.args, sb); !ok || err != nil {
+			t.Fatalf("el constructor %s no se atendió: ok=%v err=%v", caso.proto, ok, err)
+		}
+		if _, _, err := m.intentaStub(candidatos, "append", "(I)Ljava/lang/StringBuilder;",
+			[]any{int32(1)}, sb); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+		v, ok, err := m.intentaStub(candidatos, "toString", "()Ljava/lang/String;", nil, sb)
+		if !ok || err != nil {
+			t.Fatalf("toString: ok=%v err=%v", ok, err)
+		}
+		if v != caso.quien {
+			t.Errorf("con %s el texto es %q y se esperaba %q", caso.proto, v, caso.quien)
+		}
 	}
 }
 

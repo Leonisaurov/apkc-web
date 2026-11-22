@@ -106,20 +106,23 @@ func (l ladosVista) vertical() int   { return l.Arr + l.Aba }
 // cuenta documentada de AOSP/aapt2 necesita (sin oráculo de aparato), y lo que el pintor puede
 // consumir sin volver a leer el AXML.
 type nodoVista struct {
-	Tipo          string       `json:"tipo"`
-	ID            string       `json:"id,omitempty"`
-	IDRef         string       `json:"idRef,omitempty"`
-	Texto         string       `json:"texto,omitempty"`
-	TextoDinamico string       `json:"textoDinamico,omitempty"`
-	Estilo        string       `json:"estilo,omitempty"`
-	Ancho         string       `json:"ancho,omitempty"`
-	Alto          string       `json:"alto,omitempty"`
-	Gravity       string       `json:"gravity,omitempty"`
-	Peso          float64      `json:"peso,omitempty"`
-	Padding       *ladosVista  `json:"padding,omitempty"`
-	Margen        *ladosVista  `json:"margen,omitempty"`
-	Rect          rectVista    `json:"rect"`
-	Hijos         []*nodoVista `json:"hijos,omitempty"`
+	Tipo          string `json:"tipo"`
+	ID            string `json:"id,omitempty"`
+	IDRef         string `json:"idRef,omitempty"`
+	Texto         string `json:"texto,omitempty"`
+	TextoDinamico string `json:"textoDinamico,omitempty"`
+	// Oyente marca la vista que registró un OnClickListener: es la que responde a un clic en el
+	// render y la única a la que se le puede pedir `--pulsar`.
+	Oyente  bool         `json:"oyente,omitempty"`
+	Estilo  string       `json:"estilo,omitempty"`
+	Ancho   string       `json:"ancho,omitempty"`
+	Alto    string       `json:"alto,omitempty"`
+	Gravity string       `json:"gravity,omitempty"`
+	Peso    float64      `json:"peso,omitempty"`
+	Padding *ladosVista  `json:"padding,omitempty"`
+	Margen  *ladosVista  `json:"margen,omitempty"`
+	Rect    rectVista    `json:"rect"`
+	Hijos   []*nodoVista `json:"hijos,omitempty"`
 
 	orientacion string // "vertical", "horizontal" o "" (se apilan en el origen)
 
@@ -176,19 +179,24 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
 default) unless the app's onCreate calls setContentView with a resource id, which the Dalvik
-interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and one
-click per registered listener, and reports the text the app writes (TextView.setText) in
-ejecucion.capturas and in each node's textoDinamico. No process is started and nothing is written,
-so it runs inside the tab.
+interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and stops
+there: it does NOT click anything on its own. Each --pulsar id runs the OnClickListener registered
+on that view, in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal); the
+text the app writes (TextView.setText) comes back in ejecucion.capturas and in each node's
+textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.consola. Repeating the
+same list reproduces the same screen. No process is started and nothing is written, so it runs
+inside the tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
 	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
+	var pulsos listaRepetida
+	set.Var(&pulsos, "pulsar", "id de la vista cuyo OnClickListener se ejecuta (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
@@ -197,12 +205,16 @@ so it runs inside the tab.
 		fmt.Fprintln(os.Stderr, "preview: se espera un apk")
 		os.Exit(2)
 	}
+	if *sinEjecutar && len(pulsos) > 0 {
+		fmt.Fprintln(os.Stderr, "preview: --pulsar necesita ejecutar el dex; quita --sin-ejecutar")
+		os.Exit(2)
+	}
 	datos, err := os.ReadFile(rutas[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
-	modelo, err := modeloVistaDeAPKCon(datos, *layout, !*sinEjecutar)
+	modelo, err := modeloVistaDeAPKConPulsos(datos, *layout, !*sinEjecutar, pulsos)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
@@ -215,6 +227,20 @@ so it runs inside the tab.
 	fmt.Println(string(salida))
 }
 
+// listaRepetida es un flag que acumula cada aparición: `--pulsar a --pulsar b` pide dos clics en ese
+// orden, que es lo que hace reproducible una pantalla tras varios toques.
+type listaRepetida []string
+
+func (l *listaRepetida) String() string { return strings.Join(*l, ",") }
+
+func (l *listaRepetida) Set(v string) error {
+	if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("--pulsar necesita un id: id/pulsar, 0x7f010000 o su decimal")
+	}
+	*l = append(*l, v)
+	return nil
+}
+
 // modeloVistaDeAPK es el cuerpo del comando con el intérprete de la Fase 2 activo. Se queda como
 // envoltorio para que las pruebas de la Fase 1 no cambien de forma de llamada.
 func modeloVistaDeAPK(datos []byte, layout string) (*modeloVista, error) {
@@ -223,8 +249,16 @@ func modeloVistaDeAPK(datos []byte, layout string) (*modeloVista, error) {
 
 // modeloVistaDeAPKCon es el cuerpo del comando, separado de los argumentos para poder probarlo con
 // los bytes de un apk sin pasar por el sistema de ficheros. `ejecutar` decide si se interpreta
-// classes.dex; sin él, el modelo es exactamente el de la Fase 1.
+// classes.dex; sin él, el modelo es exactamente el de la Fase 1. No pulsa nada: el emulador arranca
+// en el estado de `onCreate` y espera un clic.
 func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVista, error) {
+	return modeloVistaDeAPKConPulsos(datos, layout, ejecutar, nil)
+}
+
+// modeloVistaDeAPKConPulsos es el mismo cuerpo con la lista de clics de `--pulsar`, que se entrega en
+// orden dentro de la misma ejecución. Un clic que no se puede entregar devuelve error: un modelo con
+// la pantalla a medias se leería como si el clic hubiera funcionado.
+func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulsos []string) (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(datos), int64(len(datos)))
 	if err != nil {
 		return nil, fmt.Errorf("el apk no es un zip: %w", err)
@@ -274,7 +308,11 @@ func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVis
 		if dexBytes, err := entradaDeZip(zr, "classes.dex"); err == nil {
 			if d, err := readDex(dexBytes); err == nil {
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
-				modelo.Ejecucion, layoutID = ejecutaOnCreate(d, tabla, preferida)
+				var errPulsos error
+				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreateConPulsos(d, tabla, preferida, pulsos)
+				if errPulsos != nil {
+					return nil, errPulsos
+				}
 				// un dex mal formado no se ejecuta a medias ni se tapa con un modelo que parecería
 				// medido: el comando lo rechaza. Una API fuera del subconjunto, en cambio, solo deja
 				// avisos y el modelo sale igual.
@@ -310,6 +348,7 @@ func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVis
 	}
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
 	anotaTextoDinamico(raiz, modelo.Ejecucion)
+	anotaOyentes(raiz, modelo.Ejecucion)
 	// el rectángulo se calcula con el texto que se va a ver: si la app lo cambió, la medida del
 	// layout declarado ya no es la de la pantalla que el modelo describe
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
@@ -347,6 +386,23 @@ func anotaTextoDinamico(n *nodoVista, ejecucion *resultadoEjecucion) {
 	}
 	for _, h := range n.Hijos {
 		anotaTextoDinamico(h, ejecucion)
+	}
+}
+
+// anotaOyentes marca en el árbol las vistas que responden a un clic. El emparejamiento es por id de
+// recurso: es lo que comparten el layout y el `findViewById` del `OnClickListener`.
+func anotaOyentes(n *nodoVista, ejecucion *resultadoEjecucion) {
+	if n == nil || ejecucion == nil {
+		return
+	}
+	for _, o := range ejecucion.Oyentes {
+		if o.IDRef != "" && o.IDRef == n.IDRef {
+			n.Oyente = true
+			break
+		}
+	}
+	for _, h := range n.Hijos {
+		anotaOyentes(h, ejecucion)
 	}
 }
 

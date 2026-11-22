@@ -634,6 +634,26 @@ func (tr *tablaRecursos) nombreDeId(id uint32) (tipo, clave string, ok bool) {
 	return bl.nombre, tr.clave(e), true
 }
 
+// idDeNombre es la vuelta de nombreDeId: lleva `id/pulsar` al id que el layout escribe en
+// `android:id`. El id de un recurso es el paquete en el byte alto, el tipo en el de en medio y el
+// índice de su entrada en el bajo, así que el bloque base del tipo y la posición dentro de él son
+// todo lo que hace falta. Se exige la configuración base: un `id-land` no es el id del layout.
+func (tr *tablaRecursos) idDeNombre(tipo, clave string) (uint32, bool) {
+	for i := range tr.bloques {
+		bl := &tr.bloques[i]
+		if bl.nombre != tipo || !esConfiguracionBase(bl.config) {
+			continue
+		}
+		for j := range bl.entradas {
+			if bl.entradas[j].ausente || tr.clave(bl.entradas[j]) != clave {
+				continue
+			}
+			return (tr.idPaquete&0xff)<<24 | uint32(bl.id)<<16 | uint32(j), true
+		}
+	}
+	return 0, false
+}
+
 // valorDeId da el Res_value de una entrada simple. Un valor complejo (un estilo) no tiene uno y se
 // rechaza: su nombre lo da nombreDeId.
 func (tr *tablaRecursos) valorDeId(id uint32) (valor, bool) {

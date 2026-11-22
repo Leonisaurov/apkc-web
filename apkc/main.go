@@ -125,9 +125,11 @@ check  - read one .java file and print, as one line of JSON on stdout, the error
 preview - read one apk and print, as one line of JSON on stdout, the model of its first screen:
          type, id, text, children and an approximate rectangle per node. The layout is the one
          the app's onCreate passes to setContentView (the Dalvik interpreter of Phase 2 reads it
-         from classes.dex), and the text the app writes with TextView.setText travels in
-         ejecucion.capturas and in each node's textoDinamico (--sin-ejecutar keeps Phase 1's
-         model). No process is started either.
+         from classes.dex). The interpreter runs onCreate and does NOT click anything on its own:
+         each --pulsar id runs that view's OnClickListener, in order and inside the same run, and
+         the text the app writes with TextView.setText travels in ejecucion.capturas and in each
+         node's textoDinamico; the app's own output (println, Log.*) travels in ejecucion.consola.
+         --sin-ejecutar keeps Phase 1's model. No process is started either.
 version - print the commit this binary was built from
 `)
 }

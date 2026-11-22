@@ -10,8 +10,14 @@ package main
 //   - resuelve llamadas a las clases del propio dex (constructores incluidos) y stubs de framework
 //     para lo que la app toca: `Activity.onCreate`, `setContentView`, `findViewById`,
 //     `View.setOnClickListener`, `TextView.setText`, `StringBuilder`, `Log` y `println`;
-//   - tras `onCreate` pulsa una vez cada listener registrado. Es lo único que hace falta para que la
-//     plantilla Contador escriba: su `setText` vive en el `onClick`, no en el `onCreate`.
+//   - la app arranca con `onCreate` y nada más: NO se pulsa ningún listener por su cuenta, porque un
+//     texto que cambia sin que nadie toque la pantalla no es un emulador. Los clics llegan por
+//     `--pulsar id/pulsar`, en el orden en que se piden y dentro de la misma ejecución, así que el
+//     estado que ve el `onClick` es el que dejó `onCreate` y los clics anteriores. Repetir la lista
+//     reproduce la misma pantalla: el emulador no guarda estado entre comandos y no lo finge.
+//   - la salida de la app (`System.out.println`, `print` y `Log.*`) se anota además en `consola`, en
+//     orden de emisión y numerada con `secuencia`, que es el panel de consola de la pestaña. Las
+//     escrituras de view siguen en `capturas`, que es el registro del emulador.
 //
 // Lo que NO hace: JNI, bibliotecas `.so`, multidex, excepciones (`try`/`catch` se rechazan por
 // nombre), `fill-array-data` y cualquier API de framework fuera de los stubs. Una llamada que no se
@@ -34,7 +40,11 @@ const (
 	capturasMaximas         = 64
 	avisosMaximos           = 24
 	profundidadMaximaDalvik = 48
-	interaccionesMax        = 4
+	// pulsacionesMaximas acota la lista de `--pulsar`: un clic de más no puede encadenar una
+	// ejecución sin fin, y el tope se avisa en vez de recortar en silencio.
+	pulsacionesMaximas = 32
+	// consolaMaximas acota las líneas de consola, con el mismo criterio que las capturas.
+	consolaMaximas = 128
 )
 
 // capturaTexto es una escritura que el intérprete pudo ver: qué stub la recibió, sobre qué view (si
@@ -46,6 +56,22 @@ type capturaTexto struct {
 	Texto  string `json:"texto"`
 }
 
+// lineaConsola es una línea de la consola de la app: una llamada a `print`/`println` o a `Log.*`.
+// `secuencia` es el orden de emisión dentro de la ejecución (1, 2, 3…) y es lo único que se puede
+// medir sin reloj: la hora de verdad no es determinista y no se finge.
+type lineaConsola struct {
+	Origen    string `json:"origen"`
+	Texto     string `json:"texto"`
+	Secuencia int    `json:"secuencia"`
+}
+
+// oyenteVista es una vista que registró un `OnClickListener`: su id de recurso y su nombre, que es
+// lo que la pestaña necesita para pintar el botón de pulsar y para mandar `--pulsar id/pulsar`.
+type oyenteVista struct {
+	ID    string `json:"id,omitempty"`
+	IDRef string `json:"idRef,omitempty"`
+}
+
 // resultadoEjecucion viaja dentro del modelo de la vista. `error` no tumba el comando: un layout sin
 // intérprete sigue siendo útil, y el consumidor tiene que poder distinguir «no hay clases.dex» de
 // «el onCreate falló».
@@ -55,6 +81,9 @@ type resultadoEjecucion struct {
 	Pasos         int            `json:"pasos"`
 	Interacciones int            `json:"interacciones,omitempty"`
 	Capturas      []capturaTexto `json:"capturas,omitempty"`
+	Consola       []lineaConsola `json:"consola,omitempty"`
+	Oyentes       []oyenteVista  `json:"oyentes,omitempty"`
+	Pulsaciones   []string       `json:"pulsaciones,omitempty"`
 	Avisos        []string       `json:"avisos,omitempty"`
 	Error         string         `json:"error,omitempty"`
 
@@ -258,6 +287,7 @@ type maquinaDalvik struct {
 	tabla       *tablaRecursos
 	pasos       int
 	capturas    []capturaTexto
+	consola     []lineaConsola
 	avisos      []string
 	vistos      map[string]bool
 	layoutID    uint32
@@ -299,10 +329,34 @@ func (m *maquinaDalvik) captura(origen string, obj *objetoDalvik, texto string) 
 			}
 		}
 	}
+	if esOrigenDeConsola(origen) {
+		// la consola no se recorta con el tope de las capturas: son dos acotas distintas
+		m.anotaConsola(origen, texto)
+	}
 	if len(m.capturas) >= capturasMaximas {
 		return
 	}
 	m.capturas = append(m.capturas, c)
+}
+
+// esOrigenDeConsola separa lo que escribe la app de lo que escribe en una view: `print`, `println` y
+// `Log.*` son la salida estándar de la app y van también al panel de consola. El registro del
+// emulador los conserva, porque ahí se ve todo en el orden en que ocurrió.
+func esOrigenDeConsola(origen string) bool {
+	switch origen {
+	case "print", "println", "log":
+		return true
+	}
+	return strings.HasPrefix(origen, "Log.")
+}
+
+// anotaConsola apila una línea con su secuencia de emisión. No se inventa la hora: el orden es lo
+// que se puede medir dentro de una ejecución y lo que hace determinista el JSON.
+func (m *maquinaDalvik) anotaConsola(origen, texto string) {
+	if len(m.consola) >= consolaMaximas {
+		return
+	}
+	m.consola = append(m.consola, lineaConsola{Origen: origen, Texto: texto, Secuencia: len(m.consola) + 1})
 }
 
 // textoDe es cómo un stub imprime un valor: lo que haría `String.valueOf`.
@@ -339,20 +393,29 @@ func claseCorta(descriptor string) string {
 	return strings.ReplaceAll(s, "/", ".")
 }
 
-// ejecutaOnCreate carga el programa y corre la actividad. Devuelve siempre un resultado; el error de
-// la ejecución viaja dentro, no fuera, porque el modelo de la vista se puede construir igual.
+// ejecutaOnCreate carga el programa y corre la actividad, sin pulsar nada. Es el camino de siempre:
+// el emulador arranca en el estado que deja `onCreate` y espera un clic de verdad.
 func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resultadoEjecucion, uint32) {
+	res, layoutID, _ := ejecutaOnCreateConPulsos(d, tabla, actividad, nil)
+	return res, layoutID
+}
+
+// ejecutaOnCreateConPulsos es el mismo arranque con una lista de clics: cada entrada se entrega al
+// `onClick` de la vista con ese id, en orden y en la MISMA ejecución. Devolver un error fuera del
+// resultado es solo para la lista de clics (un id que no existe o una vista sin listener): la app
+// ejecutada a medias no se devuelve como si fuera una pantalla buena.
+func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string) (*resultadoEjecucion, uint32, error) {
 	res := &resultadoEjecucion{Metodo: "onCreate"}
 	prog, err := cargaPrograma(d)
 	if err != nil {
 		res.falla(err)
-		return res, 0
+		return res, 0, nil
 	}
 	m := nuevaMaquina(prog, tabla)
 	clase, conMain := eligeClaseLanzadora(prog, actividad)
 	if clase == "" {
 		res.Error = "el dex no trae ninguna clase con main ni onCreate"
-		return res, 0
+		return res, 0, nil
 	}
 	res.Actividad = claseCorta(clase)
 
@@ -362,7 +425,7 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 		if _, err := m.ejecutaCuerpo(clase, ctor, []any{obj}, []string{clase}); err != nil {
 			res.falla(err)
 			res.Pasos = m.pasos
-			return res, m.layoutID
+			return res, m.layoutID, nil
 		}
 	}
 
@@ -383,41 +446,136 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 		}
 	}
 
-	// una pulsación por listener: el texto de la plantilla Contador se escribe en el onClick, y sin
-	// esta interacción el intérprete no tendría nada que capturar. Es una simulación declarada.
+	// los clics pedidos, en orden y solo si la app llegó viva a este punto. El estado que ve cada
+	// `onClick` incluye los anteriores, porque comparten la misma máquina: es lo que hace que
+	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1.
+	var errPulsos error
 	if res.Error == "" {
-		m.pulsaOyentes()
+		entregados := 0
+		for _, pedido := range pulsos {
+			if entregados >= pulsacionesMaximas {
+				m.avisa("se dejaron clics sin entregar por el tope de %d", pulsacionesMaximas)
+				break
+			}
+			id, err := idDePulsacion(tabla, pedido)
+			if err != nil {
+				errPulsos = err
+				break
+			}
+			if !m.pulsa(id) {
+				errPulsos = fmt.Errorf("no se puede pulsar %q: ninguna vista con ese id se registró "+
+					"como OnClickListener%s", pedido, listaDeOyentes(m))
+				break
+			}
+			res.Pulsaciones = append(res.Pulsaciones, pedido)
+			entregados++
+		}
 	}
 	res.Pasos = m.pasos
 	res.Interacciones = m.interaccion
 	res.Capturas = m.capturas
+	res.Consola = m.consola
+	res.Oyentes = m.oyentesDeVista()
 	res.Avisos = m.avisos
-	return res, m.layoutID
+	return res, m.layoutID, errPulsos
 }
 
-// pulsaOyentes invoca `onClick` una vez por listener registrado, con la view sobre la que se
-// registró. El tope existe para que un listener que registre otro no encadene sin fin.
-func (m *maquinaDalvik) pulsaOyentes() {
+// oyentesDeVista resume los listeners registrados con un id de recurso, sin repetir: es la lista con
+// la que la pestaña sabe qué se puede pulsar y con qué nombre pedirlo.
+func (m *maquinaDalvik) oyentesDeVista() []oyenteVista {
+	oídos := make(map[uint32]bool, len(m.oyentes))
+	salida := []oyenteVista{}
 	for _, reg := range m.oyentes {
-		if m.interaccion >= interaccionesMax {
-			m.avisa("se dejaron listeners sin pulsar por el tope de %d", interaccionesMax)
-			return
+		vista, ok := reg.vista.(*objetoDalvik)
+		if !ok || vista.id == 0 || oídos[vista.id] {
+			continue
+		}
+		oídos[vista.id] = true
+		o := oyenteVista{IDRef: fmt.Sprintf("%#08x", vista.id)}
+		if m.tabla != nil {
+			if tipo, clave, ok := m.tabla.nombreDeId(vista.id); ok {
+				o.ID = tipo + "/" + clave
+			}
+		}
+		salida = append(salida, o)
+	}
+	return salida
+}
+
+// listaDeOyentes arma el final del mensaje de error con lo que sí se puede pulsar; sin nada, lo dice.
+func listaDeOyentes(m *maquinaDalvik) string {
+	o := m.oyentesDeVista()
+	if len(o) == 0 {
+		return " (el onCreate no registró ningún listener con id)"
+	}
+	nombres := make([]string, 0, len(o))
+	for _, oy := range o {
+		if oy.ID != "" {
+			nombres = append(nombres, oy.ID)
+		} else {
+			nombres = append(nombres, oy.IDRef)
+		}
+	}
+	return " (los listeners registrados son " + strings.Join(nombres, ", ") + ")"
+}
+
+// idDePulsacion lleva lo que se escribe en `--pulsar` al id de recurso de la vista. Se aceptan las
+// tres formas que el modelo publica: `id/pulsar` (nombreDeId al revés), `0x7f010000` (el `idRef` de
+// los nodos) y el decimal del mismo número.
+func idDePulsacion(tabla *tablaRecursos, pedido string) (uint32, error) {
+	s := strings.TrimSpace(pedido)
+	if s == "" {
+		return 0, fmt.Errorf("--pulsar necesita un id: id/pulsar, 0x7f010000 o su decimal")
+	}
+	if tipo, clave, ok := strings.Cut(s, "/"); ok {
+		if tabla == nil {
+			return 0, fmt.Errorf("no se puede pulsar %q: sin resources.arsc no hay tabla que traduzca "+
+				"el nombre; pasa el id numérico", pedido)
+		}
+		id, ok := tabla.idDeNombre(tipo, clave)
+		if !ok {
+			return 0, fmt.Errorf("no se puede pulsar %q: la tabla no tiene %s/%s", pedido, tipo, clave)
+		}
+		return id, nil
+	}
+	if n, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(s), "0x"), 16, 32); err == nil &&
+		(strings.HasPrefix(strings.ToLower(s), "0x") || strings.ContainsAny(s, "abcdefABCDEF")) {
+		return uint32(n), nil
+	}
+	if n, err := strconv.ParseUint(s, 10, 32); err == nil {
+		return uint32(n), nil
+	}
+	return 0, fmt.Errorf("no se puede pulsar %q: se espera id/pulsar, 0x7f010000 o un decimal", pedido)
+}
+
+// pulsa entrega el clic al `onClick` de la última vista con ese id que se registró, como un
+// `setOnClickListener` que sustituye al anterior. Devuelve falso cuando ninguna vista con ese id
+// tiene oyente, que es lo que distingue «no hay a quién pulsar» de «se pulsó y no hizo nada».
+func (m *maquinaDalvik) pulsa(id uint32) bool {
+	for i := len(m.oyentes) - 1; i >= 0; i-- {
+		reg := m.oyentes[i]
+		vista, ok := reg.vista.(*objetoDalvik)
+		if !ok || vista.id != id {
+			continue
 		}
 		obj, ok := reg.oyente.(*objetoDalvik)
 		if !ok {
-			continue
+			m.avisa("el listener de %#08x no es un objeto del dex", id)
+			return true
 		}
 		met := m.buscaMetodo(obj.clase, "onClick", "(Landroid/view/View;)V")
 		if met == nil {
 			m.avisa("%s se registró como listener y no tiene onClick", claseCorta(obj.clase))
-			continue
+			return true
 		}
 		m.interaccion++
 		if _, err := m.ejecutaCuerpo(obj.clase, met, []any{obj, reg.vista},
 			[]string{obj.clase, "Landroid/view/View;"}); err != nil {
 			m.avisa("el onClick de %s falló: %v", claseCorta(obj.clase), err)
 		}
+		return true
 	}
+	return false
 }
 
 // eligeClaseLanzadora busca a quién ejecutar: primero la actividad del manifiesto si tiene un punto
@@ -1371,7 +1529,14 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	switch nombre {
 	case "<init>":
 		// el constructor de una clase del framework (Activity, Object, la vista que sea): no hay
-		// cuerpo que ejecutar y no hay nada que capturar
+		// cuerpo que ejecutar y no hay nada que capturar. La excepción es `StringBuilder(String)`,
+		// que javac usa con el primer trozo ya dentro (`new StringBuilder("Pulsos: ")`): sin esto,
+		// el `+` de javac salía sin su parte literal y el texto se quedaba en el número (medido:
+		// «1»). Solo esa forma: `StringBuilder(int)` es la CAPACIDAD, no contenido.
+		if obj != nil && proto == "(Ljava/lang/String;)V" && es("Ljava/lang/StringBuilder;") {
+			obj.cadena = &strings.Builder{}
+			obj.cadena.WriteString(textoDe(vals[0]))
+		}
 		return nil, true, nil
 	case "onCreate", "onStart", "onResume", "onPause", "onStop", "onDestroy", "onRestart",
 		"onSaveInstanceState", "onRestoreInstanceState", "onPostCreate", "onPostResume":
