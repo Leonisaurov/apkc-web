@@ -9145,3 +9145,83 @@ mensaje de tabla rala, que es una frontera del enlazador, no un defecto de la in
 planes abiertos, el incremental sigue sin implementar (`docs/plan-incremental-web.md`, I1-I5) y el
 `android.jar` propio tiene generador validado en local (`tools/androidjar/`, J2 y J3) pero su
 workflow no se ha ejecutado en GitHub (J4 y J5): este `§` no afirma que ese job esté verde.
+## 203. El emulador enlaza `android:onClick` y separa sus tres secciones
+
+Medido el 2026-11-22 sobre `ee06bf8` (submódulo `studio/`) y `19ec67a` (padre), con Go 1.27.4 y
+chromium 156. Cierra dos cosas que el usuario vio en la página: la nota «Esta ejecución no registró
+ningún OnClickListener sobre una vista con id» en una app tipo contador y que el registro, la consola
+de la app y los controles de pulsar fueran tres bloques apilados.
+
+**El camino que fallaba** era el clic declarado en el layout (`android:onClick="sumar"` y
+`public void sumar(View v)` en la actividad): `onCreate` no llama a `setOnClickListener`, así que
+`apkc preview` no publicaba ningún oyente y no había nada que pulsar. El camino de la plantilla
+**Contador** (`findViewById(...).setOnClickListener(new View.OnClickListener(){…})`) ya funcionaba y
+sigue funcionando; esta medición mide los dos por separado y no afirma cuál usó el usuario, porque no
+se midió su proyecto.
+
+```sh
+export APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar
+cd apkc && go build -o "$TMP/apkc-preview" .
+
+# el apk del Clicker declarativo se monta en memoria y la sonda lo deja en disco
+APKC_FIXTURE_DECL="$TMP/clicker-declarativo.apk" \
+  go test -count=1 -run TestElPreviewEnlazaElOnClickDeclarativoDelLayout -v .
+APKC_FIXTURE_DECL=  # sin la variable no escribe nada; la prueba sigue siendo la misma
+
+"$TMP/apkc-preview" preview "$TMP/clicker-declarativo.apk"                       # 810 B, 3 nodos
+"$TMP/apkc-preview" preview --pulsar id/pulsar "$TMP/clicker-declarativo.apk"
+"$TMP/apkc-preview" preview --pulsar 0x7f010000 --pulsar 0x7f010000 "$TMP/clicker-declarativo.apk"
+
+# el camino de la plantilla Contador, con el apk que deja el gate
+APK=$TMP/studio-e2e-contador/com.hola.contador/build/app.apk
+"$TMP/apkc-preview" preview "$APK"
+"$TMP/apkc-preview" preview --pulsar id/pulsar "$APK"
+```
+
+1. **Reposo.** El apk declarativo sale con **810 bytes**, `nodos: 3`, `oyentes:
+   [{"id":"id/pulsar","idRef":"0x7f010000"}]` y el `Button` con `oyente: true`. El `TextView` no
+   tiene `textoDinamico`: `onCreate` corrió y no se pulsó nada.
+2. **Un clic y dos.** `--pulsar id/pulsar` deja `pulsaciones: ["id/pulsar"]`, `interacciones: 1` y
+   `textoDinamico: "Pulsos: 1"`; dos `--pulsar 0x7f010000` dejan `interacciones: 2` y
+   `"Pulsos: 2"`, porque la lista entera se repite dentro de la misma ejecución.
+3. **El camino Contador, para no confundirlos.** El apk del gate publica el mismo oyente
+   (`id/pulsar`, `0x7f010000`) y un clic da `"Pulsos: 1"` con la consola
+   `Log.d "pulso 1"` (secuencia 1) y `println "contador: pulso 1"` (secuencia 2). Ninguno de los dos
+   caminos se apoya en el otro: uno registra el oyente en `onCreate`, el otro lo enlaza `apkc
+   preview` al leer el layout, como el inflado del framework.
+4. **La prueba se salta sin jar.** `jarDelSDK` busca `APKC_ANDROID_JAR`, después
+   `$HOME/Android/platforms/android-34/android.jar` y después `/sdk/android.jar`; en un escritorio
+   con el SDK en `~/opt/android-sdk` **sin la variable la prueba se omite** (`t.Skip`), así que el
+   comando de arriba la incluye. `go test -count=1 -run
+   TestElPreviewEnlazaElOnClickDeclarativoDelLayout -v .` en verde (0,05 s).
+5. **Las tres secciones.** El panel del emulador ya no apila pulsar, registro y consola: son
+   pestañas (`#previa-seccion-pulsos|registro|consola`) con `role="tab"`, `aria-selected` y
+   `aria-controls`; el panel oculto sigue en el DOM (alternar conserva sus líneas: `logLineas: 6`,
+   `consolaLineas: 4` antes y después) y la elegida se guarda en `apkc-studio/previa-seccion`. La
+   vista **Pantalla** repite el patrón con ids propios (`#vista-seccion-*`, `#vista-pulsos`,
+   `#vista-log`, `#vista-consola`). El clic se entrega en **las dos superficies**:
+   `#previa-lateral-canvas` y `#vista-previa` (antes el canvas de Pantalla no tenía manejador), con
+   la geometría del último pintado (`canvas.__espacio`).
+6. **La recarga, medida de verdad.** `prueba-pestana.js` elige Registro en el panel y Consola en
+   Pantalla, navega con `Page.navigate`, espera a que arranque la página y comprueba que
+   `conectarSecciones()` restaura las dos: `guardadas {panel:"registro", vista:"consola"}`, paneles
+   `registro:true/pulsos:false/consola:false` y `consola:true` con su pestaña activa. Después vuelve
+   a compilar para repoblar el emulador desde el apk de OPFS (`oyentes: ["id/pulsar"]`).
+7. **Gate.** Con el árbol final y la comprobación de recarga dentro,
+   `pestaña: 177 comprobaciones` y `e2e: todo en orden` (eran **175** cuando entraron las secciones y
+   el Clicker; la recarga suma las dos restantes), sin «sin chromium» ni «sin APKC_WASM». La sonda
+   del § es la de un PREFIX nuevo, puertos 8834/9840/8833.
+
+**Fronteras de este `§`.** (1) `android:onClick` se resuelve **solo** en el layout de la actividad
+lanzadora: no se siguen `include`, ni `menu`, ni el contexto de un Fragment o un servicio, y la firma
+tiene que ser `(Landroid/view/View;)V`. (2) Si el método no existe o la vista no tiene
+`android:id`, no se inventa el oyente: queda un aviso en el registro del emulador (probado en la
+misma prueba). (3) Las **lambdas Java siguen fuera del subconjunto** del compilador propio: `v ->
+{…}` se rechaza al compilar (`">" no es una expresion que este parser reconozca`), medido; el
+patrón anónimo, `this`, la clase interna y `android:onClick` sí se ejecutan. (4) No se midió el
+proyecto del usuario: se miden los dos patrones por separado y la medición no dice cuál usó. (5) El
+sitio publicado (**https://apkc-studio.surge.sh/**) sigue con la build anterior: estos cambios no se
+han empaquetado ni publicado (`tools/entorno.sh sitio` + `surge . publish` quedan pendientes). (6)
+Entrar en Pantalla repinta el último modelo y un modelo que no viene de un clic reinicia la lista de
+pulsos: el primer toque en el teléfono grande arranca en «Pulsos: 1» aunque antes se hubiera pulsado
+en el panel.

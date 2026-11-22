@@ -1005,3 +1005,147 @@ func TestElPreviewRechazaUnSwitchDePayloadRoto(t *testing.T) {
 		t.Errorf("con --sin-ejecutar el apk se rechazó: %v", err)
 	}
 }
+
+// fuenteClickDeclarativo es el patrón de los contadores de tutorial: el clic se declara en el XML
+// (`android:onClick="sumar"`) y la actividad solo tiene el método. Es el caso que el emulador no
+// enlazaba: `onCreate` no llama a `setOnClickListener`, así que `oyentes` salía vacío y la pestaña
+// decía «Esta ejecución no registró ningún OnClickListener sobre una vista con id».
+const fuenteClickDeclarativo = `package com.hola.contador;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    int pulsos = 0;
+    TextView total;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+    }
+
+    public void sumar(View v) {
+        pulsos = pulsos + 1;
+        total.setText("Pulsos: " + pulsos);
+    }
+}
+`
+
+// layoutConOnClickDeclarativo es el layout del Contador con el clic en el botón, como lo escribe
+// alguien que sigue un tutorial: sin `setOnClickListener` en el fuente.
+func layoutConOnClickDeclarativo() documentoAXML {
+	layout := layoutDelContador()
+	layout.raiz.hijos[1].attrs = append(layout.raiz.hijos[1].attrs, atributoEscribir{
+		ns: "android", nombre: "onClick", id: 0x0101026f, tipo: tipoCadena, texto: "sumar",
+	})
+	return layout
+}
+
+// TestElPreviewEnlazaElOnClickDeclarativoDelLayout mide el caso del usuario: un apk cuyo botón
+// declara `android:onClick` publica el oyente real con su id, marca el nodo y el clic ejecuta el
+// método de la actividad, sin que el fuente llame a `setOnClickListener`.
+func TestElPreviewEnlazaElOnClickDeclarativoDelLayout(t *testing.T) {
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layout, err := escribeAXML(layoutConOnClickDeclarativo())
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	apk := zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layout,
+		"classes.dex": dexDeFuentes(t,
+			fuenteJava{nombre: "R.java", contenido: rContador(t)},
+			fuenteJava{nombre: "MainActivity.java", contenido: fuenteClickDeclarativo}),
+	})
+	if destino := os.Getenv("APKC_FIXTURE_DECL"); destino != "" {
+		// la sonda del §203: deja el apk en disco para medirlo con el comando de verdad
+		if err := os.WriteFile(destino, apk, 0644); err != nil {
+			t.Fatalf("no se pudo escribir el apk de la sonda: %v", err)
+		}
+	}
+
+	reposo, err := modeloVistaDeAPKConPulsos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk con android:onClick no se lee: %v", err)
+	}
+	if reposo.Ejecucion == nil || len(reposo.Ejecucion.Oyentes) != 1 ||
+		reposo.Ejecucion.Oyentes[0].ID != "id/pulsar" ||
+		reposo.Ejecucion.Oyentes[0].IDRef != "0x7f010000" {
+		t.Fatalf("los oyentes declarativos son %+v y se esperaba id/pulsar", reposo.Ejecucion.Oyentes)
+	}
+	if len(reposo.Ejecucion.Avisos) != 0 {
+		t.Errorf("el enlace dejó avisos: %v", reposo.Ejecucion.Avisos)
+	}
+	var boton *nodoVista
+	for _, h := range reposo.Raiz.Hijos {
+		if h.ID == "id/pulsar" {
+			boton = h
+		}
+	}
+	if boton == nil || !boton.Oyente {
+		t.Fatalf("el botón con android:onClick no quedó marcado como oyente: %+v", boton)
+	}
+	if got := reposo.Raiz.Hijos[0].TextoDinamico; got != "" {
+		t.Errorf("en reposo el texto dinámico es %q", got)
+	}
+
+	uno, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar"})
+	if err != nil {
+		t.Fatalf("el clic en el oyente declarativo falló: %v", err)
+	}
+	if got := uno.Raiz.Hijos[0].TextoDinamico; got != "Pulsos: 1" {
+		t.Errorf("tras el clic el texto es %q y se esperaba «Pulsos: 1»", got)
+	}
+	if uno.Ejecucion.Interacciones != 1 {
+		t.Errorf("las interacciones son %d", uno.Ejecucion.Interacciones)
+	}
+
+	// y por el idRef del nodo, que es lo que manda la pestaña al pulsar en el canvas
+	dos, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"0x7f010000", "0x7f010000"})
+	if err != nil {
+		t.Fatalf("los clics por idRef fallaron: %v", err)
+	}
+	if got := dos.Raiz.Hijos[0].TextoDinamico; got != "Pulsos: 2" {
+		t.Errorf("tras dos clics el texto es %q y se esperaba «Pulsos: 2»", got)
+	}
+
+	// un método que no existe no inventa un oyente: queda el aviso y el clic no se puede entregar
+	roto := layoutDelContador()
+	roto.raiz.hijos[1].attrs = append(roto.raiz.hijos[1].attrs, atributoEscribir{
+		ns: "android", nombre: "onClick", id: 0x0101026f, tipo: tipoCadena, texto: "noExiste",
+	})
+	layoutRoto, err := escribeAXML(roto)
+	if err != nil {
+		t.Fatalf("el layout roto: %v", err)
+	}
+	apkRoto := zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layoutRoto,
+		"classes.dex": dexDeFuentes(t,
+			fuenteJava{nombre: "R.java", contenido: rContador(t)},
+			fuenteJava{nombre: "MainActivity.java", contenido: fuenteClickDeclarativo}),
+	})
+	sinOyente, err := modeloVistaDeAPKConPulsos(apkRoto, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk con el método que no existe no se lee: %v", err)
+	}
+	if len(sinOyente.Ejecucion.Oyentes) != 0 {
+		t.Errorf("se publicó un oyente para un método que no existe: %+v", sinOyente.Ejecucion.Oyentes)
+	}
+	if !strings.Contains(strings.Join(sinOyente.Ejecucion.Avisos, "\n"), "noExiste") {
+		t.Errorf("el aviso no nombra el método que falta: %v", sinOyente.Ejecucion.Avisos)
+	}
+}
