@@ -8986,3 +8986,17 @@ dio 104 bien y 1 mal por una expectativa que buscaba `linea 4` cuando el mensaje
 `66c2a6b` del submódulo). La medición de 98 es la del árbol de la Fase 4 antes de integrar §200;
 la del árbol final es esta.
 
+**Ampliaciones posteriores** (mismas órdenes, con `GOGC=50 GOMAXPROCS=2 sh tools/entorno.sh
+gate`): la vista dividida del editor (separador, `Previa`, consola de log) y el autocompletado D3
+subieron el gate a 123 y 115 comprobaciones en sus ramas; el modo «En vivo» dibuja el layout del
+XML del editor sin mostrar su código y sin compilar (`pre === false`, la firma de píxeles cambia al
+editar `android:text` con `#ultimo-codigo` intacto) y volvió a subirlo a 127. Sobre el árbol final,
+con las dos piezas y la colocación del §201 juntas, el gate da **`pestaña: 137 comprobaciones`** y
+`e2e: todo en orden`. El subrayado del diagnóstico no tenía desfase: la marca cae al final de la
+línea (`top = padding + (línea-1)*lineHeight + lineHeight - 2`, medido con `lineHeight 19.5 px`);
+solo el error de bloque sin cerrar se atribuía al token de fin de fichero y ahora apunta a la última
+línea con contenido (`§200`). D3 indexa el jar por rangos: **1 354 339 de 26 361 808 bytes**, 3837
+clases en ~50 ms y 0 peticiones; `Tab` entra en el undo tree. Fronteras del modo En vivo:
+aproximación declarada (dp≈px, texto a 7 px/carácter), sin `ConstraintLayout`, estilos ni temas;
+los eventos siguen solo en «Render (eventos)».
+

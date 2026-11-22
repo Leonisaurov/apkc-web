@@ -29,7 +29,12 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
   mayor parte es releer y parsear `resources.arsc` del `android.jar` en cada invocación. En la
   pestaña, a eso se le suma el arranque de una instancia de wasm por comando. Son cifras de una
   máquina de escritorio, no de un teléfono: la sonda de D2 tiene que repetirlas en la pestaña.
-- **D3 pendiente y sin medir.**
+- **D3 hecha el 2026-11-22** (§201, ampliación final). El editor sugiere recursos del proyecto
+  (`R.layout.*`, `R.id.*`) y APIs del `android.jar` sin red: el jar se indexa por trozos
+  (1 354 339 de 26 361 808 bytes, 3837 clases, ~50 ms, 0 peticiones), `Tab` acepta y entra en el
+  undo tree, `Esc` cierra y las flechas recorren sin disparar otro `check`. El gate final da
+  `pestaña: 137 comprobaciones`. Fronteras: sin completado tras `v.`, bloques `/* … */` de varias
+  líneas no detectados y recursos cacheados hasta `refrescar()`.
 
 ### Deuda conocida dentro de D1
 
