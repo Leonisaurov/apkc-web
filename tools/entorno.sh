@@ -146,6 +146,9 @@ case "$tarea" in
     DOMINIO=$(cat "$RAIZ/.surge-domain" 2>/dev/null || cat "$RAIZ/sitio/CNAME")
     printf 'publicando en https://%s/\n' "$DOMINIO"
     ( cd "$RAIZ/sitio" && surge . publish )
+    # Antes de dar nada por bueno: el gz servido debe ser byte a byte el empaquetado. Si el host
+    # devuelve un cuerpo truncado, falla aquí y no se culpa al navegador.
+    sh "$RAIZ/tools/verificar-publicacion.sh" "https://$DOMINIO/" "$TMP/apkc-wasm.wasm"
     # Verificación sobre el host real, con los mismos oráculos que el gate.
     JAR=$(jar_del_sdk 34 || true)
     APKSIGNER=$ANDROID_HOME/build-tools/34.0.0/apksigner

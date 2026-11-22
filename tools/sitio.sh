@@ -44,16 +44,19 @@ cp "$WASM" "$DESTINO/apkc.wasm"
 # DecompressionStream; el sin comprimir se conserva como respaldo (§173).
 gzip -9 -c "$WASM" > "$DESTINO/apkc.wasm.gz"
 # Manifiesto de integridad: el worker descarta copias truncadas del wasm comparando tamaño y hash.
-python3 - "$WASM" "$DESTINO/wasm-manifest.json" <<'PY'
+python3 - "$WASM" "$DESTINO/apkc.wasm.gz" "$DESTINO/wasm-manifest.json" <<'PY'
 from pathlib import Path
 import hashlib
 import json
 import sys
 
 binario = Path(sys.argv[1]).read_bytes()
-Path(sys.argv[2]).write_text(json.dumps({
+comprimido = Path(sys.argv[2]).read_bytes()
+Path(sys.argv[3]).write_text(json.dumps({
     "bytes": len(binario),
     "sha256": hashlib.sha256(binario).hexdigest(),
+    "gzBytes": len(comprimido),
+    "gzSha256": hashlib.sha256(comprimido).hexdigest(),
 }))
 PY
 cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$DESTINO/wasm_exec.js"
