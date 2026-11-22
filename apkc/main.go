@@ -21,7 +21,7 @@ func main() {
 	// verify reads one package and starts nothing either, for the same reason: it is the
 	// stage the tab needs to say something about the apk it just wrote.
 	switch os.Args[1] {
-	case "dex", "link", "compile", "verify", "keystore", "rotate", "debug-keystore", "create-keystore":
+	case "dex", "link", "compile", "check", "verify", "keystore", "rotate", "debug-keystore", "create-keystore":
 	case "build":
 		// `apkc build --linker go --compiler go` starts no process either: it is the whole build of
 		// the tab, and there is no SDK to find in there (§44)
@@ -59,6 +59,8 @@ func main() {
 		dex()
 	case "compile":
 		compilar()
+	case "check":
+		check()
 	case "link":
 		link()
 	case "verify":
@@ -106,6 +108,9 @@ verify - read one package back and check the signatures this tool writes: the v1
          no jarsigner, no subprocess - which is what makes it usable inside the tab. What is
          not measured here is refused by name (DSA, SHA-1, v3, several signers), and the trust
          chain is never validated: a debug certificate is self-signed and there is no anchor.
+check  - read one .java file and print, as one line of JSON on stdout, the errors the parser and
+         the emitter find, without writing any .class (--android-jar to resolve names; without a
+         jar only the parser is checked). No process is started, so it runs inside the tab.
 version - print the commit this binary was built from
 `)
 }
