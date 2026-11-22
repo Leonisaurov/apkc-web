@@ -701,8 +701,8 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifDoble)
-	case op == 0x92: // i2c (parrafo 87: `Letras.resta` es `isub; i2c`)
-		// una palabra dentro y otra fuera: el `char` sigue siendo `int` en la pila del verificador
+	case op == 0x91 || op == 0x92 || op == 0x93: // i2b, i2c e i2s, con la sonda javac 17 de `Estrecha`
+		// una palabra dentro y otra fuera: `byte`, `char` y `short` siguen siendo `int` en la pila
 		if err := a.sacaEntero(); err != nil {
 			return nil, false, err
 		}

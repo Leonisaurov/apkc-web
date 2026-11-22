@@ -173,10 +173,12 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x52: {"dastore", 0},
 	0x53: {"aastore", 0},
 	// el `char` en el `.class` (parrafo 87, sonda `Letras`): `caload` 0x34 y `castore` 0x55 son los
-	// opcodes propios del JVMS, y estrechar a `char` es `i2c` **0x92** —el 0x91 es `i2b` y el 0x93
-	// `i2s`, y ninguno de los dos lo escribió una sonda—. Una palabra dentro, una fuera. No hay `c2i`:
+	// opcodes propios del JVMS, y estrechar a `char` es `i2c` **0x92**. El 0x91 es `i2b` y el 0x93
+	// `i2s`, medidos con la sonda javac 17 de `Estrecha`. Una palabra dentro, una fuera. No hay `c2i`:
 	// ensanchar un `char` a `int` no escribe nada.
+	0x91: {"i2b", 0},
 	0x92: {"i2c", 0},
+	0x93: {"i2s", 0},
 	0xbc: {"newarray", 1},
 	0xbd: {"anewarray", 2},
 	0xbe: {"arraylength", 0},

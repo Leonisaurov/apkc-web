@@ -1692,7 +1692,7 @@ func (p *traduce) recorre() error {
 				n = int(in.name[len(in.name)-1]) - '0'
 			}
 			p.guardaLocalEn(in, n, true)
-		case "i2l", "i2f", "i2d", "l2i", "l2f", "l2d", "f2i", "f2l", "f2d", "d2i", "d2l", "d2f", "i2c":
+		case "i2l", "i2f", "i2d", "l2i", "l2f", "l2d", "f2i", "f2l", "f2d", "d2i", "d2l", "d2f", "i2b", "i2c", "i2s":
 			// la rejilla de conversiones, medida en `FyD` con `d8` en el parrafo 80: `int-to-double`
 			// 0x83 (`divide`, `deEntero`), `float-to-double` 0x89 (`por`, `aDoble`, `campoEstatico`),
 			// `double-to-int` 0x8A (`aEntero`) y `double-to-float` 0x8C (`aFlotante`). Las demas salen
@@ -1705,15 +1705,16 @@ func (p *traduce) recorre() error {
 				"f2i": 0x87, "f2l": 0x88, "f2d": 0x89,
 				"d2i": 0x8a, "d2l": 0x8b, "d2f": 0x8c,
 				// `int-to-char` 0x8e, medido en `Letras.deEntero` sobre el fichero de `d8 --debug`:
-				// `8e00` = `int-to-char v0, v0` (parrafo 87)
-				"i2c": 0x8e,
+				// `8e00` = `int-to-char v0, v0` (parrafo 87). `int-to-byte` 0x8d y `int-to-short`
+				// 0x8f salen de la misma rejilla, con la sonda javac 17 de `Estrecha` (§87).
+				"i2b": 0x8d, "i2c": 0x8e, "i2s": 0x8f,
 			}[in.name]
 			if !medida {
 				p.falla(in, "a numeric conversion outside the measured grid")
 				break
 			}
 			switch in.name {
-			case "i2f", "f2i", "i2c":
+			case "i2f", "f2i", "i2b", "i2c", "i2s":
 				p.conviertePalabra(in, op) // una palabra dentro y una fuera
 			case "i2l", "i2d", "f2d", "l2d", "d2l":
 				p.convierteEnAncho(in, op) // un registro suelto dentro de un par, o el par entero

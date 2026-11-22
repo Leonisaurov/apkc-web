@@ -2122,28 +2122,32 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		e.emite(0xc1, byte(idx>>8), byte(idx))
 		return "Z", nil
 	case jcast:
-		if destino, ok := descPrimitivo[v.tipo]; ok && destino == "C" {
+		if destino, ok := descPrimitivo[v.tipo]; ok && strings.IndexByte("BCS", destino[0]) >= 0 {
 			// `(char) x`, medido en `Letras` (parrafo 87): `resta` es `iload_0; iload_1; isub; i2c;
 			// ireturn` y `cambia` `iload_0; iconst_1; iadd; i2c; istore_0`, con `i2c` = 0x92. Es una
 			// palabra dentro y una fuera, asi que la pila no se mueve. Desde un ancho (`long`, `float`,
 			// `double`) primero la conversion del parrafo 77 y despues el `i2c`.
+			// Lo mismo para `i2b` 0x91 y `i2s` 0x93, medidos en `Estrecha` con la sonda javac 17:
+			// `(byte) n` es `iload_0; i2b; ireturn`, `(short) n` `iload_0; i2s; ireturn`, y desde un
+			// anchojavac escribe primero `l2i`/`d2i` y luego la conversion estrecha.
+			op := map[byte]byte{'B': 0x91, 'C': 0x92, 'S': 0x93}[destino[0]]
 			d, err := e.exp(v.dentro)
 			if err != nil {
 				return "", err
 			}
-			if d == "C" {
-				return "C", nil
+			if d == destino {
+				return destino, nil
 			}
 			if len(d) != 1 || strings.IndexByte("IJFD", d[0]) < 0 {
-				return "", fmt.Errorf("linea %d: se convierte %s a `char`, y eso no es una cuenta numerica medida", v.donde.linea, d)
+				return "", fmt.Errorf("linea %d: se convierte %s a `%s`, y eso no es una cuenta numerica medida", v.donde.linea, d, v.tipo)
 			}
 			if d != "I" {
 				if !e.convierte(d, "I") {
-					return "", fmt.Errorf("linea %d: la conversion de %s a entero antes del `char` no esta medida", v.donde.linea, d)
+					return "", fmt.Errorf("linea %d: la conversion de %s a entero antes de `%s` no esta medida", v.donde.linea, d, v.tipo)
 				}
 			}
-			e.emite(0x92)
-			return "C", nil
+			e.emite(op)
+			return destino, nil
 		}
 		if destino, ok := descPrimitivo[v.tipo]; ok && strings.IndexByte("IJFD", destino[0]) >= 0 {
 			// un cast numerico es la conversion de la rejilla, no un `checkcast`: medido en `FyD`,
@@ -3570,8 +3574,9 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 		return d, nil
 	}
 	// Enschar un `char` a `int` no escribe nada: `int n = c;` es `iload_0; istore_1` y `aEntero(char)` es
-	// `iload_0; ireturn`, medidos en el parrafo 87.
-	if d == "C" && deseado == "I" {
+	// `iload_0; ireturn`, medidos en el parrafo 87. Lo mismo vale para `byte` y `short`: la sonda
+	// javac 17 de `Estrecha.e` es `iload_0; iload_1; iadd`, sin conversiones.
+	if len(d) == 1 && strings.IndexByte("BCSZ", d[0]) >= 0 && deseado == "I" {
 		return "I", nil
 	}
 	if len(d) == 1 && len(deseado) == 1 && e.convierte(d, deseado) {
