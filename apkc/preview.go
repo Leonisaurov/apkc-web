@@ -219,7 +219,11 @@ type modeloVista struct {
 	Aproximado bool                `json:"aproximado"`
 	Nodos      int                 `json:"nodos"`
 	Ejecucion  *resultadoEjecucion `json:"ejecucion,omitempty"`
-	Raiz       *nodoVista          `json:"raiz"`
+	// Dialogo es la capa que la app dejó encima de la pantalla con un `AlertDialog` propio: título,
+	// mensaje y botones. Es el mismo dato que `ejecucion.dialogos`, en la forma que el consumidor
+	// necesita para pintarlo sobre la actividad.
+	Dialogo *dialogoVista `json:"dialogo,omitempty"`
+	Raiz    *nodoVista    `json:"raiz"`
 }
 
 // elementoLeido es un elemento del árbol del AXML con sus atributos ya resueltos a cadenas del
@@ -258,7 +262,11 @@ default) unless the app's onCreate calls setContentView with a resource id, whic
 interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and stops
 there: it does NOT click anything on its own. An android:onClick="metodo" declared in the layout is
 bound before any click, as the framework does on inflate, so --pulsar reaches it. Each --pulsar id runs the OnClickListener registered
-on that view, in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal); the
+on that view, in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal); an
+AlertDialog that the app shows is published as a layer (dialogo and ejecucion.dialogos) and its
+buttons are pressed with --pulsar dialogo/positivo|negativo|neutro, which runs their OnClickListener
+and closes the dialog; a Toast leaves a line in ejecucion.consola and the last one in ejecucion.toast.
+the
 text the app writes (TextView.setText) comes back in ejecucion.capturas and in each node's
 textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.consola. Each --recrear
 destroys and recreates the current activity with its Bundle, as a rotation does, so onSaveInstanceState
@@ -274,7 +282,8 @@ tab.
 	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
 	var ordenes []ordenEjecucion
 	set.Var(ordenDePulsar{destino: &ordenes}, "pulsar",
-		"id de la vista cuyo OnClickListener se ejecuta (repetible, en orden)")
+		"id de la vista (o dialogo/positivo|negativo|neutro) cuyo OnClickListener se ejecuta "+
+			"(repetible, en orden)")
 	set.Var(ordenDeRecrear{destino: &ordenes}, "recrear",
 		"recrea la actividad actual con su Bundle, como una rotación (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
@@ -441,6 +450,12 @@ func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, orde
 				// avisos y el modelo sale igual.
 				if modelo.Ejecucion != nil && modelo.Ejecucion.malformado {
 					return nil, fmt.Errorf("el classes.dex no es ejecutable: %s", modelo.Ejecucion.Error)
+				}
+				// el diálogo propio que quedó abierto se publica como capa; el último de la pila es
+				// el que está delante
+				if modelo.Ejecucion != nil && len(modelo.Ejecucion.Dialogos) > 0 {
+					capa := modelo.Ejecucion.Dialogos[len(modelo.Ejecucion.Dialogos)-1]
+					modelo.Dialogo = &capa
 				}
 			} else {
 				modelo.Ejecucion = &resultadoEjecucion{Error: "el classes.dex no se deja leer: " + err.Error()}

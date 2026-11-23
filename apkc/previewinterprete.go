@@ -73,6 +73,22 @@ type lineaConsola struct {
 	Secuencia int    `json:"secuencia"`
 }
 
+// dialogoVista es la capa de un `AlertDialog` propio tal como se ve: título, mensaje y los botones
+// que se pueden pulsar. No modela el fondo ni la posición; eso lo pinta el consumidor encima de la
+// pantalla, que es lo único que hace falta para reconocer un diálogo.
+type dialogoVista struct {
+	Titulo  string         `json:"titulo,omitempty"`
+	Mensaje string         `json:"mensaje,omitempty"`
+	Botones []botonDialogo `json:"botones,omitempty"`
+}
+
+// botonDialogo es un botón de un diálogo: su papel (`positivo`, `negativo` o `neutro`, que es el
+// que distingue el listener que le toca) y el texto que muestra. Se pulsa con `--pulsar dialogo/…`.
+type botonDialogo struct {
+	Tipo  string `json:"tipo"`
+	Texto string `json:"texto"`
+}
+
 // oyenteVista es una vista que registró un `OnClickListener`: su id de recurso y su nombre, que es
 // lo que la pestaña necesita para pintar el botón de pulsar y para mandar `--pulsar id/pulsar`.
 type oyenteVista struct {
@@ -123,6 +139,12 @@ type resultadoEjecucion struct {
 	// Preferencias es el SharedPreferences de la ejecución, por nombre de fichero y clave. Dura toda
 	// la ejecución (también a través de una recreación) y se publica para poder reproducirlo.
 	Preferencias map[string]map[string]any `json:"preferencias,omitempty"`
+	// Dialogos es la pila de diálogos propios que quedaron abiertos sobre la pantalla actual, del
+	// más antiguo al que está delante: es la capa que el modelo pinta encima de la actividad.
+	Dialogos []dialogoVista `json:"dialogos,omitempty"`
+	// Toast es el último aviso efímero que la app mostró (`Toast.show`): no deja vista, pero sí el
+	// texto que se ve y la línea de consola que se anota al mostrarlo.
+	Toast string `json:"toast,omitempty"`
 
 	// malformado separa dos clases de fallo que no son lo mismo: «la app llama a algo que el MVP no
 	// cubre» (se sigue con el modelo y rc 0) y «estos bytes no son un dex ejecutable», que el comando
@@ -397,6 +419,11 @@ type maquinaDalvik struct {
 	// bundleInicial es el `savedInstanceState` con el que arranca esta máquina: nil salvo que venga
 	// de una recreación, que es cuando el framework lo entrega no nulo
 	bundleInicial *objetoDalvik
+	// dialogos es la pila de `AlertDialog` propios abiertos en esta pantalla, del más antiguo al
+	// que está delante; pulsar un botón cierra el de arriba, como el framework
+	dialogos []*objetoDalvik
+	// toast es el último texto que la app mostró con `Toast.show`, el aviso efímero del modelo
+	toast string
 	// estadoGuardado es lo que la última `onSaveInstanceState` dejó en el Bundle, para publicarlo
 	estadoGuardado map[string]any
 }
@@ -884,6 +911,16 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 				estabiliza()
 				continue
 			}
+			if esOrdenDeDialogo(pedido) {
+				if err := m.pulsaBotonDeDialogo(pedido); err != nil {
+					errPulsos = err
+					break
+				}
+				res.Pulsaciones = append(res.Pulsaciones, pedido)
+				entregados++
+				estabiliza()
+				continue
+			}
 			// `id/lista:1` es un clic en una fila: la forma lleva la posición después de los dos
 			// puntos, y es la única que le entrega al `onItemClick` el número que tocó.
 			if vista, fila, esFila := cortaFila(pedido); esFila {
@@ -942,6 +979,9 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 	// la máquina que quedó delante es la que sabe qué listas tienen adaptador: el modelo se la
 	// pide para ejecutar cada `getView` cuando ya se entregaron los clics
 	res.maquina = m
+	// la capa de diálogos y el último aviso efímero son los de la pantalla que quedó delante
+	res.Dialogos = m.dialogosDeVista()
+	res.Toast = m.toast
 	// la consola se renumera al unir las pantallas: `secuencia` es el orden real de emisión
 	for i := range res.Consola {
 		res.Consola[i].Secuencia = i + 1
@@ -1334,6 +1374,66 @@ func (m *maquinaDalvik) pulsaFila(id uint32, posicion int) bool {
 		}
 		return true
 	}
+}
+
+// esOrdenDeDialogo dice si un `--pulsar` pide un botón de diálogo (`dialogo/positivo`,
+// `dialogo/negativo` o `dialogo/neutro`) en vez de una vista con id.
+func esOrdenDeDialogo(pedido string) bool {
+	return strings.HasPrefix(strings.TrimSpace(pedido), "dialogo/")
+}
+
+// campos de un diálogo dentro de su `objetoDalvik`: el título, el mensaje y, por cada botón, su
+// texto y su oyente. Se guardan en el objeto para que `create()` pueda copiarlos tal cual.
+const (
+	campoDialogoTitulo  = "dialogo.titulo"
+	campoDialogoMensaje = "dialogo.mensaje"
+)
+
+func campoBotonDialogo(tipo, parte string) string {
+	return "dialogo.boton." + tipo + "." + parte
+}
+
+// tipoDeBotonDialogo es el papel del botón, que es lo que decide qué listener se ejecuta y con qué
+// `which`. Es también el nombre que se escribe en `--pulsar dialogo/<tipo>`.
+var tipoDeBotonDialogo = map[string]string{
+	"setPositiveButton": "positivo",
+	"setNegativeButton": "negativo",
+	"setNeutralButton":  "neutro",
+}
+
+// whichDeBotonDialogo son las constantes de `DialogInterface` con las que el framework llama al
+// `onClick(DialogInterface, int)`: BUTTON_POSITIVE = -1, BUTTON_NEGATIVE = -2 y BUTTON_NEUTRAL = -3.
+var whichDeBotonDialogo = map[string]int32{"positivo": -1, "negativo": -2, "neutro": -3}
+
+// textoDeArgumento resuelve el texto de un argumento que puede ser una cadena o el id de un recurso
+// de cadena (`R.string.x`), que es lo que el framework acepta en `setTitle`, `setMessage`,
+// `setPositiveButton` y `Toast.makeText`.
+func (m *maquinaDalvik) textoDeArgumento(v any) string {
+	if s, ok := m.textoDeId(v); ok {
+		return s
+	}
+	return textoDe(v)
+}
+
+// creaDialogo copia los campos de un `AlertDialog.Builder` a una instancia de `AlertDialog`, que es
+// lo que hace `create()` en el framework: los cambios posteriores del builder no se reflejan en el
+// diálogo ya creado.
+func creaDialogo(b *objetoDalvik) *objetoDalvik {
+	d := &objetoDalvik{clase: "Landroid/app/AlertDialog;", campos: make(map[string]any, len(b.campos))}
+	for k, v := range b.campos {
+		d.campos[k] = v
+	}
+	return d
+}
+
+// dialogoAbierto dice si ese diálogo ya está en la pila, para no apilarlo dos veces cuando la app
+// llama a `show()` sobre un diálogo que ya se mostraba.
+func (m *maquinaDalvik) dialogoAbierto(d *objetoDalvik) bool {
+	for _, x := range m.dialogos {
+		if x == d {
+			return true
+		}
+	}
 	return false
 }
 
@@ -1477,6 +1577,94 @@ func (m *maquinaDalvik) listasPintadas() []listaPintada {
 	}
 	sort.Slice(salida, func(i, j int) bool { return salida[i].ID < salida[j].ID })
 	return salida
+}
+
+// apilaDialogo pone un diálogo delante de la pantalla. Si ya estaba abierto, no lo duplica.
+func (m *maquinaDalvik) apilaDialogo(d *objetoDalvik) {
+	if m.dialogoAbierto(d) {
+		return
+	}
+	m.dialogos = append(m.dialogos, d)
+}
+
+// cierraDialogo quita el diálogo de la pila; si no estaba, no hace nada. Es lo que hacen `dismiss()`,
+// `cancel()` y pulsar cualquiera de sus botones.
+func (m *maquinaDalvik) cierraDialogo(d *objetoDalvik) {
+	for i, x := range m.dialogos {
+		if x == d {
+			m.dialogos = append(m.dialogos[:i], m.dialogos[i+1:]...)
+			return
+		}
+	}
+}
+
+// dialogoDeObjeto arma la capa publicable de un diálogo: título, mensaje y los botones que tiene, en
+// el orden del framework. Un botón sin texto no se publica; uno sin oyente sí, porque se ve y se
+// puede pulsar aunque solo cierre.
+func dialogoDeObjeto(d *objetoDalvik) dialogoVista {
+	v := dialogoVista{}
+	if s, ok := d.campos[campoDialogoTitulo].(string); ok {
+		v.Titulo = s
+	}
+	if s, ok := d.campos[campoDialogoMensaje].(string); ok {
+		v.Mensaje = s
+	}
+	for _, tipo := range []string{"positivo", "negativo", "neutro"} {
+		texto, ok := d.campos[campoBotonDialogo(tipo, "texto")].(string)
+		if !ok {
+			continue
+		}
+		v.Botones = append(v.Botones, botonDialogo{Tipo: tipo, Texto: texto})
+	}
+	return v
+}
+
+// dialogosDeVista publica la pila de diálogos de la pantalla actual, en orden.
+func (m *maquinaDalvik) dialogosDeVista() []dialogoVista {
+	if len(m.dialogos) == 0 {
+		return nil
+	}
+	salida := make([]dialogoVista, 0, len(m.dialogos))
+	for _, d := range m.dialogos {
+		salida = append(salida, dialogoDeObjeto(d))
+	}
+	return salida
+}
+
+// pulsaBotonDeDialogo entrega el clic al botón del diálogo que está delante. Como el framework,
+// cerrar el diálogo es parte del clic: se quita de la pila antes de correr el oyente, para que un
+// `dismiss()` dentro del listener no lo intente dos veces. El oyente recibe el diálogo y el `which`
+// de su papel.
+func (m *maquinaDalvik) pulsaBotonDeDialogo(pedido string) error {
+	tipo := strings.TrimPrefix(strings.TrimSpace(pedido), "dialogo/")
+	if _, ok := whichDeBotonDialogo[tipo]; !ok {
+		return fmt.Errorf("no se puede pulsar %q: un diálogo solo tiene dialogo/positivo, "+
+			"dialogo/negativo o dialogo/neutro", pedido)
+	}
+	if len(m.dialogos) == 0 {
+		return fmt.Errorf("no se puede pulsar %q: no hay ningún diálogo abierto", pedido)
+	}
+	d := m.dialogos[len(m.dialogos)-1]
+	if _, ok := d.campos[campoBotonDialogo(tipo, "texto")]; !ok {
+		return fmt.Errorf("no se puede pulsar %q: el diálogo no tiene botón %s", pedido, tipo)
+	}
+	m.cierraDialogo(d)
+	m.interaccion++
+	oyente, _ := d.campos[campoBotonDialogo(tipo, "oyente")].(*objetoDalvik)
+	if oyente == nil {
+		// el botón se ve y cierra el diálogo, pero nadie pidió que hiciera nada más
+		return nil
+	}
+	met := m.buscaMetodo(oyente.clase, "onClick", "(Landroid/content/DialogInterface;I)V")
+	if met == nil {
+		return fmt.Errorf("%s se registró como onClick del diálogo y no tiene "+
+			"onClick(DialogInterface, int)", claseCorta(oyente.clase))
+	}
+	if _, err := m.ejecutaCuerpo(oyente.clase, met, []any{oyente, d, whichDeBotonDialogo[tipo]},
+		[]string{oyente.clase, "Landroid/content/DialogInterface;", "I"}); err != nil {
+		m.avisa("el onClick de %s falló: %v", claseCorta(oyente.clase), err)
+	}
+	return nil
 }
 
 // registraOnClickDeclarativo enlaza el `android:onClick="sumar"` del layout, como hace el inflado
@@ -2942,10 +3130,71 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return m.rechaza(nombre, proto,
 				"la reflexión no está en el subconjunto", "")
 		}
-	case "setTitle":
-		if len(vals) == 1 && es("Landroid/app/Activity;") {
+	case "setTitle", "setMessage":
+		// el título y el mensaje de un `AlertDialog.Builder`: se guardan para publicarlos como capa.
+		// El `setTitle` de la actividad sigue siendo otro: lo distingue la clase del receptor.
+		if len(vals) == 1 && obj != nil && es("Landroid/app/AlertDialog$Builder;") {
+			clave := campoDialogoTitulo
+			if nombre == "setMessage" {
+				clave = campoDialogoMensaje
+			}
+			obj.campos[clave] = m.textoDeArgumento(vals[0])
+			return obj, true, nil
+		}
+		if nombre == "setTitle" && len(vals) == 1 && es("Landroid/app/Activity;") {
 			m.captura("Activity.setTitle", obj, textoDe(vals[0]))
 			return nil, true, nil
+		}
+	case "setPositiveButton", "setNegativeButton", "setNeutralButton":
+		// el texto y el `DialogInterface.OnClickListener` de cada botón; el builder se devuelve a sí
+		// mismo para que la cadena de `setTitle().setMessage().show()` siga viva
+		if len(vals) == 2 && obj != nil && es("Landroid/app/AlertDialog$Builder;") {
+			tipo := tipoDeBotonDialogo[nombre]
+			obj.campos[campoBotonDialogo(tipo, "texto")] = m.textoDeArgumento(vals[0])
+			obj.campos[campoBotonDialogo(tipo, "oyente")] = vals[1]
+			return obj, true, nil
+		}
+	case "create":
+		if len(vals) == 0 && obj != nil && es("Landroid/app/AlertDialog$Builder;") {
+			return creaDialogo(obj), true, nil
+		}
+	case "show":
+		// `show()` sobre el builder crea el diálogo y lo pone delante; sobre un Toast deja su línea
+		// de consola y el aviso efímero; sobre un diálogo ya creado solo lo apila.
+		if obj != nil && es("Landroid/widget/Toast;") {
+			texto := ""
+			if s, ok := obj.campos["toast.texto"].(string); ok {
+				texto = s
+			}
+			m.anotaConsola("Toast", texto)
+			m.toast = texto
+			return nil, true, nil
+		}
+		if len(vals) == 0 && obj != nil && es("Landroid/app/AlertDialog$Builder;") {
+			d := creaDialogo(obj)
+			m.apilaDialogo(d)
+			return d, true, nil
+		}
+		if len(vals) == 0 && obj != nil && es("Landroid/app/AlertDialog;", "Landroid/app/Dialog;") {
+			m.apilaDialogo(obj)
+			return nil, true, nil
+		}
+	case "dismiss", "cancel":
+		if len(vals) == 0 && obj != nil && es("Landroid/app/AlertDialog;", "Landroid/app/Dialog;") {
+			m.cierraDialogo(obj)
+			return nil, true, nil
+		}
+	case "isShowing":
+		if len(vals) == 0 && obj != nil && es("Landroid/app/AlertDialog;", "Landroid/app/Dialog;") {
+			return boolAInt(m.dialogoAbierto(obj)), true, nil
+		}
+	case "makeText":
+		// `Toast.makeText(Context, CharSequence | int, int)`: se guarda el texto en el Toast y su
+		// `show()` lo publica; la duración no cambia lo que se mide
+		if len(vals) == 3 && es("Landroid/widget/Toast;") {
+			t := &objetoDalvik{clase: "Landroid/widget/Toast;", campos: map[string]any{}}
+			t.campos["toast.texto"] = m.textoDeArgumento(vals[1])
+			return t, true, nil
 		}
 	case "toString":
 		if len(vals) == 0 && es("Ljava/lang/StringBuilder;") && obj != nil && obj.cadena != nil {
