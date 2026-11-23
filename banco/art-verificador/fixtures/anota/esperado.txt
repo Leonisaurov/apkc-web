@@ -1,0 +1,1 @@
+clase=AZUL/5/de clase campo=VERDE/6/de campo metodo=AZUL/9/ñandú generico=class java.lang.String

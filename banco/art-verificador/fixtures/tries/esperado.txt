@@ -1,0 +1,1 @@
+aritmetica=999,1025 pendiente=fallo:cero,bien7 multi=multi:IllegalStateException,multi:NumberFormatException,ok
