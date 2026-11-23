@@ -215,8 +215,10 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
 
 - **Estado: cerrada** el 2026-11-22 como `99cd48f`, con
   `TestElPreviewRespetaVisibilidadTextoColorEImagen` en verde y el crítico
-  `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR CON CONDICIONES**: quedan dos preguntas `INCIERTAS`
-  (color `0x1d` y `layout_margin` desde `@style`), no bloqueantes, en §208 de `docs/evidencia.md`.
+  `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR**. Sus dos condiciones quedaron resueltas: H4
+  **cerrada** por `762b328` (el color `0x1d` de `aapt2` se lee como color) y H5 fijada como
+  **frontera** (`layout_margin` desde `@style` no se resuelve). Detalle en §208 de
+  `docs/evidencia.md`.
 - **Objetivo.** Que el dibujo se parezca al diseño: tamaños reales por densidad, gravedad fina,
   visibilidad, tamaños de texto, colores y estilos propios, y una imagen de recurso.
 - **Qué se emula.**

@@ -78,14 +78,14 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - E3 **cerrada** como `5cc852a`: `TestElPreviewConservaElEstadoAlRecrear` en verde y el crítico
   `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR**. Evidencia: §207.
 - E4 **cerrada** como `99cd48f`: `TestElPreviewRespetaVisibilidadTextoColorEImagen` en verde y el
-  crítico `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR CON CONDICIONES** (las dos preguntas
-  `INCIERTAS` de §208, no bloqueantes).
+  crítico `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR**. H4, la condición del color `0x1d`, queda
+  **cerrada** por `762b328`; H5 (`layout_margin` desde `@style`) se fija como **frontera** en §208.
 - E2 **cerrada** como `a76422d` (integración manual de `d54fdea`), con
   `TestElPreviewPintaUnaListaConSuAdaptador` en verde y el crítico
   `ses_df9ecde81ffeVOW5GZ5bA820E6` en **APROBAR**, sin defectos `CONFIRMADO`; el merge de cinco
   puntos está verificado y queda una pregunta `INCIERTA` (sonda `--recrear` más lista). Evidencia:
   §209.
-- La vista previa se reconstruyó con E1.1, E3, E4 y E2 (`sha256 7c8904fa…`).
+- La vista previa se reconstruyó con E1.1, E3, E4, E2 y la corrección H4 (`sha256 12ac779b…`).
 - **Activas:** E5 (`ses_df9f49694ffeE3qK56KapEVMkJ`), E6 y E7.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.

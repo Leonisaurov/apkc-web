@@ -9391,9 +9391,10 @@ la actividad que está delante. (5) El sitio publicado no se ha empaquetado con 
 
 ## 208. E4: fidelidad visual del modelo, con su crítica
 
-Medido el 2026-11-22 sobre el mismo `a76422d` y revisado por el crítico en la ronda 2 de
-`ses_df9ef9e02ffeqSQ1cuPypAdVer`. La prueba de aceptación es `apkc/previewvisual_test.go`; las
-líneas citadas son las de ese árbol.
+Medido el 2026-11-22 sobre `a76422d`, ampliado con la corrección `762b328`, y revisado por el
+crítico en la ronda 2 de `ses_df9ef9e02ffeqSQ1cuPypAdVer`. La prueba de aceptación es
+`apkc/previewvisual_test.go`; las líneas citadas son las del árbol de `a76422d` salvo donde se dice
+otra cosa.
 
 **Qué emula.** `android:visibility` en la medición y en el JSON: un `gone` no ocupa ni su margen,
 un `invisible` conserva su sitio. `textSize` en `sp` y `dp`/`px` con la densidad mdpi del modelo,
@@ -9415,21 +9416,50 @@ resuelve `textStyle` y `background`); el `ImageView` de 2×2 en `{0 36 2 2}` con
 `#ff0000ff`, `#00ff00ff`, `#0000ffff` y `#ffffffff`; y el `invisible` en `{280 38 80 24}`, con
 `layout_gravity="end"` y `background="#00ff00"`. Lo mismo se comprueba releyendo el JSON.
 
-**Veredicto del crítico**: **APROBAR CON CONDICIONES**, que son las dos preguntas abiertas de
-abajo; no hay defecto `CONFIRMADO`. Se aplica la misma nota de `gofmt -l` de §207.
+**Veredicto del crítico**: **APROBAR**; el dictamen original fue APROBAR CON CONDICIONES, y sus dos
+condiciones quedan resueltas en este `§`: H4 se cierra con la corrección `762b328` y H5 se fija
+como frontera. No hay defecto `CONFIRMADO`. Se aplica la misma nota de `gofmt -l` de §207.
 
-**Preguntas abiertas (INCIERTAS, no bloqueantes).** (H4) La constante `tipoColor` solo reconoce
-`0x1c` (`apkc/preview.go:66-67`); habría que comprobar con `aapt2 dump resources` si un
-`<color>#336699</color>` del proyecto sale como `TYPE_INT_COLOR_RGB8 0x1d`, que el lector no
-cubriría. (H5) Al resolver estilos, `layout_margin` se lee con `ladosDe(e, nil, "layout_margin")`
-(`apkc/preview.go:1104`), es decir, sin estilo; queda decidir si `layout_margin` puesto desde
-`@style` entra en E4 o se declara fuera.
+**H4, cerrada (corrección `762b328`).** La sospecha era cierta: `aapt2` escribe
+`TYPE_INT_COLOR_RGB8` (`0x1d`), no ARGB8, para un `#rrggbb` de `res/values/colors.xml`, y el
+lector solo reconocía `0x1c`. La sonda `ses_df9ea20a2ffeLaFRcu32o5Ddns` se ejecutó en
+`/home/leonisauro/.cache/apkc-web/h4-color` con `aapt2` de
+`/home/leonisauro/opt/android-sdk/build-tools/35.0.1/aapt2` y el `android.jar` de API 34:
+
+```sh
+AAPT2=/home/leonisauro/opt/android-sdk/build-tools/35.0.1/aapt2
+JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar
+cd /home/leonisauro/.cache/apkc-web/h4-color
+$AAPT2 compile --dir res -o compiled.zip
+$AAPT2 link -o out.apk -I "$JAR" --manifest AndroidManifest.xml --java gen compiled.zip
+$AAPT2 dump resources out.apk | grep -i -C3 probe
+```
+
+**Resultado**: `resource 0x7f010000 color/probe` y `() #ff336699`; leído directo el `Res_value` del
+`resources.arsc`, `dataType=0x1d data=0xff336699`. `762b328` añade `tipoColorRGB8 = 0x1d` en
+`apkc/preview.go:70` y lo incluye en `colorDeCon` (`:1227`), con la prueba nueva
+`TestElColorRGB8DeAapt2SeLeeComoColor` (`previewvisual_test.go:265`), que pasa el `Res_value` de la
+sonda (`0x1d`, `0xff336699`) y exige `#336699`. Verificación sobre cinco pruebas:
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElColorRGB8DeAapt2SeLeeComoColor|TestElPreviewRespetaVisibilidadTextoColorEImagen|TestElPreviewPintaUnaListaConSuAdaptador|TestElPreviewConservaElEstadoAlRecrear|TestElPreviewNavegaEntreActividadesPropias' -v .
+```
+
+**Resultado**: cinco `--- PASS` y `ok github.com/ajinasokan/apkc 0.101s`.
+
+**H5, frontera decidida (sin código).** `ladosDe` usa los ids de atributo `idVistaPadding*` como
+claves de estilo tanto para `padding` como para `layout_margin` (`apkc/preview.go:1165-1173`); para
+leer `layout_margin` desde `@style` harían falta los ids `layout_margin*` del framework, que no
+están en el alcance escrito de E4. Queda como frontera honesta: `layout_margin` desde `@style` no
+se resuelve, y no se finge que sí.
 
 **Fronteras de este `§`.** (1) No hay oráculo de aparato para la geometría: lo fijado es la cuenta
 declarada (alto de texto 1,5 veces el tamaño, 8 dp por carácter, 16 dp de relleno) y los
 rectángulos que salen de ella. (2) `RelativeLayout` con reglas, `ConstraintLayout`, fuentes, temas
-del sistema, sombras, `drawable` vectoriales y animaciones de vista quedan fuera. (3) No se corrió
-el gate ni chromium, y el sitio publicado no se ha empaquetado con `99cd48f`.
+del sistema, sombras, `drawable` vectoriales y animaciones de vista quedan fuera. (3) `layout_margin`
+desde `@style` queda fuera por H5. (4) No se corrió el gate ni chromium, y el sitio publicado no se
+ha empaquetado con `762b328`.
 
 ## 209. E2: listas con adaptador del proyecto, su merge y su crítica
 
