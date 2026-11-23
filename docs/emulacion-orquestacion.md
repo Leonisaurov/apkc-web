@@ -80,8 +80,11 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - E4 **cerrada** como `99cd48f`: `TestElPreviewRespetaVisibilidadTextoColorEImagen` en verde y el
   crítico `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR CON CONDICIONES** (las dos preguntas
   `INCIERTAS` de §208, no bloqueantes).
-- E2 **integrada** como `a76422d` (con resolución manual de conflictos), en **verificación**: sus
-  seis tests pasan, pero el crítico aún no ha dictaminado y no hay `§` de evidencia.
+- E2 **cerrada** como `a76422d` (integración manual de `d54fdea`), con
+  `TestElPreviewPintaUnaListaConSuAdaptador` en verde y el crítico
+  `ses_df9ecde81ffeVOW5GZ5bA820E6` en **APROBAR**, sin defectos `CONFIRMADO`; el merge de cinco
+  puntos está verificado y queda una pregunta `INCIERTA` (sonda `--recrear` más lista). Evidencia:
+  §209.
 - La vista previa se reconstruyó con E1.1, E3, E4 y E2 (`sha256 7c8904fa…`).
 - **Activas:** E5 (`ses_df9f49694ffeE3qK56KapEVMkJ`), E6 y E7.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.

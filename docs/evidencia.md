@@ -9430,3 +9430,48 @@ declarada (alto de texto 1,5 veces el tamaño, 8 dp por carácter, 16 dp de rell
 rectángulos que salen de ella. (2) `RelativeLayout` con reglas, `ConstraintLayout`, fuentes, temas
 del sistema, sombras, `drawable` vectoriales y animaciones de vista quedan fuera. (3) No se corrió
 el gate ni chromium, y el sitio publicado no se ha empaquetado con `99cd48f`.
+
+## 209. E2: listas con adaptador del proyecto, su merge y su crítica
+
+Medido el 2026-11-22 sobre `a76422d`. E2 nació como `d54fdea` en el worktree `emu-e2-listas` y se
+integró con resolución manual de conflictos, coincidiendo con E3 y E4, que tocan `preview.go` y
+`previewinterprete.go`. El crítico es `ses_df9ecde81ffeVOW5GZ5bA820E6`, que dictaminó sobre ese
+mismo árbol.
+
+**Qué emula.** `ListView` con un `BaseAdapter` o `ArrayAdapter` del proyecto: `setAdapter`,
+`getCount`, `getView`, `getItem`, `getItemId`, `notifyDataSetChanged`, `setOnItemClickListener` y
+la medición de cada fila con el layout que devuelve `getView`, ejecutando el `getView` del proyecto.
+El clic por fila se escribe `--pulsar id/lista:<posición>`. `getChildCount`/`getChildAt` son una
+aproximación declarada: no hay reciclado real de vistas.
+
+**Cómo se resolvió el merge.** El crítico comprobó los cinco puntos a mano: (1) `objetoDalvik`
+conserva los campos de E3 y los de E2; (2) conviven `almacenPreferencias` y `oyenteItemRegistrado`;
+(3) el bucle de órdenes toma `pedido := orden.Valor`, atiende `--recrear`, separa `cortaFila`/
+`pulsaFila` y mantiene el tope de 32 de `pulsa`; (4) el bloque final publica `res.Bundle`,
+`res.Preferencias` y `res.maquina = m`; (5) el `usage` documenta `--recrear` y
+`--pulsar id/lista:1`. Los 15 símbolos nuevos de E2 están en el árbol y no hay defecto
+`CONFIRMADO`.
+
+```sh
+export APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestElPreviewPintaUnaListaConSuAdaptador' -v .
+```
+
+**Resultado**: `--- PASS: TestElPreviewPintaUnaListaConSuAdaptador (0.05s)`. La tanda de la vista
+previa en el worktree dejó además las líneas `PASS` de `TestElPreviewPulsaElListenerQueSeLePide`,
+`TestElPreviewOnClickProgramaticoGanaAlDelLayout`,
+`TestElPreviewConservaElEstadoAlRecrear` y `TestElPreviewRespetaVisibilidadTextoColorEImagen`, con
+`ok github.com/ajinasokan/apkc 0.445s`; la tanda de seis sobre la raíz dio `ok … 0.141s`.
+
+**Pregunta abierta (INCIERTA, no bloqueante).** No se ejecutó una sonda combinada `--recrear` más
+`--pulsar id/lista:1`; la convivencia de la lista con la recreación se verificó por inspección
+(`apkc/previewinterprete.go:854-860` y `:944`, líneas de `a76422d`), no con una prueba. Queda
+pendiente decidir si esa sonda entra en E5 o en la prueba de pestaña.
+
+**Fronteras de este `§`.** (1) Quedan fuera `RecyclerView` con `LayoutManager` real, el reciclado,
+`DiffUtil`, `ExpandableListView`, arrastrar filas y las listas de más de 50 filas. (2) También
+quedan fuera `super.getCount()`/`super.getView()`, `ArrayAdapter` con `List`,
+`registerDataSetObserver`, `getViewTypeCount`/`getItemViewType`, `getFilter`, `areAllItemsEnabled`,
+`AdapterView.getItemAtPosition`/`setSelection`/`smoothScrollToPosition` e `inflate(XmlPullParser,…)`.
+(3) No se corrió el gate ni chromium, y el sitio publicado no se ha empaquetado con `a76422d`.

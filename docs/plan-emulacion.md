@@ -2,10 +2,10 @@
 
 **Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
 medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E3 y E4 están
-**cerradas** en §207 y §208; E2 está **integrada**; E5…E7 están **pendientes** hasta que su comando
-de aceptación pase en verde sobre el árbol final. Este fichero es un plan, no evidencia: lo que
-aquí se afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que
-se comprobará. Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla
+**cerradas** en §207 y §208; E2 está **cerrada** en §209; E5…E7 están **pendientes** hasta que su
+comando de aceptación pase en verde sobre el árbol final. Este fichero es un plan, no evidencia:
+lo que aquí se afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con
+el que se comprobará. Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla
 de `docs/plan.md` cuando la fase se cierre.
 
 Fecha: 2026-11-22. Origen de la petición: el usuario quiere **que emule mucho más**, con prioridad
@@ -169,11 +169,12 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
   `docs/auditorias.md`. Matiz del crítico: los tests del tope aseveran contra `pulsacionesMaximas`,
   no contra el literal 32, así que cambiar el valor no los rompería.
 
-### E2. Listas y adaptadores propios — **EN VERIFICACIÓN**
+### E2. Listas y adaptadores propios — **CERRADA**
 
-- **Estado: integrada en `a76422d`, en verificación.** Sus seis tests pasan con la resolución manual
-  de conflictos, pero el crítico aún no ha dictaminado: no hay `§` de evidencia todavía y no se
-  escribe hasta que lo haya.
+- **Estado: cerrada** el 2026-11-22 como `a76422d` (integración manual de `d54fdea` desde
+  `emu-e2-listas`), con `TestElPreviewPintaUnaListaConSuAdaptador` en verde y el crítico
+  `ses_df9ecde81ffeVOW5GZ5bA820E6` en **APROBAR**, sin defectos `CONFIRMADO`. Evidencia, merge y
+  pregunta abierta: §209 de `docs/evidencia.md`.
 - **Objetivo.** Ver una lista real: `ListView` con un `BaseAdapter` o `ArrayAdapter` **del
   proyecto**, su `getView`, el `ViewHolder` y el clic por posición.
 - **Qué se emula.** `setAdapter`, `getCount`, `getView`, `getItem`, `getItemId`, `notifyDataSetChanged`,
