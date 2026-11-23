@@ -100,8 +100,10 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      viejos en `/tmp/opencode`, muévelos a disco en lugar de borrarlos; no los dejes ahí. Al cerrar
      cada frente, y conforme se desocupa cada gate, limpia también los temporales en disco que ya no
      sirven (`PREFIX`, directorios de gate, perfiles de chromium, copias viejas): no los acumules
-     hasta el final de la sesión, pero conserva la evidencia y pregunta antes de borrar algo que otra
-     fase pueda necesitar.
+     hasta el final de la sesión. **Todo lo que esté bajo este directorio
+     (`~/Develop/Go/apkc-web/`) o bajo su prefijo de temporales (`$HOME/.cache/apkc-web/…`) puedes
+     borrarlo sin pedir confirmación cada vez**; conserva solo la evidencia ya registrada en `docs/`
+     y lo que tenga un proceso vivo o sirva a la sesión actual.
 
 ## Entorno (Termux/Android aarch64)
 
