@@ -5,6 +5,7 @@ package main
 // android.jar y solo existe si el proyecto la trae generada o se enlaza de `res/`.
 
 import (
+	"archive/zip"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -761,5 +762,185 @@ func TestCheckCampoGenericoNombraElTipoBase(t *testing.T) {
 	}
 	if strings.Contains(mensaje, "se esperaba un nombre de miembro") {
 		t.Errorf("el error sigue siendo el del parser en el `<`: %q", mensaje)
+	}
+}
+
+// fuenteMainSolo es un pedido que no depende de ninguna otra clase del proyecto: sirve para medir lo
+// que aportan los hermanos sin que el propio pedido tape el resultado con un error suyo.
+const fuenteMainSolo = `package com.hola.apkcstudio;
+
+public class MainActivity {
+    public int uno() {
+        return 1;
+    }
+}
+`
+
+// fuenteHelperUno y fuenteHelperDos son dos clases con el mismo nombre simple en paquetes distintos.
+// El pedido (`com.hola.apkcstudio.uno.Helper`) referencia a la otra por su nombre cualificado en la
+// firma, que es legal sin `import` y la única forma de nombrarla: dentro de su propio fuente el nombre
+// simple `Helper` ya es su clase.
+const fuenteHelperUno = `package com.hola.apkcstudio.uno;
+
+public class Helper {
+    public static int suma(com.hola.apkcstudio.dos.Helper otro) {
+        return otro.hashCode() + 1;
+    }
+}
+`
+
+const fuenteHelperDos = `package com.hola.apkcstudio.dos;
+
+public class Helper {
+    public static int doble(int x) {
+        return x + x;
+    }
+}
+`
+
+// TestCheckDosHelperEnPaquetesDistintos cierra el límite que dejó `a4bf224`: el fuente pedido se
+// saltaba del conjunto por su **nombre simple**, y con eso se llevaba por delante a cualquier otro
+// `.java` que se llamase igual, aunque viviera en otro paquete y el pedido lo referenciara. Aquí el
+// pedido es `com.hola.apkcstudio.uno.Helper` y el proyecto tiene además `com.hola.apkcstudio.dos.Helper`:
+// el del otro paquete tiene que entrar en el conjunto y la copia en disco del pedido, no.
+func TestCheckDosHelperEnPaquetesDistintos(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/uno/Helper.java", fuenteHelperUno)
+	pon(t, raiz, "src/com/hola/apkcstudio/dos/Helper.java", fuenteHelperDos)
+	r := revisarFuenteJava(fuenteHelperUno, "Helper.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("con Helper en dos paquetes el pedido da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrió: aviso %q", r.Aviso)
+	}
+	if r.Aviso != "" {
+		t.Fatalf("aviso inesperado: %q", r.Aviso)
+	}
+	// el conjunto de hermanos es el que decide: el Helper del otro paquete entra y la copia en disco
+	// del pedido se salta por su nombre cualificado, no solo por el nombre simple
+	otros := otrosFuentesDelProyecto(raiz, "", "Helper.java", fuenteHelperUno)
+	queridos := map[string]bool{
+		"src/com/hola/apkcstudio/dos/Helper.java":   true,
+		"src/com/hola/apkcstudio/MainActivity.java": true,
+	}
+	for _, f := range otros {
+		if !queridos[f.nombre] {
+			t.Fatalf("hermano inesperado %q en %+v", f.nombre, nombresDeFuentes(otros))
+		}
+		delete(queridos, f.nombre)
+	}
+	if len(queridos) != 0 {
+		t.Fatalf("faltan hermanos: %+v (medidos %+v)", queridos, nombresDeFuentes(otros))
+	}
+}
+
+// nombresDeFuentes deja legible un conjunto de fuentes en un fallo de test.
+func nombresDeFuentes(fuentes []fuenteJava) []string {
+	salida := make([]string, 0, len(fuentes))
+	for _, f := range fuentes {
+		salida = append(salida, f.nombre)
+	}
+	return salida
+}
+
+// TestCheckHermanoQueNoParseaSeAvisa cubre el otro límite declarado: un fuente hermano que ni siquiera
+// parsea no puede convertirse en una fila de error del fichero pedido. El informe dice el fichero y la
+// causa en `aviso`, no da el pedido por comprobado (`emisor:false`) y deja `errores` vacío.
+func TestCheckHermanoQueNoParseaSeAvisa(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/Roto.java", "public class Roto {\n")
+	r := revisarFuenteJava(fuenteMainSolo, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("el fallo de Roto.java se coló en la lista del pedido: %+v", r.Errores)
+	}
+	if r.Emisor {
+		t.Fatal("se dio por comprobado un fuente cuyo hermano Roto.java no parsea")
+	}
+	if !strings.Contains(r.Aviso, "Roto.java") {
+		t.Fatalf("el aviso no nombra el fichero que no parsea: %q", r.Aviso)
+	}
+	// la causa del parser tiene que viajar con el aviso: sin ella el aviso no sirve para arreglarlo
+	if !strings.Contains(r.Aviso, "se esperaba") && !strings.Contains(r.Aviso, "sin cerrar") {
+		t.Fatalf("el aviso no dice la causa del parser: %q", r.Aviso)
+	}
+	if strings.HasPrefix(r.Aviso, "MainActivity.java") {
+		t.Fatalf("el aviso atribuye el fallo al fuente pedido: %q", r.Aviso)
+	}
+}
+
+// fuenteTipoDelJar es la clase de una dependencia local: `jar/` la aporta al classpath y un hermano la usa.
+const fuenteTipoDelJar = `package com.hola.apkcstudio.dep;
+
+public class MiTipo {
+    public static int valor() {
+        return 7;
+    }
+}
+`
+
+// fuenteUsaDep es el hermano que referencia el tipo del jar; el pedido no lo toca.
+const fuenteUsaDep = `package com.hola.apkcstudio;
+
+import com.hola.apkcstudio.dep.MiTipo;
+
+public class UsaDep {
+    public int v() {
+        return MiTipo.valor();
+    }
+}
+`
+
+// jarConClasesEmitidas escribe en `jar/<nombre>` las clases que emite apkc para esos fuentes. Emitirlas
+// aquí evita depender de javac y mide lo único que importa: que `check` abra el jar del proyecto.
+func jarConClasesEmitidas(t *testing.T, raiz, nombre, rutaJar string, fuentes []fuenteJava) string {
+	t.Helper()
+	clases, err := compilarProyectoJava(fuentes, rutaJar)
+	if err != nil {
+		t.Fatalf("preparando el jar de la prueba: %v", err)
+	}
+	ruta := filepath.Join(raiz, "jar", nombre)
+	if err := os.MkdirAll(filepath.Dir(ruta), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Create(ruta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for _, c := range clases {
+		w, err := zw.Create(c.interno + ".class")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(c.datos); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return ruta
+}
+
+// TestCheckTipoDeJarLocalEnUnHermano cierra el tercer caso: un tipo que vive en `jar/` y que solo
+// referencia otro fuente del proyecto tiene que resolver, porque `check` arma el mismo classpath que
+// `build`. Antes el classpath se armaba con la raíz vacía (el cwd) y el jar del proyecto no entraba.
+func TestCheckTipoDeJarLocalEnUnHermano(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	jarConClasesEmitidas(t, raiz, "dependencia.jar", jarDelSDK(t), []fuenteJava{{nombre: "MiTipo.java", contenido: fuenteTipoDelJar}})
+	pon(t, raiz, "src/com/hola/apkcstudio/UsaDep.java", fuenteUsaDep)
+	r := revisarFuenteJava(fuenteMainSolo, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("el tipo de jar/ en un hermano da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrió: aviso %q", r.Aviso)
+	}
+	if r.Aviso != "" {
+		t.Fatalf("aviso inesperado: %q", r.Aviso)
 	}
 }
