@@ -326,18 +326,17 @@ func TestCompilaAppConVariosDexEnElApk(t *testing.T) {
 	}
 }
 
-// TestCompilaAppPre21ConDemasiadasClasesAborta es la guarda del otro lado de la frontera: con
-// `minSdkVersion` 19 el runtime no abre `classes2.dex`, así que un proyecto que no cabe en un
-// fichero no se reparte; el build tiene que abortar con el techo de 65 536 referencias y la API
-// en el mensaje, y no dejar ningún apk. `LogF` termina el proceso, así que la etapa se conduce en
-// un hijo de la propia prueba (el mismo patrón que
-// TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase): la falsificación —quitar la
-// guarda— se nota en el código de salida y en el `app.apk` que entonces sí aparece.
-func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
+// construirAppGrandeEnHijo arma el proyecto de 70×1000 métodos con el manifiesto dado y conduce
+// `_build` en un hijo de la propia prueba, porque `LogF` termina el proceso. Devuelve la raíz del
+// proyecto (donde el padre ya está situado), la salida combinada del hijo y si esta ejecución es
+// el hijo. En el hijo, un `_build` que **vuelve** (la guarda no abortó) termina la prueba en verde
+// y el padre lo lee como «no abortó»; el `return` con `esHijo` de cada prueba corta ahí.
+func construirAppGrandeEnHijo(t *testing.T, nombreTest, manifiesto string) (raiz string, salida []byte, esHijo bool) {
+	t.Helper()
 	const (
-		envDir = "APKC_PRE21_DIR"
-		envJar = "APKC_PRE21_JAR"
-		envKS  = "APKC_PRE21_KS"
+		envDir = "APKC_APP_GRANDE_DIR"
+		envJar = "APKC_APP_GRANDE_JAR"
+		envKS  = "APKC_APP_GRANDE_KS"
 	)
 	if dir := os.Getenv(envDir); dir != "" {
 		if err := os.Chdir(dir); err != nil {
@@ -360,7 +359,7 @@ func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 			codename:    "14",
 			v4:          true,
 		})
-		return
+		return "", nil, true
 	}
 
 	const clases, metodos = 70, 1000
@@ -374,10 +373,7 @@ func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 	if err := escribirDebugKeystore(keystore, "android", "androiddebugkey", 10000); err != nil {
 		t.Fatalf("escribirDebugKeystore: %v", err)
 	}
-	writeManifest(t, `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
-	<uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34"/>
-	<application android:label="@string/app_name"/>
-</manifest>`)
+	writeManifest(t, manifiesto)
 	pon(t, raiz, "res/values/strings.xml", `<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Grande</string>
@@ -387,11 +383,28 @@ func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 	}
 	pon(t, raiz, "src/grande/Uso.java", fuenteLlamadora(clases, metodos))
 
-	cmd := exec.Command(os.Args[0], "-test.run=^TestCompilaAppPre21ConDemasiadasClasesAborta$")
+	cmd := exec.Command(os.Args[0], "-test.run=^"+nombreTest+"$")
 	cmd.Env = append(os.Environ(), envDir+"="+raiz, envJar+"="+androidJar, envKS+"="+keystore)
-	salida, err := cmd.CombinedOutput()
+	salida, err = cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("el build con minSdk 19 y 70 000 referencias no abortó; salida:\n%s", salida)
+		t.Fatalf("el build con 70 000 referencias y este manifiesto no abortó; salida:\n%s", salida)
+	}
+	return raiz, salida, false
+}
+
+// TestCompilaAppPre21ConDemasiadasClasesAborta es la guarda del otro lado de la frontera: con
+// `minSdkVersion` 19 el runtime no abre `classes2.dex`, así que un proyecto que no cabe en un
+// fichero no se reparte; el build tiene que abortar con el techo de 65 536 referencias y la API
+// en el mensaje, y no dejar ningún apk. La falsificación —quitar la guarda— se nota en el código
+// de salida y en el `app.apk` que entonces sí aparece.
+func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
+	raiz, salida, esHijo := construirAppGrandeEnHijo(t, "TestCompilaAppPre21ConDemasiadasClasesAborta",
+		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
+	<uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34"/>
+	<application android:label="@string/app_name"/>
+</manifest>`)
+	if esHijo {
+		return
 	}
 	for _, quiero := range []string{"no cabe en un fichero", "65536", "API 19", "classes2.dex"} {
 		if !bytes.Contains(salida, []byte(quiero)) {
@@ -403,6 +416,36 @@ func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(raiz, "build", "classes2.dex")); err == nil {
 		t.Fatal("el build abortado dejó build/classes2.dex: no se escribe un dex que ese runtime no abre")
+	}
+	t.Logf("aborto con rc != 0; salida del build:\n%s", salida)
+}
+
+// TestCompilaAppSinUsesSdkConDemasiadasClasesAborta cubre el hueco de la guarda: sin `<uses-sdk>`
+// `manifestMinAPI` devuelve 0, y el build trata ese 0 como API 1 (`manifest.go`: d8 asume API 1
+// cuando no está declarada). Por eso el cero tampoco admite reparto, ni en el build ni en la
+// llamada directa `dexarAppEnGo(…, 0)` con la que el crítico destapó que la guarda se eludía.
+func TestCompilaAppSinUsesSdkConDemasiadasClasesAborta(t *testing.T) {
+	raiz, salida, esHijo := construirAppGrandeEnHijo(t, "TestCompilaAppSinUsesSdkConDemasiadasClasesAborta",
+		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
+	<application android:label="@string/app_name"/>
+</manifest>`)
+	if esHijo {
+		return
+	}
+	for _, quiero := range []string{"no cabe en un fichero", "65536", "API 1", "classes2.dex"} {
+		if !bytes.Contains(salida, []byte(quiero)) {
+			t.Errorf("el aborto no nombra %q; salida:\n%s", quiero, salida)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(raiz, "build", "app.apk")); err == nil {
+		t.Fatal("el build sin <uses-sdk> dejó build/app.apk: el paquete no puede existir")
+	}
+	if _, err := os.Stat(filepath.Join(raiz, "build", "classes2.dex")); err == nil {
+		t.Fatal("el build sin <uses-sdk> dejó build/classes2.dex: la guarda se eludió con api cero")
+	}
+	// la sonda exacta del crítico, en proceso: api cero es API 1 y tiene que rechazar el reparto
+	if _, err := dexarAppEnGo(clasesDeLaAppSonGrandes(), 0); err == nil {
+		t.Fatal("dexarAppEnGo(…, 0) repartió: api cero no es «sin proyecto», es API 1")
 	}
 	t.Logf("aborto con rc != 0; salida del build:\n%s", salida)
 }

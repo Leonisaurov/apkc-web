@@ -322,18 +322,25 @@ const apiMinimaMultiDex = 21
 // optimización: es un paquete que ese runtime no sabe abrir, así que se rechaza **antes** de
 // escribir ningún dex, con el techo de referencias y la API en el mensaje. Antes de esta frontera
 // ese caso moría igual, pero con el error del índice de 16 bits del traductor; el paquete nunca
-// llegaba a existir. `api` a cero es «no hay proyecto» (las pruebas de la etapa): reparte siempre.
+// llegaba a existir. Un cero no es «no hay proyecto»: `manifestMinAPI` devuelve 0 cuando el
+// manifiesto no declara `<uses-sdk>` y el resto del build lo trata como API 1, así que aquí
+// también se normaliza a 1 antes de decidir (si no, la guarda se eludiría con ese proyecto).
 //
 // Los ficheros se escriben de atrás adelante —`classesN.dex` primero y `classes.dex` al final—:
 // un build que muere a mitad deja la app sin su primer dex, así que la vuelta siguiente lo ve
 // faltar (`dexMissing`, build.go) y repite la etapa, en vez de encontrar un `classes.dex` y dar
 // por buenos los grupos que no llegaron a escribirse.
 func dexarAppEnGo(clases []classFull, api int) ([][]byte, error) {
+	// la API cero del manifiesto sin `<uses-sdk>` es la API 1 para todo el build (manifest.go):
+	// se normaliza aquí, antes de la guarda, y no se deja un camino por el que no se note
+	if api <= 0 {
+		api = 1
+	}
 	grupos, err := gruposDeClasesRepartidas(clases)
 	if err != nil {
 		return nil, err
 	}
-	if api > 0 && api < apiMinimaMultiDex && len(grupos) > 1 {
+	if api < apiMinimaMultiDex && len(grupos) > 1 {
 		return nil, fmt.Errorf("el dex de la app no cabe en un fichero: %d clases piden %d dex "+
 			"(el techo de los índices de 16 bits son %d referencias por fichero) y el proyecto "+
 			"compila para API %d; por debajo de API %d el runtime no abre classes2.dex. "+
