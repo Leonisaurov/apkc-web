@@ -183,6 +183,11 @@ func reparteEnDexesConFijas(clases []classFull, fijas map[string]bool, limite in
 	return grupos, nil
 }
 
+// arrastraLambdasDeFijas enciende el arrastre de la lambda sintética con su clase dueña. Es una
+// variable y no una constante para que la prueba del reparto pueda apagarlo (la falsificación) y
+// enseñar que sin él la lambda de una clase fija se va al segundo dex.
+var arrastraLambdasDeFijas = true
+
 // esClaseFija dice si la clase, o la clase de la que nació una lambda sintética, está en la lista
 // de fijas: una lambda del proyecto tiene que viajar con su dueña en el dex primario, y después de
 // `expandirLambdas` la sintética se llama `Ldueña$$Lambda$N;` y vive al final de la lista.
@@ -190,8 +195,10 @@ func esClaseFija(nombre string, fijas map[string]bool) bool {
 	if fijas[nombre] {
 		return true
 	}
-	if i := strings.Index(nombre, "$$Lambda$"); i >= 0 {
-		return fijas[nombre[:i]+";"]
+	if arrastraLambdasDeFijas {
+		if i := strings.Index(nombre, "$$Lambda$"); i >= 0 {
+			return fijas[nombre[:i]+";"]
+		}
 	}
 	return false
 }

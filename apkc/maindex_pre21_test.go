@@ -25,6 +25,52 @@ import (
 	"testing"
 )
 
+// TestRepartoArrastraLaLambdaDeSuClaseFija: después de expandir las lambdas, la clase sintética de
+// una clase del proyecto vive al final de la lista; para que la app arranque tiene que viajar con
+// su dueña en el dex primario. Se comprueba el arrastre y se falsifica apagándolo: la sintética se
+// va a classes2.dex mientras la dueña sigue en classes.dex.
+func TestRepartoArrastraLaLambdaDeSuClaseFija(t *testing.T) {
+	clases := clasesSinteticas(70, 1000, 0, 0)
+	dueña := classFull{Name: "Lcom/hola/Arranque;", Super: "Ljava/lang/Object;"}
+	lambda := classFull{Name: "Lcom/hola/Arranque$$Lambda$1;", Super: "Ljava/lang/Object;"}
+	clases = append(clases, dueña, lambda)
+
+	fijas := map[string]bool{dueña.Name: true}
+
+	// con el arrastre encendido, la sintética encabeza el primer dex junto a su dueña
+	conArrastre, err := reparteEnDexesConFijas(clases, fijas, refsPorDex)
+	if err != nil {
+		t.Fatalf("repartiendo con arrastre: %v", err)
+	}
+	if !contieneClase(conArrastre[0], lambda.Name) {
+		t.Fatalf("la lambda de una clase fija no cayó en el primer dex: %v", nombresDeGrupo(conArrastre[0])[:4])
+	}
+	if !contieneClase(conArrastre[0], dueña.Name) {
+		t.Fatal("la clase dueña no cayó en el primer dex")
+	}
+
+	// la falsificación: sin arrastre, la misma lista deja la sintética en el último dex
+	antes := arrastraLambdasDeFijas
+	arrastraLambdasDeFijas = false
+	t.Cleanup(func() { arrastraLambdasDeFijas = antes })
+	sinArrastre, err := reparteEnDexesConFijas(clases, fijas, refsPorDex)
+	if err != nil {
+		t.Fatalf("repartiendo sin arrastre: %v", err)
+	}
+	if len(sinArrastre) != 2 {
+		t.Fatalf("%d dex para 70 000 métodos: la falsificación esperaba classes.dex y classes2.dex", len(sinArrastre))
+	}
+	if contieneClase(sinArrastre[0], lambda.Name) {
+		t.Fatal("sin arrastre la lambda siguió en classes.dex: la falsificación no falsifica")
+	}
+	if !contieneClase(sinArrastre[1], lambda.Name) {
+		t.Fatal("sin arrastre la lambda no cayó en classes2.dex: el reparto no la movió")
+	}
+	if !contieneClase(sinArrastre[0], dueña.Name) {
+		t.Fatal("sin arrastre la clase dueña dejó de estar en el primer dex")
+	}
+}
+
 // TestRepartoFijaClasesEnElDexPrimario es la falsificación en el reparto: con el mismo conjunto y
 // el mismo techo, la clase pequeña que llega al final se queda en el último dex cuando no hay
 // lista de fijas, y encabeza `classes.dex` cuando la hay.
@@ -322,6 +368,131 @@ public class Arranque {
 		t.Fatal("sin fijas el cargador de multidex siguió en el primer dex: la falsificación no falsifica")
 	}
 	t.Logf("sin fijas, el cargador de multidex cae en el dex 2 de %d", len(sinFijas))
+}
+
+// TestCompilaAppPre21PorD8FijaElDexPrimario es la punta del camino javac+d8, el del compilador por
+// defecto. Con `minSdkVersion` 19 y un `jar/` que desborda un dex, d8 solo parte si `bundleJava` le
+// escribe la lista de main-dex; sin ella aborta con «Cannot fit requested classes in a single dex
+// file». El build tiene que volver con rc 0, dejar `classes.dex` y `classes2.dex`, y `dexdump -f`
+// tiene que ver en el primero la clase del proyecto y el cargador de multidex.
+//
+// Es el único test del fichero que arranca javac y d8 (los demás van por el compilador de Go), así
+// que se salta si faltan las herramientas. Suelto:
+//
+//	ANDROID_HOME=… APKC_ANDROID_JAR=… JAVAC17=… go test -run TestCompilaAppPre21PorD8FijaElDexPrimario -v .
+func TestCompilaAppPre21PorD8FijaElDexPrimario(t *testing.T) {
+	d8 := herramientaDelSDK(t, "d8")
+	dexdump := herramientaDelSDK(t, "dexdump")
+	if d8 == "" || dexdump == "" {
+		t.Skip("sin d8 y dexdump en las build-tools: el camino javac+d8 no se puede medir")
+	}
+	javac := buscarJavac17()
+	if javac == "" {
+		t.Skip("sin javac 17: el camino javac+d8 necesita compilar los fuentes del proyecto")
+	}
+	// el d8 de las build-tools arranca la JVM de JAVA_HOME; el JDK de javac es el mismo
+	t.Setenv("JAVA_HOME", filepath.Dir(filepath.Dir(javac)))
+
+	antesJar, antesJavac, antesD8 := androidJar, javacPath, d8Path
+	antesV4, antesSal := escribirV4, v4SaltHex
+	t.Cleanup(func() {
+		androidJar, javacPath, d8Path = antesJar, antesJavac, antesD8
+		escribirV4, v4SaltHex = antesV4, antesSal
+	})
+	androidJar, javacPath, d8Path = jarDelSDK(t), javac, d8
+
+	setupProject(t)
+	raiz, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keystore := filepath.Join(raiz, "debug.keystore")
+	if err := escribirDebugKeystore(keystore, "android", "androiddebugkey", 10000); err != nil {
+		t.Fatalf("escribirDebugKeystore: %v", err)
+	}
+
+	writeManifest(t, `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
+	<uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34"/>
+	<application android:label="@string/app_name"/>
+</manifest>`)
+	pon(t, raiz, "res/values/strings.xml", `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pre21</string>
+</resources>`)
+	pon(t, raiz, "src/grande/Arranque.java", `package grande;
+
+public class Arranque {
+    public static int arranca() { return 1; }
+}
+`)
+	// las dependencias: 70 clases de 1000 métodos y, detrás en el orden de jar/, el cargador de
+	// multidex, que tiene que quedar fijo en el dex primario aunque venga de un jar
+	grande := map[string][]byte{}
+	for i := 0; i < 70; i++ {
+		grande["grande/C"+itoa(i)+".class"] = claseFixtureGrande(t, "grande/C"+itoa(i), 1000)
+	}
+	if err := os.MkdirAll(filepath.Join(raiz, "jar"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	jarDePrueba(t, filepath.Join(raiz, "jar", "a-grande.jar"), grande)
+	jarDePrueba(t, filepath.Join(raiz, "jar", "z-multidex.jar"), map[string][]byte{
+		"androidx/multidex/MultiDex.class": claseFixtureGrande(t, "androidx/multidex/MultiDex", 2),
+	})
+
+	// el camino por defecto: javac compila y bundleJava dexa el proyecto con jar/ en el mismo merge
+	_build(buildOpts{
+		incremental: true,
+		linker:      linkerGo,
+		compiler:    "javac",
+		signer:      signerGo,
+		keyStore:    keystore,
+		storePass:   "android",
+		keyAlias:    "androiddebugkey",
+		jar:         androidJar,
+		sdkVersion:  34,
+		codename:    "14",
+	})
+
+	// la bandera que hace partir a d8: las fijas del proyecto y el cargador quedaron escritas
+	reglas := leerArchivo(t, filepath.Join("build", "maindex.pro"))
+	for _, quiero := range []string{"-keep class grande.Arranque { *; }", "-keep class androidx.multidex.MultiDex { *; }"} {
+		if !bytes.Contains(reglas, []byte(quiero)) {
+			t.Fatalf("build/maindex.pro no lleva %q:\n%s", quiero, reglas)
+		}
+	}
+
+	primero := clasesDeDex(t, filepath.Join("build", "classes.dex"))
+	segundo := clasesDeDex(t, filepath.Join("build", "classes2.dex"))
+	if !primero["Lgrande/Arranque;"] || !primero["Landroidx/multidex/MultiDex;"] {
+		t.Fatalf("classes.dex no lleva las fijas: %v", nombresDeConjunto(primero))
+	}
+	if !segundo["Lgrande/C0;"] {
+		t.Fatalf("classes2.dex no lleva el resto de las dependencias: %v", nombresDeConjunto(segundo))
+	}
+	if primero["Lgrande/C0;"] {
+		t.Fatal("classes.dex lleva una clase que no estaba fijada: d8 no siguió la lista")
+	}
+
+	// el oráculo del dex sobre los dos ficheros del merge
+	for _, caso := range []struct {
+		ruta   string
+		quiero []string
+	}{
+		{filepath.Join("build", "classes.dex"), []string{"Lgrande/Arranque;", "Landroidx/multidex/MultiDex;"}},
+		{filepath.Join("build", "classes2.dex"), []string{"Lgrande/C0;"}},
+	} {
+		salida, err := exec.Command(dexdump, "-f", caso.ruta).CombinedOutput()
+		if err != nil {
+			t.Fatalf("dexdump falló sobre %s: %v\n%s", caso.ruta, err, salida)
+		}
+		for _, quiero := range caso.quiero {
+			if !bytes.Contains(salida, []byte(quiero)) {
+				t.Fatalf("dexdump no ve %s en %s", quiero, caso.ruta)
+			}
+		}
+	}
+	t.Logf("javac+d8 con API 19: %d clases fijas en classes.dex y %d en classes2.dex",
+		len(primero), len(segundo))
 }
 
 // clasesDeDex relee un dex de build/ y devuelve el conjunto de nombres de sus clases.
