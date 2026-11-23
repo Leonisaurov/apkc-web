@@ -157,7 +157,8 @@ en su worktree con tres casos nuevos en `prueba.js`.
   SHA-256 `3d4b4382…`; y el inspector ya no redimensiona el canvas (314×561 en (690,303) en los
   cuatro estados), con el clic de `#vista-oyentes button` pasando de «sin clics» a «1 clic». El
   brinco lo causaba `.marco-previa { position: relative }`; se corrigió en `studio/style.css`
-  (`786e195`, puntero `23a827f`). El cierre visual final (`5637944` y `5f4b9ce`, puntero `89fc27f`,
+  (`786e195`, puntero `23a827f`). El cierre visual final (integrado como `ff31ef6` y `0fce105`;
+  los hashes del worktree `5637944`/`5f4b9ce` se reescribieron al cherry-pickear, puntero `89fc27f`,
   `studio/` en `0fce105`) dejó la consola libre en las dos vistas, el asa con `pointer-events` y la
   pantalla completa con `position: fixed`; acoplar la consola no reescala el canvas. El gate
   anterior fallaba porque `previa-inspector-cab` tapaba el canvas (`elementFromPoint` devolvía la

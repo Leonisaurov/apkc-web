@@ -111,7 +111,7 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
     puntero `23a827f`). Tras el fix el canvas mide 314×561 en (690,303) antes, apagado, encendido y
     con el inspector abierto: idéntico en los cuatro estados. El botón `#vista-oyentes button`
     pasa de «sin clics» a «1 clic» tras el ciclo apagado/encendido.
-  - **Cierre visual final (`5637944` y `5f4b9ce`, puntero `89fc27f`, `studio/` en `0fce105`):**
+  - **Cierre visual final (integrado como `ff31ef6` y `0fce105`; los hashes del worktree `5637944`/`5f4b9ce` se reescribieron al cherry-pickear, puntero `89fc27f`, `studio/` en `0fce105`):**
     consola libre en las dos vistas, asa de arrastre con `pointer-events` y pantalla completa con
     `position: fixed`; acoplar la consola no reescala el canvas (`ajustarCanvas` memoiza `caja|dp`,
     `pausarAjusteCanvas` durante gestos y el `ResizeObserver` no ajusta con el emulador apagado).
