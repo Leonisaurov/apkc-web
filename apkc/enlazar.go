@@ -331,6 +331,9 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 	if err != nil {
 		return nil, err
 	}
+	if err := recursosDeFicheroRepetidos(layouts, ficheros); err != nil {
+		return nil, err
+	}
 	tabla, err := tablaDeRecursos(recursos, layouts, ficheros, styleables, paquete)
 	if err != nil {
 		return nil, err
@@ -405,6 +408,26 @@ func manifestJavaDe(a *arbolFuente, paquete string) string {
 	}
 	sb.WriteString("  }\n\n}")
 	return sb.String()
+}
+
+// recursosDeFicheroRepetidos: dos recursos de fichero (layout, menu, xml, drawable, mipmap, raw) con
+// el mismo tipo, nombre y configuración acabarían en la misma entrada del apk y uno taparía al otro
+// sin decirlo. Pasa en cuanto la app y un AAR importado traen el mismo `layout/main.xml`, porque la
+// isla de `res/__deps` no viaja en la ruta; aapt2 lo rechaza igual, con «duplicate value». Se nombra
+// el fichero que llega de más, que es el único que el usuario puede quitar.
+func recursosDeFicheroRepetidos(layouts, ficheros []fuenteXML) error {
+	visto := map[string]string{}
+	for _, grupo := range [][]fuenteXML{layouts, ficheros} {
+		for _, f := range grupo {
+			tipo := tipoDeRecurso(f.nombre)
+			clave := tipo + "/" + claveDeLayout(f.nombre) + "@" + f.config
+			if antes, ok := visto[clave]; ok {
+				return fmt.Errorf("%s: el recurso %s/%s ya lo declara %s; dos ficheros con el mismo tipo, nombre y configuración no caben en el apk", f.nombre, tipo, claveDeLayout(f.nombre), antes)
+			}
+			visto[clave] = f.nombre
+		}
+	}
+	return nil
 }
 
 // nombreDelPaquete saca el atributo `package` del root del manifiesto, que es de donde aapt2 toma el

@@ -18,11 +18,18 @@ package main
 // La regla del repo es un claim con su medicion: los bytes de este enlazador estan comprobados contra
 // los ficheros que aapt2 dejo sobre el proyecto del studio (parrafos 35, 36 y 37). Un proyecto con otra
 // forma de recursos no esta comprobado, y se dice en lugar de prometer.
+//
+// Lo que aporta un AAR importado entra por aquí también: `res/__deps/<isla>/<tipo>/…` se lee con las
+// mismas reglas que `res/` y su fichero viaja al paquete con la ruta de su tipo (`res/layout/x.xml`),
+// que es la que deja `aapt2 link` y la que resuelven la tabla y la vista previa. Los nativos de
+// `lib/<abi>/*.so` no pasan por el enlazador: los mete en el apk `packagePlan`, como cualquier otro
+// fichero de `lib/`, con el nombre canónico que `System.loadLibrary` busca.
 
 import (
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -149,12 +156,23 @@ func calificadorExtraDeCarpeta(nombre string) (tipo, config string, autoVersion 
 	return tipo, sufijo, versionImplicitaDeCalificador(sufijo), true
 }
 
+// carpetaDeps es la isla donde el importador de dependencias deja los recursos de cada AAR:
+// `res/__deps/<isla>/<tipo-calificador>/<archivo>`, la misma forma que entiende aapt2 (ver
+// `apkc-deps`, `DEPS.md`). El nombre del fichero lleva el sufijo de la isla cuando es un `values`,
+// porque dos `strings.xml` homónimos pisarían el mismo flat.
+const carpetaDeps = "__deps"
+
 // tipoDeRecurso: la carpeta de res/ que da el tipo, sin calificador. Un nombre con guion todavía no
-// se acepta (5.17), así que basta el primer segmento.
+// se acepta (5.17), así que basta el primer segmento. Dentro de la isla de dependencias el tipo está
+// un nivel más abajo: `res/__deps/<isla>/<tipo>`.
 func tipoDeRecurso(ruta string) string {
 	partes := strings.Split(filepath.ToSlash(ruta), "/")
 	if len(partes) >= 2 && partes[0] == "res" {
-		carpeta := partes[1]
+		i := 1
+		if partes[1] == carpetaDeps && len(partes) >= 4 {
+			i = 3
+		}
+		carpeta := partes[i]
 		if i := strings.IndexByte(carpeta, '-'); i >= 0 {
 			carpeta = carpeta[:i]
 		}
@@ -164,7 +182,10 @@ func tipoDeRecurso(ruta string) string {
 }
 
 // fuentesDelProyecto recoge el arbol de recursos: los values, los layouts y el manifiesto, todos en
-// texto. Rechaza lo que no se pueda enlazar, antes de escribir nada.
+// texto. Rechaza lo que no se pueda enlazar, antes de escribir nada. Además de res/, lee la isla
+// `res/__deps/`, que es lo que aporta un AAR importado: los dos árboles se enlazan con las mismas
+// reglas y sus ficheros viajan al apk con la ruta de su tipo, igual que los del proyecto (lo que
+// `aapt2 link` deja en `build/res`), para que el paquete y la vista previa no distingan el origen.
 func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML, err error) {
 	manifiesto = fuenteXML{nombre: "AndroidManifest.xml"}
 	manifiesto.contenido, err = os.ReadFile(filepath.Join(raiz, "AndroidManifest.xml"))
@@ -185,64 +206,125 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 		if !e.IsDir() {
 			return nil, nil, nil, manifiesto, fmt.Errorf("res/%s no es una carpeta de recursos", e.Name())
 		}
-		tipo, config := e.Name(), ""
-		var autoVersion uint16
-		if !tiposDeResQueSeEnlazan[tipo] {
-			if t, c, auto, ok := calificadorExtraDeCarpeta(e.Name()); ok {
-				tipo, config, autoVersion = t, c, auto
-			} else {
-				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s: este enlazador solo escribe una configuración por carpeta: values, layout, menu, xml, drawable, mipmap y raw con idioma, región, orientación, densidad, tamaño, sw, touchscreen, keyboard, navigation, uiMode y -vN; anim y font tampoco", e.Name())
-			}
-		}
-		nom, err := os.ReadDir(filepath.Join(res, e.Name()))
-		if err != nil {
-			return nil, nil, nil, manifiesto, err
-		}
-		for _, f := range nom {
-			if f.IsDir() {
-				return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", e.Name(), f.Name(), e.Name())
-			}
-			carpetaSalida := e.Name()
-			if autoVersion != 0 {
-				// aapt2 añade la version implicita del calificador a la ruta del apk incluso con
-				// --no-auto-version: 4 para densidad y tamaño, 13 para sw y 8 para uiMode
-				// (parrafo 103, §159 y medido con build-tools 35.0.1)
-				carpetaSalida += fmt.Sprintf("-v%d", autoVersion)
-			}
-			ruta := filepath.Join("res", carpetaSalida, f.Name())
-			contenido, err := os.ReadFile(filepath.Join(res, e.Name(), f.Name()))
+		if e.Name() == carpetaDeps {
+			v, l, f, err := fuentesDeIslasDeDependencias(filepath.Join(res, carpetaDeps))
 			if err != nil {
 				return nil, nil, nil, manifiesto, err
 			}
-			fuente := fuenteXML{nombre: filepath.ToSlash(ruta), contenido: contenido, config: config}
-			switch tipo {
-			case "values":
-				if !strings.HasSuffix(f.Name(), ".xml") {
-					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: values solo admite .xml", e.Name(), f.Name())
-				}
-				valores = append(valores, fuente)
-			case "layout", "menu", "xml":
-				// los tres son AXML; la raiz de menu/xml no tiene que ser un layout. Se guardan en la
-				// misma lista y el tipo sale de la ruta (parrafo 97).
-				if !strings.HasSuffix(f.Name(), ".xml") {
-					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: %s solo admite .xml", e.Name(), f.Name(), tipo)
-				}
-				layouts = append(layouts, fuente)
-			case "raw":
-				// un raw viaja literal, como un PNG; no se parsea
-				ficheros = append(ficheros, fuente)
-			default:
-				// drawable/mipmap: un PNG (o cualquier binario) viaja tal cual y su entrada es un
-				// Res_value de tipo cadena con la ruta (parrafo 93). Un XML dibujable (vector,
-				// shape) es otro formato y se rechaza por nombre.
-				if strings.HasSuffix(f.Name(), ".xml") {
-					return nil, nil, nil, manifiesto, fmt.Errorf("res/%s/%s: un drawable XML (vector/shape) no esta medido", e.Name(), f.Name())
-				}
-				ficheros = append(ficheros, fuente)
-			}
+			valores = append(valores, v...)
+			layouts = append(layouts, l...)
+			ficheros = append(ficheros, f...)
+			continue
 		}
+		v, l, f, err := fuentesDeCarpetaRes(filepath.Join(res, e.Name()), "res/"+e.Name())
+		if err != nil {
+			return nil, nil, nil, manifiesto, err
+		}
+		valores = append(valores, v...)
+		layouts = append(layouts, l...)
+		ficheros = append(ficheros, f...)
 	}
 	return valores, layouts, ficheros, manifiesto, nil
+}
+
+// fuentesDeIslasDeDependencias recorre `res/__deps/`: una carpeta por artefacto y, dentro, las
+// mismas carpetas de tipo que en res/. La isla en sí no viaja al paquete: se usa para que dos AAR no
+// compartan fichero en disco, y su rastro queda en el nombre de los values, que el importador ya
+// renombra con el sufijo de la isla.
+func fuentesDeIslasDeDependencias(disco string) (valores, layouts, ficheros []fuenteXML, err error) {
+	islas, err := os.ReadDir(disco)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, isla := range islas {
+		if !isla.IsDir() {
+			return nil, nil, nil, fmt.Errorf("res/%s/%s no es la carpeta de una dependencia: dentro de %s solo va una carpeta por artefacto",
+				carpetaDeps, isla.Name(), carpetaDeps)
+		}
+		tipos, err := os.ReadDir(filepath.Join(disco, isla.Name()))
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for _, tipo := range tipos {
+			if !tipo.IsDir() {
+				return nil, nil, nil, fmt.Errorf("res/%s/%s/%s no es una carpeta de recursos", carpetaDeps, isla.Name(), tipo.Name())
+			}
+			v, l, f, err := fuentesDeCarpetaRes(filepath.Join(disco, isla.Name(), tipo.Name()), "res/"+carpetaDeps+"/"+isla.Name()+"/"+tipo.Name())
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			valores = append(valores, v...)
+			layouts = append(layouts, l...)
+			ficheros = append(ficheros, f...)
+		}
+	}
+	return valores, layouts, ficheros, nil
+}
+
+// fuentesDeCarpetaRes lee una carpeta de recursos —con o sin calificador— y reparte sus ficheros en
+// values, AXML (layout/menu/xml) y ficheros que viajan tal cual. `disco` es dónde está y `logica` la
+// ruta con la que sus ficheros entran en el paquete (`res/values`, `res/__deps/<isla>/drawable`).
+func fuentesDeCarpetaRes(disco, logica string) (valores, layouts, ficheros []fuenteXML, err error) {
+	carpeta := path.Base(logica)
+	tipo, config := carpeta, ""
+	var autoVersion uint16
+	if !tiposDeResQueSeEnlazan[tipo] {
+		if t, c, auto, ok := calificadorExtraDeCarpeta(carpeta); ok {
+			tipo, config, autoVersion = t, c, auto
+		} else {
+			return nil, nil, nil, fmt.Errorf("%s: este enlazador solo escribe una configuración por carpeta: values, layout, menu, xml, drawable, mipmap y raw con idioma, región, orientación, densidad, tamaño, sw, touchscreen, keyboard, navigation, uiMode y -vN; anim y font tampoco", logica)
+		}
+	}
+	nom, err := os.ReadDir(disco)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	for _, f := range nom {
+		if f.IsDir() {
+			return nil, nil, nil, fmt.Errorf("%s/%s: una subcarpeta dentro de %s no esta medida (densidades y variantes de configuracion se parten por API, parrafo 28)", logica, f.Name(), tipo)
+		}
+		carpetaSalida := carpeta
+		if autoVersion != 0 {
+			// aapt2 añade la version implicita del calificador a la ruta del apk incluso con
+			// --no-auto-version: 4 para densidad y tamaño, 13 para sw y 8 para uiMode
+			// (parrafo 103, §159 y medido con build-tools 35.0.1)
+			carpetaSalida += fmt.Sprintf("-v%d", autoVersion)
+		}
+		// la isla de una dependencia no viaja: el fichero entra con la ruta de su tipo, que es
+		// donde lo deja `aapt2 link` y lo que buscan la tabla, el paquete y la vista previa
+		ruta := path.Join("res", carpetaSalida, f.Name())
+		contenido, err := os.ReadFile(filepath.Join(disco, f.Name()))
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		fuente := fuenteXML{nombre: ruta, contenido: contenido, config: config}
+		switch tipo {
+		case "values":
+			if !strings.HasSuffix(f.Name(), ".xml") {
+				return nil, nil, nil, fmt.Errorf("%s/%s: values solo admite .xml", logica, f.Name())
+			}
+			valores = append(valores, fuente)
+		case "layout", "menu", "xml":
+			// los tres son AXML; la raiz de menu/xml no tiene que ser un layout. Se guardan en la
+			// misma lista y el tipo sale de la ruta (parrafo 97).
+			if !strings.HasSuffix(f.Name(), ".xml") {
+				return nil, nil, nil, fmt.Errorf("%s/%s: %s solo admite .xml", logica, f.Name(), tipo)
+			}
+			layouts = append(layouts, fuente)
+		case "raw":
+			// un raw viaja literal, como un PNG; no se parsea
+			ficheros = append(ficheros, fuente)
+		default:
+			// drawable/mipmap: un PNG (o cualquier binario) viaja tal cual y su entrada es un
+			// Res_value de tipo cadena con la ruta (parrafo 93). Un XML dibujable (vector,
+			// shape) es otro formato y se rechaza por nombre.
+			if strings.HasSuffix(f.Name(), ".xml") {
+				return nil, nil, nil, fmt.Errorf("%s/%s: un drawable XML (vector/shape) no esta medido", logica, f.Name())
+			}
+			ficheros = append(ficheros, fuente)
+		}
+	}
+	return valores, layouts, ficheros, nil
 }
 
 // enlazarConGo es el sustituto de `aapt2 compile` y `aapt2 link` juntos. Escribe los productos en el
