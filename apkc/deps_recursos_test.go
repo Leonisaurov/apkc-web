@@ -147,13 +147,13 @@ func TestFuentesDelProyectoLeeLaIslaDeDependencias(t *testing.T) {
 		}
 	}
 	if !encontrado {
-		t.Errorf("el values de la isla no sale como %q: %q", nombreIsla, valores)
+		t.Errorf("el values de la isla no sale como %q: %v", nombreIsla, valores)
 	}
 	if len(layouts) != 1 || layouts[0].nombre != "res/layout/deps_fila.xml" {
-		t.Fatalf("el layout de la isla sale %q", layouts)
+		t.Fatalf("el layout de la isla sale %v", layouts)
 	}
 	if len(ficheros) != 1 || ficheros[0].nombre != "res/drawable/deps_fondo.png" {
-		t.Fatalf("el drawable de la isla sale %q", ficheros)
+		t.Fatalf("el drawable de la isla sale %v", ficheros)
 	}
 	// el tipo se lee del nivel de la isla, que es lo que numera la tabla
 	if tipo := tipoDeRecurso(layouts[0].nombre); tipo != "layout" {

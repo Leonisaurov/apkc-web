@@ -314,6 +314,11 @@ type objetoDalvik struct {
 	// bluetoothActivo es el estado del adaptador de `getDefaultAdapter`: se modela encendido para
 	// que la UI de la app pueda recorrer su camino completo sin un dispositivo.
 	bluetoothActivo bool
+	// lo que un `Paint` lleva para el dibujo de una vista propia: color y grosor. Se guarda en el
+	// objeto del framework porque un onDraw puede tener varios Paint a la vez.
+	paintColor  uint32
+	paintPuesto bool
+	paintGrosor float64
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -539,6 +544,9 @@ type maquinaDalvik struct {
 	// pasosBase es el valor de `pasos` al arrancar la tarea en curso: el límite de pasos se mide
 	// desde ahí, así que cada tarea de la cola tiene su propio presupuesto
 	pasosBase int
+	// dibujo es el lienzo que recoge las operaciones del `onDraw` de una vista propia mientras
+	// corre; fuera de una llamada de dibujo es nil y los stubs de Canvas no anotan nada.
+	dibujo *dibujoVista
 }
 
 type oyenteRegistrado struct {
@@ -3799,6 +3807,11 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if obj != nil && es("Ljava/util/ArrayList;") && obj.lista == nil {
 			obj.lista = []any{}
 		}
+		// un Paint nace negro y sin trazo, como el del framework: es el color que un onDraw
+		// publica si no llama a setColor
+		if obj != nil && es("Landroid/graphics/Paint;") && !obj.paintPuesto {
+			obj.paintColor = 0xff000000
+		}
 		return nil, true, nil
 	case "onCreate", "onStart", "onResume", "onPause", "onStop", "onDestroy", "onRestart",
 		"onSaveInstanceState", "onRestoreInstanceState", "onPostCreate", "onPostResume":
@@ -4469,6 +4482,94 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				otro, esCadena := cadenaDe(vals[0])
 				return boolAInt(esCadena && s == otro), true, nil
 			}
+		}
+	case "setColor":
+		// `Paint.setColor(int)`: el color con el que se pintará el trazo siguiente. Sin esto, el
+		// dibujo de una vista propia saldría con el negro por defecto y no con lo que pide la app.
+		if len(vals) == 1 && obj != nil && es("Landroid/graphics/Paint;") {
+			if c, ok := enteroDeDibujo(vals[0]); ok {
+				obj.paintColor = c
+				obj.paintPuesto = true
+			}
+			return nil, true, nil
+		}
+	case "getColor":
+		if len(vals) == 0 && obj != nil && es("Landroid/graphics/Paint;") {
+			return int32(colorDePaint(obj)), true, nil
+		}
+	case "setStrokeWidth":
+		if len(vals) == 1 && obj != nil && es("Landroid/graphics/Paint;") {
+			obj.paintGrosor = flotanteDeDibujo(vals[0])
+			return nil, true, nil
+		}
+	case "getStrokeWidth":
+		if len(vals) == 0 && obj != nil && es("Landroid/graphics/Paint;") {
+			return float32(obj.paintGrosor), true, nil
+		}
+	case "setStyle", "setAntiAlias", "setStrokeCap", "setStrokeJoin", "setDither", "setFilterBitmap":
+		// propiedades de Paint que no cambian el trazo que el modelo publica: se aceptan sin
+		// inventar un efecto que no se dibuja
+		if obj != nil && es("Landroid/graphics/Paint;") {
+			return nil, true, nil
+		}
+	case "drawColor", "drawRGB", "drawARGB":
+		if len(vals) == 1 && obj != nil && es("Landroid/graphics/Canvas;") {
+			if c, ok := enteroDeDibujo(vals[0]); ok {
+				m.anotaDibujo(operacionDibujo{Operacion: "color", Color: formatoColor(c)})
+			}
+			return nil, true, nil
+		}
+	case "drawLine":
+		if len(vals) == 5 && obj != nil && es("Landroid/graphics/Canvas;") {
+			m.anotaDibujo(operacionDibujo{
+				Operacion: "linea",
+				X1:        flotanteDeDibujo(vals[0]),
+				Y1:        flotanteDeDibujo(vals[1]),
+				X2:        flotanteDeDibujo(vals[2]),
+				Y2:        flotanteDeDibujo(vals[3]),
+				Color:     colorDeArgumento(vals[4]),
+				Grosor:    grosorDeArgumento(vals[4]),
+			})
+			return nil, true, nil
+		}
+	case "drawRect":
+		if len(vals) == 5 && obj != nil && es("Landroid/graphics/Canvas;") {
+			m.anotaDibujo(operacionDibujo{
+				Operacion: "rectangulo",
+				X1:        flotanteDeDibujo(vals[0]),
+				Y1:        flotanteDeDibujo(vals[1]),
+				X2:        flotanteDeDibujo(vals[2]),
+				Y2:        flotanteDeDibujo(vals[3]),
+				Color:     colorDeArgumento(vals[4]),
+				Grosor:    grosorDeArgumento(vals[4]),
+			})
+			return nil, true, nil
+		}
+	case "drawCircle":
+		if len(vals) == 4 && obj != nil && es("Landroid/graphics/Canvas;") {
+			m.anotaDibujo(operacionDibujo{
+				Operacion: "circulo",
+				X1:        flotanteDeDibujo(vals[0]),
+				Y1:        flotanteDeDibujo(vals[1]),
+				Radio:     flotanteDeDibujo(vals[2]),
+				Color:     colorDeArgumento(vals[3]),
+				Grosor:    grosorDeArgumento(vals[3]),
+			})
+			return nil, true, nil
+		}
+	case "drawText":
+		// `drawText(String, x, y, Paint)` y su forma con CharSequence: el texto se publica como
+		// operación, no se mide con una fuente que el modelo no tiene
+		if len(vals) == 4 && obj != nil && es("Landroid/graphics/Canvas;") {
+			m.anotaDibujo(operacionDibujo{
+				Operacion: "texto",
+				Texto:     textoDe(vals[0]),
+				X1:        flotanteDeDibujo(vals[1]),
+				Y1:        flotanteDeDibujo(vals[2]),
+				Color:     colorDeArgumento(vals[3]),
+				Grosor:    grosorDeArgumento(vals[3]),
+			})
+			return nil, true, nil
 		}
 	case "d", "i", "w", "e", "v", "wtf":
 		if es("Landroid/util/Log;") {

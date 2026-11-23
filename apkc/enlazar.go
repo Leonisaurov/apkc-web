@@ -279,7 +279,7 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 		for _, f := range layouts {
 			if f.config == "" {
 				base = append(base, fuenteXML{
-					nombre: "res/layout-v1/" + path.Base(f.nombre),
+					nombre:    "res/layout-v1/" + path.Base(f.nombre),
 					contenido: f.contenido, config: "v1",
 				})
 			}
@@ -300,6 +300,24 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 			texto:  f.nombre,
 		})
 	}
+	// Un value del proyecto gana al de un AAR con el mismo tipo, nombre y configuración, y el
+	// resultado no depende del orden de lectura: se recogen primero las claves del proyecto y se
+	// descartan las de la dependencia que choquen. aapt2 rechaza dos valores duplicados; aquí el
+	// importador deja los dos ficheros en el árbol y la prioridad del dueño del proyecto es la
+	// decisión determinista (dos valores con el mismo tipo, nombre y configuración no caben).
+	delProyecto := map[string]bool{}
+	for _, f := range valores {
+		if f.deDependencia {
+			continue
+		}
+		nuevos, _, err := recursosYStyleables(f, m)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f.nombre, err)
+		}
+		for _, r := range nuevos {
+			delProyecto[r.tipo+"\x00"+r.clave+"\x00"+f.config] = true
+		}
+	}
 	for _, f := range valores {
 		nuevos, estilos, err := recursosYStyleables(f, m)
 		if err != nil {
@@ -307,6 +325,16 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 		}
 		for i := range nuevos {
 			nuevos[i].config = f.config
+		}
+		if f.deDependencia {
+			filtrados := nuevos[:0]
+			for _, r := range nuevos {
+				if delProyecto[r.tipo+"\x00"+r.clave+"\x00"+f.config] {
+					continue
+				}
+				filtrados = append(filtrados, r)
+			}
+			nuevos = filtrados
 		}
 		recursos = append(recursos, nuevos...)
 		styleables = append(styleables, estilos...)

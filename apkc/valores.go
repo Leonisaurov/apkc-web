@@ -29,6 +29,10 @@ type fuenteXML struct {
 	// config es el calificador de una segunda configuracion, hoy solo el idioma de `values-es`
 	// (parrafo 94). Vacío es la configuracion base.
 	config string
+	// deDependencia dice que el fichero entró por `res/__deps/<isla>/` (un AAR importado). Sirve para
+	// resolver por prioridad: un value del proyecto gana al de la dependencia con el mismo tipo,
+	// nombre y configuración, sin depender del orden en que se leyeron las carpetas.
+	deDependencia bool
 }
 
 // recursoEntabla es una entrada de la tabla antes de ordenar: su tipo, su clave y el valor ya resuelto

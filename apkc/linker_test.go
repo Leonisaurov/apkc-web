@@ -100,9 +100,9 @@ func TestFuentesDelProyectoRechazaLoQueNoSabeEnlazar(t *testing.T) {
 		quierenPiensa string
 	}{
 		{
-			"un drawable XML (vector/shape), que no es un binario que se copie",
-			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/drawable/vector.xml": `<shape/>`},
-			"drawable XML",
+			"un color state list, que no es un tipo que este enlazador escriba",
+			map[string]string{"AndroidManifest.xml": manifestMinimo, "res/color/estado.xml": `<selector/>`},
+			"configuración",
 		},
 		{
 			"una carpeta de densidad, que es una segunda configuracion y aqui se emite una sola",

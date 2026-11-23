@@ -78,7 +78,7 @@ name, because those need a second configuration or a file copy, and neither is m
 // carpeta son recursos que este enlazador no sabe escribir.
 var tiposDeResQueSeEnlazan = map[string]bool{
 	"values": true, "layout": true, "drawable": true, "mipmap": true,
-	"menu": true, "xml": true, "raw": true,
+	"menu": true, "xml": true, "raw": true, "anim": true, "font": true,
 }
 
 // parteEsCalificador: un segmento del sufijo de una carpeta que este enlazador sabe traducir a un
@@ -216,7 +216,7 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			ficheros = append(ficheros, f...)
 			continue
 		}
-		v, l, f, err := fuentesDeCarpetaRes(filepath.Join(res, e.Name()), "res/"+e.Name())
+		v, l, f, err := fuentesDeCarpetaRes(filepath.Join(res, e.Name()), "res/"+e.Name(), false)
 		if err != nil {
 			return nil, nil, nil, manifiesto, err
 		}
@@ -249,7 +249,7 @@ func fuentesDeIslasDeDependencias(disco string) (valores, layouts, ficheros []fu
 			if !tipo.IsDir() {
 				return nil, nil, nil, fmt.Errorf("res/%s/%s/%s no es una carpeta de recursos", carpetaDeps, isla.Name(), tipo.Name())
 			}
-			v, l, f, err := fuentesDeCarpetaRes(filepath.Join(disco, isla.Name(), tipo.Name()), "res/"+carpetaDeps+"/"+isla.Name()+"/"+tipo.Name())
+			v, l, f, err := fuentesDeCarpetaRes(filepath.Join(disco, isla.Name(), tipo.Name()), "res/"+carpetaDeps+"/"+isla.Name()+"/"+tipo.Name(), true)
 			if err != nil {
 				return nil, nil, nil, err
 			}
@@ -262,9 +262,10 @@ func fuentesDeIslasDeDependencias(disco string) (valores, layouts, ficheros []fu
 }
 
 // fuentesDeCarpetaRes lee una carpeta de recursos —con o sin calificador— y reparte sus ficheros en
-// values, AXML (layout/menu/xml) y ficheros que viajan tal cual. `disco` es dónde está y `logica` la
-// ruta con la que sus ficheros entran en el paquete (`res/values`, `res/__deps/<isla>/drawable`).
-func fuentesDeCarpetaRes(disco, logica string) (valores, layouts, ficheros []fuenteXML, err error) {
+// values, AXML (layout/menu/xml/anim y los drawable/font XML) y ficheros que viajan tal cual. `disco`
+// es dónde está y `logica` la ruta con la que sus ficheros entran en el paquete (`res/values`,
+// `res/__deps/<isla>/drawable`). `deDependencia` marca lo que viene de un AAR importado.
+func fuentesDeCarpetaRes(disco, logica string, deDependencia bool) (valores, layouts, ficheros []fuenteXML, err error) {
 	carpeta := path.Base(logica)
 	tipo, config := carpeta, ""
 	var autoVersion uint16
@@ -272,7 +273,7 @@ func fuentesDeCarpetaRes(disco, logica string) (valores, layouts, ficheros []fue
 		if t, c, auto, ok := calificadorExtraDeCarpeta(carpeta); ok {
 			tipo, config, autoVersion = t, c, auto
 		} else {
-			return nil, nil, nil, fmt.Errorf("%s: este enlazador solo escribe una configuración por carpeta: values, layout, menu, xml, drawable, mipmap y raw con idioma, región, orientación, densidad, tamaño, sw, touchscreen, keyboard, navigation, uiMode y -vN; anim y font tampoco", logica)
+			return nil, nil, nil, fmt.Errorf("%s: este enlazador solo escribe una configuración por carpeta: values, layout, menu, xml, anim, drawable, mipmap, font y raw con idioma, región, orientación, densidad, tamaño, sw, touchscreen, keyboard, navigation, uiMode y -vN", logica)
 		}
 	}
 	nom, err := os.ReadDir(disco)
@@ -297,16 +298,17 @@ func fuentesDeCarpetaRes(disco, logica string) (valores, layouts, ficheros []fue
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		fuente := fuenteXML{nombre: ruta, contenido: contenido, config: config}
+		fuente := fuenteXML{nombre: ruta, contenido: contenido, config: config, deDependencia: deDependencia}
 		switch tipo {
 		case "values":
 			if !strings.HasSuffix(f.Name(), ".xml") {
 				return nil, nil, nil, fmt.Errorf("%s/%s: values solo admite .xml", logica, f.Name())
 			}
 			valores = append(valores, fuente)
-		case "layout", "menu", "xml":
-			// los tres son AXML; la raiz de menu/xml no tiene que ser un layout. Se guardan en la
-			// misma lista y el tipo sale de la ruta (parrafo 97).
+		case "layout", "menu", "xml", "anim":
+			// los cuatro son AXML; la raíz de menu/xml/anim no tiene que ser un layout. Se guardan
+			// en la misma lista y el tipo sale de la ruta (párrafo 97). Un `anim` XML es el mismo
+			// formato: lo que cambia es el nombre del tipo en la tabla.
 			if !strings.HasSuffix(f.Name(), ".xml") {
 				return nil, nil, nil, fmt.Errorf("%s/%s: %s solo admite .xml", logica, f.Name(), tipo)
 			}
@@ -314,14 +316,23 @@ func fuentesDeCarpetaRes(disco, logica string) (valores, layouts, ficheros []fue
 		case "raw":
 			// un raw viaja literal, como un PNG; no se parsea
 			ficheros = append(ficheros, fuente)
-		default:
-			// drawable/mipmap: un PNG (o cualquier binario) viaja tal cual y su entrada es un
-			// Res_value de tipo cadena con la ruta (parrafo 93). Un XML dibujable (vector,
-			// shape) es otro formato y se rechaza por nombre.
+		case "font":
+			// Igual que un drawable: el XML de una familia (`<font-family>`) se compila a AXML y
+			// viaja como documento; un `.ttf`/`.otf` viaja tal cual y su entrada es la ruta.
 			if strings.HasSuffix(f.Name(), ".xml") {
-				return nil, nil, nil, fmt.Errorf("%s/%s: un drawable XML (vector/shape) no esta medido", logica, f.Name())
+				layouts = append(layouts, fuente)
+			} else {
+				ficheros = append(ficheros, fuente)
 			}
-			ficheros = append(ficheros, fuente)
+		default:
+			// drawable/mipmap: un XML (`<shape>`, `<vector>`) se compila a AXML y viaja como
+			// documento, que es lo que deja `aapt2 compile`; un PNG (o cualquier binario) viaja
+			// tal cual y su entrada es un Res_value de tipo cadena con la ruta (párrafo 93).
+			if strings.HasSuffix(f.Name(), ".xml") {
+				layouts = append(layouts, fuente)
+			} else {
+				ficheros = append(ficheros, fuente)
+			}
 		}
 	}
 	return valores, layouts, ficheros, nil

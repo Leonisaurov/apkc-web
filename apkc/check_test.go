@@ -127,12 +127,13 @@ func TestCheckSinProyectoNombraLaR(t *testing.T) {
 	}
 }
 
-// TestCheckRecursosSinMedirNoFalsifica: un `res/` que el enlazador de Go no sabe escribir (un drawable
-// XML) no puede dejar el informe en verde por su cuenta ni romper el check: se dice por que no hay R
-// y el error del fuente sigue siendo el de la R que falta.
+// TestCheckRecursosSinMedirNoFalsifica: un `res/` que el enlazador de Go no sabe escribir (un color
+// state list) no puede dejar el informe en verde por su cuenta ni romper el check: se dice por qué
+// no hay R y el error del fuente sigue siendo el de la R que falta. Este caso usaba un drawable XML,
+// pero desde el frente de recursos de AAR ese tipo ya se enlaza: el que sigue sin medirse es `color`.
 func TestCheckRecursosSinMedirNoFalsifica(t *testing.T) {
 	raiz, fuente := proyectoDeCheck(t)
-	pon(t, raiz, "res/drawable/forma.xml", `<shape xmlns:android="http://schemas.android.com/apk/res/android"/>`)
+	pon(t, raiz, "res/color/estado.xml", `<selector xmlns:android="http://schemas.android.com/apk/res/android"/>`)
 	r := revisarFuenteJava(fuente, "MainActivity.java", jarDelSDK(t), raiz)
 	if !strings.Contains(r.Recursos, "sin R") {
 		t.Fatalf("el informe no dice por que no hay R: %q", r.Recursos)

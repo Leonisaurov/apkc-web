@@ -189,8 +189,12 @@ type nodoVista struct {
 	EstiloTexto string       `json:"estiloTexto,omitempty"`
 	Fondo       string       `json:"fondo,omitempty"`
 	Imagen      *imagenVista `json:"imagen,omitempty"`
-	Rect        rectVista    `json:"rect"`
-	Hijos       []*nodoVista `json:"hijos,omitempty"`
+	// Dibujo es lo que la vista propia dibujó al ejecutar su `onDraw`: las operaciones que el
+	// intérprete pudo medir y, si no se pudo, la frontera con su motivo. Vacío es una vista que no
+	// es propia o cuyo `onDraw` no se pidió.
+	Dibujo *dibujoVista `json:"dibujo,omitempty"`
+	Rect   rectVista    `json:"rect"`
+	Hijos  []*nodoVista `json:"hijos,omitempty"`
 
 	orientacion string // "vertical", "horizontal" o "" (se apilan en el origen)
 
@@ -208,6 +212,7 @@ type nodoVista struct {
 	srcRef        uint32 // el id de `android:src` si es una referencia, o 0
 	imagenAncho   int    // el tamaño intrínseco del PNG ya en dp
 	imagenAlto    int
+	fondoRef      uint32 // el id de `android:background` si es una referencia, o 0
 }
 
 // estaOculta: `gone` no se mide ni se coloca; `invisible` sí ocupa su sitio.
@@ -561,6 +566,9 @@ func modeloVistaDeAPKConEventos(datos []byte, layout string, ejecutar bool, even
 	anotaTextoDinamico(raiz, modelo.Ejecucion)
 	anotaOyentes(raiz, modelo.Ejecucion)
 	anotaEstados(raiz, modelo.Ejecucion)
+	// las vistas propias ejecutan su onDraw con un Canvas del modelo: el rectángulo ya está y el
+	// trazo se publica en cada nodo; si no se puede, la frontera lleva el motivo
+	pintaVistasPropias(raiz, modelo.Ejecucion, modelo.Paquete)
 	// las listas se expanden después de los clics: el adaptador ya está armado y es su getView el
 	// que decide qué filas y qué textos se ven
 	expandeListas(raiz, modelo.Ejecucion, tabla, zr)
@@ -1270,6 +1278,9 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	}
 	if fondo, ok := valorDeVista(e, estilo, "background", idVistaBackground); ok {
 		n.Fondo = c.colorDe(fondo)
+		if fondo.tipo == tipoReferencia {
+			n.fondoRef = fondo.datos
+		}
 	}
 	if src, ok := valorDeVista(e, estilo, "src", idVistaSrc); ok && src.tipo == tipoReferencia {
 		n.srcRef = src.datos
@@ -1595,6 +1606,12 @@ func cargaImagenes(n *nodoVista, zr *zip.Reader, tabla *tablaRecursos) {
 			n.imagenAncho, n.imagenAlto = ancho, alto
 		}
 	}
+	// un `android:background="@drawable/x"` XML: `<shape>` con `<solid android:color>` se publica
+	// como el color de relleno. Es lo que el preview puede dibujar de un drawable XML; un
+	// `<vector>` o un `<selector>` no se interpretan y el fondo se queda vacío, sin inventarlo.
+	if n.fondoRef != 0 && n.Fondo == "" {
+		n.Fondo = fondoDeDrawableXML(zr, tabla, n.fondoRef)
+	}
 	for _, h := range n.Hijos {
 		cargaImagenes(h, zr, tabla)
 	}
@@ -1652,6 +1669,60 @@ func imagenDeRecurso(zr *zip.Reader, tabla *tablaRecursos, id uint32) (*imagenVi
 		altoDp = 1
 	}
 	return img, anchoDp, altoDp
+}
+
+// fondoDeDrawableXML resuelve el relleno de un `android:background="@drawable/x"` cuando el recurso
+// es un XML compilado: `<shape>` con un `<solid android:color>`. Es la parte de un drawable XML que
+// el modelo puede enseñar de verdad; un `<vector>`, un `<selector>` o un `<layer-list>` no se
+// interpretan aquí y devuelven vacío, para no pintar un color que el fichero no declara.
+func fondoDeDrawableXML(zr *zip.Reader, tabla *tablaRecursos, id uint32) string {
+	if tabla == nil {
+		return ""
+	}
+	bl, e, ok := tabla.entradaDeId(id)
+	if !ok || e.ausente || e.compleja || e.valor.tipo != tipoCadena {
+		return ""
+	}
+	if bl.nombre != "drawable" && bl.nombre != "mipmap" {
+		return ""
+	}
+	if int(e.valor.datos) >= len(tabla.global.cadenas) {
+		return ""
+	}
+	ruta := tabla.global.cadenas[e.valor.datos]
+	if !strings.HasSuffix(ruta, ".xml") {
+		return ""
+	}
+	datos, err := entradaDeZip(zr, ruta)
+	if err != nil {
+		return ""
+	}
+	axml, err := leeAXML(datos)
+	if err != nil {
+		return ""
+	}
+	ctx := &contextoVista{axml: axml, tabla: tabla}
+	arbol, err := ctx.arbol()
+	if err != nil || arbol == nil {
+		return ""
+	}
+	var andar func(*elementoLeido) string
+	andar = func(e *elementoLeido) string {
+		if e.nombre == "solid" {
+			if v, ok := e.atributo(uriDeRecursos, "color"); ok {
+				if col := ctx.colorDe(v); col != "" {
+					return col
+				}
+			}
+		}
+		for _, h := range e.hijos {
+			if col := andar(h); col != "" {
+				return col
+			}
+		}
+		return ""
+	}
+	return andar(arbol)
 }
 
 // densidadDeRuta lee el calificador de densidad de `res/drawable-xhdpi/x.png`; sin calificador (o
