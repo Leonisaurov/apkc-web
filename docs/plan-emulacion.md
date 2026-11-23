@@ -1,11 +1,12 @@
 # Plan de emulación de apps propias en la vista previa
 
 **Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
-medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E2…E7 están
-**pendientes** hasta que su comando de aceptación pase en verde sobre el árbol final. Este fichero
-es un plan, no evidencia: lo que aquí se afirme sobre coste, compatibilidad o formato es una
-hipótesis y lleva el comando con el que se comprobará. Las mediciones reales van a
-`docs/evidencia.md`; el estado de las fases, a la tabla de `docs/plan.md` cuando la fase se cierre.
+medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E3 y E4 están
+**cerradas** en §207 y §208; E2 está **integrada**; E5…E7 están **pendientes** hasta que su comando
+de aceptación pase en verde sobre el árbol final. Este fichero es un plan, no evidencia: lo que
+aquí se afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que
+se comprobará. Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla
+de `docs/plan.md` cuando la fase se cierre.
 
 Fecha: 2026-11-22. Origen de la petición: el usuario quiere **que emule mucho más**, con prioridad
 clara en **diseño de la app, funcionalidad, fidelidad y funcionamiento**. Las APIs externas de
@@ -168,8 +169,11 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
   `docs/auditorias.md`. Matiz del crítico: los tests del tope aseveran contra `pulsacionesMaximas`,
   no contra el literal 32, así que cambiar el valor no los rompería.
 
-### E2. Listas y adaptadores propios
+### E2. Listas y adaptadores propios — **EN VERIFICACIÓN**
 
+- **Estado: integrada en `a76422d`, en verificación.** Sus seis tests pasan con la resolución manual
+  de conflictos, pero el crítico aún no ha dictaminado: no hay `§` de evidencia todavía y no se
+  escribe hasta que lo haya.
 - **Objetivo.** Ver una lista real: `ListView` con un `BaseAdapter` o `ArrayAdapter` **del
   proyecto**, su `getView`, el `ViewHolder` y el clic por posición.
 - **Qué se emula.** `setAdapter`, `getCount`, `getView`, `getItem`, `getItemId`, `notifyDataSetChanged`,
@@ -183,8 +187,12 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
 - **Abandona.** `RecyclerView` con `LayoutManager` real, reciclado de vistas, `DiffUtil`,
   `ExpandableListView`, arrastrar filas y listas de más de 50 elementos.
 
-### E3. Estado y persistencia local
+### E3. Estado y persistencia local — **CERRADA**
 
+- **Estado: cerrada** el 2026-11-22 como `5cc852a`, con
+  `TestElPreviewConservaElEstadoAlRecrear` en verde y el crítico
+  `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR**. Evidencia y comandos: §207 de
+  `docs/evidencia.md`.
 - **Objetivo.** Que el estado de la app sobreviva a una recreación y a cerrar la pantalla, y que el
   usuario pueda probarlo desde la pestaña.
 - **Qué se emula.**
@@ -202,8 +210,12 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
 - **Abandona.** `ContentProvider`, ficheros internos/externos, `SQLite`, `DataStore`, cifrado de
   preferencias y multiusuario.
 
-### E4. Fidelidad visual
+### E4. Fidelidad visual — **CERRADA**
 
+- **Estado: cerrada** el 2026-11-22 como `99cd48f`, con
+  `TestElPreviewRespetaVisibilidadTextoColorEImagen` en verde y el crítico
+  `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR CON CONDICIONES**: quedan dos preguntas `INCIERTAS`
+  (color `0x1d` y `layout_margin` desde `@style`), no bloqueantes, en §208 de `docs/evidencia.md`.
 - **Objetivo.** Que el dibujo se parezca al diseño: tamaños reales por densidad, gravedad fina,
   visibilidad, tamaños de texto, colores y estilos propios, y una imagen de recurso.
 - **Qué se emula.**

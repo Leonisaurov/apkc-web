@@ -9348,3 +9348,85 @@ evidencia son los tests enfocados y la suite de la capa de vista previa. (2) La 
 que ejerza `startActivity` (D7 de `docs/auditorias.md`) sigue pendiente: aquí no hay ninguna nueva.
 (3) El sitio publicado no se ha empaquetado con `def0b85`. (4) No hay medición en aparato ni del
 orden de ciclo de vida ni del redirect sin layout del párrafo anterior.
+
+## 207. E3: estado, recreación y persistencia local, con su crítica
+
+Medido el 2026-11-22 sobre `a76422d`, con E3 (`5cc852a`), E4 (`99cd48f`) y E2 (`a76422d`) ya
+integrados, y revisado por el crítico en la ronda 2 de `ses_df9ef9e02ffeqSQ1cuPypAdVer`.
+
+**Qué emula.** `--pulsar` y `--recrear` comparten un solo acumulador de órdenes: se entregan en el
+orden escrito, y `--recrear` es una bandera sin valor (`apkc/preview.go`). La recreación vuelve a
+crear la actividad que está delante con el `Bundle` que dejó `onSaveInstanceState`; en la
+recreación, el `Bundle` que recibe `onCreate` es no nulo, como en una rotación, y las actividades
+cubiertas no se recrean. `SharedPreferences` es un almacén en memoria por nombre de fichero, con su
+editor y `apply`/`commit`, sin ficheros fuera del modelo; el Bundle y las preferencias se publican
+en `ejecucion.bundle` y `ejecucion.preferencias`. También se corrigió el `if-eqz` de Dalvik: un
+registro nulo y el `int32(0)` son el mismo patrón de bits y la comparación los trataba distinto
+(`apkc/previewinterprete.go`). La prueba de aceptación es `apkc/previewestado_test.go`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElPreviewConservaElEstadoAlRecrear' -v .
+```
+
+**Resultado**: `--- PASS: TestElPreviewConservaElEstadoAlRecrear (0.05s)` y
+`ok github.com/ajinasokan/apkc 0.061s`, sin `SKIP`. La prueba exige el texto «Pulsos: 2» tras dos
+clics y una recreación, `bundle.pulsos=2`, `preferencias.cuenta.pulsos=2`, la consola con `pref: 0`
+antes y `pref: 2` después, el ciclo exacto `onCreate, onSaveInstanceState, onCreate` y dos pantallas
+con la misma actividad; además, que dos ejecuciones den el mismo JSON, que un clic posterior deje
+«Pulsos: 3», que la actividad cubierta conserve su único `onCreate` y que la recreada tenga dos.
+
+**Veredicto del crítico**: **APROBAR**. Las hipótesis H2 (E3 sin verificar por falta de
+`APKC_ANDROID_JAR`) y H3 (árbol inconsistente por el cherry-pick de E2 en curso) quedan **FALSAS**:
+el comando se ejecutó con el jar y `git status --short` estaba limpio, con el `grep` de marcadores
+vacío. Nota suya: `gofmt -l` sobre todo `apkc/` devuelve `enlazar.go` y
+`javaemisor_constantvalue_long_test.go`, ambos preexistentes (`66426c1` y `3928024`), no
+introducidos por E2, E3 ni E4.
+
+**Fronteras de este `§`.** (1) No se corrió el gate ni chromium: la evidencia es el test enfocado.
+(2) No hay medición en aparato: el orden de ciclo de vida de la recreación es el que declara el
+intérprete, no el observado en ART. (3) Las preferencias duran la ejecución y no tocan ficheros;
+`ContentProvider`, `SQLite`, `DataStore` y el cifrado quedan fuera. (4) La recreación solo afecta a
+la actividad que está delante. (5) El sitio publicado no se ha empaquetado con `5cc852a`.
+
+## 208. E4: fidelidad visual del modelo, con su crítica
+
+Medido el 2026-11-22 sobre el mismo `a76422d` y revisado por el crítico en la ronda 2 de
+`ses_df9ef9e02ffeqSQ1cuPypAdVer`. La prueba de aceptación es `apkc/previewvisual_test.go`; las
+líneas citadas son las de ese árbol.
+
+**Qué emula.** `android:visibility` en la medición y en el JSON: un `gone` no ocupa ni su margen,
+un `invisible` conserva su sitio. `textSize` en `sp` y `dp`/`px` con la densidad mdpi del modelo,
+`textColor` y `textStyle`, `background` con color propio (`#rrggbb` o `@color/x`) y `ImageView` con
+un PNG del APK decodificado con `image/png`, con sus píxeles publicados en el nodo `imagen`.
+`gravity` fino se lee también escrito como texto (`center_vertical|end`), y los `style="@style/x"`
+del proyecto se resuelven desde `resources.arsc` con su cadena de padres del mismo paquete.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElPreviewRespetaVisibilidadTextoColorEImagen' -v .
+```
+
+**Resultado**: `--- PASS: TestElPreviewRespetaVisibilidadTextoColorEImagen (0.00s)` y
+`ok github.com/ajinasokan/apkc 0.009s`. El layout de la prueba da cuatro hijos: el `gone` con
+rectángulo `{0 0 0 0}`; el `TextView` de 24 sp en `{0 0 76 36}`, con `tamTexto=24sp`,
+`color=#336699`, `estiloTexto=bold` y `fondo=#102030` (el color viene de `@color/x`; el estilo
+resuelve `textStyle` y `background`); el `ImageView` de 2×2 en `{0 36 2 2}` con cuatro píxeles
+`#ff0000ff`, `#00ff00ff`, `#0000ffff` y `#ffffffff`; y el `invisible` en `{280 38 80 24}`, con
+`layout_gravity="end"` y `background="#00ff00"`. Lo mismo se comprueba releyendo el JSON.
+
+**Veredicto del crítico**: **APROBAR CON CONDICIONES**, que son las dos preguntas abiertas de
+abajo; no hay defecto `CONFIRMADO`. Se aplica la misma nota de `gofmt -l` de §207.
+
+**Preguntas abiertas (INCIERTAS, no bloqueantes).** (H4) La constante `tipoColor` solo reconoce
+`0x1c` (`apkc/preview.go:66-67`); habría que comprobar con `aapt2 dump resources` si un
+`<color>#336699</color>` del proyecto sale como `TYPE_INT_COLOR_RGB8 0x1d`, que el lector no
+cubriría. (H5) Al resolver estilos, `layout_margin` se lee con `ladosDe(e, nil, "layout_margin")`
+(`apkc/preview.go:1104`), es decir, sin estilo; queda decidir si `layout_margin` puesto desde
+`@style` entra en E4 o se declara fuera.
+
+**Fronteras de este `§`.** (1) No hay oráculo de aparato para la geometría: lo fijado es la cuenta
+declarada (alto de texto 1,5 veces el tamaño, 8 dp por carácter, 16 dp de relleno) y los
+rectángulos que salen de ella. (2) `RelativeLayout` con reglas, `ConstraintLayout`, fuentes, temas
+del sistema, sombras, `drawable` vectoriales y animaciones de vista quedan fuera. (3) No se corrió
+el gate ni chromium, y el sitio publicado no se ha empaquetado con `99cd48f`.

@@ -72,13 +72,17 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 ## Estado
 
 - Preparación: worktrees creados, `PREFIX` en disco, prueba base en verde.
-- E1.1 **integrada** en la raíz como `def0b85` (cherry-pick de `1e3b277`), con sus siete tests
+- E1.1 **cerrada** en la raíz como `def0b85` (cherry-pick de `1e3b277`), con sus siete tests
   enfocados en verde y el crítico `ses_df9f4b884ffepDlg2y2VQsIBYZ` en **APROBAR**, sin defectos
-  `CONFIRMADO`. Evidencia: §206 de `docs/evidencia.md`. La vista previa se reconstruyó con ella
-  (`sha256 95f8eb36…`).
-- **Activos:** E2 (`ses_df9faaecaffeJpx6NiHwB2xnD6`), E3 (`ses_df9fa7681ffeSncJk5w47iIaHS`), E4
-  (`ses_df9fa481dffetVrg53DFv1Beom`) y E5 (`ses_df9f49694ffeE3qK56KapEVMkJ`, con `def0b85`
-  cherry-pickeado). **E6 entrando** al liberarse un hueco; **E7 en cola**.
-- Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`: si el cherry-pick a la raíz
-  conflictúa, se resuelve conservando ambos cambios.
+  `CONFIRMADO`. Evidencia: §206 de `docs/evidencia.md`.
+- E3 **cerrada** como `5cc852a`: `TestElPreviewConservaElEstadoAlRecrear` en verde y el crítico
+  `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR**. Evidencia: §207.
+- E4 **cerrada** como `99cd48f`: `TestElPreviewRespetaVisibilidadTextoColorEImagen` en verde y el
+  crítico `ses_df9ef9e02ffeqSQ1cuPypAdVer` en **APROBAR CON CONDICIONES** (las dos preguntas
+  `INCIERTAS` de §208, no bloqueantes).
+- E2 **integrada** como `a76422d` (con resolución manual de conflictos), en **verificación**: sus
+  seis tests pasan, pero el crítico aún no ha dictaminado y no hay `§` de evidencia.
+- La vista previa se reconstruyó con E1.1, E3, E4 y E2 (`sha256 7c8904fa…`).
+- **Activas:** E5 (`ses_df9f49694ffeE3qK56KapEVMkJ`), E6 y E7.
+- Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.
