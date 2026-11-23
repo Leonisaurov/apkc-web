@@ -1,9 +1,9 @@
 # Plan: dependencias Maven y red en la pestaña
 
-Estado: **investigación, sin implementar y sin autorizar** (2026-11-22). Nada de
-este documento cambia la regla 4 de `AGENTS.md`; la decisión es del usuario y
-está al final, en «Pregunta abierta». Todo lo que no trae comando ejecutado va
-marcado HIPÓTESIS.
+Estado: **autorizado y priorizado por el usuario** (2026-11-22). La vía es importar
+artefactos desde disco u OPFS (Fase 1 y Fase J); la regla 4 de `AGENTS.md` sigue intacta y
+cualquier descarga en runtime está prohibida. La Fase J está en curso en el worktree
+`deps-compiler`. Todo lo que no trae comando ejecutado va marcado HIPÓTESIS.
 
 ## Resumen ejecutivo
 
@@ -156,12 +156,12 @@ sea `fetch` (imposible sin CORS), sea a través de un proxy CORS, sea un relay
 Wisp. No hay una cuarta vía: el navegador no permite leer bytes de otro origen
 sin cooperación del servidor.
 
-## 4. Arquitectura propuesta (solo si se autoriza)
+## 4. Arquitectura aprobada: importar sin red
 
-Fase 0 — decisión. Sin la respuesta del usuario no se escribe código.
+Fase 0 — decisión. Resuelta el 2026-11-22: el usuario autorizó y priorizó la importación sin
+red (Fase 1 y Fase J). La red en runtime sigue fuera.
 
-Fase 1 — importador sin red (no requiere autorización de red, pero sí de
-producto). Entrada: directorio o `.zip` con la salida de `apkc-deps`. Salida:
+Fase 1 — importador sin red. Entrada: directorio o `.zip` con la salida de `apkc-deps`. Salida:
 `jar/`, `lib/<abi>/`, `res/__deps/` en OPFS. Medir con
 `APKC_WASM=… node studio/prueba-pestana.js` que sigue habiendo **cero**
 peticiones fuera del origen, y con `navigator.storage.estimate()` la cuota real
@@ -182,21 +182,35 @@ espejo con CORS.
 Fase 4 — proxy (solo si la regla 4 se cambia explícitamente). Fuera del alcance
 de este repo mientras la regla siga en pie.
 
+Fase J — `jar/` en el compilador Go (**en curso**). El usuario quiere que
+`apkc compile/build --compiler go` consuma `jar/*.jar` y `classes.jar` de los
+`.aar`, sin red y sin `apkc-deps` en runtime. El builder
+`ses_df92b1504ffea11oCtRmc2rxAK` trabaja en el worktree `deps-compiler`. Criterio
+de aceptación: un proyecto con un jar en `jar/` compila con el compilador Go y
+las clases del jar resuelven en el dex; se mide con un test enfocado y se
+verifica en la pestaña con cero peticiones fuera del origen. Frontera: no se
+resuelven versiones ni se descargan artefactos; el catálogo y la red siguen
+fuera.
+
 Criterios de abandono comunes: si el importador cubre el caso de uso real (traer
 una librería que el usuario ya tiene), las fases 3 y 4 mueren; si la cuota de
 OPFS no aguanta ~7 MB por proyecto, se vuelve a vendorizar por proyecto y no por
 catálogo.
 
-## 5. Pregunta abierta
+## 5. Decisión del usuario (2026-11-22)
 
-Para autorizar o rechazar el cambio de la regla 4 hace falta que el usuario
-responda, literalmente:
+El usuario **autorizó y priorizó** el frente de dependencias por la vía sin red: importar los
+artefactos que ya tiene desde disco u OPFS y que el compilador Go los consuma. Eso resuelve la
+Fase 0 y deja la Fase 1 y la Fase J como trabajo activo.
 
-> ¿Se permite que la pestaña haga peticiones de red en tiempo de ejecución? Si
-> sí: ¿a qué orígenes exactos (solo `repo1.maven.org` y `dl.google.com`, o
-> cualquiera), con qué propósito (solo descargar AAR/JAR/POM, o también
-> resolver rangos y metadatos), y se mantiene como gate innegociable que la carga
-> inicial y la compilación sin dependencias nuevas hagan **cero** peticiones
-> fuera del origen (aunque la descarga explícita de una dependencia sí las haga)?
+La pregunta de red en runtime **no se reabre**: la regla 4 sigue vigente y la respuesta es no.
+Proxy y Wisp siguen descartados.
 
-Sin esa respuesta, el trabajo sigue por la Fase 1, que no toca la regla.
+## 6. Registro de estado
+
+- Fase J **en curso**: builder `ses_df92b1504ffea11oCtRmc2rxAK`, worktree `deps-compiler`.
+- Opción A (importar desde disco u OPFS) es la vía.
+- Vendorizar un catálogo curado queda detrás.
+- Proxy y Wisp siguen descartados.
+- Sigue prohibido cualquier acceso de red en runtime; la carga inicial y la compilación sin
+  dependencias nuevas conservan el gate de cero peticiones fuera del origen.

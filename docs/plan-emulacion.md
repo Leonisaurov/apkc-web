@@ -54,7 +54,9 @@ que se mide cada fase; nada de lo que sigue se da por bueno sin su comando.
 - Los métodos de `Activity` del ciclo de vida **solo se absorben como stubs** cuando el `invoke` los
   resuelve contra `Landroid/app/Activity;` (`apkc/previewinterprete.go:1704`). Si la app **sobreescribe**
   `onStart`, `onResume`, `finish`, etc., el intérprete **no los llama**: no hay ciclo de vida.
-- No hay `startActivity`, ni `Intent` propio, ni pila de actividades: una sola pantalla.
+- `startActivity`, `Intent(Context, Class)` y una pila de actividades existen desde E1 (§205). Una
+  excepción de la segunda actividad no se propaga a la primera: su arranque se degrada a aviso y la
+  primera reanuda; es una aproximación, no una ausencia.
 - Lo que no se emula se dice por su nombre y se devuelve el cero del tipo de retorno, sin romper el
   modelo (`rechaza`, `apkc/previewinterprete.go:1659`): `Editable`/`Spannable`, `Html.fromHtml`, la
   reflexión y `getString(id, args)` con formato.
@@ -309,6 +311,10 @@ frontera, no se finge.
 - **`try`/`catch`.** Cerrado para el caso que E3 necesitaba: el intérprete ejecuta la tabla de
   excepciones del dex (§213). Quedan sin medir el `finally` y el multi-catch, que el compilador emite
   como catch-all y como varias filas del mismo handler.
+- **Excepciones entre actividades.** El cruce existe como aviso, no como propagación: la pila
+  `pila` está en `previewinterprete.go:1280,1307` y, si la segunda actividad lanza, su arranque se
+  degrada a aviso y la primera reanuda con `Error=""` y `Pantallas=[A]`. Es una aproximación
+  declarada, no una ausencia.
 - **Adaptadores.** Un `getView` que infla layouts con `LayoutInflater` exige emular el inflado desde
   el dex; si el adaptador construye la fila a mano (que es lo que permiten las plantillas del
   studio), E2 es directo y el inflado se pospone.

@@ -9738,8 +9738,12 @@ cero: esa frontera ya no existe.
 
 **Fronteras de este `§`.** El `finally` y el multi-catch **no** se han medido: el compilador los emite
 como catch-all y como varias filas del mismo handler, y el despacho debería cubrirlos, pero eso no
-está probado y no se afirma. Una excepción que cruce de una actividad a otra no existe: el emulador no
-tiene pila de actividades. Los tipos del framework fuera de `padresDeExcepcion` se reconocen por el
+está probado y no se afirma. Una excepción que cruce de una actividad a otra **sí** ocurre, como
+aproximación: la pila `pila` existe (`apkc/previewinterprete.go:1280,1307`), y si la segunda
+actividad lanza, su arranque se degrada a aviso («B no arrancó: …IllegalStateException: boomB») y la
+primera reanuda con `Error=""` y `Pantallas=[A]`. Lo midió el crítico
+`ses_df93095c5ffeyRt8kl6K1MhO3T` con `go test -run TestCriticoExcepcionCruzaActividad` (prueba
+temporal, no está en el árbol). Los tipos del framework fuera de `padresDeExcepcion` se reconocen por el
 sufijo `Exception;`/`Error;` para el `throw`, pero un `catch (PadreDesconocido e)` no casaría con su
 hijo: la tabla de padres es la que hay, no la de Android entera. Sigue sin gate, sin chromium y sin
 wasm: la medición es nativa.
