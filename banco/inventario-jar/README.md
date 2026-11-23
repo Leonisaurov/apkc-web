@@ -25,12 +25,18 @@ SHA-256 sobre los `.go` de `apkc/` sin `_test.go`, `go.mod`/`go.sum` y los fiche
 recompila antes de medir; si solo cambió el mtime o se cambió de rama sin cambiar bytes, se
 reutiliza. Con `--apkc` o `APKC=...` se usa el binario externo tal cual, sin reconstruir.
 
-`--falsificar` comprueba las dos cosas sobre una **copia** de `apkc/` en el directorio de trabajo
-(nunca escribe en el árbol versionado): cambia un `.go` de la copia y exige reconstrucción, restaura
-el contenido y exige una última reconstrucción, y una ejecución más sin cambios no debe compilar.
-Durante toda la sonda se exige `git status --porcelain apkc/` vacío. El cuarto caso comprueba que
-dos ejecuciones seguidas del mismo jar dejan `informe.md` y `casos.json` byte a byte iguales y que
-el comando del oráculo usa un directorio derivado de la huella del jar, no uno aleatorio.
+`--falsificar` escribe su detalle en `$HOME/.cache/apkc-web/inventario-jar/falsificacion.md` (o
+bajo `$XDG_CACHE_HOME`), nunca en el fichero versionado: la salida lleva hashes de los fixtures y
+la ruta del directorio de trabajo. El `falsificacion.md` del repo es un resumen estable sin datos
+locales.
+
+La sonda comprueba cinco cosas. La reconstrucción se hace sobre una **copia** de `apkc/` en el
+directorio de trabajo (nunca escribe en el árbol versionado) y exige `git status --porcelain apkc/`
+vacío en cada paso. También exige que dos ejecuciones del mismo jar dejen `informe.md` y
+`casos.json` byte a byte iguales, que al terminar no haya cambios en `banco/inventario-jar/` ni en
+`apkc/`, y que dos procesos concurrentes sobre el mismo jar terminen con rc 0 y dejen los mismos
+bytes. Cada proceso usa un directorio privado `trabajo-<huella>-<aleatorio>`; el informe publica la
+forma estable `$CACHE/trabajo-<huella>/d8`, donde `$CACHE` es el directorio de caché del inventario.
 
 ## Qué deja
 
@@ -38,7 +44,8 @@ el comando del oráculo usa un directorio derivado de la huella del jar, no uno 
   propuesta de forma DEX y el dex de referencia que escribe `d8` para el mismo método.
 - `casos.json`: todos los rechazos con clase, método, pc, opcode y motivo, para que cada agente
   ataque un límite sin volver a correr el jar.
-- `falsificacion.md`: el resultado de `--falsificar`.
+- `falsificacion.md`: resumen estable de los cinco casos; el detalle con hashes y rutas va a la
+  caché (`$HOME/.cache/apkc-web/inventario-jar/falsificacion.md`).
 
 Los temporales van a `$HOME/.cache/apkc-web/inventario-jar/`, nunca a `/tmp`: esa tmpfs tiene cuota
 de usuario y ya ha roto builds de este repo.

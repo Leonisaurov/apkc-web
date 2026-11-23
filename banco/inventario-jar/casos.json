@@ -15,21 +15,93 @@
       "motivo": "the type_id Landroid/support/v4/util/ArrayMap; was never interned (the collector does not follow this operand)"
     }
   ],
-  "registro fuera de formato": [
+  "registro bajo ocupado": [
     {
       "clase": "Landroid/support/v4/app/FragmentActivity;",
       "metodo": "onCreateView",
       "pc": 195,
       "opcode": "getfield",
-      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/app/FragmentManagerImpl;",
+      "metodo": "loadAnimation",
+      "pc": 180,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
     },
     {
       "clase": "Landroid/support/v4/app/NotificationCompat$NotificationCompatImplJellybean;",
       "metodo": "build",
       "pc": 61,
       "opcode": "getfield",
-      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+      "motivo": "no low register is free to carry a high slot down"
     },
+    {
+      "clase": "Landroid/support/v4/app/NotificationCompatIceCreamSandwich;",
+      "metodo": "add",
+      "pc": 193,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/app/NotificationCompatJellybean;",
+      "metodo": "<init>",
+      "pc": 197,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/content/LocalBroadcastManager;",
+      "metodo": "sendBroadcast",
+      "pc": 385,
+      "opcode": "astore",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/print/PrintHelperKitkat;",
+      "metodo": "loadConstrainedBitmap",
+      "pc": 233,
+      "opcode": "putfield",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/view/GestureDetectorCompat$GestureDetectorCompatImplBase;",
+      "metodo": "onTouchEvent",
+      "pc": 333,
+      "opcode": "getfield",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/view/PagerTitleStrip;",
+      "metodo": "updateTextPositions",
+      "pc": 226,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/view/ViewPager;",
+      "metodo": "populate",
+      "pc": 388,
+      "opcode": "getfield",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/DrawerLayout;",
+      "metodo": "onMeasure",
+      "pc": 310,
+      "opcode": "getfield",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/SlidingPaneLayout;",
+      "metodo": "updateObscuredViewsVisibility",
+      "pc": 182,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
+    }
+  ],
+  "registro fuera de formato": [
     {
       "clase": "Landroid/support/v4/util/TimeUtils;",
       "metodo": "formatDurationLocked",
@@ -50,78 +122,6 @@
       "pc": 89,
       "opcode": "iconst_2",
       "motivo": "register v20 does not fit a four-bit format (the /range or /from16 form is not measured here)"
-    }
-  ],
-  "registro bajo ocupado": [
-    {
-      "clase": "Landroid/support/v4/app/FragmentManagerImpl;",
-      "metodo": "loadAnimation",
-      "pc": 180,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/app/NotificationCompatIceCreamSandwich;",
-      "metodo": "add",
-      "pc": 193,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/app/NotificationCompatJellybean;",
-      "metodo": "<init>",
-      "pc": 197,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/content/LocalBroadcastManager;",
-      "metodo": "sendBroadcast",
-      "pc": 529,
-      "opcode": "aload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/print/PrintHelperKitkat;",
-      "metodo": "loadConstrainedBitmap",
-      "pc": 247,
-      "opcode": "aload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/view/GestureDetectorCompat$GestureDetectorCompatImplBase;",
-      "metodo": "onTouchEvent",
-      "pc": 336,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/view/PagerTitleStrip;",
-      "metodo": "updateTextPositions",
-      "pc": 226,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/view/ViewPager;",
-      "metodo": "populate",
-      "pc": 412,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/widget/DrawerLayout;",
-      "metodo": "onMeasure",
-      "pc": 361,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
-    },
-    {
-      "clase": "Landroid/support/v4/widget/SlidingPaneLayout;",
-      "metodo": "updateObscuredViewsVisibility",
-      "pc": 182,
-      "opcode": "iload",
-      "motivo": "no low register is free to carry a high slot down"
     }
   ],
   "presupuesto de temporales": [

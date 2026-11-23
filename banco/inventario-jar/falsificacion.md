@@ -1,28 +1,31 @@
-## Falsificación del contador
+# Falsificación del inventario
 
-- Jar vacío: 0 clases, 0 fallos.
-- Fixture sano: 0 límites.
-- Fixture con el primer opcode cambiado a `0xca`: 1 límites, el primero en `Lfixture/Sano;.()V pc 0 · byte 0xca`.
-- Fixture restaurado: 0 límites.
+La salida detallada de `--falsificar` se escribe en la caché, no aquí:
 
-Veredicto del contador: PASA
+```sh
+python3 banco/inventario-jar/inventario.py --falsificar
+# detalle: $HOME/.cache/apkc-web/inventario-jar/falsificacion.md
+```
 
-## Reconstrucción por huella
+No se versiona porque lleva hashes de los fixtures que produce el `javac` local y la ruta del
+directorio de trabajo derivado de la huella del jar. Este fichero es el resumen estable.
 
-- `--apkc` externo: se usa sin reconstruir.
-- `APKC=...` externo: se usa sin reconstruir.
-- Sin cambios: no reconstruye.
-- Con un `.go` cambiado: reconstruye.
-- Al restaurar el `.go` original: reconstruye una vez.
-- Después de restaurar, sin cambios: no reconstruye.
-- `git status --porcelain apkc/` vacío durante toda la comprobación: la sonda no escribe en el árbol versionado.
+## Casos que comprueba la sonda
 
-Veredicto de la reconstrucción: PASA
+1. **Contador**: un jar vacío da 0 clases y 0 fallos; un fixture sano da 0 límites; el mismo
+   fixture con su primer opcode cambiado a `0xca` suma exactamente un caso de «bytecode JVM fuera
+   de la tabla»; al restaurar vuelve a 0.
+2. **Reconstrucción por huella**: se hace sobre una copia de `apkc/` en el directorio de trabajo,
+   nunca sobre el árbol versionado. Sin cambios no recompila; con un `.go` cambiado, sí; al
+   restaurar el original, una vez; después, no. Durante toda la sonda se exige
+   `git status --porcelain apkc/` vacío.
+3. **Informe reproducible**: dos ejecuciones seguidas sobre el mismo jar dejan `informe.md` y
+   `casos.json` byte a byte iguales, y el comando del oráculo usa `$CACHE/trabajo-<huella>/d8`, no
+   un directorio aleatorio.
+4. **No escribe en el árbol**: al terminar, `git status --porcelain` no trae cambios en
+   `banco/inventario-jar/` ni en `apkc/`.
+5. **Dos corridas concurrentes**: dos procesos a la vez sobre el mismo jar terminan con rc 0 y
+   dejan `informe.md` y `casos.json` idénticos. Cada proceso usa un directorio privado
+   (`trabajo-<huella>-<aleatorio>`), así que el d8 de uno no borra el del otro.
 
-## Cuarto caso: informe reproducible
-
-- Dos ejecuciones seguidas del mismo jar: `informe.md` idéntico (sha256 `0140ab3b9ee9a2b0…`).
-- `casos.json` idéntico (sha256 `ca3d163bab055381…`).
-- El oráculo usa `trabajo-95e423499042/d8`, derivado del jar, no un directorio aleatorio.
-
-Veredicto de la reproducibilidad: PASA
+Cada caso imprime su veredicto; la sonda termina con código distinto de cero si alguno falla.

@@ -15,6 +15,7 @@ El informe se escribe en `banco/inventario-jar/informe.md` (o en --salida). Los 
 """
 
 import argparse
+import atexit
 import contextlib
 import hashlib
 import io
@@ -24,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
@@ -294,11 +296,13 @@ def buscar_dexdump():
     return Path(encontrado) if encontrado else None
 
 
-def oraculo_d8(jar, trabajo, android_jar, muestras):
+def oraculo_d8(jar, trabajo, android_jar, muestras, publicado):
     """Dexa el jar entero con d8 y enseña las instrucciones DEX de los primeros casos.
 
     `muestras` es una lista de (tipo, clase, método): para cada una se recorta del `dexdump -d`
     del dex de d8 el trozo de ese método, que es el equivalente que propone el dexer de referencia.
+    La corrida escribe en `trabajo` (privado del proceso) y el comando se publica con `publicado`
+    (la forma estable bajo `$CACHE`).
     """
     d8, dexdump = buscar_d8()
     if d8 is None or not Path(d8).exists():
@@ -308,8 +312,14 @@ def oraculo_d8(jar, trabajo, android_jar, muestras):
         shutil.rmtree(salida)
     salida.mkdir(parents=True)
     comando = [str(d8), "--min-api", "21", "--lib", str(android_jar), "--output", str(salida), str(jar)]
+    visible = list(comando)
+    visible[visible.index(str(salida))] = ruta_publicada(publicado / "d8")
     r = subprocess.run(comando, capture_output=True, text=True)
-    lineas = ["Comando del oráculo:", "", "```sh", " ".join(comando), "```", ""]
+    lineas = ["Comando del oráculo:", "", "```sh", " ".join(visible), "```", ""]
+    lineas.append("La corrida usa un directorio privado por proceso; `$CACHE` es el directorio de "
+                  "caché del inventario (`$XDG_CACHE_HOME/apkc-web/inventario-jar` o "
+                  "`$HOME/.cache/apkc-web/inventario-jar`).")
+    lineas.append("")
     if r.returncode != 0:
         lineas.append(f"d8 falló con rc {r.returncode}:")
         lineas.append("```\n" + (r.stdout + r.stderr).strip()[-2000:] + "\n```")
@@ -634,14 +644,17 @@ def comprobar_reproducibilidad(apkc, jar):
     se persigue es que no quede ninguna ruta aleatoria en el informe.
     """
     fallos = []
-    lineas = ["", "## Cuarto caso: informe reproducible", ""]
+    lineas = ["", "## Informe reproducible", ""]
     if not jar.exists():
         return lineas + ["- Falta el jar del fixture; no se pudo medir."], 1
 
     first = None
     for vuelta in (1, 2):
         trabajo = directorio_de_trabajo(jar)
-        informe, detalle = genera_informe(apkc, jar, trabajo, ANDROID_JAR_POR_DEFECTO, False)
+        try:
+            informe, detalle = genera_informe(apkc, jar, trabajo, ANDROID_JAR_POR_DEFECTO, False)
+        finally:
+            shutil.rmtree(trabajo, ignore_errors=True)
         actual = (informe, detalle)
         if first is None:
             first = actual
@@ -655,7 +668,7 @@ def comprobar_reproducibilidad(apkc, jar):
                   f"(sha256 `{sha_informe[:16]}…`).")
     lineas.append(f"- `casos.json` idéntico (sha256 `{sha_detalle[:16]}…`).")
 
-    esperado = f"trabajo-{hashlib.sha256(jar.read_bytes()).hexdigest()[:12]}"
+    esperado = f"trabajo-{huella_del_jar(jar)}"
     vistos = set(re.findall(r"trabajo-[A-Za-z0-9_]+", informe))
     # el jar del fixture vive dentro del directorio de trabajo del jar real: los dos nombres son
     # huellas de 12 hex. Lo que no puede quedar es un sufijo aleatorio de `mkdtemp`.
@@ -670,6 +683,94 @@ def comprobar_reproducibilidad(apkc, jar):
                       "aleatorio.")
     lineas.append("")
     lineas.append("Veredicto de la reproducibilidad: " + ("PASA" if not fallos else "FALLA"))
+    for f in fallos:
+        lineas.append(f"- {f}")
+    return lineas, 0 if not fallos else 1
+
+
+def comprobar_arbol_limpio():
+    """Quinto caso: al terminar, la sonda no ha dejado cambios en el árbol.
+
+    Mira todo `git status --porcelain` y separa lo que la sonda puede tocar (`banco/inventario-jar/`
+    y `apkc/`) de cambios ajenos. Los ajenos se enseñan pero no tumban la prueba: el repo puede
+    estar en medio de otro trabajo. Los propios sí: era el defecto que reescribía `falsificacion.md`.
+    """
+    r = subprocess.run(["git", "status", "--porcelain"], cwd=RAIZ, capture_output=True, text=True)
+    lineas = ["", "## No escribe en el árbol", ""]
+    if r.returncode != 0:
+        lineas.append(f"- `git status --porcelain` falló: {r.stderr.strip()}")
+        lineas.append("Veredicto: FALLA")
+        return lineas, 1
+    todas = [l for l in r.stdout.splitlines() if l.strip()]
+    propias = [l for l in todas if l[3:].startswith(("banco/inventario-jar/", "apkc/"))]
+    ajenas = [l for l in todas if l not in propias]
+    if propias:
+        lineas.append("- `git status --porcelain` trae cambios de la sonda:")
+        lineas.append("```")
+        lineas.extend(propias)
+        lineas.append("```")
+        lineas.append("Veredicto: FALLA")
+        return lineas, 1
+    lineas.append("- `git status --porcelain banco/inventario-jar/ apkc/`: vacío.")
+    if ajenas:
+        lineas.append("- Cambios ajenos que la sonda no toca: " + ", ".join(ajenas))
+    lineas.append("Veredicto: PASA")
+    return lineas, 0
+
+
+def comprobar_concurrencia(apkc, jar, trabajo):
+    """Quinto caso: dos procesos a la vez sobre el mismo jar no comparten ni borran su taller.
+
+    Cada hijo crea su propio `trabajo-<huella>-<aleatorio>`, así que el d8 de uno no puede pisar el
+    del otro. Se comparan los informes: si los dos procesos escriben el mismo jar con el mismo
+    dexer, tienen que salir los mismos bytes.
+    """
+    fallos = []
+    lineas = ["", "## Dos corridas concurrentes", ""]
+    script = RAIZ / "banco" / "inventario-jar" / "inventario.py"
+    base = trabajo / "concurrente"
+    procesos = []
+    for nombre in ("a", "b"):
+        destino = base / nombre
+        destino.mkdir(parents=True, exist_ok=True)
+        cmd = [sys.executable, str(script), "--jar", str(jar), "--apkc", apkc,
+               "--salida", str(destino / "informe.md")]
+        registro = open(destino / "salida.txt", "w", encoding="utf-8")
+        procesos.append((nombre, subprocess.Popen(cmd, cwd=RAIZ, stdout=registro,
+                                                  stderr=subprocess.STDOUT), registro))
+    codigos = []
+    for _, p, registro in procesos:
+        codigos.append(p.wait())
+        registro.close()
+
+    lineas.append(f"- Dos procesos sobre el mismo jar: rc {codigos[0]} y rc {codigos[1]}.")
+    if any(codigo != 0 for codigo in codigos):
+        fallos.append(f"alguna corrida concurrente falló: {codigos}")
+        for nombre, codigo in zip(("a", "b"), codigos):
+            if codigo == 0:
+                continue
+            salida = (base / nombre / "salida.txt").read_text(encoding="utf-8", errors="replace")
+            lineas.append(f"- Proceso {nombre} falló; últimas líneas:")
+            lineas.append("```")
+            lineas.extend(salida.strip().splitlines()[-8:])
+            lineas.append("```")
+    else:
+        informe_a = (base / "a" / "informe.md").read_bytes()
+        informe_b = (base / "b" / "informe.md").read_bytes()
+        json_a = (base / "a" / "casos.json").read_bytes()
+        json_b = (base / "b" / "casos.json").read_bytes()
+        if informe_a != informe_b:
+            fallos.append("las dos corridas concurrentes no dejan el mismo informe.md")
+        else:
+            sha = hashlib.sha256(informe_a).hexdigest()
+            lineas.append(f"- `informe.md` idéntico byte a byte (sha256 `{sha[:16]}…`).")
+        if json_a != json_b:
+            fallos.append("las dos corridas concurrentes no dejan el mismo casos.json")
+        else:
+            lineas.append(f"- `casos.json` idéntico byte a byte "
+                          f"(sha256 `{hashlib.sha256(json_a).hexdigest()[:16]}…`).")
+    lineas.append("")
+    lineas.append("Veredicto de la concurrencia: " + ("PASA" if not fallos else "FALLA"))
     for f in fallos:
         lineas.append(f"- {f}")
     return lineas, 0 if not fallos else 1
@@ -727,7 +828,7 @@ def comprobar_falsificacion(apkc, trabajo):
         fallos.append("el caso roto no señala el byte 0xca")
 
     lineas = [
-        "## Falsificación del contador",
+        "## Contador",
         "",
         f"- Jar vacío: {inv['clases']} clases, {inv['fallos']} fallos.",
         f"- Fixture sano: {sanos} límites.",
@@ -744,23 +845,42 @@ def comprobar_falsificacion(apkc, trabajo):
     lineas.extend(lineas_recon)
     lineas_repro, rc_repro = comprobar_reproducibilidad(apkc, trabajo / "fixture-sana.jar")
     lineas.extend(lineas_repro)
-    return lineas, 0 if (not fallos and rc_recon == 0 and rc_repro == 0) else 1
+    lineas_conc, rc_conc = comprobar_concurrencia(apkc, trabajo / "fixture-sana.jar", trabajo)
+    lineas.extend(lineas_conc)
+    lineas_arbol, rc_arbol = comprobar_arbol_limpio()
+    lineas.extend(lineas_arbol)
+    return lineas, 0 if (not fallos and rc_recon == 0 and rc_repro == 0 and rc_conc == 0
+                         and rc_arbol == 0) else 1
+
+
+def huella_del_jar(jar):
+    """SHA-256 del jar, corto: fija el nombre del directorio de trabajo publicado."""
+    return hashlib.sha256(Path(jar).read_bytes()).hexdigest()[:12]
+
+
+def ruta_publicada(ruta):
+    """Forma estable de una ruta de caché para el informe: `$CACHE/...`.
+
+    El comando del oráculo se publica con esta forma, no con la ruta privada de la corrida, para
+    que dos ejecuciones (y dos máquinas con el mismo `CACHE`) escriban el mismo texto.
+    """
+    try:
+        rel = Path(ruta).resolve().relative_to(CACHE.resolve())
+    except ValueError:
+        return str(ruta)
+    return "$CACHE/" + rel.as_posix()
 
 
 def directorio_de_trabajo(jar):
-    """Directorio de trabajo estable, derivado del SHA-256 del jar.
+    """Directorio de trabajo privado por proceso, con el prefijo estable de la huella del jar.
 
-    No se usa un `mkdtemp`: el comando del oráculo se publica en el informe y un sufijo aleatorio
-    hacía que cada ejecución reescribiera la evidencia con una ruta distinta. La huella del jar
-    fija el nombre (`trabajo-<12 hex>`), el directorio se vacía al empezar y es solo un taller: lo
-    que se versiona es el informe, no lo que queda dentro.
+    Dos corridas concurrentes sobre el mismo jar no pueden compartir ni borrarse el directorio: cada
+    una tiene el suyo (`trabajo-<12 hex>-<aleatorio de mkdtemp>`). Lo que se publica en el informe es
+    la forma estable `$CACHE/trabajo-<12 hex>/d8`, no esta ruta privada.
     """
-    huella = hashlib.sha256(Path(jar).read_bytes()).hexdigest()[:12]
-    trabajo = CACHE / f"trabajo-{huella}"
-    if trabajo.exists():
-        shutil.rmtree(trabajo)
-    trabajo.mkdir(parents=True, exist_ok=True)
-    return trabajo
+    huella = huella_del_jar(jar)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=f"trabajo-{huella}-", dir=str(CACHE)))
 
 
 def genera_informe(apkc, jar, trabajo, android_jar, sin_oraculo, limite=None):
@@ -823,7 +943,8 @@ def genera_informe(apkc, jar, trabajo, android_jar, sin_oraculo, limite=None):
             primero = grupo["casos"][0]
             if primero.get("clase") and primero.get("metodo"):
                 muestras.append((tipo, primero["clase"], primero["metodo"]))
-        lineas.append(oraculo_d8(jar, trabajo, Path(android_jar), muestras))
+        lineas.append(oraculo_d8(jar, trabajo, Path(android_jar), muestras,
+                                 CACHE / f"trabajo-{huella_del_jar(jar)}"))
     lineas.append("Comando que lo reproduce:")
     lineas.append("")
     lineas.append("```sh")
@@ -855,11 +976,14 @@ def main():
     apkc = construir_apkc(args.apkc)
     CACHE.mkdir(parents=True, exist_ok=True)
     trabajo = directorio_de_trabajo(jar)
+    atexit.register(shutil.rmtree, trabajo, ignore_errors=True)
     print(f"[inventario] directorio de trabajo {trabajo}", file=sys.stderr)
 
     if args.falsificar:
         lineas, rc = comprobar_falsificacion(apkc, trabajo)
-        destino = Path(args.salida).parent / "falsificacion.md"
+        # la salida detallada lleva hashes de los fixtures y la ruta del directorio de trabajo:
+        # va a la caché, nunca al fichero versionado, para que la sonda deje el árbol limpio
+        destino = CACHE / "falsificacion.md"
         destino.parent.mkdir(parents=True, exist_ok=True)
         destino.write_text("\n".join(lineas) + "\n")
         print("\n".join(lineas))
