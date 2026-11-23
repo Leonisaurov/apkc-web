@@ -948,6 +948,27 @@ func (ctx *contextoJava) tipoAInterno(nombre string) (string, error) {
 	return base, nil
 }
 
+// tipoDeReferencia parte una cadena sin receptor (`com.x.dos.Helper.doble`, `Outer.Inner.CAMPO`) en el
+// nombre interno del tipo y los segmentos que quedan, que ya son campos. Toma el prefijo más largo que
+// resuelva a una clase, que es lo que javac hace con un nombre cualificado: `pkg.Clase.campo` es la
+// clase del paquete, no la clase `pkg` con un campo `Clase`. Las clases anidadas se dejan a
+// `accesoEstatico`, que anota la `Class` de cada una: `R.layout.main` tiene que seguir pasando por
+// `R$layout` para que quede su fila de InnerClasses. ok=false cuando ni el primer segmento es un tipo,
+// y entonces el llamador devuelve el error de siempre con la referencia entera.
+func (ctx *contextoJava) tipoDeReferencia(segs []string) (string, []string, bool) {
+	for corte := len(segs); corte >= 2; corte-- {
+		if c := strings.Join(segs[:corte], "/"); ctx.hay(c) {
+			return c, segs[corte:], true
+		}
+	}
+	if len(segs) > 0 {
+		if interno, err := ctx.resolverSimple(segs[0]); err == nil {
+			return interno, segs[1:], true
+		}
+	}
+	return "", nil, false
+}
+
 // descriptorDe: como se escribe un tipo del fuente dentro de un descriptor.
 func (ctx *contextoJava) descriptorDe(tipo string) (string, error) {
 	if strings.HasSuffix(tipo, "[]") {
@@ -3275,11 +3296,15 @@ func (e *emisor) acceso(a jacceso) (string, error) {
 			return d, nil
 		}
 	}
-	interno, err := e.ctx.resolverSimple(segs[0])
-	if err != nil {
-		return "", fmt.Errorf("%s: al leer %s, %w", donde.sitio(), strings.Join(segs, "."), err)
+	// `com.x.dos.Helper.CAMPO` y `Outer.Inner.CAMPO`: el tipo es el prefijo más largo que resuelve, no
+	// el primer segmento. `R.layout.main` también entra aquí y sale con `R$layout` + `main`, que es el
+	// mismo acceso estático que daba antes por el camino de `resolverSimple("R")`.
+	if interno, resto, ok := e.ctx.tipoDeReferencia(segs); ok {
+		return e.accesoEstatico(interno, resto, donde)
 	}
-	return e.accesoEstatico(interno, segs[1:], donde)
+	// el error tiene que nombrar la referencia entera, no su primer segmento
+	_, err := e.ctx.tipoAInterno(strings.Join(segs, "."))
+	return "", fmt.Errorf("%s: al leer %s, %w", donde.sitio(), strings.Join(segs, "."), err)
 }
 
 // cadenaDeCampos: campos de instancia sobre el valor que ya esta en la pila.
@@ -3719,34 +3744,42 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		e.invoca(opcode, e.interno, l.nombre, cand.desc, n+1)
 		return vueltaDe(cand.desc), nil
 	}
-	if acc, esAcceso := l.base.(jacceso); esAcceso && acc.base == nil && e.locales[acc.nombre].desc == "" {
-		if interno, err := e.ctx.resolverSimple(acc.nombre); err == nil {
-			// el mismo orden que en el receptor de instancia: con un primitivo que cae en un
-			// parametro de referencia hay que estimar y boxear antes de invocar (§194)
-			if e.hayEmpaquetadoEn(interno, l.nombre, l.args) || e.necesitaBoxingEn(interno, l.nombre, l.args) {
-				cand, n, err := e.argumentosResueltos(interno, l.nombre, l.args)
+	// una llamada estática sobre un nombre de tipo, simple (`Helper.doble`) o cualificado
+	// (`com.x.dos.Helper.doble`): el tipo es el prefijo más largo que resuelve y no puede quedar nada
+	// detrás, porque lo que sigue es el nombre del método. Si queda un campo (`Helper.instancia.m()`),
+	// el receptor es una expresión y se emite por el camino normal.
+	if acc, esAcceso := l.base.(jacceso); esAcceso {
+		segs, base := aplanar(acc)
+		if base == nil && len(segs) > 0 && e.locales[segs[0]].desc == "" {
+			interno, resto, ok := e.ctx.tipoDeReferencia(segs)
+			if ok && len(resto) == 0 {
+				// el mismo orden que en el receptor de instancia: con un primitivo que cae en un
+				// parametro de referencia hay que estimar y boxear antes de invocar (§194)
+				if e.hayEmpaquetadoEn(interno, l.nombre, l.args) || e.necesitaBoxingEn(interno, l.nombre, l.args) {
+					cand, n, err := e.argumentosResueltos(interno, l.nombre, l.args)
+					if err != nil {
+						return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+					}
+					if cand.acceso&accStatic == 0 {
+						return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
+					}
+					e.invoca(opInvokestat, interno, l.nombre, cand.desc, n)
+					return vueltaDe(cand.desc), nil
+				}
+				tipos, err := e.argumentos(l.args)
+				if err != nil {
+					return "", err
+				}
+				cand, err := e.ctx.buscarMetodo(interno, l.nombre, argc, tipos)
 				if err != nil {
 					return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 				}
 				if cand.acceso&accStatic == 0 {
 					return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
 				}
-				e.invoca(opInvokestat, interno, l.nombre, cand.desc, n)
+				e.invoca(opInvokestat, interno, l.nombre, cand.desc, argc)
 				return vueltaDe(cand.desc), nil
 			}
-			tipos, err := e.argumentos(l.args)
-			if err != nil {
-				return "", err
-			}
-			cand, err := e.ctx.buscarMetodo(interno, l.nombre, argc, tipos)
-			if err != nil {
-				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
-			}
-			if cand.acceso&accStatic == 0 {
-				return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
-			}
-			e.invoca(opInvokestat, interno, l.nombre, cand.desc, argc)
-			return vueltaDe(cand.desc), nil
 		}
 	}
 	d, err := e.exp(l.base)
@@ -4431,15 +4464,16 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			}
 		}
 		if base == nil {
-			// `R.layout.main` y cualquier `Clase.campo` / `Clase.campo.campo`: el tipo de la cadena se
-			// saca de la declaracion del campo, sin emitir nada. Cuando la cabeza no se resuelve se
-			// devuelve **su** motivo (que suele ser una `R` que el classpath no trae) y no un «no
-			// esta medido» que escondia la causa real (§200).
-			interno, err := e.ctx.resolverSimple(segs[0])
-			if err != nil {
+			// `R.layout.main` y cualquier `Clase.campo` / `Clase.campo.campo`, también con el tipo
+			// cualificado (`com.x.dos.Helper.CAMPO`): el tipo es el prefijo más largo que resuelve y el
+			// resto son campos. Cuando no se resuelve se devuelve **su** motivo (que suele ser una `R`
+			// que el classpath no trae) y no un «no esta medido» que escondia la causa real (§200).
+			interno, resto, ok := e.ctx.tipoDeReferencia(segs)
+			if !ok {
+				_, err := e.ctx.tipoAInterno(strings.Join(segs, "."))
 				return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
 			}
-			d, err := e.descDeAccesoEstatico(interno, segs[1:])
+			d, err := e.descDeAccesoEstatico(interno, resto)
 			if err != nil {
 				return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
 			}
@@ -4582,8 +4616,8 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 			}
 			return cr.desc, true
 		}
-		if interno, err := e.ctx.resolverSimple(segs[0]); err == nil {
-			d, err := e.descDeAccesoEstatico(interno, segs[1:])
+		if interno, resto, ok := e.ctx.tipoDeReferencia(segs); ok {
+			d, err := e.descDeAccesoEstatico(interno, resto)
 			if err != nil {
 				return "", false
 			}
