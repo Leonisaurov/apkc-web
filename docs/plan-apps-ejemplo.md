@@ -136,16 +136,35 @@ en el emulador), el diálogo de permisos de `chatbt` (puede quedar pendiente en 
 comportamiento de `startDiscovery` sin receptor. Cada uno tiene su comando arriba o su frontera en la
 tabla de defectos.
 
+La preview **no modela** `ArrayList`, `BluetoothAdapter`, `SystemClock` ni `removeCallbacks`:
+devuelve cero o `null` y avisa. No es que carezca de esas APIs; es que no las emula.
+
+## Evidencia archivada y corrida no archivada
+
+**Archivada y confirmada** en `$HOME/.cache/apkc-web/apps-mejorar/sonda/informe.md`: las cinco apps
+compilan con el camino todo-Go; los tamaños de dex son 4760, 5428, 5940, 6504 y 5320 bytes, con
+187-240 ms por build; no se versiona ningún binario; la sonda apunta solo a `10.177.0.2:5555` y no
+hace red ni push. Esa es la base que se puede citar.
+
+**Observada en una corrida no archivada, no medida.** Aparecieron diferencias de texto entre aparato
+y preview y una diferencia de tiempo, pero el informe archivado no las contiene —dice «aparato 0 con
+id» y «no se pudo leer el tiempo»—, así que no se citan como cifras. Quedan como **objetivos de H3**,
+no como logros, y hay que repetir la sonda con una ventana sana antes de escribirlas.
+
+**Pregunta abierta sin `§`.** El «~6 s» de retirada de la ventana de Droidloom no tiene medición
+registrada; no se usa como cifra.
+
 ## Fase H — mejorar las apps y endurecer el emulador con ellas
 
-Autorizada por el usuario el 2026-11-22. Estado: **H1 y H2 en curso**, con un builder en el worktree
-`apps-mejorar`; **no se corre ningún gate final** hasta que el usuario lo pida.
+Autorizada por el usuario el 2026-11-22. Estado: **H1 ejecutada y aprobada en `30c2afc`; H2
+ejecutada con informe archivado incompleto; H3 abierta**, sin gate final hasta que el usuario lo
+pida.
 
 | Paso | Objetivo | Comando que lo prueba | Criterio de cierre |
 | --- | --- | --- | --- |
 | H1 | Dar comportamiento real a las cinco apps: `lienzo` con toques y colores, `notas` con crear/editar/borrar y persistencia, `chatbt` con envío local, `tareas` con filtro y persistencia, `cronometro` con iniciar/pausar/reiniciar. | `sh banco/apps-ejemplo/construir.sh` y `sh banco/apps-ejemplo/probar.sh` | Las cinco siguen compilando con `--linker go --compiler go`, instalando y arrancando en Droidloom (`10.177.0.2:5555`). |
-| H2 | Usarlas como sonda: `banco/apps-ejemplo/endurecer.sh` compila, instala, arranca, ejecuta `apkc preview` con una secuencia de `--pulsar`, guarda el JSON del modelo y vuelca `uiautomator dump` del dispositivo. | `sh banco/apps-ejemplo/endurecer.sh` | Informe con diferencias concretas de texto/vistas por app; cada diferencia se registra como aviso, no se oculta. |
-| H3 | Convertir cada diferencia en un defecto medido del compilador o del intérprete, con su `§` en `docs/evidencia.md` y su fila en el inventario, y repetir la sonda. | el comando del defecto correspondiente | La diferencia desaparece o queda escrita como frontera con su comando. |
+| H2 | Usarlas como sonda: `banco/apps-ejemplo/endurecer.sh` compila, instala, arranca, ejecuta `apkc preview` con una secuencia de `--pulsar`, guarda el JSON del modelo y vuelca `uiautomator dump` del dispositivo. | `sh banco/apps-ejemplo/endurecer.sh` | Informe archivado con las cinco compilaciones y los datos que sí se pudieron leer; lo que no se leyó se marca como no medido, no se rellena. |
+| H3 | Convertir cada diferencia en un objetivo medido del compilador o del intérprete, con su `§` en `docs/evidencia.md` y su fila en el inventario, y repetir la sonda. Las diferencias de la corrida no archivada son **objetivos**, no logros. | el comando del defecto correspondiente | La diferencia se mide con su comando y desaparece, o queda escrita como frontera. |
 
 Prioridad dentro de H2/H3: `lienzo` (ya destapó el reparto de registros) → `notas` (inflado y
 persistencia) → `cronometro` (bucle de UI y reloj lógico) → `tareas` (estado compuesto) → `chatbt`

@@ -9876,3 +9876,30 @@ la preview se reconstruyó (`sha256 90fc0011…`), verificada contra `/apkc.wasm
 superar 65 536 referencias de método (el límite de índices de 16 bits). Un `invokedynamic` no
 medido falla nombrando el jar, la entrada y el sitio. Queda como trabajo aparte. No se corrió gate,
 chromium ni publicación.
+
+## 221. Apps de ejemplo: cinco builds reproducibles y la comparación no archivada
+
+Medido el 2026-11-23 sobre `30c2afc` (`feat(banco): apps de ejemplo interactivas y sonda de
+endurecimiento`). El crítico `ses_df8d5e78affeJAoal8XzOTzm46` aprobó el commit con una condición
+documental: el informe archivado de la sonda no contiene las diferencias que se habían citado.
+
+```sh
+sh banco/apps-ejemplo/construir.sh
+sh banco/apps-ejemplo/probar.sh
+```
+
+**Resultado confirmado.** Las cinco apps compilan con `--linker go --compiler go`; los tamaños de
+dex son 4760, 5428, 5940, 6504 y 5320 bytes, con 187-240 ms por build. No se versiona ningún
+binario. La sonda apunta solo a `10.177.0.2:5555` y no hace red ni push.
+
+**Fronteras confirmadas.** No inflan: `&&` en una condición, una condición que no es comparación,
+`Long.toString`, la concatenación de un `long` y la vista propia de `lienzo`.
+
+**Comparación aparato↔preview: no archivada.** El informe
+`$HOME/.cache/apkc-web/apps-mejorar/sonda/informe.md` dice «aparato 0 con id» y «no se pudo leer el
+tiempo», así que las diferencias de texto y de tiempo observadas en esa corrida no son medidas y no
+se citan. Quedan como objetivos de H3 y hay que repetir la sonda con una ventana sana. El «~6 s» de
+retirada de la ventana de Droidloom tampoco tiene `§`; es pregunta abierta.
+
+**Fronteras de este `§`.** No se corrió gate, chromium ni publicación; la comprobación es la del
+crítico sobre el árbol de `30c2afc`.
