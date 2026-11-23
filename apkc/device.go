@@ -323,6 +323,12 @@ func mainActivityFromManifest() (string, string) {
 		LogF("run", "couldn't find main activity")
 	}
 
+	// los dos valores viajan dentro de `am start` y de `pidof` en la shell del
+	// dispositivo: se rechazan aquí, antes de que exista ningún script
+	if err := validarPaqueteYActividad(manifest.Package, activityName); err != nil {
+		LogF("run", err)
+	}
+
 	return manifest.Package, activityName
 }
 

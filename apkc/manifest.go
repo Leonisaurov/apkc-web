@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/xml"
+	"fmt"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -122,4 +124,32 @@ type IntentFilter struct {
 type Action struct {
 	XMLName xml.Name `xml:"action"`
 	Name    string   `xml:"name,attr"`
+}
+
+// El manifiesto es un fichero que puede venir de fuera (un zip importado, un proyecto
+// ajeno), y `apkc run` mete el paquete y la actividad dentro de un script que se ejecuta
+// en la shell del dispositivo: `am start -W -S -n <paquete>/<actividad>` y `pidof -s
+// <paquete>`. Un manifiesto con package="x; reboot" convertía ese script en dos órdenes.
+// Se valida la forma antes de construir ninguna, y el patrón es el que Android acepta de
+// todas formas: letras, dígitos y guion bajo, con al menos un punto.
+var patronPaquete = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$`)
+
+// La actividad va en el mismo script y admite dos formas: absoluta (`com.x.MainActivity`)
+// y relativa al paquete (`.MainActivity`). Es un nombre Java, así que además de letras y
+// dígitos lleva `_` y `$` (clases internas); nada más pasa.
+var patronActividad = regexp.MustCompile(`^\.?[A-Za-z_$][A-Za-z0-9_$]*(\.[A-Za-z_$][A-Za-z0-9_$]*)*$`)
+
+// validarPaqueteYActividad juzga los dos valores del manifiesto que acaban dentro de una
+// orden de shell. El mensaje nombra el valor y el motivo: quien importe el proyecto tiene
+// que saber qué corregir, no solo que se rechazó.
+func validarPaqueteYActividad(pkg, actividad string) error {
+	if !patronPaquete.MatchString(pkg) {
+		return fmt.Errorf("el paquete del manifiesto %q no es un nombre de paquete Android "+
+			"(se esperaba algo como com.ejemplo.app, sin espacios, signos ni puntos seguidos)", pkg)
+	}
+	if !patronActividad.MatchString(actividad) {
+		return fmt.Errorf("la actividad principal %q no es un nombre Java permitido "+
+			"(se esperaba MainActivity, .MainActivity o com.ejemplo.app.MainActivity)", actividad)
+	}
+	return nil
 }
