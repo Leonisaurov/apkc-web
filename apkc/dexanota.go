@@ -124,8 +124,15 @@ func (a *anotacion) clave() string {
 func (a *anotacion) bytes(td *dexTables) []byte {
 	out := []byte{visibilidadSistema}
 	out = putUleb(out, uint32(td.typeIdx[a.tipo]))
-	out = putUleb(out, uint32(len(a.elementos)))
-	for _, p := range a.elementos {
+	// el verificador exige los elementos en orden ascendente de `name_idx`; la tabla del `.class` no
+	// los trae necesariamente así (lo destapó `dexdump` sobre el jar real: `Out-of-order field_idx
+	// for annotation: c4 then ba`). d8 los ordena.
+	elementos := append([]par(nil), a.elementos...)
+	sort.Slice(elementos, func(i, j int) bool {
+		return td.stringIdx[elementos[i].nombre] < td.stringIdx[elementos[j].nombre]
+	})
+	out = putUleb(out, uint32(len(elementos)))
+	for _, p := range elementos {
 		out = putUleb(out, uint32(td.stringIdx[p.nombre]))
 		out = codificaValor(td, out, p.valor)
 	}
@@ -491,14 +498,29 @@ func (td *dexTables) armaAnotaciones(clases []classFull, de map[string]anotacion
 		p.dirs = putU32(p.dirs, uint32(len(a.campos)))  // fields_size
 		p.dirs = putU32(p.dirs, uint32(len(a.metodos))) // annotated_methods_size
 		p.dirs = putU32(p.dirs, 0)                      // annotated_static_fields_size
-		for _, f := range a.campos {
+		// las dos listas del directorio van ordenadas por su índice de tabla (el verificador corta
+		// con `Out-of-order field_idx for annotation`; lo destapó `dexdump` sobre el jar real). El
+		// orden del `.class` no tiene por qué coincidir con el de `field_ids`/`method_ids`.
+		campos := append([]anotacionesCampo(nil), a.campos...)
+		sort.Slice(campos, func(i, j int) bool {
+			ki := fieldKey{owner: campos[i].owner, typeOf: campos[i].desc, name: campos[i].nombre}
+			kj := fieldKey{owner: campos[j].owner, typeOf: campos[j].desc, name: campos[j].nombre}
+			return td.fieldIdx[ki] < td.fieldIdx[kj]
+		})
+		for _, f := range campos {
 			rel := setDe(claveItems(f.items))
 			k := fieldKey{owner: f.owner, typeOf: f.desc, name: f.nombre}
 			p.dirs = putU32(p.dirs, uint32(td.fieldIdx[k]))
 			p.dirs = putU32(p.dirs, 0)
 			p.parches = append(p.parches, parcheAnot{area: 0x2006, en: len(p.dirs) - 4, destino: 0x1003, rel: rel})
 		}
-		for _, m := range a.metodos {
+		metodos := append([]anotacionesMiembro(nil), a.metodos...)
+		sort.Slice(metodos, func(i, j int) bool {
+			ki := methodKey{owner: metodos[i].owner, proto: protoKeyOf(metodos[i].desc), desc: metodos[i].desc, name: metodos[i].nombre}
+			kj := methodKey{owner: metodos[j].owner, proto: protoKeyOf(metodos[j].desc), desc: metodos[j].desc, name: metodos[j].nombre}
+			return td.methodIdx[ki] < td.methodIdx[kj]
+		})
+		for _, m := range metodos {
 			rel := setDe(claveItems(m.items))
 			k := methodKey{owner: m.owner, proto: protoKeyOf(m.desc), desc: m.desc, name: m.nombre}
 			p.dirs = putU32(p.dirs, uint32(td.methodIdx[k]))

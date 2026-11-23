@@ -621,10 +621,16 @@ func (td *dexTables) valorEstatico(f classField) (byte, []byte) {
 		}
 		return byte(valueLong | 7<<5), b
 	case cpString:
-		if _, ok := td.stringIdx[f.ConstStr]; !ok {
+		idx, ok := td.stringIdx[f.ConstStr]
+		if !ok {
 			return 0, nil
 		}
-		return byte(valueString), putUleb([]byte{}, uint32(td.stringIdx[f.ConstStr]))
+		// el índice va en los `ancho+1` bytes little-endian que dice la cabecera, como el resto de
+		// `encoded_value` (no es un uleb: con un índice de más de 127 el uleb se leía como un número
+		// distinto —`Bad index for encoded_value string`—). Es la misma codificación que usan las
+		// anotaciones (`codificaBytes`).
+		b := codificaBytes(nil, valueString, anchuraIndice(uint32(idx)), int64(idx))
+		return b[0], b[1:]
 	case cpFloat:
 		n := uint32(f.ConstInt)
 		return byte(valueFloat | 3<<5), []byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)}
