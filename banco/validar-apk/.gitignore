@@ -1,0 +1,2 @@
+# Los jars de las dependencias y el keystore los produce validar.sh: no se versionan (regla 2).
+jar/*.jar
