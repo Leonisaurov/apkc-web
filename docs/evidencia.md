@@ -9620,7 +9620,7 @@ sondas eran pruebas temporales y no viven en el árbol; lo permanente son las pr
 bloque. (3) No hay medición en aparato: el reloj es lógico. (4) El sitio publicado no se ha
 empaquetado con `35d5f79`.
 
-## 200. I4: dexado por clase, sin cambiar un byte del `classes.dex`
+## 214. I4: dexado por clase, sin cambiar un byte del `classes.dex`
 
 Medido el 2026-11-22 en el worktree `inc-i4-i5` sobre `banco/gen-proyecto-grande.py` (231 fuentes,
 244 clases, 1875 `code_item`, 195 844 bytes de dex). El ensamblado del dex tiene offsets absolutos
@@ -9668,7 +9668,7 @@ salió de `banco/incremental.sh` con un `TRABAJO` propio. (3) Lo que queda por r
 —`leeClases` 11 ms, `collectClasses` 13 ms y el ensamblado de las áreas globales— no se tocó: I5 es
 el índice del `android.jar` entre pasadas y ataca a la compilación, no al dex.
 
-## 201. I4: los dos `INCIERTO` del crítico, cerrados
+## 215. I4: los dos `INCIERTO` del crítico, cerrados
 
 Cierra las dos dudas que el crítico de I4 dejó abiertas sobre `829cad6`.
 

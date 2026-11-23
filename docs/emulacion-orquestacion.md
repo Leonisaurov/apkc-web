@@ -125,8 +125,28 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
     1×1) y 400 caracteres no cambiaron el canvas. `node --check` y `node prueba.js` en verde en el
     submódulo.
 - **Editor auditado:** `e121270` en el submódulo (cherry-pick de `e600a66`), puntero `6243d9d`;
-  F1, C1-C4 y F2 cerrados, F5 sigue `INCIERTO`. `node --check` sin salida y `prueba.js` en
-  `todo en orden`.
+  F1, C1-C4 y F2 cerrados. `node --check` sin salida y `prueba.js` en `todo en orden`.
+- **Clic del contador** (`7b9278c`/`799dafa`): el repintado de `vistas.js` reenvía el mismo
+  `ultimoModelo` y ya no borra `pulsos`; verificado de 1 a 5 y el sexto tras cambiar de vista;
+  crítico `ses_df953db48ffepwm7yI8MImMgv2` en **APROBAR**. Deuda no bloqueante: doble repintado al
+  cambiar de vista.
+- **F4** (`99229a4`/`73a59bd`): crítico `ses_df9532943ffeEMhPX85PddyVY3` en **APROBAR** con cuatro
+  mutaciones detectadas.
+- **Bloqueos y TOCTOU** (`b930078`/`5efc33a`, corrección `ad86af0`/`d86d5e8`): re-auditor
+  `ses_df94eb6a7ffeafL8IIklwgqMdX` en **APROBAR** sin condiciones; la carrera real de dos pestañas
+  queda para gate.
+- **F5** (`d22fe3a`/`36a69c0`): el tecleo durante la carga se rechaza con aviso; crítico
+  `ses_df93f2da4ffePx3uHgzYLU2qEM` en **APROBAR** con comprobación visual en gate.
+- **OPFS mtime** (`9751433`/`4dd322a`): `statDe` usa el `lastModified` real; crítico
+  `ses_df9352c53ffelAkiO5TriVgbyR` en **APROBAR**; deuda preexistente: `writeSync` no actualiza
+  `mtimeMs`.
+- **D7** (`385f1ed`/`db16376`): seis comprobaciones de navegación en pestaña; crítico
+  `ses_df947ea53ffedqhgTYwg0HERax` en **APROBAR** estático; la ejecución real queda para gate.
+- **I4** (`67e5f21` y `2dd06f7`): crítico `ses_df9491794ffePi1NK1rABUt0cZ` en **APROBAR** tras
+  cerrar los dos `INCIERTO` (cuerpo que crece y caché corrupta); evidencia en §214 y §215.
+- **I5** (`03b6ac5`): integrado, **en verificación**; su crítico
+  `ses_df93c3f9fffefvTzhHzPYyU5lF` **rechazó** el cierre con dos `CONFIRMADO` (mtime sintético, ya
+  corregido en cliente; classpath demasiado estrecho, en corrección) y pide medición en pestaña.
 - **Gate final VERDE** sobre `web` @ `89fc27f` (studio `0fce105`), ejecutado por
   `ses_df9a20cc2ffeLm5MRdXzqCsIwR` con `PREFIX=~/.cache/apkc-web-gate-final3`, puertos
   9081/9581/9082/9083/9582 y `ANDROID_HOME=/home/leonisauro/opt/android-sdk`. `LD_LIBRARY_PATH`
@@ -141,6 +161,8 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   sirve sin red desde la caché del service worker. Oráculos externos ejecutados: `apksigner`,
   `zipalign`, `aapt2`, `d8`, `bundletool`, `jarsigner` y `zipcheck.py`. `git status -sb` limpio
   (`ahead 66`, submódulo limpio).
-- **Pendiente:** solo F5, la carrera de tecleo durante la carga; sigue `INCIERTO`.
-- **Activas:** ninguna; la emulación queda cerrada y el gate final está **en verde**.
+- **Pendiente de gate:** la comprobación visual de F5, la ejecución real de D7, la carrera de dos
+  pestañas y la medición de I5 en la pestaña. El gate verde registrado es de `89fc27f`, un árbol
+  anterior a estos cierres.
+- **Activas:** I5 en verificación; el resto de frentes queda cerrado.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.

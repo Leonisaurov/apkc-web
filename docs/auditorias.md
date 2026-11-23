@@ -20,18 +20,20 @@ hecho por analogía (regla 11).
   DOM y worker queda para el gate con navegador.
 - **F2. CERRADO en `e121270`.** `guardarAjustes` aplica sobre el buffer del manifiesto, no sobre una
   lectura de OPFS que pisaba los cambios sin guardar.
-- **F4.** `importarProyecto` (`pestana.js:509`) ignora `borradoDelDisco` (`fs-fragmento.js:546`):
-  si otra pestaña tiene un handle abierto, el borrado falla y el zip se mezcla con el árbol viejo.
-  Tampoco hay rollback si se agota la cuota a mitad de la escritura.
-- **TOCTOU.** La revisión se lee y se confirma fuera de `conBloqueo` (`pestana.js:1707-1719`).
-- **Escrituras sin `conBloqueo`:** jar (`:2476`, `:2535`), deps (`deps.js:130,139`) e imagen del
-  drawable (`previa-panel.js:2096`). La generación de clave sí pasa por lock (`:2237`).
-- **F5 (INCIERTO).** Teclear durante la ventana de carga marca sucio el doc nuevo con `texto=null`
-  y la lectura posterior descarta lo tecleado. No se cerró con `e121270`; sigue `INCIERTO`.
-- **Frontera de gate.** La carrera real con DOM y worker queda reducida a F5; el hit-test y la
-  geometría del emulador ya están verificados en navegador real. El gate final ejerce además el
-  hit-test y el clic real en el canvas; lo que sigue sin cubrir es el tecleo durante la carga
-  (F5).
+- **F4. CERRADO en `99229a4`/`73a59bd`.** El crítico `ses_df9532943ffeEMhPX85PddyVY3` dio
+  **APROBAR** con cuatro mutaciones detectadas: el import ya no mezcla el zip con el árbol viejo.
+- **TOCTOU. CERRADO en `b930078`/`5efc33a` (corrección `ad86af0`/`d86d5e8`).** La revisión se lee y
+  se confirma dentro de `conBloqueo`; el re-auditor `ses_df94eb6a7ffeafL8IIklwgqMdX` dio
+  **APROBAR** sin condiciones. La carrera real de dos pestañas queda para el gate.
+- **Escrituras sin `conBloqueo`. CERRADAS en `b930078`/`5efc33a`.** Jar, deps e imagen del drawable
+  pasan por el bloqueo; la generación de clave ya lo hacía.
+- **F5. CERRADO en `d22fe3a`/`36a69c0`.** Teclear durante la ventana de carga se rechaza con aviso
+  en vez de marcar sucio el documento nuevo y descartar lo tecleado. El crítico
+  `ses_df93f2da4ffePx3uHgzYLU2qEM` dio **APROBAR** con la condición de comprobar el aviso en el
+  gate con navegador.
+- **Frontera de gate.** Quedan dos del editor: la comprobación visual de F5 y la carrera real de dos
+  pestañas. El hit-test y la geometría del emulador ya están verificados en navegador real, y el
+  gate final ejerce el hit-test y el clic real en el canvas.
 
 ### 1.2 Compilación y panel de resultado
 
@@ -48,6 +50,8 @@ hecho por analogía (regla 11).
   `apkc/compilar.go:152` dice «No hay incremental aqui…»; `escribirClases` (`compilar.go:87-98`)
   reescribe todos los `.class`, `compSource` queda siempre cierto (`build.go:300,340,365`) y un
   build inactivo recompila, re-dexa y reempaqueta. `--inc` solo ahorra el enlace de recursos (I1/I2).
+  **Superado por I3** (`d3803bb`): `clasesAlDia` y `classRosterSHA` ya existen; véase
+  `docs/plan-incremental-web.md`.
 - **C6 (INCIERTO):** `saveTable()` se llama antes del empaquetado y `LogF` no volcaría el estado;
   hoy no es alcanzable porque `R.java` fuerza la compilación.
 
@@ -72,16 +76,18 @@ hecho por analogía (regla 11).
   encadenaba pantallas sin fin ahora avisa y deja delante la última que arrancó. Matiz del crítico:
   los tests aseveran contra las constantes, no contra el literal 32. Las citas de línea son las de
   `def0b85`.
-- **3.5.** `try`/`catch` en `onCreate` mata la ejecución entera (`:1044-1046`, `:614-622`).
-  Limitación del MVP, sin arreglo trivial.
+- **3.5. SUPERADO por §213.** La limitación era que `try`/`catch` en `onCreate` mataba la ejecución
+  entera (`:1044-1046`, `:614-622`). El intérprete ya ejecuta la tabla de excepciones del dex
+  (§213), así que esta limitación histórica no describe el árbol actual.
 - **3.6.** `RelativeLayout` y los `*Layout` no lineales se apilan en el origen
   (`preview.go:1369-1373`), ignorando `layout_gravity` que `colocarFrame` sí aplica (`:1448-1476`).
-- **D7.** El gate no ejerce `startActivity`: `e2e.sh:190-196` es Contador con un clic y
-  `prueba-pestana.js:1644-1648` es una sola actividad. La prueba de navegación en pestaña que E1
-  invoca **no existe**.
+- **D7. CERRADO en `385f1ed`/`db16376`.** La pestaña tiene seis comprobaciones de navegación entre
+  actividades propias; el crítico `ses_df947ea53ffedqhgTYwg0HERax` dio **APROBAR** estático. La
+  ejecución real de esas comprobaciones queda para el gate.
 - **Veredicto E1:** correcta en intérprete y CLI (determinista, estado conservado), incompleta como
   afirmación de la pestaña. La prioridad del crítico **E1.1 antes que E4** se atendió: `def0b85`
-  cerró 3.1, 3.2 y 3.4 y el crítico dio **APROBAR** (§206). D7 sigue sin prueba en la pestaña.
+  cerró 3.1, 3.2 y 3.4 y el crítico dio **APROBAR** (§206). D7 ya tiene seis comprobaciones; su
+  ejecución real queda para el gate.
 - **INCIERTO:** el orden de ciclo de vida de `previewinterprete.go:643` no se ha medido en aparato.
 - **INCIERTA (pregunta abierta de E1.1, no bloqueante):** en un redirect sin layout que vuelve al
   frente porque el destino llama a `finish()`, `layoutID==0` podría caer al layout `main`
