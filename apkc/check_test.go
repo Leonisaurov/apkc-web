@@ -157,6 +157,61 @@ func TestRaizDelProyectoSubeHastaElManifiesto(t *testing.T) {
 	}
 }
 
+// fuenteApkCualificada es el caso de D4: un campo de la propia clase escrito con el receptor `this`,
+// que es la forma que trae el `Apk.java` del usuario. La asignacion cae en la linea 7.
+const fuenteApkCualificada = `package com.hola.apkcstudio;
+
+public class Apk {
+    private String filePath;
+
+    public Apk(String filePath) {
+        this.filePath = filePath;
+    }
+
+    public String ruta() {
+        return filePath;
+    }
+}
+`
+
+// TestCheckAsignacionCualificadaThis: `this.filePath = filePath` es un campo de la propia clase, no
+// dos nombres sin medir. El emisor tiene que resolver el receptor `this` y el campo contra la clase y
+// dejar el fuente en cero errores, igual que `filePath = filePath`.
+func TestCheckAsignacionCualificadaThis(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteApkCualificada, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("`this.filePath = filePath` da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
+// TestCheckAsignacionCualificadaNombraElCampo es el control negativo: si el campo no existe, el error
+// tiene que nombrar el campo que falta (`noExiste`) y no volver al «mas de un nombre en el destino».
+func TestCheckAsignacionCualificadaNombraElCampo(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	roto := strings.Replace(fuenteApkCualificada, "this.filePath = filePath;", "this.noExiste = filePath;", 1)
+	if roto == fuenteApkCualificada {
+		t.Fatal("no se sustituyo la asignacion cualificada")
+	}
+	r := revisarFuenteJava(roto, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	e := r.Errores[0]
+	if !strings.Contains(e.Mensaje, "noExiste") {
+		t.Errorf("el mensaje no nombra el campo que falta: %q", e.Mensaje)
+	}
+	if strings.Contains(e.Mensaje, "mas de un nombre en el destino") {
+		t.Errorf("el mensaje sigue siendo el generico de antes: %q", e.Mensaje)
+	}
+	if e.Linea != 7 || e.Posicion != "Apk.java:7" {
+		t.Errorf("el error cae en %q y la asignacion esta en la linea 7", e.Posicion)
+	}
+}
+
 // TestCheckNoEscribeNada: el diagnostico no puede ensuciar el arbol del proyecto; el enlace de la R se
 // hace en memoria. Se mira que no aparezca ni build/ ni R.java donde no estaba.
 func TestCheckNoEscribeNada(t *testing.T) {

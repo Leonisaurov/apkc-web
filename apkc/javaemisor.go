@@ -5769,25 +5769,50 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		acc, esAcceso := v.destino.(jacceso)
 		segs, base := aplanar(acc)
-		if !esAcceso || base != nil || len(segs) != 1 {
+		// `this.campo = valor` se resuelve contra la clase del receptor, igual que el nombre suelto: javac
+		// escribe el mismo `aload_0; …; putfield` y pone la linea de la sentencia en el primer byte, asi
+		// que la LineNumberTable no se mueve. Medido contra javac 17 en
+		// `javaemisor_argumento_estatico_test.go` (`TestAsignacionCualificadaContraJavac17`).
+		porThis := false
+		if t, esThis := base.(jthis); esThis && t.nombre == "" && len(segs) == 1 {
+			porThis = true
+		}
+		if !esAcceso || len(segs) != 1 || (base != nil && !porThis) {
 			return fmt.Errorf("linea %d: una asignacion con mas de un nombre en el destino no esta medida", v.donde.linea)
 		}
-		if lv, ok := e.locales[segs[0]]; ok {
-			dv, err := e.expA(v.valor, lv.desc)
-			if err != nil {
-				return err
+		if porThis && e.estatico {
+			return fmt.Errorf("linea %d: `this` en un metodo estatico no es Java", v.donde.linea)
+		}
+		if !porThis {
+			if lv, ok := e.locales[segs[0]]; ok {
+				dv, err := e.expA(v.valor, lv.desc)
+				if err != nil {
+					return err
+				}
+				if dv[0] != lv.desc[0] {
+					return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, acc.nombre, lv.desc, dv)
+				}
+				e.guardaDe(lv.indice, lv.desc)
+				return nil
 			}
-			if dv[0] != lv.desc[0] {
-				return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, acc.nombre, lv.desc, dv)
-			}
-			e.guardaDe(lv.indice, lv.desc)
-			return nil
 		}
 		// asignar a un campo: `pulsos = pulsos + 1`, medido como el receptor ANTES del valor, el valor, y
 		// `putfield`; en un campo estatico no hay receptor. Desde una anonima el campo puede ser del
-		// exterior, y entonces el receptor es la captura (parrafo 54).
-		dueño, cr, encontrado := e.duenioDelCampo(segs[0])
+		// exterior, y entonces el receptor es la captura (parrafo 54). Con receptor `this` solo se mira
+		// la clase del receptor: no es un local y no alcanza al exterior que captura una anonima, donde
+		// `this` es la propia anonima.
+		dueño, cr, encontrado := "", campoResuelto{}, false
+		if porThis {
+			if c, err := e.ctx.buscarCampo(e.interno, segs[0]); err == nil {
+				dueño, cr, encontrado = e.interno, c, true
+			}
+		} else {
+			dueño, cr, encontrado = e.duenioDelCampo(segs[0])
+		}
 		if !encontrado {
+			if porThis {
+				return fmt.Errorf("linea %d: al asignar a this.%s: no es un campo de esta clase", v.donde.linea, segs[0])
+			}
 			return fmt.Errorf("linea %d: asignar a %s: no es una variable local ni un campo de esta clase ni del exterior que la anonima captura",
 				v.donde.linea, segs[0])
 		}

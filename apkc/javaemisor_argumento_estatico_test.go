@@ -124,6 +124,115 @@ func TestAccesoEstaticoEncadenadoContraJavac17(t *testing.T) {
 	}
 }
 
+// fuenteAsignacionCualificada es el caso de D4: el campo propio escrito con el receptor `this`. Es el
+// `Apk.java` que el usuario vio rechazado con «una asignacion con mas de un nombre en el destino».
+const fuenteAsignacionCualificada = `package com.hola.apkcstudio;
+
+public class Apk {
+    private String filePath;
+
+    public Apk(String filePath) {
+        this.filePath = filePath;
+    }
+
+    public String ruta() {
+        return filePath;
+    }
+}
+`
+
+// TestAsignacionCualificadaContraJavac17: `this.filePath = filePath` tiene que salir del emisor como el
+// `.class` de javac 17 y dar el mismo dex. El receptor `this` se emite con el `aload_0` que javac pone
+// delante del valor, y la linea de la sentencia sigue marcandose al empezar el `jasign` —antes del
+// receptor—, que es donde javac la pone: la `LineNumberTable` no se mueve.
+//
+// El `.class` no se compara byte a byte porque javac ordena el pool por insercion de simbolos y este
+// emisor por declaracion; esa diferencia esta aceptada y escrita en `javaemisor_fuzz_test.go`. Lo que si
+// se compara, ademas del dex entero (el oraculo estricto de siempre), es el `Code` y la `LineNumberTable`
+// metodo a metodo: ahi se veria cualquier instruccion de mas o una fila movida.
+func TestAsignacionCualificadaContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	raiz := t.TempDir()
+	pon(t, raiz, "Apk.java", fuenteAsignacionCualificada)
+
+	nuestras, err := compilarProyectoJava([]fuenteJava{{nombre: "Apk.java", contenido: fuenteAsignacionCualificada}}, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazo `this.filePath = filePath`: %v", err)
+	}
+	if len(nuestras) != 1 || nuestras[0].interno != "com/hola/apkcstudio/Apk" {
+		t.Fatalf("salieron %d clases (%s), y javac deja una", len(nuestras), nombresDe(nuestras))
+	}
+	nuestra, err := readClassFull(nuestras[0].datos)
+	if err != nil {
+		t.Fatalf("nuestra clase no se lee: %v", err)
+	}
+	dexNuestro, err := dexDeClases([]classFull{nuestra})
+	if err != nil {
+		t.Fatalf("dexando lo nuestro: %v", err)
+	}
+
+	salida := filepath.Join(raiz, "javac-out")
+	cmd := exec.Command(javac, "--release", "8", "-g:lines,source", "-classpath", jar, "-d", salida,
+		filepath.Join(raiz, "Apk.java"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("javac 17 rechazo el caso: %v\n%s", err, out)
+	}
+	deJavac, err := leeClases([]string{salida})
+	if err != nil {
+		t.Fatalf("leyendo lo de javac: %v", err)
+	}
+	if len(deJavac) != 1 {
+		t.Fatalf("javac dejo %d clases, una", len(deJavac))
+	}
+	suya := deJavac[0]
+
+	for _, esperado := range suya.Methods {
+		var encontrada *classMethod
+		for i := range nuestra.Methods {
+			if nuestra.Methods[i].Name == esperado.Name && nuestra.Methods[i].Desc == esperado.Desc {
+				encontrada = &nuestra.Methods[i]
+				break
+			}
+		}
+		if encontrada == nil {
+			t.Errorf("falta el metodo %s%s", esperado.Name, esperado.Desc)
+			continue
+		}
+		if encontrada.MaxStack != esperado.MaxStack || encontrada.LocalCount != esperado.LocalCount {
+			t.Errorf("%s%s: max_stack/locals %d/%d y javac %d/%d", esperado.Name, esperado.Desc,
+				encontrada.MaxStack, encontrada.LocalCount, esperado.MaxStack, esperado.LocalCount)
+		}
+		// el Code no se compara byte a byte porque los dos bytes de cada indice del pool cambian con el
+		// orden del pool; las instrucciones y sus referencias las normaliza el dex, que se compara entero
+		// mas abajo. La LineNumberTable no depende del pool, asi que aqui si va fila a fila.
+		if len(encontrada.Lines) != len(esperado.Lines) {
+			t.Errorf("%s%s: %d filas de linea y javac %d", esperado.Name, esperado.Desc,
+				len(encontrada.Lines), len(esperado.Lines))
+			continue
+		}
+		for i := range esperado.Lines {
+			if encontrada.Lines[i] != esperado.Lines[i] {
+				t.Errorf("%s%s: la fila %d es %+v y la de javac %+v", esperado.Name, esperado.Desc,
+					i, encontrada.Lines[i], esperado.Lines[i])
+			}
+		}
+	}
+
+	dexJavac, err := dexDeClases(deJavac)
+	if err != nil {
+		t.Fatalf("dexando lo de javac: %v", err)
+	}
+	if len(dexNuestro) != len(dexJavac) {
+		t.Fatalf("nuestro dex mide %d bytes y el de javac %d", len(dexNuestro), len(dexJavac))
+	}
+	for i := range dexNuestro {
+		if dexNuestro[i] != dexJavac[i] {
+			t.Fatalf("dex distinto en el byte %d: %#02x frente a %#02x\n%s", i, dexNuestro[i], dexJavac[i], volcadoDeClases(nuestras))
+		}
+	}
+}
+
 // volcadoDeClases: la lista de clases que emitimos, para que un fallo diga por donde iba.
 func volcadoDeClases(cs []claseEmitida) string {
 	var sb strings.Builder
