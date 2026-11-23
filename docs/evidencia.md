@@ -9747,3 +9747,37 @@ temporal, no está en el árbol). Los tipos del framework fuera de `padresDeExce
 sufijo `Exception;`/`Error;` para el `throw`, pero un `catch (PadreDesconocido e)` no casaría con su
 hijo: la tabla de padres es la que hay, no la de Android entera. Sigue sin gate, sin chromium y sin
 wasm: la medición es nativa.
+
+## 216. Dependencias: recursos `res/__deps/` y `lib/<abi>/` en el enlazador
+
+Medido el 2026-11-22 sobre `976b02e` (`feat(apkc): enlaza recursos y lib/ de dependencias`), trabajo
+del builder en el worktree `deps-recursos`. La prueba está en `apkc/deps_recursos_test.go` y el
+crítico `ses_df915d191ffetJ53F3oGQiKaI1` dio **APROBAR** sin hallazgos confirmados.
+
+**Qué hace.** `apkc/linker.go` fija `carpetaDeps = "__deps"`; `tipoDeRecurso` lee el tipo bajo la
+isla y `fuentesDelProyecto` recorre `res/__deps/` además de `res/`, valida una carpeta por
+artefacto y tipo y escribe la salida como `res/<tipo>/x.xml`, sin la isla (`:240-242`, `:252` y
+`:295`). `apkc/enlazar.go` añade `recursosDeFicheroRepetidos`, que rechaza con el nombre de fichero
+cuando app y AAR declaran el mismo recurso de fichero, como el «duplicate value» de `aapt2`
+(`:418-430`). `packagePlan` ya metía `lib/**` y no se tocó.
+
+**Pruebas.** La isla se lee; un AAR sintético con `classes.jar`,
+`res/values/deps_strings-<isla>.xml`, `res/layout/deps_fila.xml` y `lib/x86/libejemplo.so` con
+cabecera ELF32 produce el apk esperado; el duplicado de fichero se rechaza; y el incremental
+rehace el paquete al cambiar el `.so`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestFuentesDelProyectoLeeLaIslaDeDependencias|TestRecursosDeDependenciaEnElApk|TestRecursosDeFicheroRepetidos' -v .
+```
+
+**Resultado**: tres `--- PASS` y `ok github.com/ajinasokan/apkc 0.527s`; los cuatro tests de la
+raíz que cubren el frente dan `ok … 0.813s` y la suite completa, `ok github.com/ajinasokan/apkc
+56.504s`. El crítico atacó la ruta de salida sin isla, el rechazo de duplicados, la entrada
+`lib/x86/libejemplo.so`, el rebuild incremental al cambiar el `.so` y la regresión de I3/I4/I5; todo
+resistió.
+
+**Fronteras declaradas, no defectos.** (1) Los tipos de recurso no medidos quedan fuera: `drawable`
+XML/vectorial, `anim`, `font` y algunos `values`. (2) Dos AAR con la misma clave `values` no se
+detectan: solo se rechazan ficheros duplicados. (3) El `AndroidManifest.xml` y el `R.txt` del AAR
+quedan fuera del enlace. (4) No se corrió gate, chromium ni wasm: la medición es nativa.

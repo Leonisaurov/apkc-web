@@ -192,6 +192,17 @@ verifica en la pestaña con cero peticiones fuera del origen. Frontera: no se
 resuelven versiones ni se descargan artefactos; el catálogo y la red siguen
 fuera.
 
+Fase K — recursos `res/__deps/` y `lib/<abi>/` (**aprobada en nativo**). `976b02e`
+(`feat(apkc): enlaza recursos y lib/ de dependencias`) lee la isla `res/__deps/`, valida una carpeta
+por artefacto y tipo y escribe la salida como `res/<tipo>/x.xml` sin la isla; rechaza con nombre de
+fichero un recurso de fichero duplicado entre app y AAR, como el «duplicate value» de `aapt2`.
+`packagePlan` ya metía `lib/**`. El crítico `ses_df915d191ffetJ53F3oGQiKaI1` dio **APROBAR** sin
+hallazgos confirmados: atacó la ruta de salida, el duplicado, la entrada `lib/x86/libejemplo.so`, el
+rebuild incremental al cambiar el `.so` y la regresión de I3/I4/I5. Fronteras declaradas, no
+defectos: tipos de recurso no medidos (`drawable` XML/vectorial, `anim`, `font` y algunos `values`),
+dos AAR con la misma clave `values` (solo se detectan ficheros duplicados) y el `AndroidManifest.xml`
+y `R.txt` del AAR fuera. Evidencia: §216 de `docs/evidencia.md`.
+
 Criterios de abandono comunes: si el importador cubre el caso de uso real (traer
 una librería que el usuario ya tiene), las fases 3 y 4 mueren; si la cuota de
 OPFS no aguanta ~7 MB por proyecto, se vuelve a vendorizar por proyecto y no por
@@ -201,7 +212,7 @@ catálogo.
 
 El usuario **autorizó y priorizó** el frente de dependencias por la vía sin red: importar los
 artefactos que ya tiene desde disco u OPFS y que el compilador Go los consuma. Eso resuelve la
-Fase 0 y deja la Fase 1 y la Fase J como trabajo activo.
+Fase 0 y deja la Fase 1, la Fase J y la Fase K como trabajo activo.
 
 La pregunta de red en runtime **no se reabre**: la regla 4 sigue vigente y la respuesta es no.
 Proxy y Wisp siguen descartados.
@@ -209,6 +220,8 @@ Proxy y Wisp siguen descartados.
 ## 6. Registro de estado
 
 - Fase J **en curso**: builder `ses_df92b1504ffea11oCtRmc2rxAK`, worktree `deps-compiler`.
+- Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
+  fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
 - Vendorizar un catálogo curado queda detrás.
 - Proxy y Wisp siguen descartados.
