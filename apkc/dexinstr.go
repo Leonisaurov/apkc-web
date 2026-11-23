@@ -1116,6 +1116,67 @@ func (p *traduce) tomaBajo(in jvmInstr, techo int) int {
 	return v
 }
 
+// tomaParBajo: un par consecutivo que quepa en el formato: `techo` es el mayor registro BAJO del par
+// (14 para cuatro bits, 0xfe para ocho, de modo que la mitad alta no se salga). Busca el par más bajo
+// en la bolsa; si no hay, cae en `tomaPar`.
+func (p *traduce) tomaParBajo(in jvmInstr, techo int) int {
+	indice := func(r int) int {
+		for i, v := range p.libres {
+			if v == r {
+				return i
+			}
+		}
+		return -1
+	}
+	for t := 0; t <= techo; t++ {
+		i, j := indice(t), indice(t+1)
+		if i >= 0 && j >= 0 {
+			if i > j {
+				i, j = j, i
+			}
+			p.libres = append(p.libres[:j], p.libres[j+1:]...)
+			p.libres = append(p.libres[:i], p.libres[i+1:]...)
+			p.marcaPar(t)
+			return t
+		}
+	}
+	t := p.tomaPar(in)
+	if p.err != nil {
+		return 0
+	}
+	if t > techo {
+		p.falla(in, "no low register pair is free to carry a high wide slot down")
+		return 0
+	}
+	return t
+}
+
+// aseguraRegistro: un registro que quepa en el formato. `techo` es el mayor registro que el formato
+// admite (15 o 0xff para uno suelto; 14 o 0xfe para el bajo de un par). Si el registro no cabe, se
+// copia a un temporal bajo con la forma 22v del move de su tipo y se devuelve el temporal; el segundo
+// valor dice si hubo copia, para soltarla cuando el consumidor termine. El original no se suelta aquí.
+func (p *traduce) aseguraRegistro(in jvmInstr, r, techo int, opMueve byte, par bool) (int, bool) {
+	if r >= 0 && r <= techo {
+		return r, false
+	}
+	if r < 0 || r > 0xffff {
+		p.falla(in, "a register that does not fit sixteen bits")
+		return 0, false
+	}
+	var t int
+	if par {
+		t = p.tomaParBajo(in, techo)
+	} else {
+		t = p.tomaBajo(in, techo)
+	}
+	if p.err != nil {
+		return 0, false
+	}
+	p.palabra(unidad22v(mueveFrom16(opMueve), t))
+	p.palabra(uint16(r))
+	return t, true
+}
+
 // bajaAlto: atar a un temporal bajo un hueco cuyo registro no cabe en cuatro bits, y devolver ese
 // registro. `d8` resuelve esto renombrando el local (medido en `D16d.reasignaEntero`, donde el `k` del
 // argumento v16 se va a v4); aquí no hace falta ningún análisis de viveza: el hueco queda atado al
@@ -1349,14 +1410,27 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	// al escribir el registro sale de la pila, y **no** se pide uno nuevo: pedirlo antes de sacarlo
 	// dejaba un temporal asignado y perdido por cada `putstatic`, y con dos en un método el marco se
 	// quedaba sin temporales —lo destapó el banco al añadir un `println` con concatenación (§62)—
+	// la 21c nombra el registro en OCHO bits; uno más alto no se recorta: se copia a un temporal.
 	var r int
+	var copia bool
+	var original int
 	switch {
 	case escribe:
-		r = p.pop(in)
+		original = p.pop(in)
+		move := byte(opMueve)
+		if esObjeto(desc) {
+			move = opMueveObjeto
+		}
+		if esAncho(desc) {
+			move = opMueveWide
+			r, copia = p.aseguraRegistro(in, original, 0xfe, move, true)
+		} else {
+			r, copia = p.aseguraRegistro(in, original, 0xff, move, false)
+		}
 	case esAncho(desc):
-		r = p.tomaPar(in)
+		r = p.tomaParBajo(in, 0xfe)
 	default:
-		r = p.toma(in)
+		r = p.tomaBajo(in, 0xff)
 	}
 	if p.err != nil {
 		return
@@ -1366,10 +1440,17 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 		return
 	}
 	if escribe {
+		if copia {
+			if esAncho(desc) {
+				p.sueltaPar(r)
+			} else {
+				p.suelta(r)
+			}
+		}
 		if esAncho(desc) {
-			p.sueltaPar(r)
+			p.sueltaPar(original)
 		} else {
-			p.suelta(r)
+			p.suelta(original)
 		}
 		return
 	}
@@ -2481,15 +2562,44 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 	}
 	if escribe {
 		// orden JVM: objeto, valor; el 22c escribe primero el valor y después el objeto, que es
-		// como d8 dejó el this$0: iput-object v1, v0
+		// como d8 dejó el this$0: iput-object v1, v0. El valor y el objeto van en cuatro bits, así
+		// que un registro alto se copia antes a un temporal bajo con la forma 22v de su move.
 		valor := p.pop(in)
 		objeto := p.pop(in)
-		if !p.nibble(valor, in) || !p.nibble(objeto, in) {
+		moveValor := byte(opMueve)
+		if esObjeto(desc) {
+			moveValor = opMueveObjeto
+		}
+		if esAncho(desc) {
+			moveValor = opMueveWide
+		}
+		var valorUso int
+		var copiaValor bool
+		if esAncho(desc) {
+			valorUso, copiaValor = p.aseguraRegistro(in, valor, 14, moveValor, true)
+		} else {
+			valorUso, copiaValor = p.aseguraRegistro(in, valor, 15, moveValor, false)
+		}
+		if p.err != nil {
 			return
 		}
-		p.palabra(unidad12x(op, valor, objeto))
+		objetoUso, copiaObjeto := p.aseguraRegistro(in, objeto, 15, opMueveObjeto, false)
+		if p.err != nil {
+			return
+		}
+		p.palabra(unidad12x(op, valorUso, objetoUso))
 		// los dos murieron con el almacenamiento: sin soltarlos, un <init> con seis putfields
 		// pide seis temporales y revienta contra la pila máxima que midió javap
+		if copiaValor {
+			if esAncho(desc) {
+				p.sueltaPar(valorUso)
+			} else {
+				p.suelta(valorUso)
+			}
+		}
+		if copiaObjeto {
+			p.suelta(objetoUso)
+		}
 		if esAncho(desc) {
 			p.sueltaPar(valor)
 		} else {
@@ -2498,19 +2608,24 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		p.suelta(objeto)
 	} else {
 		objeto := p.pop(in)
+		// el destino también tiene que caber en cuatro bits: se pide uno bajo en vez de tomarlo
 		var r int
 		if esAncho(desc) {
-			r = p.tomaPar(in)
+			r = p.tomaParBajo(in, 14)
 		} else {
-			r = p.toma(in)
+			r = p.tomaBajo(in, 15)
 		}
 		if p.err != nil {
 			return
 		}
-		if !p.nibble(objeto, in) || !p.nibble(r, in) {
+		objetoUso, copiaObjeto := p.aseguraRegistro(in, objeto, 15, opMueveObjeto, false)
+		if p.err != nil {
 			return
 		}
-		p.palabra(unidad12x(op, r, objeto))
+		p.palabra(unidad12x(op, r, objetoUso))
+		if copiaObjeto {
+			p.suelta(objetoUso)
+		}
 		p.suelta(objeto)
 		p.pushValor(r, tipoDeArregloPrimitivo(desc), esAncho(desc))
 	}
