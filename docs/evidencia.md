@@ -10184,3 +10184,47 @@ la variable fuera (traza `+ '[' 0 = 1 ']'`) y el flag viaja en `argv`
 **Fronteras de este `§`.** El `bundletool` es el jar local
 `$ANDROID_HOME/bundletool/bundletool-all-1.18.3.jar`, sin red; el `.aab` no se probó en un aparato (ni
 `bundletool install-apks` ni Play). No se corrió gate, chromium, red ni publicación.
+
+## 230. El gate final, en verde
+
+Medido el 2026-11-23 en la raíz sobre `d456592` (`chore(studio): aísla el navegador de pruebas en
+puertos y perfil propios`; el submódulo apunta a `fcd5798`, `fix(prueba): aisla el navegador en puertos
+y perfil propios`). El usuario autorizó expresamente esta corrida.
+
+```sh
+LD_LIBRARY_PATH=/home/leonisauro/.cache/apkc-web-gate-final/shimlib \
+  tcr -c 4 -m 3G -r 512M -- sh tools/entorno.sh gate
+```
+
+**Salida.** La última línea es `e2e: todo en orden` y no hay ninguna línea `FALLO`. Lo que prueba esa
+corrida:
+
+- **plantillas**: Contador, ciclo, menú y traducido salen firmadas y alineadas;
+- **vista previa**: 3 nodos, `res/layout/main.xml`, el modelo `LinearLayout[TextView,Button]`, un clic
+  que deja «Pulsos: 1» y 2 líneas de consola;
+- **crear**: todo en orden, 36 comprobaciones;
+- **pestaña**: 229 comprobaciones, y la APK se firma dentro de chromium (10 285 B) y se verifica;
+- **pestaña, release**: keystore propio (CN=Release) con firma v1+v2+v3, la v4 con su `.idsig` de
+  5 562 B, el `.aab` con su v1 JAR, y la rotación con linaje v3.1 y v4 de dos firmantes;
+- **pestaña, compilando**: APK de 9 252 B verificada por `apksigner`, `zipalign`, `zipcheck` y `aapt2`;
+  el dex de la pestaña lleva `com.myapp.MainActivity`, el proyecto generado sale **byte a byte** igual
+  al nativo y `d8` lo relee, más el fuente escrito a mano y la app del contador;
+- **firma**: los casos bueno, con-v3, bloque-alterado, rotación, EC P-256/P-384 y SHA-1; el icono sale
+  con `aapt2` y el PNG literal.
+
+**Lo que costó arrancarlo, y no era del producto.** El primer intento no llegó a correr el gate: el
+chromium del sistema pedía `libsimdutf.so.36` y un chromium huérfano seguía escuchando en el puerto 9333
+con un OPFS ajeno, así que el arnés hablaba con la corrida anterior. Se corrigió el entorno con el
+`LD_LIBRARY_PATH` al shim local (`~/.cache/apkc-web-gate-final/shimlib/libsimdutf.so.36`) y el arnés
+pasó a puertos efímeros —`PUERTO` a `0` y el puerto real leído del `DevToolsActivePort`
+(`studio/prueba-navegador.js:78-96`)— y a un perfil por PID,
+`studio-chrome-perfil-<pid>` (`studio/prueba-navegador.js:55-60`). Ninguno de los dos arreglos toca el
+compilador ni la página: son del arnés y del entorno.
+
+**Preview y suite.** La vista previa de ese árbol quedó en `sha256 e1ea319e…`, y la suite Go completa
+dio `ok … 72.735s`.
+
+**Fronteras de este `§`.** El gate se corrió **en local**, con el shim de biblioteca, y **no** se corrió
+CI en GitHub: un workflow escrito no está verde hasta que el job pasa. El push de `studio/` sigue
+pendiente de autorización del usuario, así que este árbol no se ha publicado; seguridad y hot swap
+siguen diferidos. No se tocó red ni publicación en esta corrida.
