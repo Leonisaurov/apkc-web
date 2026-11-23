@@ -409,6 +409,53 @@ func TestCheckResuelveElClassesJarDeUnAar(t *testing.T) {
 	}
 }
 
+// TestCheckResuelveElJarDelProyectoDesdeOtroCwd: `check` diagnostica un fichero que puede estar
+// fuera del directorio de trabajo, así que las dependencias de `jar/` tienen que salir de la raíz
+// del proyecto (`--proyecto`), no del cwd. Las demás pruebas de este fichero hacen `t.Chdir(raiz)` y
+// pasan la misma `raiz` como proyecto, de modo que su verde no distingue una cosa de la otra; esta
+// corre desde un directorio ajeno —que además no tiene `jar/`—, exige que la clase del jar resuelva
+// y, al quitar el jar de la raíz, que el error nombre la clase.
+func TestCheckResuelveElJarDelProyectoDesdeOtroCwd(t *testing.T) {
+	jarSDK := jarDelSDKExigido(t)
+	raiz := t.TempDir()
+	jar := jarDeDependencia(t, raiz, clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma))
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
+
+	// el cwd no es el proyecto y no tiene `jar/`: si `check` leyera el cwd, no vería la dependencia
+	otro := t.TempDir()
+	t.Chdir(otro)
+	aqui, err := os.Getwd()
+	if err != nil || aqui != otro {
+		t.Fatalf("el cwd no es el directorio ajeno: %q (%v)", aqui, err)
+	}
+	if deAqui := jarsEn(""); len(deAqui) != 0 {
+		t.Fatalf("el cwd tiene jars y la prueba no distinguiría la raíz del cwd: %v", deAqui)
+	}
+	if enLaRaiz := jarsEn(raiz); len(enLaRaiz) != 1 {
+		t.Fatalf("la raíz del proyecto no tiene el jar: %v", enLaRaiz)
+	}
+
+	r := revisarFuenteJava(fuenteUsoSuma, "Uso.java", jarSDK, raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("check no resolvió dep.Suma con la raíz del proyecto y un cwd ajeno: %+v (aviso %q)", r.Errores, r.Aviso)
+	}
+	if !r.Emisor {
+		t.Fatalf("check no llegó al emisor: aviso %q", r.Aviso)
+	}
+
+	// el control negativo: sin el jar de la raíz la clase no está en ningún sitio y el error la nombra
+	if err := os.Remove(jar); err != nil {
+		t.Fatal(err)
+	}
+	r = revisarFuenteJava(fuenteUsoSuma, "Uso.java", jarSDK, raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores sin el jar de la raíz, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	if !strings.Contains(r.Errores[0].Mensaje, "Suma") {
+		t.Errorf("el error no nombra la clase del jar que falta: %q", r.Errores[0].Mensaje)
+	}
+}
+
 // TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia cierra I3 con dependencias: la vuelta sin
 // cambios reutiliza, y cambiar un byte de `jar/` —sin tocar ni un fuente— abre la compilación otra
 // vez, porque la huella del classpath entra en el estado.
