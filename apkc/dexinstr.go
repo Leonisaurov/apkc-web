@@ -182,6 +182,7 @@ const (
 	// 0x28 con el desplazamiento de ocho bits en la mitad alta de su propia unidad.
 	opSalto  = 0x28 // 10t goto +AAAA (ocho bits en la mitad alta de la propia unidad)
 	opGoto16 = 0x29 // 21t goto/16 +AAAA (desplazamiento de 16 bits en la unidad siguiente)
+	opGoto32 = 0x2a // 30t goto/32 +AAAAAAAA (32 bits con signo en las dos unidades siguientes)
 	// familia de dos registros (22c con desplazamiento) y de uno (21t), en el mismo orden que la
 	// de enteros del JVMS: eq, ne, lt, ge, gt, le
 	opIfEq, opIfNe, opIfLt, opIfGe, opIfGt, opIfLe       = 0x32, 0x33, 0x34, 0x35, 0x36, 0x37
@@ -201,6 +202,18 @@ var ifEntreDos = map[string]byte{
 	"if_icmpge": opIfGe, "if_icmpgt": opIfGt, "if_icmple": opIfLe,
 	// la comparacion de referencias baja a las mismas `if-eq`/`if-ne` de dos registros (parrafo 89)
 	"if_acmpeq": opIfEq, "if_acmpne": opIfNe,
+}
+
+// inversaBranquia empareja cada if-* de dalvik con su contraria. La condicional larga no existe en
+// el formato: cuando el destino no cabe en 16 bits, d8 invierte la condición y pone el salto de
+// verdad en un goto/32 (medido con javac 17 y d8 sobre `Largo32`: `ifle` del .class sale `if-gtz v2, +5; goto/32`).
+var inversaBranquia = map[byte]byte{
+	opIfEq: opIfNe, opIfNe: opIfEq,
+	opIfLt: opIfGe, opIfGe: opIfLt,
+	opIfGt: opIfLe, opIfLe: opIfGt,
+	opIfEqz: opIfNez, opIfNez: opIfEqz,
+	opIfLtz: opIfGez, opIfGez: opIfLtz,
+	opIfGtz: opIfLez, opIfLez: opIfGtz,
 }
 
 // traduce es el estado de un método mientras se traduce. Se corre dos veces: la primera con una
@@ -225,7 +238,7 @@ type traduce struct {
 	kindFijo  map[int]byte  // move (opMueve/Objeto/Wide) con el que se copió un registro atado, para desalojarlo
 	altos     map[int]bool  // registro ALTO de un par vivo: no se libera hasta que muera el par
 	pcs       map[int]int   // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
-	promover  map[int]bool  // pc JVM de los `goto` que se emiten como `goto/16` (no caben en 10t)
+	promover  map[int]byte  // pc JVM -> escalón de la branquia: 16, 32 o condicional con 32
 	saltos    []parcheDEX   // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
 	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
 	siguiente int           // próximo temporal nuevo
@@ -1707,31 +1720,57 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	}
 }
 
+// las formas de salto que se abren en un parche: la de 10t, con los ocho bits dentro de la propia
+// unidad; la de 16 bits de `goto/16` y de las condicionales 21t/22t, en la unidad siguiente; y la de
+// 32 bits de `goto/32` 0x2a (30t), repartida en las dos unidades siguientes.
+const (
+	forma10 byte = iota // goto 10t
+	forma16             // goto/16 0x29 y if-* 21t/22t
+	forma30             // goto/32 0x2a
+)
+
+// los escalones de la promoción. El `goto` 10t sube a `goto/16` cuando no cabe en +-127 unidades, y
+// `goto/16` (o el `goto_w` de JVM) sube a `goto/32` cuando no cabe en +-32767. La condicional no
+// tiene forma larga en dalvik: se invierte y salta encima de un `goto/32`, así que es un escalón
+// propio. Los valores van en orden de crecimiento para que una promoción posterior nunca baje.
+const (
+	promocion16     byte = 1 // goto 10t -> goto/16 0x29
+	promocion32     byte = 2 // goto/16 o goto_w -> goto/32 0x2a
+	promocionCond32 byte = 3 // if-* -> if invertido + goto/32 0x2a
+)
+
 // parcheDEX: una branquia cuyo desplazamiento todavía no se conoce. `desde` es la unidad donde
 // empieza la instrucción —el desplazamiento dalvik se cuenta desde ahí, en unidades de código, y no
 // desde el operando—, `en` la unidad donde va a escribirse, y `destino` el pc JVM al que se salta.
-// `enMitadAlta` marca el `goto` 10t, que lleva los ocho bits dentro de su propia unidad.
+// `forma` dice cuántas unidades ocupa el desplazamiento y dónde va; `condicional` marca el if-*,
+// cuya forma larga no es un desplazamiento mayor sino la condición invertida delante de un goto/32.
 type parcheDEX struct {
 	desde, en, destino int
 	origen             int  // pc JVM de la instrucción de salto, para poder promoverla
-	enMitadAlta        bool // `goto` 10t, que lleva los ocho bits dentro de su propia unidad
+	forma              byte // forma10, forma16 o forma30
+	condicional        bool // 21t/22t de un if-*: su forma larga es invertirse y saltar un goto/32
 }
 
-// necesitaPromocion: el `goto` 10t de `pc` no cabe en +-127 unidades y hay que rehacer la pasada con
-// la forma larga `goto/16` 0x29. No es un fallo del método: el bucle de `codeItemConPc` lo apunta en
-// `promover` y vuelve a traducir, porque la instrucción crece una unidad y cambia los desplazamientos.
-type necesitaPromocion struct{ pc int }
+// necesitaPromocion: la branquia de `pc` no cabe en la forma que se le dio y hay que rehacer la
+// pasada con la siguiente —`goto/16`, `goto/32` o la condicional invertida con `goto/32`—. No es un
+// fallo del método: el bucle de `codeItemConPc` lo apunta en `promover` y vuelve a traducir, porque
+// la instrucción crece y cambia los desplazamientos de todos los saltos que la cruzan.
+type necesitaPromocion struct {
+	pc    int
+	forma byte
+}
 
 func (e *necesitaPromocion) Error() string {
-	return "a goto that needs the long form at pc " + itoa(e.pc)
+	return "a branch that needs a long form at pc " + itoa(e.pc)
 }
 
-// esPromocion separa el aviso de promoción de los demás errores del traductor.
-func esPromocion(err error) (int, bool) {
+// esPromocion separa el aviso de promoción de los demás errores del traductor y dice a qué escalón
+// hay que subir.
+func esPromocion(err error) (int, byte, bool) {
 	if e, ok := err.(*necesitaPromocion); ok {
-		return e.pc, true
+		return e.pc, e.forma, true
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // salto emite la branquia con el desplazamiento en blanco y la deja apuntada al pc destino. `consume`
@@ -1746,10 +1785,64 @@ func (p *traduce) salto16(op byte, destino int, in jvmInstr) {
 	desde := len(p.w)
 	p.palabra(uint16(op))
 	p.palabra(0)
-	p.abreSalto(desde, len(p.w)-1, destino, false, in)
+	p.abreSalto(desde, len(p.w)-1, destino, forma16, false, in)
+}
+
+// salto32 escribe un goto/32 (30t): el opcode 0x2a en el byte bajo de la primera palabra y el
+// desplazamiento de 32 bits con signo en las dos unidades siguientes, contado desde la primera.
+// Medido con d8 sobre un método de 40010 unidades: `2a00 6586 0000` para +34405.
+func (p *traduce) salto32(destino int, in jvmInstr) {
+	desde := len(p.w)
+	p.palabra(uint16(opGoto32))
+	p.palabra(0)
+	p.palabra(0)
+	p.abreSalto(desde, len(p.w)-2, destino, forma30, false, in)
 }
 
 func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
+	desde, ok := p.escribeBranquia(op, consume, in)
+	if !ok {
+		return
+	}
+	forma := forma16
+	if consume == 0 {
+		forma = forma10
+	}
+	p.abreSalto(desde, len(p.w)-1, destino, forma, consume > 0, in)
+}
+
+// condicional emite un if-*: la forma corta de siempre o, si la promoción lo pidió, la invertida con
+// el salto real en un goto/32.
+func (p *traduce) condicional(op byte, destino int, consume int, in jvmInstr) {
+	if p.promover[in.pc] == promocionCond32 {
+		p.saltoCondicionalLargo(op, destino, consume, in)
+		return
+	}
+	p.salto(op, destino, consume, in)
+}
+
+// saltoCondicionalLargo: dalvik no tiene un if-* de 32 bits, así que la condición se invierte para
+// saltar por encima de un goto/32 que lleva el destino de verdad. Es lo que hace d8; medido sobre
+// `condi`: `3c02 0500` (if-gtz v2, +5) y detrás `2a00 6586 0000` (goto/32 +34405).
+// El +5 sale de las dos unidades del if y las tres del goto/32 que se saltan.
+func (p *traduce) saltoCondicionalLargo(op byte, destino int, consume int, in jvmInstr) {
+	inv, ok := inversaBranquia[op]
+	if !ok {
+		p.falla(in, "a conditional branch with no inverted form for goto/32")
+		return
+	}
+	desde, ok := p.escribeBranquia(inv, consume, in)
+	if !ok {
+		return
+	}
+	p.w[desde+1] = 5 // las tres unidades del goto/32 más las dos de este if
+	p.salto32(destino, in)
+}
+
+// escribeBranquia emite la instrucción con el hueco del desplazamiento y devuelve la unidad donde
+// empieza. No abre el parche: el if invertido de la forma larga reutiliza esta emisión pero no
+// apunta el salto, porque su desplazamiento es fijo (el que salta el goto/32).
+func (p *traduce) escribeBranquia(op byte, consume int, in jvmInstr) (int, bool) {
 	var desde int
 	switch consume {
 	case 2:
@@ -1764,11 +1857,11 @@ func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
 		}
 		ua, copiaA := p.aseguraRegistro(in, a, 15, mv, false)
 		if p.err != nil {
-			return
+			return 0, false
 		}
 		ub, copiaB := p.aseguraRegistro(in, b, 15, mv, false)
 		if p.err != nil {
-			return
+			return 0, false
 		}
 		desde = len(p.w)
 		p.palabra(unidad12x(op, ua, ub))
@@ -1785,7 +1878,7 @@ func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
 		a := p.pop(in)
 		// la comparación contra cero es 21t: el registro va en OCHO bits
 		if !p.octeto(a, in) {
-			return
+			return 0, false
 		}
 		desde = len(p.w)
 		p.palabra(unidad11x(op, a))
@@ -1795,20 +1888,24 @@ func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
 		desde = len(p.w)
 		p.palabra(uint16(op)) // el goto 10t: la mitad alta queda en blanco hasta el parche
 	}
-	p.abreSalto(desde, len(p.w)-1, destino, consume == 0, in)
+	return desde, true
 }
 
-func (p *traduce) abreSalto(desde, en, destino int, mitadAlta bool, in jvmInstr) {
+func (p *traduce) abreSalto(desde, en, destino int, forma byte, condicional bool, in jvmInstr) {
 	if destino < 0 || destino > len(p.m.Code) {
 		p.falla(in, "a branch to pc "+itoa(destino)+", outside the code of the method")
 		return
 	}
-	p.saltos = append(p.saltos, parcheDEX{desde: desde, en: en, destino: destino, origen: in.pc, enMitadAlta: mitadAlta})
+	p.saltos = append(p.saltos, parcheDEX{desde: desde, en: en, destino: destino, origen: in.pc,
+		forma: forma, condicional: condicional})
 }
 
 // parchaSaltos completa los desplazamientos al final del método, cuando ya se escribió hasta el
 // último destino. Un pc que no es el principio de ninguna instrucción no se inventa: se rechaza,
-// porque llegar ahí significa que el salto entra en medio de un operando.
+// porque llegar ahí significa que el salto entra en medio de un operando. Cuando una branquia no
+// cabe en su forma, se devuelve la promoción al escalón siguiente y `codeItemConPc` vuelve a
+// traducir: el desplazamiento se recalcula desde la posición nueva de cada instrucción, no desde la
+// vieja, y el crecimiento puede destapar otra branquia fuera de rango (el bucle es un fixpoint).
 func (p *traduce) parchaSaltos() error {
 	for _, s := range p.saltos {
 		donde, ok := p.pcs[s.destino]
@@ -1825,17 +1922,30 @@ func (p *traduce) parchaSaltos() error {
 		// `while` de javac— y la salida con un 22t hacia adelante. El reparto de registros no cambia
 		// porque los locales van clavados (`guardaLocal`) y en la cabecera del bucle la pila JVM está
 		// vacía, que es lo que exige el verificador para los dos caminos. Lo que no cabe en el formato
-		// se sigue rechazando por nombre.
-		if s.enMitadAlta {
+		// se promueve a la forma siguiente, no se rechaza.
+		if s.forma == forma30 {
+			// el goto/32 aguanta todo el método; el tope es defensivo, no una medida
+			if rel < -(1<<31) || rel > (1<<31)-1 {
+				return &traduceError{nombre: p.m.Name, motivo: "a goto/32 whose offset does not fit thirty-two bits"}
+			}
+			p.w[s.en] = uint16(rel)
+			p.w[s.en+1] = uint16(uint32(rel) >> 16)
+			continue
+		}
+		if s.forma == forma10 {
 			if rel < -128 || rel > 127 {
 				// el `goto` 10t no llega: se promueve a `goto/16` 0x29 y la pasada se repite
-				return &necesitaPromocion{pc: s.origen}
+				return &necesitaPromocion{pc: s.origen, forma: promocion16}
 			}
 			p.w[s.en] |= uint16(rel&0xff) << 8
 			continue
 		}
 		if rel < -32768 || rel > 32767 {
-			return &traduceError{nombre: p.m.Name, motivo: "a branch offset that does not fit sixteen bits"}
+			if s.condicional {
+				// un if-* no tiene forma de 32 bits: se invierte y salta un goto/32
+				return &necesitaPromocion{pc: s.origen, forma: promocionCond32}
+			}
+			return &necesitaPromocion{pc: s.origen, forma: promocion32}
 		}
 		p.w[s.en] = uint16(rel)
 	}
@@ -2630,21 +2740,29 @@ func (p *traduce) recorre() error {
 			}
 			p.guardaLocal(in, n)
 		case "ifeq", "ifne", "iflt", "ifge", "ifgt", "ifle", "ifnull", "ifnonnull":
-			p.salto(ifContraCero[in.name], destinoDe(in), 1, in)
+			p.condicional(ifContraCero[in.name], destinoDe(in), 1, in)
 		case "if_icmpeq", "if_icmpne", "if_icmplt", "if_icmpge", "if_icmpgt", "if_icmple",
 			"if_acmpeq", "if_acmpne":
-			p.salto(ifEntreDos[in.name], destinoDe(in), 2, in)
+			p.condicional(ifEntreDos[in.name], destinoDe(in), 2, in)
 		case "goto":
-			if p.promover[in.pc] {
+			switch p.promover[in.pc] {
+			case promocion32:
+				// el `goto/16` tampoco llegaba: `goto/32` 0x2a, tres unidades
+				p.salto32(destinoDe(in), in)
+			case promocion16:
 				// el 10t no llegaba a este destino: `goto/16` 0x29, dos unidades, medido por d8
 				p.salto16(opGoto16, destinoDe(in), in)
-			} else {
+			default:
 				p.salto(opSalto, destinoDe(in), 0, in)
 			}
 		case "goto_w":
 			// d8 baja el goto_w de JVM a goto/16 de Dalvik (0x29): dos palabras, la segunda con
-			// el desplazamiento en unidades de 16 bits.
-			p.salto16(opGoto16, destinoDe(in), in)
+			// el desplazamiento en unidades de 16 bits. Si ni esas alcanzan, a goto/32 0x2a.
+			if p.promover[in.pc] >= promocion32 {
+				p.salto32(destinoDe(in), in)
+			} else {
+				p.salto16(opGoto16, destinoDe(in), in)
+			}
 		case "tableswitch", "lookupswitch":
 			p.saltoTabla(in)
 		default:
@@ -2729,10 +2847,14 @@ func (p *traduce) saltoTabla(in jvmInstr) {
 	}
 	p.cargas = append(p.cargas, c)
 	// el «ninguna clave casa» es un `goto` detrás del switch; si el bloque es largo, ese `goto`
-	// tampoco cabe en 10t y se promueve a `goto/16`, con el pc del switch como clave
-	if p.promover[in.pc] {
+	// tampoco cabe en 10t y se promueve a `goto/16`, con el pc del switch como clave; y si ni 16
+	// bits alcanzan, a `goto/32`
+	switch p.promover[in.pc] {
+	case promocion32:
+		p.salto32(defecto, in)
+	case promocion16:
 		p.salto16(opGoto16, defecto, in)
-	} else {
+	default:
 		p.salto(opSalto, defecto, 0, in)
 	}
 }
@@ -3180,25 +3302,27 @@ func (t *dexTables) codeItemConPc(clase classFull, m classMethod) (codeItem, map
 	// §81), se sube la base a lo que pidió y se repite **sola ella**: volver a medir rebotaba entre
 	// dos picos. Cada vuelta sube al menos un registro y los formatos llegan a 255, así que el bucle
 	// termina.
-	// `promover` es el conjunto de `goto` cuyo desplazamiento no cabe en 10t y se emiten como
-	// `goto/16` 0x29. Como la instrucción crece una unidad, cambiar el tamaño mueve los destinos y
-	// puede destapar otro `goto` fuera de rango: se vuelve a medir y a traducir hasta que ninguna
-	// promoción nueva haga falta. Cada vuelta apunta un pc distinto, así que el bucle termina.
-	var promover map[int]bool
+	// `promover` es el escalón de cada branquia que no cabe en la forma que se le dio: el `goto`
+	// 10t que se emite como `goto/16` 0x29, el `goto/16` o el `goto_w` que no llegan y se emiten
+	// como `goto/32` 0x2a, y el if-* que se invierte para saltar un `goto/32`. Como cada forma
+	// larga crece y cambia los desplazamientos, se vuelve a medir y a traducir hasta que ninguna
+	// promoción nueva haga falta; cada vuelta sube al menos un escalón uno de los pc, así que el
+	// bucle termina.
+	var promover map[int]byte
 	var final *traduce
 medir:
 	for {
 		prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount,
 			base: m.MaxStack + m.LocalCount + 1, promover: promover}
 		if err := prueba.recorre(); err != nil {
-			if pc, ok := esPromocion(err); ok {
-				if promover[pc] {
+			if pc, forma, ok := esPromocion(err); ok {
+				if promover[pc] >= forma {
 					return codeItem{}, nil, err
 				}
 				if promover == nil {
-					promover = map[int]bool{}
+					promover = map[int]byte{}
 				}
-				promover[pc] = true
+				promover[pc] = forma
 				continue
 			}
 			return codeItem{}, nil, err
@@ -3211,15 +3335,15 @@ medir:
 			if err == nil {
 				break
 			}
-			if pc, ok := esPromocion(err); ok {
-				if promover[pc] {
+			if pc, forma, ok := esPromocion(err); ok {
+				if promover[pc] >= forma {
 					return codeItem{}, nil, err
 				}
 				if promover == nil {
-					promover = map[int]bool{}
+					promover = map[int]byte{}
 				}
-				promover[pc] = true
-				// la instrucción crece una unidad: hay que volver a medir con la nueva forma
+				promover[pc] = forma
+				// la instrucción crece: hay que volver a medir con la nueva forma
 				continue medir
 			}
 			if !esPresupuesto(err) {
