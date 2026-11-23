@@ -10228,3 +10228,44 @@ dio `ok … 72.735s`.
 CI en GitHub: un workflow escrito no está verde hasta que el job pasa. El push de `studio/` sigue
 pendiente de autorización del usuario, así que este árbol no se ha publicado; seguridad y hot swap
 siguen diferidos. No se tocó red ni publicación en esta corrida.
+
+## 231. Genéricos en `extends` y en el campo: los dos bugs del usuario
+
+Medido el 2026-11-23 sobre el árbol integrado, con los tres arreglos que salieron del informe del
+usuario: `4ff2d13` (`fix(java): argumentos de tipo en extends e implements`), `979a5b3` (`fix(java):
+argumentos de tipo en campos y variables`) y `6742687` (`fix(java): los throws no van en la Signature`).
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  JAVAC17=/home/leonisauro/opt/jdk17/bin/javac \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestCheckClausulaGenericaEnExtends|TestClausulaGenericaContraJavac17|TestCheckCampoGenerico|TestCampoGenericoContraJavac17|TestThrowsFueraDeLaSignatureContraJavac17|TestDirectorioCentralDelJarContraArchiveZip' -v .
+```
+
+**Resultado**: 9 tests en verde y `ok … 2.618s`; la capa enfocada de `throws`, campo e índice del jar
+dio `ok … 1.577s`. El comando arrastra además `TestDirectorioCentralDelJarContraArchiveZip` —el índice
+del jar contra `archive/zip`—, que cae en esa misma capa.
+
+**Caso 1, la cláusula de tipo en `extends`.** `public class ApkAdapter extends ArrayAdapter<Apk> {`
+daba `se esperaba "{" y hay "<"` en el `check`; `4ff2d13` consume los argumentos de tipo en `extends` e
+`implements`.
+
+**Caso 2, el campo genérico.** `private final List<Apk> apks;` daba `se esperaba un nombre de miembro y
+hay "<"`; `979a5b3` los admite en campos y variables.
+
+**Falsificaciones.** Sin consumir el `<` en esos dos sitios, **5 tests** fallan con esos dos mensajes
+literales; sin la `Signature` del campo, el test falla y nombra la de `javac` como esperada,
+`Ljava/util/List<Lcom/hola/apkcstudio/Apk;>;` (`apkc/javaemisor_campo_generico_test.go:99`). Los dos
+oráculos contra `javac` 17 (`TestClausulaGenericaContraJavac17` y `TestCampoGenericoContraJavac17`)
+comparan el `.class` byte a byte.
+
+**Tercer hallazgo, del mismo informe.** `firmaDeMetodo` metía los `throws` concretos dentro de la
+`Signature` sin el `^` que pide la JVMS 4.7.9.1; `6742687` los deja solo en `Exceptions`, y
+`TestThrowsFueraDeLaSignatureContraJavac17` lo comprueba byte a byte contra `javac` 17.
+
+**Contrato que se conserva.** El descriptor sigue siendo el *raw*, sin genéricos; la `Signature`
+genérica va medida en su atributo; `check` queda a cero errores; y el `LineNumberTable` no se toca.
+
+**Fronteras de este `§`.** No medidos: los comodines (`?`), los parámetros de tipo declarados en la
+clase (`class C<T>`), `new T<...>()` y los `throws` genéricos. El `goto/32` del emisor de `.class` es
+otro frente (§226 cierra el del dexer). No se corrió gate, chromium, red ni publicación.
