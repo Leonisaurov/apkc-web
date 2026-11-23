@@ -9937,3 +9937,55 @@ desaparecen las 2 clases de «tipo no internado por el colector».
 
 **Fronteras de este `§`.** No se corrió gate, chromium ni publicación; el cambio se limitó a
 `dextabla.go` y su test.
+
+## 223. Reparto de un bucket grande en varios dex
+
+Medido el 2026-11-23 sobre `492c3f0` (`feat(build): reparte un bucket grande en varios dex`). Un
+bucket de dependencias que no cabe en un `classes.dex` se parte en `classes2.dex`, `classes3.dex`… con
+las tablas que mide el propio dexer (`apkc/reparto.go:90`, `apkc/dex.go:124`); un bucket que cabe
+sigue siendo un solo dex, byte a byte el de antes.
+
+```sh
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestReparte|TestBucket|TestDexEntry' -v .
+PROBAR_LIMITE=1 sh banco/validar-apk/validar.sh   # con el binario del árbol integrado
+```
+
+**Falsificación.** Desactivar el reparto (`reparteEnDexes(clases, 1<<30)`, un solo grupo) da
+`the method index does not fit a 16-bit index`, rc 1 y **sin `app.apk`**: la segunda unidad de
+`21c`/`22c`/`35c` es un `u16` y el `method_id` que no cabe se rechaza. Ese es el estado de antes, no
+un defecto nuevo.
+
+**Resultado con reparto.** 700 clases y 70 000 métodos (1 206 648 B): el bucket pasa a **2 dex**, que
+salen como `classes2.dex` y `classes3.dex`, y el build sale con rc 0; `app.apk` lleva `classes.dex`,
+`classes2.dex` y `classes3.dex`; `apksigner` da `true` en v1, v2 y v3, `zipalign` da `ok`, y
+`classes2.dex` invoca `Lgrande/C680;.m0`, que define `classes3.dex`. Dos vueltas dieron **sha1
+idénticos**.
+
+**Fronteras de este `§`.** El dex de la **app** (no el de las dependencias) aún no se reparte. El
+guion `banco/validar-apk/validar.sh:253` todavía exige el rechazo viejo con `PROBAR_LIMITE=1` y otro
+agente está invirtiendo esa comprobación. No se corrió gate, chromium ni publicación.
+
+## 224. Clase duplicada entre dependencias
+
+Medido el 2026-11-23 sobre `8be5250` (`fix(jar): nombra la clase duplicada entre dependencias`). La
+guarda vive en `dependenciasDexeables` (`apkc/dependencias.go:175`), común a los dos dexers, y nombra
+la clase y **ambos** jars que la definen, no solo el último.
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestDependenciasDexeables|TestClaseDuplicadaEntreJars' -v .
+```
+
+**Resultado**: los 4 tests de la raíz pasan (`ok … 0.022s`).
+
+**Oráculo `d8`.** El `d8` de build-tools 34.0.0 sobre dos jars que definen `dup.D` da
+`Type dup.D is defined multiple times: a.jar:dup-D.class, b.jar:dup/D.class` y rc 1. Nuestro mensaje
+es `la clase dup.D está definida más de una vez: jar/a.jar y jar/b.jar`.
+
+**Falsificación.** Quitar la guarda hace fallar
+`TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase` con «el build no abortó…»; con la
+guarda, `PASS`.
+
+**Fronteras de este `§`.** `module-info.class` y `package-info.class` de la raíz se excluyen a
+propósito (`apkc/dependencias.go:171`): dos jars modulares no colisionan por ellos. No se corrió gate,
+chromium ni publicación.
