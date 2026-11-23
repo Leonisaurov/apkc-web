@@ -201,11 +201,22 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 
 // TestDirectorioCentralDelJarContraArchiveZip comprueba el lector propio contra archive/zip sobre el
 // android.jar de verdad: las mismas entradas, el mismo método, tamaño y CRC, y las mismas clases.
+//
+// El contrato del índice es «todas las clases más la única entrada que no es una clase, la tabla de
+// recursos del framework», porque `check` la lee para enlazar el res/ del proyecto sin abrir el zip.
+// Por eso la comparación es del conjunto completo y no solo de las clases: filtrar ambos lados a
+// `.class` dejaba caer el marco sin que se notara (5721 contra 5720), y añadir cualquier otra entrada
+// al índice debe romper esta prueba a propósito, que es un cambio de contrato.
 func TestDirectorioCentralDelJarContraArchiveZip(t *testing.T) {
 	ruta := jarDelSDK(t)
 	propio, err := directorioCentralDelJar(ruta)
 	if err != nil {
 		t.Fatalf("el lector propio no recorre el jar: %v", err)
+	}
+	// El marco se afirma aparte: si se cae del índice por cualquier motivo, esta prueba falla por
+	// esta vía y no solo por el conteo, que es lo que pasó cuando `check` dejó de verlo.
+	if _, hay := propio[entradaMarcoDelJar]; !hay {
+		t.Fatalf("el índice no guarda %q: `check` volvería a recorrer el jar por el marco", entradaMarcoDelJar)
 	}
 	zr, err := zip.OpenReader(ruta)
 	if err != nil {
@@ -215,6 +226,9 @@ func TestDirectorioCentralDelJarContraArchiveZip(t *testing.T) {
 	esperadas := map[string]*zip.File{}
 	for _, f := range zr.File {
 		interno, ok := recortaClase(f.Name)
+		if !ok && f.Name == entradaMarcoDelJar {
+			interno, ok = f.Name, true
+		}
 		if !ok {
 			continue
 		}
@@ -223,7 +237,7 @@ func TestDirectorioCentralDelJarContraArchiveZip(t *testing.T) {
 		}
 	}
 	if len(propio) != len(esperadas) {
-		t.Fatalf("el lector propio ve %d clases y archive/zip %d", len(propio), len(esperadas))
+		t.Fatalf("el lector propio ve %d entradas y archive/zip %d", len(propio), len(esperadas))
 	}
 	nombres := make([]string, 0, len(esperadas))
 	for interno := range esperadas {
