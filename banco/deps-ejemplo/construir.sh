@@ -107,8 +107,8 @@ set -e
 if [ "$rc" -ne 0 ]; then
 	echo "   el camino Go falló (rc $rc):" >&2
 	sed 's/^/   | /' "$SALIDA/go.log" >&2
-	if grep -q 'no dexa dependencias' "$SALIDA/go.log"; then
-		echo "OBJETIVO PENDIENTE: el compilador Go todavía rechaza jar/; esta sonda es su aceptación." >&2
+	if grep -q 'd8 of dependency bucket' "$SALIDA/go.log"; then
+		echo "OBJETIVO PENDIENTE: el dex de las dependencias todavía lo escribe d8; esta sonda es su aceptación." >&2
 		exit 3
 	fi
 	exit 1

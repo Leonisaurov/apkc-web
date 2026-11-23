@@ -38,14 +38,16 @@ camino nativo lo excluye para que su dex no dependa de restos de una vuelta ante
 
 - Código `0`: los dos caminos compilan, los dos dex invocan el método del jar y el apk Go
   lleva la clase de la dependencia.
-- Código `3`: el compilador Go **todavía rechaza** `jar/` con
-  `--compiler go no dexa dependencias: hay 1 jars en jar/ y eso lo hace d8`. Ese rechazo es
-  el objetivo del frente, no un fallo del fixture: la sonda queda lista para ponerse verde
-  cuando el builder lo levante.
+- Código `3`: el compilador Go resuelve las clases del jar pero **el dex de la dependencia todavía
+  lo escribe d8**, con `the d8 of dependency bucket 0 failed: exec: no command`. Ese rechazo es el
+  objetivo del frente, no un fallo del fixture: la sonda queda lista para ponerse verde cuando el
+  builder lo levante.
 - Código `1`: cualquier otro fallo (se imprime el error literal).
 
 ## Estado medido
 
 Con el árbol del 2026-11-22, el camino nativo compila y dexa la app (1136 bytes) y la
 dependencia (728 bytes), y el camino Go sale con `rc 3` por el rechazo de arriba. El guion no
-oculta ese fallo: lo imprime y lo marca como objetivo pendiente.
+oculta ese fallo: lo imprime y lo marca como objetivo pendiente. El mensaje anterior
+(`--compiler go no dexa dependencias…`) correspondía a una revisión anterior de `apkc` y ya no
+aparece en el árbol actual.
