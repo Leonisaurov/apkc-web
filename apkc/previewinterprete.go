@@ -37,9 +37,12 @@ import (
 )
 
 const (
-	pasosMaximos            = 200000
-	capturasMaximas         = 64
-	avisosMaximos           = 24
+	pasosMaximos = 200000
+	// capturasMaximas deja sitio a las tres capturas que genera cada clic del contador del studio
+	// (TextView.setText, Log.d y println, medido con una sonda de 30 clics) más las del arranque:
+	// 32 clics × 3 = 96, que caben en 128. Antes era 64 y el texto se congelaba en el clic 23.
+	capturasMaximas = 4 * pulsacionesMaximas
+	avisosMaximos   = 24
 	profundidadMaximaDalvik = 48
 	// pulsacionesMaximas acota la lista de `--pulsar`: un clic de más no puede encadenar una
 	// ejecución sin fin, y el tope se avisa en vez de recortar en silencio.
@@ -574,6 +577,7 @@ func (m *maquinaDalvik) captura(origen string, obj *objetoDalvik, texto string) 
 		m.anotaConsola(origen, texto)
 	}
 	if len(m.capturas) >= capturasMaximas {
+		m.avisa("se dejaron capturas sin registrar por el tope de %d", capturasMaximas)
 		return
 	}
 	m.capturas = append(m.capturas, c)
