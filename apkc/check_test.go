@@ -619,6 +619,117 @@ func TestCheckCampoGenerico(t *testing.T) {
 	}
 }
 
+// fuenteHelper es una clase del proyecto que vive en otro fichero. El defecto que abrió este frente:
+// `check` compilaba solo el fuente pedido y `Helper` no existía para el emisor.
+const fuenteHelper = `package com.hola.apkcstudio;
+
+public class Helper {
+    public static int doble(int x) {
+        return x + x;
+    }
+}
+`
+
+// fuenteMainUsaHelper usa una clase que no está en su propio fichero.
+const fuenteMainUsaHelper = `package com.hola.apkcstudio;
+
+public class MainActivity {
+    public int usa() {
+        return Helper.doble(2);
+    }
+}
+`
+
+// TestCheckCompilaLosDemasFuentesDelProyecto: con `--proyecto` (aquí, la raíz) `check` lee todos los
+// `.java` del proyecto y los compila juntos, así que `Helper.doble` resuelve aunque viva en otro
+// fichero. Deja además una copia rota del fichero pedido en disco: el fuente que se diagnostica es el
+// que se pasa, no el guardado, y la ruta/nombre del pedido lo saca del conjunto.
+func TestCheckCompilaLosDemasFuentesDelProyecto(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/Helper.java", fuenteHelper)
+	pon(t, raiz, "src/com/hola/apkcstudio/MainActivity.java", "public class MainActivity {\n")
+	r := revisarFuenteJava(fuenteMainUsaHelper, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("con Helper en otro fichero el fuente da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrió: aviso %q", r.Aviso)
+	}
+	if r.Aviso != "" {
+		t.Fatalf("aviso inesperado: %q", r.Aviso)
+	}
+}
+
+// TestCheckSigueDiagnosticandoElFuentePedido: reunir los fuentes no puede tapar el error del pedido.
+// `Helper` existe, pero `noExiste` no está en él: el error tiene que ser del pedido y nombrar el
+// miembro que falta.
+func TestCheckSigueDiagnosticandoElFuentePedido(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/Helper.java", fuenteHelper)
+	roto := strings.Replace(fuenteMainUsaHelper, "Helper.doble(2)", "Helper.noExiste(2)", 1)
+	if roto == fuenteMainUsaHelper {
+		t.Fatal("no se sustituyó la llamada al Helper")
+	}
+	r := revisarFuenteJava(roto, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	e := r.Errores[0]
+	if !strings.Contains(e.Mensaje, "noExiste") {
+		t.Errorf("el error no nombra el miembro que falta: %q", e.Mensaje)
+	}
+	if e.Posicion == "" || !strings.HasPrefix(e.Posicion, "MainActivity.java:") {
+		t.Errorf("la posición no es del fuente pedido: %q", e.Posicion)
+	}
+}
+
+// TestCheckNoAtribuyeElErrorDeOtroFuente fija el contrato de los fallos ajenos: si el primer error
+// que encuentra el emisor es de otro `.java` del proyecto, no entra en `errores` del pedido; se dice
+// en `aviso` con el fichero que falla y el informe no se da por comprobado.
+func TestCheckNoAtribuyeElErrorDeOtroFuente(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/Helper.java", "public class Helper {\n")
+	r := revisarFuenteJava(fuenteMainUsaHelper, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("el error de Helper.java se coló en la lista del pedido: %+v", r.Errores)
+	}
+	if r.Emisor {
+		t.Fatal("se dio por comprobado un fuente cuyo Helper.java no compila")
+	}
+	if !strings.Contains(r.Aviso, "Helper.java") {
+		t.Fatalf("el aviso no nombra el fichero que falla: %q", r.Aviso)
+	}
+}
+
+// fuenteHelperRoto parsea bien pero no emite: su cuerpo nombra un tipo que no existe. El pedido se
+// emite antes (va primero), así que su diagnóstico sí se completa aunque Helper falle al emitirse.
+const fuenteHelperRoto = `package com.hola.apkcstudio;
+
+public class Helper {
+    public static int doble(int x) {
+        return NoExiste.doble(x);
+    }
+}
+`
+
+// TestCheckElFalloDeEmisionDeOtroFuenteNoTapaElPedido: el pedido se emite primero; si después falla
+// otro fichero al emitirse, el pedido ya está comprobado (`emisor:true`, cero errores) y el aviso
+// nombra al que falla.
+func TestCheckElFalloDeEmisionDeOtroFuenteNoTapaElPedido(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/Helper.java", fuenteHelperRoto)
+	r := revisarFuenteJava(fuenteMainUsaHelper, "MainActivity.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("el error de emisión de Helper.java se coló en el pedido: %+v", r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el pedido se emitió antes del fallo y no se marcó: aviso %q", r.Aviso)
+	}
+	if !strings.Contains(r.Aviso, "Helper.java") || !strings.Contains(r.Aviso, "NoExiste") {
+		t.Fatalf("el aviso no nombra el fichero y la causa: %q", r.Aviso)
+	}
+}
+
 // fuenteCampoGenericoSinImport deja `List` sin importar: el control negativo. El error tiene que
 // nombrar el tipo base que falta, no el `<` ni el nombre del campo.
 const fuenteCampoGenericoSinImport = `package com.hola.apkcstudio;

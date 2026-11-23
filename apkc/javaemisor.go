@@ -1887,6 +1887,19 @@ func compilarProyectoJava(fuentes []fuenteJava, rutaJar string) ([]claseEmitida,
 	return compilarProyectoJavaConClasspath(fuentes, []string{rutaJar})
 }
 
+// errorDeFuente dice en qué fichero y en qué etapa del emisor nació un fallo del proyecto. El mensaje
+// conserva la forma que ya tenían estos errores (`<fichero>: <explicacion>`), porque la consumen
+// `compile`, `build` y `check`; la estructura existe para que `check` distinga un fallo del fuente
+// pedido de uno de otro fichero del proyecto sin adivinarlo por el texto.
+type errorDeFuente struct {
+	fuente string // el nombre con el que entró el fuente, tal cual
+	etapa  string // "parser" o "emisor"
+	err    error
+}
+
+func (e *errorDeFuente) Error() string { return e.fuente + ": " + e.err.Error() }
+func (e *errorDeFuente) Unwrap() error { return e.err }
+
 // compilarProyectoJavaConClasspath es el emisor con el classpath entero: el `android.jar` primero y
 // después las dependencias, en el orden en que se le pasan. El proyecto se registra antes de resolver
 // nada, así que una clase del fuente gana a la del mismo nombre en una dependencia, como en javac.
@@ -1907,7 +1920,7 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 	for _, f := range fuentes {
 		a, err := parsearJava(f.contenido)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", f.nombre, err)
+			return nil, &errorDeFuente{fuente: f.nombre, etapa: "parser", err: err}
 		}
 		// el paquete y los imports se ponen antes de registrar para que cada clase se quede con los de su
 		// fuente: un descriptor suyo se resuelve después con ese alcance aunque lo pida otro fichero
@@ -1925,7 +1938,7 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 		for _, c := range p.a.clases {
 			hechas, err := ctx.emmitirArbol(c)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", p.nomb, err)
+				return nil, &errorDeFuente{fuente: p.nomb, etapa: "emisor", err: err}
 			}
 			salida = append(salida, hechas...)
 		}

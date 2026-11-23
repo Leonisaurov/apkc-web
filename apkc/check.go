@@ -1,6 +1,7 @@
 package main
 
-// `apkc check` lee un fuente Java y devuelve en stdout un JSON con los errores que el parser y el
+// `apkc check` lee un fuente Java —y, con `--proyecto`, también el resto de fuentes del proyecto,
+// para que sus clases resuelvan— y devuelve en stdout un JSON con los errores que el parser y el
 // emisor encuentran, sin escribir ni un .class. Es la pieza que la pestaña llama mientras se
 // escribe: un comando corto, sin procesos y con un contrato que la página pueda leer.
 //
@@ -10,6 +11,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -67,6 +69,13 @@ func (r *resultadoDeCheck) agregar(err error) {
 			}
 		}
 	}
+	r.Errores = append(r.Errores, errorDeCheck{Linea: linea, Columna: columna, Posicion: r.posicion(linea, columna), Mensaje: limpiarMensaje(texto)})
+}
+
+// limpiarMensaje quita del texto las capas de posicion que se apilan al propagar el error: el nombre
+// del fichero que anade el emisor y un `linea N:` por cada `%w`. Queda la explicacion sola.
+func limpiarMensaje(texto string) string {
+	texto = strings.TrimSpace(texto)
 	for {
 		quitado := false
 		for _, re := range []*regexp.Regexp{prefijoDeMensaje, prefijoDeLinea} {
@@ -79,7 +88,7 @@ func (r *resultadoDeCheck) agregar(err error) {
 			break
 		}
 	}
-	r.Errores = append(r.Errores, errorDeCheck{Linea: linea, Columna: columna, Posicion: r.posicion(linea, columna), Mensaje: texto})
+	return texto
 }
 
 // posicion: `fichero:linea:columna`, o `fichero:linea` si el error no trae columna.
@@ -159,6 +168,60 @@ func rDelProyectoEnDisco(raiz string) []fuenteJava {
 	return salida
 }
 
+// otrosFuentesDelProyecto lee los `.java` del proyecto que no son el fuente pedido. El emisor resuelve
+// los nombres entre ficheros: una clase del propio proyecto escrita en otro `.java` tiene que estar
+// delante o `check` la acusa de no existir (el mismo defecto que ya se corrigió para la R). Se saltan
+// el fuente pedido —por ruta si se conoce y, siempre, por su nombre, que es el que lleva la pestaña
+// cuando copia el buffer a un temporal fuera de `src/`— y las clases generadas (R y Manifest), que ya
+// aporta fuentesDeRecursos. Cada fichero se lee una sola vez y no se escribe nada.
+func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme string) []fuenteJava {
+	salida := []fuenteJava{}
+	pedida := ""
+	if rutaPedida != "" {
+		pedida = filepath.Clean(rutaPedida)
+	}
+	informe := baseDeNombre(nombreInforme)
+	for _, base := range []string{"src", "gen"} {
+		carpeta := filepath.Join(proyecto, base)
+		_ = filepath.WalkDir(carpeta, func(ruta string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return nil
+			}
+			nombre := d.Name()
+			if !strings.HasSuffix(nombre, ".java") || nombre == "R.java" || nombre == "Manifest.java" {
+				return nil
+			}
+			if pedida != "" && filepath.Clean(ruta) == pedida {
+				return nil
+			}
+			if nombre == informe {
+				return nil
+			}
+			datos, err := os.ReadFile(ruta)
+			if err != nil {
+				return nil
+			}
+			rel, err := filepath.Rel(proyecto, ruta)
+			if err != nil {
+				rel = ruta
+			}
+			salida = append(salida, fuenteJava{nombre: filepath.ToSlash(rel), contenido: string(datos)})
+			return nil
+		})
+	}
+	return salida
+}
+
+// fuenteDelError devuelve el fichero en el que nació un fallo del emisor, o nil si el error no viene
+// de un fuente (por ejemplo, un classpath que no abre).
+func fuenteDelError(err error) *errorDeFuente {
+	var de *errorDeFuente
+	if errors.As(err, &de) {
+		return de
+	}
+	return nil
+}
+
 // raizDelProyecto sube desde la carpeta del fichero hasta la que tiene AndroidManifest.xml, que es la
 // raiz del proyecto. Devuelve "" cuando no hay ninguna: entonces no se inventa una R.
 func raizDelProyecto(dir string) string {
@@ -189,6 +252,13 @@ func revisarFuenteJava(contenido, nombre, rutaJar, proyecto string) resultadoDeC
 // del nombre que va en las posiciones del informe. La pestaña comprueba un temporal y quiere que el
 // error diga `MainActivity.java:15:24`, no `.apkc-check.java`.
 func revisarFuenteJavaComo(contenido, nombreFuente, nombreInforme, rutaJar, proyecto string, version int, codename string) resultadoDeCheck {
+	return revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, "", rutaJar, proyecto, version, codename)
+}
+
+// revisarFuenteJavaEn es lo mismo con la ruta real del fuente pedido. Sirve para no compilar dos veces
+// el mismo fichero cuando el comando lee un `.java` de dentro del proyecto: los demás fuentes se
+// recogen del árbol y el pedido se salta por su ruta.
+func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rutaJar, proyecto string, version int, codename string) resultadoDeCheck {
 	r := resultadoDeCheck{
 		Tipo: "check", Fichero: nombreInforme, Lineas: strings.Count(contenido, "\n") + 1,
 		Errores: []errorDeCheck{},
@@ -212,6 +282,10 @@ func revisarFuenteJavaComo(contenido, nombreFuente, nombreInforme, rutaJar, proy
 		extras, nota := fuentesDeRecursos(proyecto, rutaJar, version, codename)
 		fuentes = append(fuentes, extras...)
 		r.Recursos = nota
+		// el resto de fuentes del proyecto va después del pedido: el emisor registra todas las
+		// clases antes de emitir nada, y al emitir el pedido primero su diagnóstico no queda detrás
+		// de un fallo de otro fichero.
+		fuentes = append(fuentes, otrosFuentesDelProyecto(proyecto, rutaFuente, nombreInforme)...)
 	}
 	// el classpath es el mismo que el de `compile` y `build`: el `android.jar` y las dependencias del
 	// proyecto (cada `jar/*.jar` y el `classes.jar` de cada `.aar`). Antes se compilaba contra el
@@ -232,6 +306,16 @@ func revisarFuenteJavaComo(contenido, nombreFuente, nombreInforme, rutaJar, proy
 		r.Aviso = "sin android.jar: solo se comprobó el parser"
 		return r
 	}
+	// el fuente pedido es el que se diagnostica. Si el primer fallo es de otro `.java` del proyecto,
+	// no se cuela en su lista: se dice en `aviso` y no se da el pedido por comprobado, salvo que el
+	// fallo sea de emisión, porque entonces el pedido —que va primero— ya se emitió sin error.
+	if de := fuenteDelError(err); de != nil && baseDeNombre(de.fuente) != baseDeNombre(nombreFuente) {
+		if de.etapa == "emisor" {
+			r.Emisor = true
+		}
+		r.Aviso = "otro fuente del proyecto no compila: " + baseDeNombre(de.fuente) + ": " + de.err.Error()
+		return r
+	}
 	r.agregar(err)
 	return r
 }
@@ -247,9 +331,12 @@ emitter find, without writing any .class. The emitter needs the android.jar; wit
 report says so and only the parser is checked.
 
 --proyecto is the root of the project the file belongs to: its res/ (or the R.java that a build
-already wrote) is linked in memory so that R.layout.main resolves. Without it no R is available
-and any resource access is reported as the unresolved name it is. When the flag is missing, the
-directory of the file and its ancestors are searched for an AndroidManifest.xml.
+already wrote) is linked in memory so that R.layout.main resolves, and the other .java files under
+its src/ and gen/ are compiled together with the requested one so that its classes resolve. Only the
+requested file is reported: an error in another file never becomes a row for it. Without --proyecto
+no R is available, no other source is read, and any resource access is reported as the unresolved
+name it is. When the flag is missing, the directory of the file and its ancestors are searched for
+an AndroidManifest.xml.
 
 --sdk-version and --codename say which platform the resources are linked against when the path of
 the android.jar does not carry it, which is the case in the tab (/sdk/android.jar).
@@ -281,7 +368,7 @@ the android.jar does not carry it, which is the case in the tab (/sdk/android.ja
 		fmt.Fprintln(os.Stderr, "check:", err)
 		os.Exit(2)
 	}
-	datos, err := json.Marshal(revisarFuenteJavaComo(string(d), baseDeNombre(fuentes[0]), informe, *jar, raiz, *sdkVersion, *sdkCodename))
+	datos, err := json.Marshal(revisarFuenteJavaEn(string(d), fuentes[0], informe, fuentes[0], *jar, raiz, *sdkVersion, *sdkCodename))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "check:", err)
 		os.Exit(2)
