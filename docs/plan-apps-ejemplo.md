@@ -62,9 +62,12 @@ fidelidad de dibujo.
 
 ## Defectos del compilador que destapa cada una
 
-Todas las frases siguientes se vieron como rechazo literal de `apkc build --linker go --compiler go`
-mientras se escribían estas apps; el fuente quedó adaptado para compilar y el defecto se documenta
-aquí como objetivo.
+Las frases siguientes se vieron como rechazo literal de `apkc build --linker go --compiler go`
+mientras se escribían estas apps, y el fuente quedó adaptado para compilar. **No se conserva el
+comando ni el `§` que las reproduzca**: por regla 1 del `AGENTS.md` son **hipótesis de trabajo**, no
+mediciones registradas. Para convertirlas en evidencia hay que restaurar el fuente que las provocó,
+repetir el build y anotar el error literal con su comando en `docs/evidencia.md`. El crítico de este
+frente marcó precisamente este punto como pregunta abierta.
 
 | App | Defecto o límite | Síntoma literal (resumen) |
 | --- | --- | --- |
