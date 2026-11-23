@@ -3,22 +3,21 @@
 Jar medido: `/home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar` (648327 bytes)
 
 - Clases recorridas: 520
-- Clases que el dexer rechaza: 49
-- Tipos de límite: 5
+- Clases que el dexer rechaza: 22
+- Tipos de límite: 4
 
 Primer fallo de `apkc dex` sobre las clases a la vez:
 
 ```
-[dex] Landroid/support/v4/app/BackStackRecord;dump: at pc 0, dump: a goto of -259 code units: the 10t form reaches +-127 and goto/16 is not measured here 
+[dex] Landroid/support/v4/app/FragmentActivity;onCreateView: at pc 195, getfield: register v16 does not fit a four-bit format (the /range or /from16 form is not measured here) 
 ```
 
 | Límite | Clases | Métodos | Primer caso |
 | --- | ---: | ---: | --- |
-| registro fuera de formato | 37 | 37 | Landroid/support/v4/app/BackStackState;.<init> pc 0 · aload_0 |
-| salto goto fuera de alcance | 6 | 6 | Landroid/support/v4/app/BackStackRecord;.dump pc 0 · dump |
-| presupuesto de temporales | 3 | 3 | Landroid/support/v4/view/GravityCompat$GravityCompatImplJellybeanMr1;.apply pc 13 · invokestatic |
-| registro bajo ocupado | 2 | 2 | Landroid/support/v4/app/NotificationCompatJellybean;.<init> pc 207 · iload |
-| tipo no internado por el colector | 1 | 1 | Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;.<init> pc 5 · ldc_w |
+| registro bajo ocupado | 10 | 10 | Landroid/support/v4/app/FragmentManagerImpl;.loadAnimation pc 180 · iload |
+| presupuesto de temporales | 5 | 5 | Landroid/support/v4/view/GravityCompat$GravityCompatImplJellybeanMr1;.apply pc 13 · invokestatic |
+| registro fuera de formato | 5 | 5 | Landroid/support/v4/app/FragmentActivity;.onCreateView pc 195 · getfield |
+| tipo no internado por el colector | 2 | 2 | Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;.<init> pc 5 · ldc_w |
 
 Cada clase se dexó en su propia invocación de `apkc dex`: el conteo de clases es exacto. El de métodos es la primera que falla en cada clase, porque el ensamblado se detiene ahí; es una cota inferior, no el total del jar.
 
@@ -26,10 +25,9 @@ Cada clase se dexó en su propia invocación de `apkc dex`: el conteo de clases 
 
 | Límite | Forma que falta |
 | --- | --- |
-| registro fuera de formato | las formas `/from16` (move-object/from16 0x08, move/from16 0x02, …) y 22x, que ya están medidas para otras familias; falta aplicarlas a `aload_*`, `iload_*`, `astore_*` y sus primas. |
-| salto goto fuera de alcance | `goto/16` (0x29, 21t) y `goto/32` (0x2a, 30t) para un salto fuera de ±127 unidades; d8 los usa en el mismo método del oráculo. |
-| presupuesto de temporales | subir la base del reparto por encima de `max_stack` de javap cuando el bloque `/range` necesita más temporales; el bucle de `codeItemConPc` ya sube la base cuando el pico lo pide, y aquí el límite es el paso de medida. |
 | registro bajo ocupado | un plan de registros con desalojo de un local a la pila de temporales; d8 resuelve el mismo método moviendo el valor a otro registro libre antes del uso. |
+| presupuesto de temporales | subir la base del reparto por encima de `max_stack` de javap cuando el bloque `/range` necesita más temporales; el bucle de `codeItemConPc` ya sube la base cuando el pico lo pide, y aquí el límite es el paso de medida. |
+| registro fuera de formato | las formas `/from16` (move-object/from16 0x08, move/from16 0x02, …) y 22x, que ya están medidas para otras familias; falta aplicarlas a `aload_*`, `iload_*`, `astore_*` y sus primas. |
 | tipo no internado por el colector | `const-class` (0x1c, 21c) con el type_id internado también desde `ldc_w` de una clase; el colector debe seguir ese operando, no solo `checkcast`/`instanceof`/`new`. |
 
 #### Oráculo d8/dexdump
@@ -37,124 +35,39 @@ Cada clase se dexó en su propia invocación de `apkc dex`: el conteo de clases 
 Comando del oráculo:
 
 ```sh
-/home/leonisauro/opt/android-sdk/build-tools/36.0.0/d8 --min-api 21 --lib /home/leonisauro/opt/android-sdk/platforms/android-34/android.jar --output /home/leonisauro/.cache/apkc-web/inventario-jar/trabajo-wonxwn9e/d8 /home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar
+/home/leonisauro/opt/android-sdk/build-tools/36.0.0/d8 --min-api 21 --lib /home/leonisauro/opt/android-sdk/platforms/android-34/android.jar --output /home/leonisauro/.cache/apkc-web/inventario-jar/trabajo-rwefanvf/d8 /home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar
 ```
 
 d8 dexa el jar completo con rc 0: `classes.dex` de 563612 bytes.
 
-Equivalente DEX de d8 para **registro fuera de formato** — `Landroid/support/v4/app/BackStackState;.<init>`:
+Equivalente DEX de d8 para **registro bajo ocupado** — `Landroid/support/v4/app/FragmentManagerImpl;.loadAnimation`:
 
 ```
-      name          : '<init>'
-      type          : '(Landroid/os/Parcel;)V'
-      access        : 0x10001 (PUBLIC CONSTRUCTOR)
-      code          -
-      registers     : 3
-      ins           : 2
-      outs          : 2
-      insns size    : 66 16-bit code units
-01e018:                                        |[01e018] android.support.v4.app.BackStackState.<init>:(Landroid/os/Parcel;)V
-01e028: 7010 a814 0100                         |0000: invoke-direct {v1}, Ljava/lang/Object;.<init>:()V // method@14a8
-01e02e: 6e10 7e01 0200                         |0003: invoke-virtual {v2}, Landroid/os/Parcel;.createIntArray:()[I // method@017e
-01e034: 0c00                                   |0006: move-result-object v0
-01e036: 5b10 7a00                              |0007: iput-object v0, v1, Landroid/support/v4/app/BackStackState;.mOps:[I // field@007a
-01e03a: 6e10 8101 0200                         |0009: invoke-virtual {v2}, Landroid/os/Parcel;.readInt:()I // method@0181
-01e040: 0a00                                   |000c: move-result v0
-01e042: 5910 7b00                              |000d: iput v0, v1, Landroid/support/v4/app/BackStackState;.mTransition:I // field@007b
-01e046: 6e10 8101 0200                         |000f: invoke-virtual {v2}, Landroid/os/Parcel;.readInt:()I // method@0181
-01e04c: 0a00                                   |0012: move-result v0
-01e04e: 5910 7c00                              |0013: iput v0, v1, Landroid/support/v4/app/BackStackState;.mTransitionStyle:I // field@007c
-01e052: 6e10 8301 0200                         |0015: invoke-virtual {v2}, Landroid/os/Parcel;.readString:()Ljava/lang/String; // method@0183
-01e058: 0c00                                   |0018: move-result-object v0
-01e05a: 5b10 7900                              |0019: iput-object v0, v1, Landroid/support/v4/app/BackStackState;.mName:Ljava/lang/String; // field@0079
-01e05e: 6e10 8101 0200                         |001b: invoke-virtual {v2}, Landroid/os/Parcel;.readInt:()I // method@0181
-01e064: 0a00                                   |001e: move-result v0
-01e066: 5910 7800                              |001f: iput v0, v1, Landroid/support/v4/app/BackStackState;.mIndex:I // field@0078
-      name          : '<init>'
-      type          : '(Landroid/support/v4/app/FragmentManagerImpl;Landroid/support/v4/app/BackStackRecord;)V'
-      access        : 0x10001 (PUBLIC CONSTRUCTOR)
+      name          : 'loadAnimation'
+      type          : '(Landroid/support/v4/app/Fragment;IZI)Landroid/view/animation/Animation;'
+      access        : 0x0000 ()
       code          -
       registers     : 11
-      ins           : 3
-      outs          : 2
-      insns size    : 189 16-bit code units
-01e0ac:                                        |[01e0ac] android.support.v4.app.BackStackState.<init>:(Landroid/support/v4/app/FragmentManagerImpl;Landroid/support/v4/app/BackStackRecord;)V
-01e0bc: 7010 a814 0800                         |0000: invoke-direct {v8}, Ljava/lang/Object;.<init>:()V // method@14a8
-01e0c2: 1200                                   |0003: const/4 v0, #int 0 // #0
-01e0c4: 54a1 6900                              |0004: iget-object v1, v10, Landroid/support/v4/app/BackStackRecord;.mHead:Landroid/support/v4/app/BackStackRecord$Op; // field@0069
-01e0c8: 3801 1000                              |0006: if-eqz v1, 0016 // +0010
-01e0cc: 5412 5600                              |0008: iget-object v2, v1, Landroid/support/v4/app/BackStackRecord$Op;.removed:Ljava/util/ArrayList; // field@0056
-01e0d0: 3802 0900                              |000a: if-eqz v2, 0013 // +0009
-01e0d4: 5412 5600                              |000c: iget-object v2, v1, Landroid/support/v4/app/BackStackRecord$Op;.removed:Ljava/util/ArrayList; // field@0056
-01e0d8: 6e10 ea14 0200                         |000e: invoke-virtual {v2}, Ljava/util/ArrayList;.size:()I // method@14ea
-01e0de: 0a02                                   |0011: move-result v2
-01e0e0: b020                                   |0012: add-int/2addr v0, v2
-01e0e2: 5411 5200                              |0013: iget-object v1, v1, Landroid/support/v4/app/BackStackRecord$Op;.next:Landroid/support/v4/app/BackStackRecord$Op; // field@0052
-01e0e6: 28f1                                   |0015: goto 0006 // -000f
-01e0e8: 52a2 6d00                              |0016: iget v2, v10, Landroid/support/v4/app/BackStackRecord;.mNumOp:I // field@006d
-01e0ec: da02 0207                              |0018: mul-int/lit8 v2, v2, #int 7 // #07
-01e0f0: b002                                   |001a: add-int/2addr v2, v0
-01e0f2: 2322 3903                              |001b: new-array v2, v2, [I // type@0339
-```
-
-Equivalente DEX de d8 para **salto goto fuera de alcance** — `Landroid/support/v4/app/BackStackRecord;.dump`:
-
-```
-      name          : 'dump'
-      type          : '(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V'
-      access        : 0x0001 (PUBLIC)
-      code          -
-      registers     : 6
       ins           : 5
-      outs          : 4
-      insns size    : 5 16-bit code units
-01d370:                                        |[01d370] android.support.v4.app.BackStackRecord.dump:(Ljava/lang/String;Ljava/io/FileDescriptor;Ljava/io/PrintWriter;[Ljava/lang/String;)V
-01d380: 1210                                   |0000: const/4 v0, #int 1 // #1
-01d382: 6e40 3602 2104                         |0001: invoke-virtual {v1, v2, v4, v0}, Landroid/support/v4/app/BackStackRecord;.dump:(Ljava/lang/String;Ljava/io/PrintWriter;Z)V // method@0236
-01d388: 0e00                                   |0004: return-void
-      catches       : (none)
-      positions     :
-        0x0000 line=237
-        0x0004 line=238
-      locals        :
-        0x0000 - 0x0005 reg=1 this Landroid/support/v4/app/BackStackRecord;
-        0x0000 - 0x0005 reg=2 prefix Ljava/lang/String;
-        0x0000 - 0x0005 reg=3 fd Ljava/io/FileDescriptor;
-        0x0000 - 0x0005 reg=4 writer Ljava/io/PrintWriter;
-        0x0000 - 0x0005 reg=5 args [Ljava/lang/String;
-
-    #13              : (in Landroid/support/v4/app/BackStackRecord;)
-      name          : 'dump'
-      type          : '(Ljava/lang/String;Ljava/io/PrintWriter;Z)V'
-      access        : 0x0001 (PUBLIC)
-      code          -
-      registers     : 12
-      ins           : 4
-      outs          : 2
-      insns size    : 514 16-bit code units
-01d38c:                                        |[01d38c] android.support.v4.app.BackStackRecord.dump:(Ljava/lang/String;Ljava/io/PrintWriter;Z)V
-01d39c: 380b da00                              |0000: if-eqz v11, 00da // +00da
-01d3a0: 6e20 6e14 9a00                         |0002: invoke-virtual {v10, v9}, Ljava/io/PrintWriter;.print:(Ljava/lang/String;)V // method@146e
-01d3a6: 1a00 4711                              |0005: const-string v0, "mName=" // string@1147
-01d3aa: 6e20 6e14 0a00                         |0007: invoke-virtual {v10, v0}, Ljava/io/PrintWriter;.print:(Ljava/lang/String;)V // method@146e
-01d3b0: 5480 6c00                              |000a: iget-object v0, v8, Landroid/support/v4/app/BackStackRecord;.mName:Ljava/lang/String; // field@006c
-01d3b4: 6e20 6e14 0a00                         |000c: invoke-virtual {v10, v0}, Ljava/io/PrintWriter;.print:(Ljava/lang/String;)V // method@146e
-01d3ba: 1a00 5f00                              |000f: const-string v0, " mIndex=" // string@005f
-01d3be: 6e20 6e14 0a00                         |0011: invoke-virtual {v10, v0}, Ljava/io/PrintWriter;.print:(Ljava/lang/String;)V // method@146e
-01d3c4: 5280 6a00                              |0014: iget v0, v8, Landroid/support/v4/app/BackStackRecord;.mIndex:I // field@006a
-01d3c8: 6e20 6c14 0a00                         |0016: invoke-virtual {v10, v0}, Ljava/io/PrintWriter;.print:(I)V // method@146c
-01d3ce: 1a00 5600                              |0019: const-string v0, " mCommitted=" // string@0056
-01d3d2: 6e20 6e14 0a00                         |001b: invoke-virtual {v10, v0}, Ljava/io/PrintWriter;.print:(Ljava/lang/String;)V // method@146e
-01d3d8: 5580 6600                              |001e: iget-boolean v0, v8, Landroid/support/v4/app/BackStackRecord;.mCommitted:Z // field@0066
-01d3dc: 6e20 7414 0a00                         |0020: invoke-virtual {v10, v0}, Ljava/io/PrintWriter;.println:(Z)V // method@1474
-01d3e2: 5280 7100                              |0023: iget v0, v8, Landroid/support/v4/app/BackStackRecord;.mTransition:I // field@0071
-01d3e6: 3800 2100                              |0025: if-eqz v0, 0046 // +0021
-```
-
-Líneas que d8 escribe para ese límite:
-
-```
-01d772: 2900 12ff                              |01eb: goto/16 00fd // -00ee
+      outs          : 5
+      insns size    : 134 16-bit code units
+020680:                                        |[020680] android.support.v4.app.FragmentManagerImpl.loadAnimation:(Landroid/support/v4/app/Fragment;IZI)Landroid/view/animation/Animation;
+020690: 5270 b200                              |0000: iget v0, v7, Landroid/support/v4/app/Fragment;.mNextAnim:I // field@00b2
+020694: 6e40 b202 8709                         |0002: invoke-virtual {v7, v8, v9, v0}, Landroid/support/v4/app/Fragment;.onCreateAnimation:(IZI)Landroid/view/animation/Animation; // method@02b2
+02069a: 0c00                                   |0005: move-result-object v0
+02069c: 3800 0300                              |0006: if-eqz v0, 0009 // +0003
+0206a0: 1100                                   |0008: return-object v0
+0206a2: 5271 b200                              |0009: iget v1, v7, Landroid/support/v4/app/Fragment;.mNextAnim:I // field@00b2
+0206a6: 3801 0d00                              |000b: if-eqz v1, 0018 // +000d
+0206aa: 5461 0001                              |000d: iget-object v1, v6, Landroid/support/v4/app/FragmentManagerImpl;.mActivity:Landroid/support/v4/app/FragmentActivity; // field@0100
+0206ae: 5272 b200                              |000f: iget v2, v7, Landroid/support/v4/app/Fragment;.mNextAnim:I // field@00b2
+0206b2: 7120 c513 2100                         |0011: invoke-static {v1, v2}, Landroid/view/animation/AnimationUtils;.loadAnimation:(Landroid/content/Context;I)Landroid/view/animation/Animation; // method@13c5
+0206b8: 0c01                                   |0014: move-result-object v1
+0206ba: 3801 0300                              |0015: if-eqz v1, 0018 // +0003
+0206be: 1101                                   |0017: return-object v1
+0206c0: 1201                                   |0018: const/4 v1, #int 0 // #0
+0206c2: 3908 0300                              |0019: if-nez v8, 001c // +0003
+0206c6: 1101                                   |001b: return-object v1
 ```
 
 Equivalente DEX de d8 para **presupuesto de temporales** — `Landroid/support/v4/view/GravityCompat$GravityCompatImplJellybeanMr1;.apply`:
@@ -219,34 +132,34 @@ Líneas que d8 escribe para ese límite:
 0363d4: 7706 1909 0100                         |0000: invoke-static/range {v1, v2, v3, v4, v5, v6}, Landroid/support/v4/view/GravityCompatJellybeanMr1;.apply:(IIILandroid/graphics/Rect;Landroid/graphics/Rect;I)V // method@0919
 ```
 
-Equivalente DEX de d8 para **registro bajo ocupado** — `Landroid/support/v4/app/NotificationCompatJellybean;.<init>`:
+Equivalente DEX de d8 para **registro fuera de formato** — `Landroid/support/v4/app/FragmentActivity;.onCreateView`:
 
 ```
-      name          : '<init>'
-      type          : '(Landroid/content/Context;Landroid/app/Notification;Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;Landroid/widget/RemoteViews;ILandroid/app/PendingIntent;Landroid/app/PendingIntent;Landroid/graphics/Bitmap;IIZZILjava/lang/CharSequence;)V'
-      access        : 0x10001 (PUBLIC CONSTRUCTOR)
+      name          : 'onCreateView'
+      type          : '(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;'
+      access        : 0x0001 (PUBLIC)
       code          -
-      registers     : 33
-      ins           : 17
+      registers     : 14
+      ins           : 4
       outs          : 4
-      insns size    : 200 16-bit code units
-0290c8:                                        |[0290c8] android.support.v4.app.NotificationCompatJellybean.<init>:(Landroid/content/Context;Landroid/app/Notification;Ljava/lang/CharSequence;Ljava/lang/CharSequence;Ljava/lang/CharSequence;Landroid/widget/RemoteViews;ILandroid/app/PendingIntent;Landroid/app/PendingIntent;Landroid/graphics/Bitmap;IIZZILjava/lang/CharSequence;)V
-0290d8: 0800 1200                              |0000: move-object/from16 v0, v18
-0290dc: 7601 a814 1000                         |0002: invoke-direct/range {v16}, Ljava/lang/Object;.<init>:()V // method@14a8
-0290e2: 2201 0e00                              |0005: new-instance v1, Landroid/app/Notification$Builder; // type@000e
-0290e6: 0802 1100                              |0007: move-object/from16 v2, v17
-0290ea: 7020 4e00 2100                         |0009: invoke-direct {v1, v2}, Landroid/app/Notification$Builder;.<init>:(Landroid/content/Context;)V // method@004e
-0290f0: 5303 0e00                              |000c: iget-wide v3, v0, Landroid/app/Notification;.when:J // field@000e
-0290f4: 6e30 6800 3104                         |000e: invoke-virtual {v1, v3, v4}, Landroid/app/Notification$Builder;.setWhen:(J)Landroid/app/Notification$Builder; // method@0068
-0290fa: 0c01                                   |0011: move-result-object v1
-0290fc: 5203 0600                              |0012: iget v3, v0, Landroid/app/Notification;.icon:I // field@0006
-029100: 5204 0700                              |0014: iget v4, v0, Landroid/app/Notification;.iconLevel:I // field@0007
-029104: 6e30 6200 3104                         |0016: invoke-virtual {v1, v3, v4}, Landroid/app/Notification$Builder;.setSmallIcon:(II)Landroid/app/Notification$Builder; // method@0062
-02910a: 0c01                                   |0019: move-result-object v1
-02910c: 5403 0100                              |001a: iget-object v3, v0, Landroid/app/Notification;.contentView:Landroid/widget/RemoteViews; // field@0001
-029110: 6e20 5300 3100                         |001c: invoke-virtual {v1, v3}, Landroid/app/Notification$Builder;.setContent:(Landroid/widget/RemoteViews;)Landroid/app/Notification$Builder; // method@0053
-029116: 0c01                                   |001f: move-result-object v1
-029118: 5403 0c00                              |0020: iget-object v3, v0, Landroid/app/Notification;.tickerText:Ljava/lang/CharSequence; // field@000c
+      insns size    : 370 16-bit code units
+01ec3c:                                        |[01ec3c] android.support.v4.app.FragmentActivity.onCreateView:(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View;
+01ec4c: 1a00 120d                              |0000: const-string v0, "fragment" // string@0d12
+01ec50: 6e20 b714 b000                         |0002: invoke-virtual {v0, v11}, Ljava/lang/String;.equals:(Ljava/lang/Object;)Z // method@14b7
+01ec56: 0a00                                   |0005: move-result v0
+01ec58: 3900 0700                              |0006: if-nez v0, 000d // +0007
+01ec5c: 6f40 2000 badc                         |0008: invoke-super {v10, v11, v12, v13}, Landroid/app/Activity;.onCreateView:(Ljava/lang/String;Landroid/content/Context;Landroid/util/AttributeSet;)Landroid/view/View; // method@0020
+01ec62: 0c00                                   |000b: move-result-object v0
+01ec64: 1100                                   |000c: return-object v0
+01ec66: 1a00 0f0b                              |000d: const-string v0, "class" // string@0b0f
+01ec6a: 1201                                   |000f: const/4 v1, #int 0 // #0
+01ec6c: 7230 1912 1d00                         |0010: invoke-interface {v13, v1, v0}, Landroid/util/AttributeSet;.getAttributeValue:(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String; // method@1219
+01ec72: 0c00                                   |0013: move-result-object v0
+01ec74: 6202 c700                              |0014: sget-object v2, Landroid/support/v4/app/FragmentActivity$FragmentTag;.Fragment:[I // field@00c7
+01ec78: 6e30 9100 dc02                         |0016: invoke-virtual {v12, v13, v2}, Landroid/content/Context;.obtainStyledAttributes:(Landroid/util/AttributeSet;[I)Landroid/content/res/TypedArray; // method@0091
+01ec7e: 0c02                                   |0019: move-result-object v2
+01ec80: 1203                                   |001a: const/4 v3, #int 0 // #0
+01ec82: 3900 0600                              |001b: if-nez v0, 0021 // +0006
 ```
 
 Equivalente DEX de d8 para **tipo no internado por el colector** — `Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;.<init>`:

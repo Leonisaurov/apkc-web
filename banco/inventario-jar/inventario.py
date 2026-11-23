@@ -15,6 +15,9 @@ El informe se escribe en `banco/inventario-jar/informe.md` (o en --salida). Los 
 """
 
 import argparse
+import contextlib
+import hashlib
+import io
 import os
 import re
 import shutil
@@ -38,18 +41,58 @@ RE_CON_PC = re.compile(r"(L[^;]+;)([^:\s]+): at pc (\d+), (.*)$")
 RE_SIN_PC = re.compile(r"(L[^;]+;)([^:\s]+): (.*)$")
 
 
-def construir_apkc(ruta):
-    """Devuelve el binario de apkc: el que se le pase, el del entorno o uno construido en caché."""
+def huella_de_apkc(directorio=None):
+    """Huella del código que `go build` lee de apkc/: los `.go` sin pruebas, go.mod/go.sum y los
+    ficheros embebidos de `template/`.
+
+    Es una huella de CONTENIDO, no de mtime: cambiar de rama o tocar un fichero sin cambiar sus
+    bytes no obliga a recompilar, y un cambio real sí. Se guarda al lado del binario; si no casa, el
+    binario cacheado es de otro código y no sirve para medir este HEAD.
+    """
+    directorio = Path(directorio) if directorio else APKC_DIR
+    rutas = []
+    for ruta in directorio.rglob("*.go"):
+        if ruta.name.endswith("_test.go"):
+            continue
+        rutas.append(ruta)
+    for nombre in ("go.mod", "go.sum"):
+        ruta = directorio / nombre
+        if ruta.exists():
+            rutas.append(ruta)
+    plantilla = directorio / "template"
+    if plantilla.is_dir():
+        rutas.extend(p for p in plantilla.rglob("*") if p.is_file())
+    h = hashlib.sha256()
+    for ruta in sorted(rutas, key=lambda p: p.relative_to(directorio).as_posix()):
+        h.update(ruta.relative_to(directorio).as_posix().encode())
+        h.update(b"\0")
+        h.update(ruta.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def construir_apkc(ruta, directorio=APKC_DIR):
+    """Devuelve el binario de apkc: el que se le pase, el del entorno o uno construido en caché.
+
+    Un `--apkc` o un `APKC=...` externos se usan tal cual, sin reconstruir: quien los pasa sabe qué
+    binario quiere. El de caché se reconstruye cuando la huella de contenido de `apkc/` no es la que
+    se guardó al construirlo; con solo `destino.exists()` se medía con el dexer de otro commit.
+    """
     if ruta:
         return str(Path(ruta))
     del_entorno = os.environ.get("APKC")
     if del_entorno:
         return del_entorno
+    directorio = Path(directorio)
     destino = CACHE / "apkc"
-    if not destino.exists():
-        CACHE.mkdir(parents=True, exist_ok=True)
-        print(f"[inventario] construyendo apkc en {destino}", file=sys.stderr)
-        subprocess.run(["go", "build", "-o", str(destino), "."], cwd=APKC_DIR, check=True)
+    marca = CACHE / "apkc.huella"
+    actual = huella_de_apkc(directorio)
+    if destino.exists() and marca.exists() and marca.read_text(encoding="utf-8").strip() == actual:
+        return str(destino)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    print(f"[inventario] construyendo apkc en {destino} (huella {actual[:12]})", file=sys.stderr)
+    subprocess.run(["go", "build", "-o", str(destino), "."], cwd=directorio, check=True)
+    marca.write_text(actual + "\n", encoding="utf-8")
     return str(destino)
 
 
@@ -449,6 +492,87 @@ def romper_primera_code(datos):
     return bytes(copia)
 
 
+def decide_construir(ruta="", directorio=None):
+    """Llama a `construir_apkc` y dice si decidió reconstruir, capturando su aviso de stderr."""
+    buf = io.StringIO()
+    with contextlib.redirect_stderr(buf):
+        binario = construir_apkc(ruta, directorio) if directorio else construir_apkc(ruta)
+    return binario, "construyendo apkc" in buf.getvalue()
+
+
+def comprobar_reconstruccion(trabajo):
+    """Cambia un `.go` de apkc/ y exige reconstrucción; restaura y exige que sin cambios no haya.
+
+    Se toca `apkc/create.go`, que no es el fichero que editan los agentes del dexer, y se restaura
+    en un `finally`. La huella es de contenido: un comentario cambia los bytes y obliga a compilar;
+    volver al contenido original obliga una vez, y la siguiente ejecución ya no compila.
+    """
+    fallos = []
+    archivo = APKC_DIR / "create.go"
+    original = archivo.read_bytes()
+    lineas = ["", "## Reconstrucción por huella", ""]
+
+    # un binario externo, por --apkc o por APKC, se usa tal cual y no se reconstruye
+    externo = str(trabajo / "apkc-externo")
+    igual, reconstruyo = decide_construir(externo)
+    if igual != externo or reconstruyo:
+        fallos.append("--apkc no devolvió el binario externo tal cual")
+    else:
+        lineas.append("- `--apkc` externo: se usa sin reconstruir.")
+    anterior = os.environ.get("APKC")
+    os.environ["APKC"] = externo
+    try:
+        via_entorno, reconstruyo = decide_construir()
+    finally:
+        if anterior is None:
+            os.environ.pop("APKC", None)
+        else:
+            os.environ["APKC"] = anterior
+    if via_entorno != externo or reconstruyo:
+        fallos.append("APKC=... no devolvió el binario externo tal cual")
+    else:
+        lineas.append("- `APKC=...` externo: se usa sin reconstruir.")
+
+    modificado = original + b"\n// huella: prueba de reconstruccion del inventario\n"
+    # deja la caché al día con el código de este HEAD antes de medir la decisión
+    decide_construir()
+    try:
+        _, sin_cambio = decide_construir()
+        if sin_cambio:
+            fallos.append("reconstruyó sin que cambiara ningún .go")
+        else:
+            lineas.append("- Sin cambios: no reconstruye.")
+
+        # un cambio real de contenido: un comentario al final, que no altera el código compilado
+        archivo.write_bytes(modificado)
+        _, con_cambio = decide_construir()
+        if not con_cambio:
+            fallos.append("no reconstruyó tras cambiar el contenido de create.go")
+        else:
+            lineas.append("- Con un `.go` cambiado: reconstruye.")
+
+        archivo.write_bytes(original)
+        _, al_restaurar = decide_construir()
+        if not al_restaurar:
+            fallos.append("no reconstruyó al restaurar el .go original")
+        else:
+            lineas.append("- Al restaurar el `.go` original: reconstruye una vez.")
+        _, tras_restaurar = decide_construir()
+        if tras_restaurar:
+            fallos.append("reconstruyó otra vez sin cambios tras restaurar")
+        else:
+            lineas.append("- Después de restaurar, sin cambios: no reconstruye.")
+    finally:
+        # solo se restaura si el fichero sigue exactamente como lo dejó la sonda
+        if archivo.read_bytes() == modificado:
+            archivo.write_bytes(original)
+    lineas.append("")
+    lineas.append("Veredicto de la reconstrucción: " + ("PASA" if not fallos else "FALLA"))
+    for f in fallos:
+        lineas.append(f"- {f}")
+    return lineas, 0 if not fallos else 1
+
+
 def comprobar_falsificacion(apkc, trabajo):
     """Comprueba que el contador ve cero sin límites y uno cuando el bytecode no está medido."""
     fallos = []
@@ -509,11 +633,14 @@ def comprobar_falsificacion(apkc, trabajo):
         + (f", el primero en `{muestra(caso)}`" if caso else "") + ".",
         f"- Fixture restaurado: {restaurados} límites.",
         "",
-        "Veredicto: " + ("PASA" if not fallos else "FALLA"),
+        "Veredicto del contador: " + ("PASA" if not fallos else "FALLA"),
     ]
     for f in fallos:
         lineas.append(f"- {f}")
-    return lineas, 0 if not fallos else 1
+
+    lineas_recon, rc_recon = comprobar_reconstruccion(trabajo)
+    lineas.extend(lineas_recon)
+    return lineas, 0 if (not fallos and rc_recon == 0) else 1
 
 
 def main():

@@ -17,6 +17,18 @@ tcr -c 2 -m 1536M -r 256M -- python3 banco/inventario-jar/inventario.py --falsif
 Opciones: `--jar` cambia el artefacto, `--apkc` usa un binario ya construido, `--sin-oraculo` no
 arranca d8/dexdump, `--limite N` mide solo las N primeras clases y `--salida` mueve el informe.
 
+## El binario cacheado se recompila cuando cambia `apkc/`
+
+El binario de caché se reutiliza solo si su **huella de contenido** coincide con la de este árbol:
+SHA-256 sobre los `.go` de `apkc/` sin `_test.go`, `go.mod`/`go.sum` y los ficheros embebidos de
+`apkc/template/`. La huella se guarda al lado del binario (`apkc.huella`). Si el código cambió, se
+recompila antes de medir; si solo cambió el mtime o se cambió de rama sin cambiar bytes, se
+reutiliza. Con `--apkc` o `APKC=...` se usa el binario externo tal cual, sin reconstruir.
+
+`--falsificar` comprueba las dos cosas: cambia un `.go` de `apkc/` y exige reconstrucción, restaura
+el contenido y exige una última reconstrucción, y una ejecución más sin cambios no debe compilar.
+La sonda restaura el fichero en un `finally` y no pisa una edición ajena.
+
 ## Qué deja
 
 - `informe.md`: tabla de límites con clases y métodos afectados, primer caso con su pc y opcode,
