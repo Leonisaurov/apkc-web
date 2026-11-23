@@ -1374,6 +1374,7 @@ func (m *maquinaDalvik) pulsaFila(id uint32, posicion int) bool {
 		}
 		return true
 	}
+	return false
 }
 
 // esOrdenDeDialogo dice si un `--pulsar` pide un botón de diálogo (`dialogo/positivo`,
