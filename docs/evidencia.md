@@ -9667,3 +9667,36 @@ la cifra es nativa. (2) La prueba de identidad es la del repo; el `cmp` sobre el
 salió de `banco/incremental.sh` con un `TRABAJO` propio. (3) Lo que queda por recortar en la etapa
 —`leeClases` 11 ms, `collectClasses` 13 ms y el ensamblado de las áreas globales— no se tocó: I5 es
 el índice del `android.jar` entre pasadas y ataca a la compilación, no al dex.
+
+## 201. I4: los dos `INCIERTO` del crítico, cerrados
+
+Cierra las dos dudas que el crítico de I4 dejó abiertas sobre `829cad6`.
+
+1. **Reutilización con las áreas desplazadas.** La vuelta que ejercitaba la prueba cambiaba un
+   literal (`x * 3` → `x * 7`) y no movía un byte de sitio. Se añade una vuelta que **alarga** el
+   cuerpo de una clase ya medida (`cuenta` gana tres sentencias, sin una sola cadena, método o campo
+   nuevos, así que `huellaTablas` sigue igual): el área de código crece, la depuración, el
+   `class_data` y los arrays se desplazan, y sus offsets —`debug_info_off` incluido— tienen que
+   recalcularse. Resultado: 6 de 9 `code_item` reutilizados (los de las dos clases intactas), el dex
+   pasa de 1196 a 1212 bytes y `bytes.Equal` contra el dexado desde cero del mismo árbol.
+
+2. **Caché corrupta.** `cargaCacheDex` comparaba `p+n` con el tamaño total; con una `n` de cuatro
+   gigabytes el `int` de 32 bits del wasm desborda y el guard pasaba por accidente. Ahora se compara
+   `n` contra **lo que queda** (`n > len(cuerpo)-p`), el recuento de cada sección tiene su propio
+   tope, y el fichero lleva un SHA-1 del cuerpo detrás de la marca: un byte movido en los blobs ya no
+   se reutiliza. La escritura va por temporal y `rename`, como `saveTable`. Cinco casos en la
+   prueba —truncada, sin cuerpo, marca de otra versión, longitud imposible con el resumen bueno y un
+   byte cambiado— caen al dexado completo con aviso, sin pánico, y el dex sale idéntico al de
+   referencia.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestDexadoPorClaseReutilizaYNoCambiaUnByte|Test.*Cache' -v .
+```
+
+**Resultado**: `--- PASS` en las dos pruebas y en los cinco casos (`ok github.com/ajinasokan/apkc
+0.251s`), y la suite entera verde (`ok github.com/ajinasokan/apkc 55.098s`).
+
+**Fronteras de este `§`.** Sigue sin gate, sin chromium y sin wasm: la medición es nativa. El SHA-1
+del cuerpo detecta la corrupción, no la repara: el coste de una caché ilegible es el dexado completo.

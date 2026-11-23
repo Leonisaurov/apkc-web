@@ -426,8 +426,11 @@ analogía.
   o un método, la caché se tira y la vuelta cuesta lo de siempre. La clave es el SHA-1 del `.class`
   entero, de modo que cualquier cambio de la clase re-traduce todos sus métodos. Medido: `dex go`
   100 → 45 ms, 1875 `code_item`, 1866 reutilizados al editar un fuente. Prueba:
-  `TestDexadoPorClaseReutilizaYNoCambiaUnByte` (las tres vueltas: frío, edición con tablas iguales y
-  clase nueva que las mueve). Lo que aún se paga en esta etapa —`leeClases` 11 ms,
+  `TestDexadoPorClaseReutilizaYNoCambiaUnByte` (cuatro vueltas: frío, edición con tablas iguales,
+  cuerpo que **crece** —las áreas se desplazan y los offsets se recalculan— y clase nueva que mueve
+  las tablas) y `TestCacheDexCorruptaCaeAlDexadoCompleto` (caché truncada, de otra versión, con una
+  longitud imposible o con un byte cambiado: cae al dexado completo con aviso y el dex sale
+  idéntico; §201). Lo que aún se paga en esta etapa —`leeClases` 11 ms,
   `collectClasses` 13 ms y el ensamblado de las áreas globales— no es I5: I5 es el índice del
   `android.jar` entre pasadas, que ataca a la compilación, no al dex.
 - **I5, índice del `android.jar` entre pasadas (H3).** Comando: el test del shim sobre el proyecto

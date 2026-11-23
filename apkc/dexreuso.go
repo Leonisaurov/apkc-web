@@ -36,7 +36,7 @@ const (
 	cacheDexFichero = "build/dexcache.bin"
 	// la marca lleva versión: un cambio en lo que se guarda tiene que dejar ilegible lo anterior,
 	// porque una entrada vieja leída con otro formato no es una entrada, es basura
-	cacheDexMarca = "apkc-dex-reuso-1\n"
+	cacheDexMarca = "apkc-dex-reuso-2\n"
 )
 
 // cacheDex es la caché de una pasada: lo leído de la vuelta anterior, lo que esta pasada vuelve a
@@ -65,47 +65,78 @@ func nuevoCacheDex() *cacheDex {
 
 // cargaCacheDex lee la caché de la vuelta anterior. Una caché que no se puede leer no es un motivo
 // para no dexar: se devuelve una vacía, la pasada cuesta lo de siempre y la siguiente la repone.
+//
+// El fichero es `marca | sha1(cuerpo) | cuerpo`, con la huella de las tablas y las dos secciones
+// dentro del cuerpo. El resumen no está de adorno: sin él, un byte movido en los blobs guardados
+// —un disco que devuelve otra cosa, una escritura que se cortó— se reutilizaría tal cual y el dex
+// saldría distinto del de un dexado completo, que es justo lo que esta etapa no puede permitirse.
 func cargaCacheDex() *cacheDex {
 	c := nuevoCacheDex()
 	b, err := os.ReadFile(cacheDexFichero)
 	if err != nil {
 		return c
 	}
-	if len(b) < len(cacheDexMarca)+20 || string(b[:len(cacheDexMarca)]) != cacheDexMarca {
+	cabecera := len(cacheDexMarca) + 20
+	if len(b) < cabecera+20 || string(b[:len(cacheDexMarca)]) != cacheDexMarca {
 		LogW("build", cacheDexFichero, "no es una caché de esta versión: se dexan las clases enteras")
 		return c
 	}
-	p := len(cacheDexMarca)
-	copy(c.huella[:], b[p:p+20])
-	p += 20
+	cuerpo := b[cabecera:]
+	resumen := sha1.Sum(cuerpo)
+	if string(resumen[:]) != string(b[len(cacheDexMarca):cabecera]) {
+		LogW("build", cacheDexFichero, "no cuadra con su resumen: se dexan las clases enteras")
+		return c
+	}
+	if !c.leeCuerpo(cuerpo) {
+		LogW("build", cacheDexFichero, "está truncada: se dexan las clases enteras")
+		return nuevoCacheDex()
+	}
+	return c
+}
+
+// leeCuerpo parsea el cuerpo de la caché: la huella de las tablas y las dos secciones de blobs.
+// Devuelve false —y quien llama se queda con una caché vacía— ante cualquier flujo que no cuadre.
+// Las longitudes que vienen del fichero se comparan **contra lo que queda**, no contra el tamaño
+// total: `p+n` con una `n` de cuatro gigabytes desborda el `int` de 32 bits del wasm y el guard
+// pasaría por accidente, leyendo fuera del fichero.
+func (c *cacheDex) leeCuerpo(cuerpo []byte) bool {
+	if len(cuerpo) < 20 {
+		return false
+	}
+	copy(c.huella[:], cuerpo[:20])
+	p := 20
 	leer := func(destino map[[20]byte][]byte) bool {
-		if p+4 > len(b) {
+		if p+4 > len(cuerpo) {
 			return false
 		}
-		cuantas := int(binary.LittleEndian.Uint32(b[p:]))
+		cuantas := int(binary.LittleEndian.Uint32(cuerpo[p:]))
 		p += 4
+		// una sección no puede declarar más entradas de las que caben en lo que queda: 24 bytes de
+		// clave y longitud, más el blob vacío más corto
+		if cuantas < 0 || cuantas > (len(cuerpo)-p)/24 {
+			return false
+		}
 		for i := 0; i < cuantas; i++ {
-			if p+24 > len(b) {
+			if p+24 > len(cuerpo) {
 				return false
 			}
 			var clave [20]byte
-			copy(clave[:], b[p:p+20])
+			copy(clave[:], cuerpo[p:p+20])
 			p += 20
-			n := int(binary.LittleEndian.Uint32(b[p:]))
+			n := int(binary.LittleEndian.Uint32(cuerpo[p:]))
 			p += 4
-			if n < 0 || p+n > len(b) {
+			if n < 0 || n > len(cuerpo)-p {
 				return false
 			}
-			destino[clave] = b[p : p+n : p+n]
+			destino[clave] = cuerpo[p : p+n : p+n]
 			p += n
 		}
 		return true
 	}
 	if !leer(c.codigo) || !leer(c.depuracion) {
-		LogW("build", cacheDexFichero, "está truncada: se dexan las clases enteras")
-		return nuevoCacheDex()
+		return false
 	}
-	return c
+	return p == len(cuerpo)
 }
 
 // activa cierra la caché contra las tablas de esta pasada: si el resumen de las cinco tablas
@@ -165,26 +196,37 @@ func (c *cacheDex) guardaDepuracion(clave [20]byte, blob []byte) {
 }
 
 // guarda escribe la caché de esta pasada: solo lo que esta pasada tocó. Un fallo al escribir no
-// puede tumbar el build —la caché es un atajo, no un producto— y se queda en un aviso.
+// puede tumbar el build —la caché es un atajo, no un producto— y se queda en un aviso. Va por
+// fichero temporal y `rename`, como el estado incremental (`saveTable`): un build que muere a
+// mitad de la escritura deja el temporal, nunca una caché a medias en el sitio bueno.
 func (c *cacheDex) guarda() {
-	b := make([]byte, 0, len(cacheDexMarca)+20+8+len(c.nuevoCodigo)*64)
-	b = append(b, cacheDexMarca...)
-	b = append(b, c.huella[:]...)
+	cuerpo := make([]byte, 0, 20+8+len(c.nuevoCodigo)*64)
+	cuerpo = append(cuerpo, c.huella[:]...)
 	escribe := func(mapa map[[20]byte][]byte) {
 		var n [4]byte
 		binary.LittleEndian.PutUint32(n[:], uint32(len(mapa)))
-		b = append(b, n[:]...)
+		cuerpo = append(cuerpo, n[:]...)
 		for clave, blob := range mapa {
-			b = append(b, clave[:]...)
+			cuerpo = append(cuerpo, clave[:]...)
 			binary.LittleEndian.PutUint32(n[:], uint32(len(blob)))
-			b = append(b, n[:]...)
-			b = append(b, blob...)
+			cuerpo = append(cuerpo, n[:]...)
+			cuerpo = append(cuerpo, blob...)
 		}
 	}
 	escribe(c.nuevoCodigo)
 	escribe(c.nuevoDepuracion)
-	if err := os.WriteFile(cacheDexFichero, b, 0644); err != nil {
-		LogW("build", "no se pudo escribir", cacheDexFichero, ":", err.Error())
+	resumen := sha1.Sum(cuerpo)
+	b := make([]byte, 0, len(cacheDexMarca)+20+len(cuerpo))
+	b = append(b, cacheDexMarca...)
+	b = append(b, resumen[:]...)
+	b = append(b, cuerpo...)
+	tmp := cacheDexFichero + ".tmp"
+	if err := os.WriteFile(tmp, b, 0644); err != nil {
+		LogW("build", "no se pudo escribir", tmp, ":", err.Error())
+		return
+	}
+	if err := os.Rename(tmp, cacheDexFichero); err != nil {
+		LogW("build", "no se pudo renombrar", tmp, ":", err.Error())
 	}
 }
 
