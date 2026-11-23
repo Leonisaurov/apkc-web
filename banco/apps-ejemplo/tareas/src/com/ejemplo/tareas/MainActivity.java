@@ -8,20 +8,24 @@ import android.widget.ArrayAdapter;
 import android.widget.ListView;
 import android.widget.TextView;
 
-import java.util.ArrayList;
-
-// Lista de tareas con categoría y estado persistente. Tres listas paralelas (texto, categoría y
-// hecha) se guardan en SharedPreferences con un contador y se pintan con un ArrayAdapter sobre
-// res/layout/item.xml. "Completar la primera" marca la primera pendiente y vuelve a pintar.
+// Lista de tareas con categoría, estado y filtro. Tres arreglos paralelos (texto, categoría y hecha)
+// más un contador, persistidos en SharedPreferences con una clave por campo y tarea.
+// El adaptador se reconstruye con la copia ya filtrada cada vez que algo cambia: es la forma que
+// `apkc preview` pinta (el ArrayAdapter del framework enseña los elementos que recibe en el
+// constructor) y en el aparato equivale a notifyDataSetChanged sin caché que invalidar.
 public class MainActivity extends Activity implements View.OnClickListener {
+    private static final int MAXIMO = 64;
+
     private TextView nueva;
     private TextView etiqueta;
+    private ListView lista;
     private ArrayAdapter adaptador;
     private SharedPreferences prefs;
-    private ArrayList textos;
-    private ArrayList categorias;
-    private ArrayList hechas;
-    private String categoria;
+    private String[] textos;
+    private String[] categorias;
+    private String[] hechas;
+    private int cuantas;
+    private int filtro;
 
     @Override
     public void onCreate(Bundle guardado) {
@@ -29,133 +33,196 @@ public class MainActivity extends Activity implements View.OnClickListener {
         setContentView(R.layout.principal);
         nueva = (TextView) findViewById(R.id.nueva);
         etiqueta = (TextView) findViewById(R.id.categoria);
-        ListView lista = (ListView) findViewById(R.id.lista);
+        lista = (ListView) findViewById(R.id.lista);
         prefs = getSharedPreferences("tareas", 0);
-        textos = new ArrayList();
-        categorias = new ArrayList();
-        hechas = new ArrayList();
-        categoria = "Casa";
-        adaptador = new ArrayAdapter(this, R.layout.item);
-        lista.setAdapter(adaptador);
+        textos = new String[MAXIMO];
+        categorias = new String[MAXIMO];
+        hechas = new String[MAXIMO];
+        cuantas = 0;
+        filtro = 0;
+        cargar();
         findViewById(R.id.casa).setOnClickListener(this);
         findViewById(R.id.trabajo).setOnClickListener(this);
         findViewById(R.id.estudio).setOnClickListener(this);
         findViewById(R.id.agregar).setOnClickListener(this);
         findViewById(R.id.completar).setOnClickListener(this);
-        cargar();
-        pintarCategoria();
-    }
-
-    private void pintarCategoria() {
-        etiqueta.setText(getString(R.string.categoria) + categoria);
-    }
-
-    private void cargar() {
-        int cuantas = prefs.getInt("cuantas", 0);
-        for (int i = 0; i < cuantas; i++) {
-            String clave = "texto" + i;
-            String texto = prefs.getString(clave, "");
-            textos.add(texto);
-            clave = "categoria" + i;
-            texto = prefs.getString(clave, "Casa");
-            categorias.add(texto);
-            clave = "hecha" + i;
-            texto = prefs.getString(clave, "no");
-            hechas.add(texto);
-        }
+        findViewById(R.id.filtrar).setOnClickListener(this);
         redibujar();
     }
 
-    private String componer(int i) {
-        String texto = (String) textos.get(i);
-        String cat = (String) categorias.get(i);
-        String hecha = (String) hechas.get(i);
-        String linea = "[ ] ";
-        boolean lista = hecha.equals("si");
-        if (lista == true) {
-            linea = "[x] ";
+    private void cargar() {
+        int guardadas = prefs.getInt("cuantas", 0);
+        for (int i = 0; i < guardadas; i++) {
+            if (cuantas >= MAXIMO) {
+                return;
+            }
+            String clave = "texto" + i;
+            textos[cuantas] = prefs.getString(clave, "");
+            clave = "categoria" + i;
+            categorias[cuantas] = prefs.getString(clave, "Casa");
+            clave = "hecha" + i;
+            hechas[cuantas] = prefs.getString(clave, "no");
+            cuantas = cuantas + 1;
         }
-        linea = linea + texto;
-        linea = linea + " (";
-        linea = linea + cat;
-        linea = linea + ")";
-        return linea;
+    }
+
+    private void guardar(int indice) {
+        String clave = "texto" + indice;
+        prefs.edit().putString(clave, textos[indice]).apply();
+        clave = "categoria" + indice;
+        prefs.edit().putString(clave, categorias[indice]).apply();
+        clave = "hecha" + indice;
+        prefs.edit().putString(clave, hechas[indice]).apply();
+        prefs.edit().putInt("cuantas", cuantas).apply();
+    }
+
+    private String nombreFiltro() {
+        if (filtro == 1) {
+            return "Casa";
+        }
+        if (filtro == 2) {
+            return "Trabajo";
+        }
+        if (filtro == 3) {
+            return "Estudio";
+        }
+        return "Todas";
+    }
+
+    private boolean visible(int i) {
+        if (filtro == 0) {
+            return true;
+        }
+        return categorias[i].equals(nombreFiltro());
+    }
+
+    private String componer(int i) {
+        String marca = "[ ] ";
+        boolean lista = hechas[i].equals("si");
+        if (lista == true) {
+            marca = "[x] ";
+        }
+        return marca + textos[i] + " (" + categorias[i] + ")";
+    }
+
+    private int contarVisibles() {
+        int total = 0;
+        for (int i = 0; i < cuantas; i++) {
+            boolean dentro = visible(i);
+            if (dentro == true) {
+                total = total + 1;
+            }
+        }
+        return total;
+    }
+
+    private int contarPendientes() {
+        int total = 0;
+        for (int i = 0; i < cuantas; i++) {
+            boolean dentro = visible(i);
+            if (dentro == true) {
+                boolean pendiente = hechas[i].equals("no");
+                if (pendiente == true) {
+                    total = total + 1;
+                }
+            }
+        }
+        return total;
+    }
+
+    private String[] copiaVisible() {
+        int n = contarVisibles();
+        String[] copia = new String[n];
+        int siguiente = 0;
+        for (int i = 0; i < cuantas; i++) {
+            boolean dentro = visible(i);
+            if (dentro == true) {
+                copia[siguiente] = componer(i);
+                siguiente = siguiente + 1;
+            }
+        }
+        return copia;
+    }
+
+    private void pintarLista() {
+        String[] copia = copiaVisible();
+        adaptador = new ArrayAdapter(this, R.layout.item, copia);
+        lista.setAdapter(adaptador);
     }
 
     private void redibujar() {
-        adaptador.clear();
-        int cuantas = textos.size();
-        for (int i = 0; i < cuantas; i++) {
-            adaptador.add(componer(i));
-        }
+        pintarLista();
+        int visibles = contarVisibles();
+        int pendientes = contarPendientes();
+        String texto = "Filtro: " + nombreFiltro() + " · " + visibles + " · pendientes " + pendientes;
+        etiqueta.setText(texto);
     }
 
+    // El texto de la tarea nueva y su categoría salen de dos campos: el de al lado del teclado y el
+    // que se elige con los tres botones. Al agregar se queda seleccionada la misma categoría.
     private void agregar() {
-        String texto = nueva.getText().toString();
+        String texto = nueva.getEditableText().toString();
         if (texto.length() == 0) {
             return;
         }
-        int indice = textos.size();
-        textos.add(texto);
-        categorias.add(categoria);
-        hechas.add("no");
-        guardar(indice, texto, categoria, "no");
+        if (cuantas >= MAXIMO) {
+            return;
+        }
+        textos[cuantas] = texto;
+        categorias[cuantas] = nombreFiltro();
+        boolean sinFiltro = categorias[cuantas].equals("Todas");
+        if (sinFiltro == true) {
+            categorias[cuantas] = "Casa";
+        }
+        hechas[cuantas] = "no";
+        guardar(cuantas);
+        cuantas = cuantas + 1;
+        prefs.edit().putInt("cuantas", cuantas).apply();
         nueva.setText("");
         redibujar();
     }
 
-    private void guardar(int indice, String texto, String cat, String hecha) {
-        String clave = "texto" + indice;
-        prefs.edit().putString(clave, texto).apply();
-        clave = "categoria" + indice;
-        prefs.edit().putString(clave, cat).apply();
-        clave = "hecha" + indice;
-        prefs.edit().putString(clave, hecha).apply();
-        prefs.edit().putInt("cuantas", textos.size()).apply();
-    }
-
-    private int primeraPendiente() {
-        int cuantas = hechas.size();
+    // Marca la primera pendiente que el filtro deja ver, y no la primera de la lista completa: con
+    // el filtro en Trabajo, completar la primera de Casa sería un efecto invisible.
+    private void completar() {
         for (int i = 0; i < cuantas; i++) {
-            String hecha = (String) hechas.get(i);
-            boolean pendiente = hecha.equals("no");
-            if (pendiente == true) {
-                return i;
+            boolean dentro = visible(i);
+            if (dentro == true) {
+                boolean pendiente = hechas[i].equals("no");
+                if (pendiente == true) {
+                    hechas[i] = "si";
+                    guardar(i);
+                    redibujar();
+                    return;
+                }
             }
         }
-        return -1;
     }
 
-    private void completar() {
-        int elegida = primeraPendiente();
-        if (elegida < 0) {
-            return;
-        }
-        hechas.set(elegida, "si");
-        String texto = (String) textos.get(elegida);
-        String cat = (String) categorias.get(elegida);
-        guardar(elegida, texto, cat, "si");
+    private void elegirCategoria(int cual) {
+        filtro = cual;
         redibujar();
-    }
-
-    private void elegirCategoria(String cual) {
-        categoria = cual;
-        pintarCategoria();
     }
 
     @Override
     public void onClick(View vista) {
         int cual = vista.getId();
         if (cual == R.id.casa) {
-            elegirCategoria("Casa");
+            elegirCategoria(1);
         } else if (cual == R.id.trabajo) {
-            elegirCategoria("Trabajo");
+            elegirCategoria(2);
         } else if (cual == R.id.estudio) {
-            elegirCategoria("Estudio");
+            elegirCategoria(3);
         } else if (cual == R.id.agregar) {
             agregar();
-        } else {
+        } else if (cual == R.id.completar) {
             completar();
+        } else {
+            int siguiente = filtro + 1;
+            if (siguiente > 3) {
+                siguiente = 0;
+            }
+            elegirCategoria(siguiente);
         }
     }
 }

@@ -10,6 +10,12 @@
         android:layout_height="wrap_content"
         android:text="@string/cero" />
 
+    <TextView
+        android:id="@+id/estado"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/parado" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -22,16 +28,22 @@
             android:text="@string/iniciar" />
 
         <Button
-            android:id="@+id/parar"
+            android:id="@+id/pausar"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="@string/parar" />
+            android:text="@string/pausar" />
 
         <Button
             android:id="@+id/vuelta"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/vuelta" />
+
+        <Button
+            android:id="@+id/reiniciar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/reiniciar" />
     </LinearLayout>
 
     <ListView

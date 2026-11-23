@@ -8,5 +8,6 @@
     <string name="estudio">Estudio</string>
     <string name="agregar">Agregar</string>
     <string name="completar">Completar la primera</string>
+    <string name="filtrar">Filtrar</string>
     <string name="categoria">Categoría: </string>
 </resources>

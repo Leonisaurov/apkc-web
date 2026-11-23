@@ -3,6 +3,10 @@
     <string name="app_name">Notas</string>
     <string name="titulo">Bloc de notas</string>
     <string name="pista">Escribe una nota</string>
+    <string name="nueva">Nueva</string>
+    <string name="inicial">Nota nueva</string>
+    <string name="anterior">Anterior</string>
+    <string name="siguiente">Siguiente</string>
     <string name="guardar">Guardar</string>
-    <string name="borrar">Borrar la última</string>
+    <string name="borrar">Borrar</string>
 </resources>
