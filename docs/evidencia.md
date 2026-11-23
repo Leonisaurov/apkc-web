@@ -9989,3 +9989,55 @@ guarda, `PASS`.
 **Fronteras de este `§`.** `module-info.class` y `package-info.class` de la raíz se excluyen a
 propósito (`apkc/dependencias.go:171`): dos jars modulares no colisionan por ellos. No se corrió gate,
 chromium ni publicación.
+
+## 225. El frente `jar/` cierra: inventario a cero y el APK del jar real verificado
+
+Medido el 2026-11-23 sobre `6742687` (`fix(java): los throws no van en la Signature`), que lleva
+dentro los tres arreglos que destapó el jar real: `dd50e71` (`fix(dex): ordena los try_items por
+dirección de inicio`), `c106f6a` (`fix(dex): escribe los encoded_value y el directorio de anotaciones
+como el verificador`) y `64a7da9` (`fix(dex): marca la mitad alta del par en conversiones en sitio`).
+
+**El inventario, a cero.**
+
+```sh
+python3 banco/inventario-jar/inventario.py
+```
+
+**Resultado**: `banco/inventario-jar/informe.md` queda con **520 clases recorridas, 0 rechazadas y 0
+tipos de límite**, la tabla de límites vacía y `casos.json` en `{}`. Cada clase se dexó en su propia
+invocación de `apkc dex`, así que el conteo de clases es exacto (`banco/inventario-jar/README.md:55-59`).
+El oráculo `d8` dexa el jar completo con **rc 0** y deja un `classes.dex` de **563 612 B**
+(`banco/inventario-jar/informe.md:24`).
+
+**El APK del jar real, por los oráculos.**
+
+```sh
+APKC=<binario del árbol> \
+  JAR_REAL=/home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar \
+  sh banco/validar-apk/validar.sh
+```
+
+**Resultado**: el build `--linker go --compiler go --signer go` dexa las **520 clases** del jar en un
+solo dex de **526 856 B** y el APK sale con `classes.dex` (la app) y `classes2.dex` (la dependencia);
+`apksigner verify --verbose` da `true` en la v1, la v2 y la v3, `zipalign -c -p 4` da `ok`, y
+`dexdump` ve las 520 clases en `classes2.dex` sin un solo `Failure to verify`. El cruce queda medido:
+`classes.dex` invoca `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode` y `classes2.dex` lo
+define, que es lo que exige `verifica_metodo` (`banco/validar-apk/validar.sh:178`). El guion cierra
+con `OK: los dos APK llevan los dex esperados, la firma pasa por los tres esquemas y los oráculos ven
+el método del jar`; en esta corrida imprimió además el `OK` del techo de 16 bits (§223), de ahí el
+doble `OK`.
+
+**Antes de los tres arreglos.** El jar real no dexaba y el desorden estaba en el fichero que
+escribíamos: `dexdump` daba `Out_of_order try_item with start_addr: 61`, y detrás aparecían
+`Bad index for encoded_value string` y `Out-of-order field_idx for annotation`. Los tres se
+corrigieron en `dd50e71`, `c106f6a` y `64a7da9`. El inventario pasó de 20 rechazadas sobre `492c3f0`
+(§222) a 0 sobre el árbol de este `§`; los conteos intermedios de las corridas del frente son
+historial, no estado vigente.
+
+**La pestaña.** El wasm se reconstruyó con `sh tools/preview-local.sh` y quedó en
+`sha256 8026c54aebfcf6af097a305f5faad55ca0ebb11b827c90ab351a476f82ab3b0e`.
+
+**Fronteras de este `§`.** Siguen fuera de la medida: `invokedynamic`/`condy`; un método que pase de
+32 KB y pida `goto/32`; el dex de la **app**, que aún no se reparte (§223); API < 21; y el `check`
+mono-fuente. No se corrió gate, chromium ni publicación: la comprobación es la del inventario y la del
+guion de los oráculos.

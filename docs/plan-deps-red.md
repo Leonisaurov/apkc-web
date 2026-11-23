@@ -2,8 +2,9 @@
 
 Estado: **autorizado y priorizado por el usuario** (2026-11-22). La vía es importar
 artefactos desde disco u OPFS (Fase 1 y Fase K); la regla 4 de `AGENTS.md` sigue intacta y
-cualquier descarga en runtime está prohibida. La Fase J está cerrada y la Fase K, aprobada en
-nativo. Todo lo que no trae comando ejecutado va marcado HIPÓTESIS.
+cualquier descarga en runtime está prohibida. La Fase J está cerrada **con un jar real dexado y su
+APK verificado por los oráculos** y la Fase K, aprobada en nativo. Todo lo que no trae comando
+ejecutado va marcado HIPÓTESIS.
 
 ## Resumen ejecutivo
 
@@ -182,7 +183,7 @@ espejo con CORS.
 Fase 4 — proxy (solo si la regla 4 se cambia explícitamente). Fuera del alcance
 de este repo mientras la regla siga en pie.
 
-Fase J — `jar/` en el compilador Go (**cerrada**). El usuario quiere que
+Fase J — `jar/` en el compilador Go (**cerrada, con el jar real verificado**). El usuario quiere que
 `apkc compile/build --compiler go` consuma `jar/*.jar` y `classes.jar` de los
 `.aar`, sin red y sin `apkc-deps` en runtime. Criterio de aceptación: un proyecto
 con un jar en `jar/` compila con el compilador Go y las clases del jar resuelven
@@ -208,9 +209,55 @@ artefactos; el catálogo y la red siguen fuera. Subestados:
   `build/dexcache/deps-gocache-*.bin`, sin pisar `build/dexcache.bin` ni dejar
   `.tmp`. 4 tests, `rc 0` del fixture y preview `sha256 90fc0011…`. Evidencia:
   §220 de `docs/evidencia.md`.
-- **No medido / trabajo aparte**: el dexer propio escribe un `classes.dex` por
-  bucket y no parte al superar 65 536 referencias de método; un `invokedynamic`
-  no medido falla nombrando jar, entrada y sitio.
+
+### J-bis: inventario de límites restantes (cerrada el 2026-11-23)
+
+**Estado vigente: 0 clases rechazadas y 0 tipos de límite** sobre
+`android-support-v4.jar` (648 327 B), y el APK de ese jar pasa los tres oráculos. Los dos comandos
+que lo sostienen:
+
+```sh
+python3 banco/inventario-jar/inventario.py
+APKC=<binario del árbol> \
+  JAR_REAL=/home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar \
+  sh banco/validar-apk/validar.sh
+```
+
+- **Inventario**: 520 clases recorridas, **0** rechazadas, **0** tipos de límite
+  (`banco/inventario-jar/informe.md`); `casos.json` queda en `{}`. El oráculo `d8` dexa el jar completo
+  con **rc 0** y un `classes.dex` de **563 612 B**. Cada clase va en su propia invocación de
+  `apkc dex`, así que el conteo de clases es exacto.
+- **Validación**: rc 0; las 520 clases salen en un dex de **526 856 B** (`classes2.dex`), la app en
+  `classes.dex`; `apksigner` da `true` en v1, v2 y v3, `zipalign` da `ok`, `dexdump` no imprime ningún
+  `Failure to verify` y ve las 520 clases, y `classes.dex` invoca
+  `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode`, que define `classes2.dex`.
+- **Lo que lo desbloqueó**: el jar real destapó tres defectos del fichero que escribíamos:
+  `Out_of_order try_item with start_addr: 61` en `dexdump`, y detrás
+  `Bad index for encoded_value string` y `Out-of-order field_idx for annotation`; se cerraron en
+  `dd50e71`, `c106f6a` y `64a7da9`.
+- **La pestaña**: wasm reconstruido con `sh tools/preview-local.sh`,
+  `sha256 8026c54aebfcf6af097a305f5faad55ca0ebb11b827c90ab351a476f82ab3b0e`.
+
+Historial de las corridas del inventario durante el frente, con el mismo comando de arriba. Solo cuenta
+como estado la última fila; las demás son las cifras que dejó cada vuelta, y la de 20 es la que quedó
+registrada como §222 de `docs/evidencia.md`:
+
+| Corrida | Clases rechazadas |
+| --- | ---: |
+| 1 | 49 |
+| 2 | 22 |
+| 3 (árbol `492c3f0`, §222) | 20 |
+| 4 | 6 |
+| 5 (árbol `6742687`, §225) | **0** |
+
+Las corridas 1, 2 y 4 se hicieron con el mismo comando de arriba, pero no quedaron registradas como
+`§`; sus cifras son el historial que dejó el inventario en cada vuelta, no estado del árbol actual.
+Solo la fila 5 describe el árbol de este documento. Evidencia del cierre: §225 de `docs/evidencia.md`,
+más §222 (el conteo de 20) y §223 (el reparto a 70 000 métodos).
+
+Fronteras que siguen fuera de la medida, no defectos: `invokedynamic`/`condy`, un método de más de
+32 KB que pida `goto/32`, el dex de la **app** sin repartir (§223), API < 21 y el `check`
+mono-fuente.
 
 Fase K — recursos `res/__deps/` y `lib/<abi>/` (**aprobada en nativo**). `976b02e`
 (`feat(apkc): enlaza recursos y lib/ de dependencias`) lee la isla `res/__deps/`, valida una carpeta
@@ -241,16 +288,20 @@ Proxy y Wisp siguen descartados.
 ## 6. Registro de estado
 
 - Fase J **cerrada**: clases aprobadas en nativo (`5bc1e8c`/`8d6ee67`), importador aprobado
-  (`be7b417`/`66c35ab`), fixture aprobado (`8d99e52`/`aee59d4`) y dex en Go aprobado
-  (`3bc6c52`/`e84a64f`).
-- **J-bis, reabierta el 2026-11-23 por evidencia real**: con `jar/android-support-v4.jar`, la pestaña
-  dexea el bucket y falla en `ActionBarDrawerToggle$SlideDrawable` con `byte 0x76: opcode outside the
-  table this fork measured`. `0x76` es `invoke-direct/range`, no medido por el traductor. El cierre con
-  fixtures era válido para lo medido, pero no para ese jar real; queda en curso con un agente
-  específico (`dex-opcode76`) que añadirá la familia `/range` que falte y su prueba. Hasta que pase,
-  la Fase J no se da por terminada frente a dependencias reales.
-- No medido / trabajo aparte: un `classes.dex` por bucket, sin partir a las 65 536 referencias de
-  método; `invokedynamic` no medido.
+  (`be7b417`/`66c35ab`), fixture aprobado (`8d99e52`/`aee59d4`), dex en Go aprobado
+  (`3bc6c52`/`e84a64f`) y J-bis cerrada con el jar real inventariado a 0 y su APK verificado
+  (§225).
+- **J-bis, cerrada el 2026-11-23 con el jar real**: reabierta por `jar/android-support-v4.jar`, que
+  se paraba en `ActionBarDrawerToggle$SlideDrawable` con `byte 0x76: opcode outside the table this
+  fork measured` (`invoke-direct/range`) y después destapó tres defectos del fichero que escribíamos
+  (`Out_of_order try_item with start_addr: 61`, `Bad index for encoded_value string`,
+  `Out-of-order field_idx for annotation`), cerrados en `dd50e71`, `c106f6a` y `64a7da9`. Cierre:
+  inventario a **0 rechazadas y 0 tipos de límite** en 520 clases, y `JAR_REAL=… sh
+  banco/validar-apk/validar.sh` con **rc 0**, las 520 clases en un dex de 526 856 B, `apksigner`
+  v1/v2/v3 `true`, `zipalign ok`, `dexdump` sin `Failure to verify` y el método del jar invocado en
+  `classes.dex` y definido en `classes2.dex`. Evidencia: §225.
+- Fronteras vivas del frente, no defectos: `invokedynamic`/`condy`, métodos de más de 32 KB
+  (`goto/32`), el dex de la **app** sin repartir (§223), API < 21 y el `check` mono-fuente.
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
   fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
