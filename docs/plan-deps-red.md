@@ -255,11 +255,12 @@ Las corridas 1, 2 y 4 se hicieron con el mismo comando de arriba, pero no quedar
 Solo la fila 5 describe el árbol de este documento. Evidencia del cierre: §225 de `docs/evidencia.md`,
 más §222 (el conteo de 20) y §223 (el reparto a 70 000 métodos).
 
-Fronteras que siguen fuera de la medida, no defectos: `invokedynamic`/`condy`, un método de más de
-32 KB que pida `goto/32`, API < 21 y el `check` mono-fuente. El dex de la **app** ya no es una de
-ellas: se reparte desde `e05213b` (§228: 70 000 métodos en `classes.dex` + `classes2.dex`, y en las
-apps pequeñas el dex sale byte a byte como antes); lo que queda abierto es el **`.aab` multi-dex, sin
-medir con `bundletool`**.
+Fronteras que siguen fuera de la medida, no defectos: `invokedynamic`/`condy`, API < 21 y el
+**`.aab` multi-dex, sin medir con `bundletool`**. Ya no lo son: un método de más de 32 KB que pida
+`goto/32` (cerrado en `23033fe`, §226), el `check` mono-fuente (cerrado en `a4bf224`, §227: compila
+todos los fuentes del proyecto y solo diagnostica el pedido) y el dex de la **app**, que se reparte
+desde `e05213b` (§228: 70 000 métodos en `classes.dex` + `classes2.dex`, y en las apps pequeñas el dex
+sale byte a byte como antes).
 
 Fase K — recursos `res/__deps/` y `lib/<abi>/` (**aprobada en nativo**). `976b02e`
 (`feat(apkc): enlaza recursos y lib/ de dependencias`) lee la isla `res/__deps/`, valida una carpeta
@@ -302,10 +303,11 @@ Proxy y Wisp siguen descartados.
   banco/validar-apk/validar.sh` con **rc 0**, las 520 clases en un dex de 526 856 B, `apksigner`
   v1/v2/v3 `true`, `zipalign ok`, `dexdump` sin `Failure to verify` y el método del jar invocado en
   `classes.dex` y definido en `classes2.dex`. Evidencia: §225.
-- Fronteras vivas del frente, no defectos: `invokedynamic`/`condy`, métodos de más de 32 KB
-  (`goto/32`), API < 21 y el `check` mono-fuente. El dex de la **app** sí se reparte desde `e05213b`
-  (§228: 70 000 métodos en `classes.dex` + `classes2.dex`, y en las apps pequeñas el dex sale byte a
-  byte como antes); queda abierto el **`.aab` multi-dex, sin medir con `bundletool`**.
+- Fronteras vivas del frente, no defectos: `invokedynamic`/`condy`, API < 21 y el **`.aab` multi-dex,
+  sin medir con `bundletool`**. Cerradas después de este frente: `goto/32` en `23033fe` (§226), el
+  `check` mono-fuente en `a4bf224` (§227: compila todos los fuentes y solo diagnostica el pedido) y el
+  dex de la **app**, que se reparte desde `e05213b` (§228: 70 000 métodos en `classes.dex` +
+  `classes2.dex`, apps pequeñas byte a byte).
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
   fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
