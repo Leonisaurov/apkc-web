@@ -85,12 +85,17 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   `ses_df9ecde81ffeVOW5GZ5bA820E6` en **APROBAR**, sin defectos `CONFIRMADO`; el merge de cinco
   puntos está verificado y queda una pregunta `INCIERTA` (sonda `--recrear` más lista). Evidencia:
   §209.
-- E5 **integrada** como `2dd70c8` (cherry-pick de `993d51b`, 21 conflictos resueltos), con la tanda
-  de diez pruebas y el paquete completo en verde; su crítico
-  `ses_df9c6f81effeRKtmnqwkLjBU4s` **aún no ha dictaminado**, así que sigue **en verificación**
-  (§210).
-- La vista previa se reconstruyó con E1.1, E3, E4, E2, H4 y E5 (`sha256 48df84e3…`).
-- **Activas:** E6 (en integración) y E7 (crítico aprobado y corrección cosmética aplicada, sin
-  cierre documental).
+- E5 **cerrada** como `2dd70c8` (cherry-pick de `993d51b`, 21 conflictos resueltos): crítico
+  `ses_df9c6f81effeRKtmnqwkLjBU4s` en **APROBAR CON CONDICIONES**, cumplida por el builder de E6 en
+  `88d9b38` (diez tests juntos y paquete completo en verde). Evidencia: §210.
+- E6 **integrado** como `88d9b38`, con diez tests enfocados y el paquete completo en verde, **en
+  verificación**: su crítico `ses_df9bd547cffefBHTZrtCZdEv1i` aún no ha dictaminado.
+- E7 **cerrada**: lógica aprobada por `ses_df9d13306ffehyseNhLIqoaYfh`, `usage` corregido en
+  `2dd70c8` y `which` verificado en `969b045` por el QA `ses_df9c1482fffeKi6lTSOz6CBbk0`.
+  Evidencia: §211.
+- La vista previa se reconstruyó con E6 y E5 (`sha256 468500fd…`), verificada contra el `/apkc.wasm`
+  servido.
+- **Activas:** E6, pendiente del crítico. I3 (incremental) se trabaja en un worktree aparte, fuera
+  de esta cola.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.

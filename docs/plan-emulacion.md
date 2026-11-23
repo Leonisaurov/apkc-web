@@ -2,9 +2,10 @@
 
 **Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
 medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E3 y E4 están
-**cerradas** en §207 y §208; E2 está **cerrada** en §209; E5 está **integrada y en verificación**
-en §210; E6 y E7 siguen **abiertas**. Este fichero es un plan, no evidencia: lo que aquí se afirme
-sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que se comprobará.
+**cerradas** en §207 y §208; E2 está **cerrada** en §209; E5 y E7 están **cerradas** en §210 y
+§211; E6 está **integrada y en verificación**. Este fichero es un plan, no evidencia: lo que aquí
+se afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que se
+comprobará.
 Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla de `docs/plan.md`
 cuando la fase se cierre.
 
@@ -237,12 +238,12 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
 - **Abandona.** `RelativeLayout` con reglas, `ConstraintLayout`, fuentes, temas del sistema, sombras,
   `drawable` vectoriales y animaciones de vista.
 
-### E5. Entrada de usuario — **EN VERIFICACIÓN**
+### E5. Entrada de usuario — **CERRADA**
 
-- **Estado: integrada en `2dd70c8`, en verificación.** Cherry-pick de `993d51b` con 21 conflictos
-  resueltos; la tanda de diez pruebas y el paquete completo están en verde, pero el crítico
-  `ses_df9c6f81effeRKtmnqwkLjBU4s` aún no ha dictaminado. Evidencia y fronteras: §210 de
-  `docs/evidencia.md`. Se cerrará con el follow-up del crítico.
+- **Estado: cerrada** el 2026-11-22 como `2dd70c8` (cherry-pick de `993d51b`, 21 conflictos
+  resueltos), con el crítico `ses_df9c6f81effeRKtmnqwkLjBU4s` en **APROBAR CON CONDICIONES** y la
+  condición cumplida por el builder de E6 en `88d9b38` (diez tests juntos, paquete completo en
+  verde). Evidencia y fronteras: §210 de `docs/evidencia.md`.
 - **Objetivo.** Probar un formulario: escribir en un `EditText`, marcar una casilla, elegir un
   radio y cambiar un `Switch`, y que la app reaccione por sus oyentes.
 - **Qué se emula.**
@@ -258,8 +259,11 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
   `cd apkc && APKC_ANDROID_JAR=<jar> go test -run TestElPreviewEscribeYMarcaLoQueSeLePide -v .`.
 - **Abandona.** Teclado en pantalla, IME, selección, autocompletado, arrastrar texto y portapapeles.
 
-### E6. Hilos y temporizadores controlados
+### E6. Hilos y temporizadores controlados — **EN VERIFICACIÓN**
 
+- **Estado: integrado en `88d9b38`, en verificación.** Diez tests enfocados en verde y el paquete
+  completo en verde, pero el crítico `ses_df9bd547cffefBHTZrtCZdEv1i` aún no ha dictaminado. Su
+  evidencia se escribirá cuando lo haga; aquí no hay `§` todavía.
 - **Objetivo.** Ver un contador o una animación simple sin depender del reloj real: el mismo
   resultado en cada ejecución.
 - **Qué se emula.** `Handler.post`/`postDelayed`, `View.post`/`postDelayed`, `runOnUiThread` y
@@ -272,8 +276,12 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
 - **Abandona.** Hilos reales, `java.util.Timer`, `ValueAnimator`/`ObjectAnimator` con interpoladores,
   corrutinas y cualquier espera de reloj de pared.
 
-### E7. Diálogos y avisos propios (cola posterior)
+### E7. Diálogos y avisos propios — **CERRADA**
 
+- **Estado: cerrada** el 2026-11-22 con la lógica aprobada por el crítico
+  `ses_df9d13306ffehyseNhLIqoaYfh`, el defecto del `usage` corregido en `2dd70c8` y el `which` de
+  los botones verificado en `969b045` por el QA `ses_df9c1482fffeKi6lTSOz6CBbk0`. Evidencia y
+  fronteras: §211 de `docs/evidencia.md`.
 - **Objetivo.** Que un `AlertDialog` y un `Toast` propios se vean en el modelo como una capa.
 - **Qué se emula.** `AlertDialog.Builder` con título, mensaje y botones; `Toast.makeText().show()`
   como línea de consola y aviso efímero; `dismiss()`.

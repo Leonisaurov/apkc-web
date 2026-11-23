@@ -9506,12 +9506,10 @@ quedan fuera `super.getCount()`/`super.getView()`, `ArrayAdapter` con `List`,
 `AdapterView.getItemAtPosition`/`setSelection`/`smoothScrollToPosition` e `inflate(XmlPullParser,…)`.
 (3) No se corrió el gate ni chromium, y el sitio publicado no se ha empaquetado con `a76422d`.
 
-## 210. E5: entrada de usuario, con su medición (crítico en curso)
+## 210. E5: entrada de usuario, cerrada con su medición
 
 Medido el 2026-11-22 sobre `2dd70c8`, cherry-pick de `993d51b` con 21 conflictos resueltos, en un
-árbol que ya tenía `f802c0b` (sin topes de clics, capturas ni consola) y `2e3c629`. El crítico de
-E5 (`ses_df9c6f81effeRKtmnqwkLjBU4s`) **aún no ha dictaminado**, así que este `§` deja la fase en
-verificación y se corregirá con el follow-up cuando lo haga.
+árbol que ya tenía `f802c0b` (sin topes de clics, capturas ni consola) y `2e3c629`.
 
 **Qué emula.** `--escribir id/texto`, `--marcar id` y `--desmarcar id` entran por un solo
 `guionDeEntrada` de `eventoUsuario`, en el mismo orden que los clics y las recreaciones. El modelo
@@ -9541,9 +9539,44 @@ con `--pulsar` y `--recrear` en el mismo acumulador de órdenes, y el modelo man
 `Pulsaciones`, `Marcas`, `Interacciones`, `Bundle` y `Preferencias`. La tanda de diez incluye las
 pruebas de los topes retirados y las de E2, E3, E4 y H4 para comprobar que no se pisaron.
 
+**Cierre y condición cumplida.** El crítico `ses_df9c6f81effeRKtmnqwkLjBU4s` dio **APROBAR CON
+CONDICIONES**, sin hallazgos confirmados. La condición era repetir los tests de supervivencia de
+E1.1, E3, E4, E2 y E7 después de integrar E6; el builder de E6 la cumplió en `88d9b38`: los diez
+tests, incluidos `TestElPreviewConservaElEstadoAlRecrear`,
+`TestElColorRGB8DeAapt2SeLeeComoColor`, `TestElPreviewPintaUnaListaConSuAdaptador` y
+`TestElPreviewMuestraUnDialogoPropio`, pasan juntos (`ok … 0.195s`; paquete completo
+`ok … 56.618s`). No hay topes reintroducidos (`grep` vacío) y el `help` de `preview` está corregido.
+
 **Fronteras de este `§`.** (1) Se rechazan por nombre: teclear en algo que no es `EditText`, marcar
 algo no marcable (incluido el `RadioGroup`), un id ausente de la tabla y `--escribir` sin la forma
 `id/texto`. (2) Sin IME, cursor, selección, autocompletado, arrastre ni portapapeles. (3) Un
 `setText` dentro de un `TextWatcher` no vuelve a avisar, para no encadenar avisos. (4) Deuda
 apuntada: `String.valueOf(boolean)` sigue dando `1`/`0`. (5) No se corrió el gate ni chromium, y el
 sitio publicado no se ha empaquetado con `2dd70c8`.
+
+## 211. E7: diálogos propios y el `which` de sus botones, con su crítica
+
+Medido el 2026-11-22 sobre `969b045`, con la lógica de E7 ya integrada y el defecto cosmético del
+`usage` corregido en `2dd70c8`. La lógica la aprobó el crítico
+`ses_df9d13306ffehyseNhLIqoaYfh`; la condición `INCIERTA` del `which` la cerró el QA
+`ses_df9c1482fffeKi6lTSOz6CBbk0` con el commit `969b045` (`test(preview): verifica el which de los
+botones del diálogo`).
+
+**Qué emula.** `AlertDialog.Builder` con título, mensaje y hasta tres botones; `Toast.makeText()`
+como línea de consola y aviso efímero; `dismiss()`. Al pulsar un botón se entrega su `which` real
+del framework: `-1` el positivo, `-2` el negativo y `-3` el neutro.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElPreviewEntregaElWhichDeCadaBotonDelDialogo|TestElPreviewMuestraUnDialogoPropio' -v .
+```
+
+**Resultado**: `--- PASS` en las dos y `ok github.com/ajinasokan/apkc 0.060s`. El diálogo publica
+sus tres botones en el orden positivo, negativo y neutro; cada pulsación deja en el `TextView` y en
+la consola (`Log.i`) la línea `positivo=-1`, `negativo=-2` o `neutro=-3`, que es lo que el oyente
+leyó como `which`. La prueba se falsificó de forma adversativa: mutar el mapa a `+1/+2/+3` o quitar
+el botón neutro la hace fallar.
+
+**Fronteras de este `§`.** (1) Diálogos del sistema, `DialogFragment` con `FragmentManager`, menús
+contextuales y notificaciones del sistema quedan fuera. (2) No se corrió el gate ni chromium, y el
+sitio publicado no se ha empaquetado con `969b045`.
