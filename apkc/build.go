@@ -410,7 +410,7 @@ func _build(o buildOpts) {
 	if o.useAAB {
 		if needBundle || !exists("build/app.aab") {
 			requireKeystore(o.keyStore)
-			buildAAB()
+			buildAAB(depDexes)
 			signAAB(o.keyStore, o.storePass, o.keyAlias, o.sigAlg)
 		}
 	} else if o.signer == signerGo {
@@ -1478,6 +1478,41 @@ func dexEntryName(index int) string {
 	return "classes" + strconv.Itoa(index) + ".dex"
 }
 
+// dexEntries es la lista ordenada de dex que lleva un paquete: el del proyecto, los que dejó
+// su reparto a su lado y, detrás, los de las dependencias. `src` es de dónde se leen los bytes
+// y `name` el nombre de la entrada dentro del paquete (classes.dex, classes2.dex, …); quien
+// empaqueta le pone delante el prefijo `dex/` del módulo cuando lo necesita.
+//
+// Es la única lista que leen los dos empaquetadores. El apk ya pasaba por ella desde el
+// reparto; el aab recorría build/ por su cuenta y nombraba cada dex con filepath.Base, así que
+// un bucket de dependencias guardado bajo build/dexcache/… aportaba un segundo classes.dex y la
+// firma rechazaba el bundle por listar base/dex/classes.dex dos veces.
+func dexEntries(dirBuild string, depDexes []string) []bundleEntry {
+	entries := []bundleEntry{}
+	next := 1
+	if exists(filepath.Join(dirBuild, dexEntryName(1))) {
+		entries = append(entries, bundleEntry{src: filepath.Join(dirBuild, dexEntryName(next)), name: dexEntryName(next)})
+		next++
+		// el reparto del dex de la app (reparto.go) deja `classes2.dex`, `classes3.dex`, … en
+		// build/; el paquete los numera seguidos del primero, antes de los de las dependencias.
+		// El bucle para en el primer hueco: dexarAppEnGo los escribe contiguos y borra los que
+		// no tocan, así que un hueco no es un dex que falte sino el final del reparto.
+		for {
+			extra := filepath.Join(dirBuild, dexEntryName(next))
+			if !exists(extra) {
+				break
+			}
+			entries = append(entries, bundleEntry{src: extra, name: dexEntryName(next)})
+			next++
+		}
+	}
+	for _, dex := range depDexes {
+		entries = append(entries, bundleEntry{src: dex, name: dexEntryName(next)})
+		next++
+	}
+	return entries
+}
+
 // shadowedClass reports a class the project compiles that a dependency also ships,
 // reading nothing but the central directories of the jars. The single merge used to
 // catch this by aborting on "defined multiple times"; with two dex files the runtime
@@ -1702,31 +1737,12 @@ func packagePlan(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	} else {
 		add(filepath.Join("build", "AndroidManifest.xml"), "AndroidManifest.xml", true)
 	}
-	appDex := filepath.Join("build", "classes.dex")
 	dexDir := ""
 	if useAAB {
 		dexDir = "dex"
 	}
-	next := 1
-	if exists(appDex) {
-		add(appDex, filepath.Join(dexDir, dexEntryName(next)), true)
-		next++
-		// el reparto del dex de la app (reparto.go) deja `classes2.dex`, `classes3.dex`, … en
-		// build/; el paquete los numera seguidos del primero, antes de los de las dependencias.
-		// El bucle para en el primer hueco: dexarAppEnGo los escribe contiguos y borra los que
-		// no tocan, así que un hueco no es un dex que falte sino el final del reparto.
-		for {
-			extra := filepath.Join("build", dexEntryName(next))
-			if !exists(extra) {
-				break
-			}
-			add(extra, filepath.Join(dexDir, dexEntryName(next)), true)
-			next++
-		}
-	}
-	for _, dex := range depDexes {
-		add(dex, filepath.Join(dexDir, dexEntryName(next)), true)
-		next++
+	for _, e := range dexEntries("build", depDexes) {
+		add(e.src, filepath.Join(dexDir, e.name), true)
 	}
 
 	if useAAB {

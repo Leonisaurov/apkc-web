@@ -9,20 +9,22 @@ import (
 	"path/filepath"
 )
 
-// buildAAB turns build/bundle.zip into build/app.aab without bundletool.
+// buildAAB turns build/bundle.zip into build/app.aab without bundletool. `depDexes` es la
+// lista de dex de las dependencias que produjo el plan del build, para que la rama del
+// enlazador Go numere los dex con dexEntries y no recorra build/.
 //
 // The bundle.zip that the aapt2 backend leaves is already protobuf: manifest/
 // AndroidManifest.xml, dex/, res/ and resources.pb. What bundletool adds is the
 // BundleConfig.pb and the `base/` prefix of the base module, and that is what this
 // writes. The signature is JAR v1, because a bundle has no APK Signing Block.
-func buildAAB() {
+func buildAAB(depDexes []string) {
 	salida := filepath.Join("build", "app.aab")
 	entrada := filepath.Join("build", "bundle.zip")
 	if _, err := os.Stat(entrada); err != nil && os.IsNotExist(err) {
 		// Sin bundle.zip no hay salida de aapt2: el enlazador Go dejó AXML y resources.arsc.
 		// Esta es la rama que cierra la frontera 5.33 (§128) sin bundletool ni proto de aapt2.
 		if _, err := os.Stat(filepath.Join("build", "resources.arsc")); err == nil {
-			if err := ensamblarAABDesdeGo("build", salida); err != nil {
+			if err := ensamblarAABDesdeGo("build", dexEntries("build", depDexes), salida); err != nil {
 				LogF("build", err.Error(), "(el bundle se arma desde la salida del enlazador Go)")
 			}
 			LogI("build", salida, "ensamblado desde el enlazador Go, sin aapt2 ni bundletool")

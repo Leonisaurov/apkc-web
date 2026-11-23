@@ -306,9 +306,12 @@ func ficherosDeArbol(raiz string) ([]string, error) {
 
 // ensamblarAABDesdeGo es la pieza que cierra la frontera 5.33: convierte la salida del
 // enlazador Go en un .aab con la misma forma que el que ensamblaba aapt2 + bundletool.
-// `dirBuild` es el directorio build/ del proyecto. La firma JAR v1 se aplica después con
-// signAAB, igual que en el camino de aapt2.
-func ensamblarAABDesdeGo(dirBuild, salida string) error {
+// `dirBuild` es el directorio build/ del proyecto y `dexes` la lista que arma dexEntries, la
+// misma que empaqueta el apk: el ensamblador no recorre build/ por su cuenta, porque los
+// `classes.dex` que dejan los buckets de dependencias bajo build/dexcache/… colisionaban con
+// el de la app al nombrarlos con filepath.Base. La firma JAR v1 se aplica después con signAAB,
+// igual que en el camino de aapt2.
+func ensamblarAABDesdeGo(dirBuild string, dexes []bundleEntry, salida string) error {
 	axmlManifiesto, err := os.ReadFile(filepath.Join(dirBuild, "AndroidManifest.xml"))
 	if err != nil {
 		return fmt.Errorf("el manifiesto AXML: %w", err)
@@ -366,18 +369,12 @@ func ensamblarAABDesdeGo(dirBuild, salida string) error {
 	if err := escribe("base/manifest/AndroidManifest.xml", manifiesto); err != nil {
 		return err
 	}
-	dex, _ := ficherosDeArbol(dirBuild)
-	sort.Strings(dex)
-	for _, nombre := range dex {
-		if filepath.Ext(nombre) != ".dex" {
-			continue
-		}
-		datos, err := os.ReadFile(filepath.Join(dirBuild, nombre))
+	for _, de := range dexes {
+		datos, err := os.ReadFile(de.src)
 		if err != nil {
 			return err
 		}
-		destino := "base/dex/" + filepath.Base(nombre)
-		if err := escribe(destino, datos); err != nil {
+		if err := escribe("base/dex/"+de.name, datos); err != nil {
 			return err
 		}
 	}
