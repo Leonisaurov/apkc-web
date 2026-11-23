@@ -261,7 +261,9 @@ un método de más de 32 KB que pida `goto/32` (cerrado en `23033fe`, §226), el
 de la **app**, que se reparte desde `e05213b` (§228: 70 000 métodos en `classes.dex` + `classes2.dex`, y
 en las apps pequeñas el dex sale byte a byte como antes), y el **`.aab` multi-dex**, que `0237e23`
 ensambla con `dexEntries` —la misma lista de dex que el APK— y
-`banco/aab-multidex/aab-multidex.sh --dependencias` deriva con `bundletool` (§229).
+`banco/aab-multidex/aab-multidex.sh --dependencias` deriva con `bundletool` (§229). Del resto del mapa
+siguen abiertos, con su `§`: los puntos de unión —el ternario y el booleano de comparación— y `"" + x`
+(§236), el SourceStamp truncado y `verify` con `ReadAll` (§237), y la UI del hot swap (§238).
 
 Fase K — recursos `res/__deps/` y `lib/<abi>/` (**aprobada en nativo**). `976b02e`
 (`feat(apkc): enlaza recursos y lib/ de dependencias`) lee la isla `res/__deps/`, valida una carpeta
@@ -309,7 +311,8 @@ Proxy y Wisp siguen descartados.
   fuentes y solo diagnostica el pedido), el dex de la **app**, que se reparte desde `e05213b` (§228: 70 000
   métodos en `classes.dex` + `classes2.dex`, apps pequeñas byte a byte), y el **`.aab` multi-dex**, que
   `0237e23` ensambla con `dexEntries` y `banco/aab-multidex/aab-multidex.sh --dependencias` deriva con
-  `bundletool` (§229).
+  `bundletool` (§229). Siguen abiertos, con su `§`: los puntos de unión y `"" + x` (§236), el SourceStamp
+  truncado y `verify` con `ReadAll` (§237), y la UI del hot swap (§238).
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
   fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
