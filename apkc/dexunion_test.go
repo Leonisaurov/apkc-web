@@ -343,3 +343,41 @@ func TestElBordeDeVueltaQueCasaNoDejaFrontera(t *testing.T) {
 		t.Fatalf("no hay goto de vuelta en las palabras: %v", unidades)
 	}
 }
+
+// TestElCondicionalLargoNoDuplicaLaFrontera fija que un `if-*` promovido a `if invertido + goto/32`
+// que vuelve a una cabecera con OTRA altura deja UNA sola frontera por par (origen, destino). La forma
+// larga llama a `reconciliaAntesDeSaltar` dos veces —una desde `escribeBranquia` y otra desde
+// `salto32`— y, como con una altura distinta esa función no hace `fijaPila`, la segunda repite el
+// mismo `pc → destino`: la frontera se anotaba dos veces. Es un cuerpo con la cabecera a pc 3 (canon
+// de 1 valor) y el borde de vuelta a pc 7, que llega con 0 tras consumir la comparación:
+//
+//	0: iconst_0        2: iconst_0        4: iload_1      7: if_icmplt 3   <- borde de vuelta
+//	1: istore_0        3: istore_1        5: bipush 10   10: iload_0 / 11: ireturn
+//	                   ^ cabecera, canon con 1 valor
+func TestElCondicionalLargoNoDuplicaLaFrontera(t *testing.T) {
+	codigo := []byte{
+		0x03, 0x3b, // iconst_0 / istore_0
+		0x03, 0x3c, // iconst_0 / istore_1  (pc 3: la cabecera, canon con 1 valor)
+		0x1b, 0x10, 0x0a, // iload_1 / bipush 10
+		0xa1, 0xff, 0xfc, // if_icmplt 3      (pc 7: el borde de vuelta, llega con 0)
+		0x1a, 0xac, // iload_0 / ireturn
+	}
+	m := classMethod{Access: accStatic, Name: "condLargoFrontera", Desc: "()I", HasCode: true,
+		MaxStack: 2, LocalCount: 2, ArgCount: 0, Code: codigo}
+	// la promoción la decide la pasada de `codeItemConPc` cuando la forma corta no llega; aquí se
+	// fuerza para ejercitar `saltoCondicionalLargo` sin montar un método de 32 KB
+	p := &traduce{m: m, locales: 2, base: 2 + 2 + 2,
+		promover: map[int]byte{7: promocionCond32}}
+	if err := p.recorre(); err != nil {
+		t.Fatalf("el cuerpo no se traduce: %v", err)
+	}
+	pares := 0
+	for _, f := range p.fronteras {
+		if f.pc == 7 && f.destino == 3 {
+			pares++
+		}
+	}
+	if pares != 1 {
+		t.Fatalf("%d fronteras para el par (pc 7 -> pc 3) y la medida dice 1: %v", pares, p.fronteras)
+	}
+}

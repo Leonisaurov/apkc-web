@@ -62,6 +62,21 @@ func (f fronteraUnion) String() string {
 		"a stack height, so that arrival keeps the plan it had"
 }
 
+// anotaFrontera apunta una llegada con otra altura sin repetir la que ya estuviera anotada. La forma
+// larga de un condicional (`saltoCondicionalLargo`) pasa por `reconciliaAntesDeSaltar` dos veces
+// —una desde `escribeBranquia` y otra desde `salto32`— y, como con una altura distinta esa función no
+// hace `fijaPila`, la segunda veía la misma llegada: el par (pc, destino) se anotaba dos veces. Dos
+// fronteras idénticas no describen dos caminos, sino el mismo; se compara la estructura entera para no
+// descartar una llegada del mismo pc a otro bloque con otra altura.
+func (p *traduce) anotaFrontera(f fronteraUnion) {
+	for _, ya := range p.fronteras {
+		if ya == f {
+			return
+		}
+	}
+	p.fronteras = append(p.fronteras, f)
+}
+
 // padRecon es un bloque de fuera de línea que iguala el reparto de un camino con el del cuerpo.
 type padRecon struct {
 	pila   estadoPila // reparto con el que llega el camino
@@ -296,7 +311,7 @@ func (p *traduce) reconcilia(in jvmInstr) bool {
 		if len(s.pila) != len(canon) {
 			// otra altura: el plan de registros no la puede igualar, así que este camino se queda
 			// con el que traía (fronteraUnion) en vez de tumbar el método
-			p.fronteras = append(p.fronteras, fronteraUnion{pc: s.origen, destino: in.pc,
+			p.anotaFrontera(fronteraUnion{pc: s.origen, destino: in.pc,
 				cabecera: len(canon), borde: len(s.pila)})
 			continue
 		}
@@ -341,7 +356,7 @@ func (p *traduce) reconciliaAntesDeSaltar(destino int, in jvmInstr) bool {
 		// el borde de vuelta llega con otra altura: se deja el reparto que traía, sin abortar (ver
 		// fronteraUnion). Cambiar la altura aquí exigiría inventar o tirar un valor, y eso cambia el
 		// programa.
-		p.fronteras = append(p.fronteras, fronteraUnion{pc: in.pc, destino: destino,
+		p.anotaFrontera(fronteraUnion{pc: in.pc, destino: destino,
 			cabecera: len(canon), borde: len(actual)})
 		return true
 	}
