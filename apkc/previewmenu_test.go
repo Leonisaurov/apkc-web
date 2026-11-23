@@ -63,6 +63,84 @@ func apkDelMenu(t *testing.T) []byte {
 		fuenteJava{nombre: "MainActivity.java", contenido: fuenteMenu})
 }
 
+// fuentePlantillaMenu es la plantilla «Menú de opciones» que genera el editor, copiada tal cual de
+// `studio/app.js` (TEMPLATES.activityMenu) con el paquete sustituido. No es un fixture: es la fuente
+// exacta que el usuario compila desde la página, incluida la anónima de MenuItem.
+const fuentePlantillaMenu = `package com.hola.contador;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        menu.add("Opciones").setOnMenuItemClickListener(new MenuItem.OnMenuItemClickListener() {
+            public boolean onMenuItemClick(MenuItem item) {
+                Toast.makeText(MainActivity.this, "Menu pulsado", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+        });
+        return true;
+    }
+}
+`
+
+// TestElPreviewEjecutaLaPlantillaMenuDelEditor reproduce la plantilla real del editor, no un
+// fixture: `--menu` publica «Opciones» y `--menu-item menu/0` ejecuta la anónima
+// `MenuItem.OnMenuItemClickListener`, cuyo único efecto es un Toast. Es la prueba de que el camino
+// que ve el usuario (menú → ítem → Toast en la consola) funciona con la fuente que genera la página.
+func TestElPreviewEjecutaLaPlantillaMenuDelEditor(t *testing.T) {
+	apk := apkDelContador(t,
+		fuenteJava{nombre: "R.java", contenido: rContador(t)},
+		fuenteJava{nombre: "MainActivity.java", contenido: fuentePlantillaMenu})
+
+	abierto, err := modeloVistaDeAPKConEventos(apk, "", true,
+		[]eventoUsuario{{Tipo: ordenMenuTipo}})
+	if err != nil {
+		t.Fatalf("--menu con la plantilla del editor falló: %v", err)
+	}
+	menu := abierto.Ejecucion.Menu
+	if menu == nil || !menu.Abierto || len(menu.Items) != 1 || menu.Items[0].Titulo != "Opciones" {
+		t.Fatalf("la plantilla no publica un menú abierto con «Opciones»: %+v", menu)
+	}
+
+	pulsado, err := modeloVistaDeAPKConEventos(apk, "", true, []eventoUsuario{
+		{Tipo: ordenMenuTipo},
+		{Tipo: ordenMenuItemTipo, Dato: "menu/0"},
+	})
+	if err != nil {
+		t.Fatalf("--menu-item menu/0 con la plantilla del editor falló: %v", err)
+	}
+	if pulsado.Ejecucion.Toast != "Menu pulsado" {
+		t.Errorf("el Toast de la anónima es %q y se esperaba «Menu pulsado»",
+			pulsado.Ejecucion.Toast)
+	}
+	linea := false
+	for _, l := range pulsado.Ejecucion.Consola {
+		if l.Origen == "Toast" && l.Texto == "Menu pulsado" {
+			linea = true
+		}
+	}
+	if !linea {
+		t.Errorf("la consola no tiene la línea del Toast de la plantilla: %+v", pulsado.Ejecucion.Consola)
+	}
+	if pulsado.Ejecucion.Menu == nil || pulsado.Ejecucion.Menu.Abierto ||
+		pulsado.Ejecucion.Menu.Seleccionado != "menu/0" {
+		t.Errorf("el menú no quedó cerrado con el ítem pulsado: %+v", pulsado.Ejecucion.Menu)
+	}
+	if len(pulsado.Ejecucion.Avisos) != 0 {
+		t.Errorf("la plantilla del editor dejó avisos: %+v", pulsado.Ejecucion.Avisos)
+	}
+}
+
 // TestElPreviewAbreElMenuDeOpciones es el criterio de la carencia: sin `--menu` no hay menú en el
 // modelo; con él, `onCreateOptionsMenu` corre y el modelo publica sus ítems visibles con su id
 // `menu/N`, saltándose los invisibles sin correr los índices.
