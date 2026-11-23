@@ -97,6 +97,12 @@ type resultadoEjecucion struct {
 	// Ciclo es la secuencia de métodos de ciclo de vida que se llamaron (`onCreate`, `onStart`,
 	// `onResume`, `onPause`, `onStop`, `onDestroy`, `onRestart`), en orden.
 	Ciclo []string `json:"ciclo,omitempty"`
+	// Bundle es el último estado que la actividad guardó en `onSaveInstanceState`, ya volcado: es lo
+	// que recibe la instancia recreada y lo que deja reproducible la rotación.
+	Bundle map[string]any `json:"bundle,omitempty"`
+	// Preferencias es el SharedPreferences de la ejecución, por nombre de fichero y clave. Dura toda
+	// la ejecución (también a través de una recreación) y se publica para poder reproducirlo.
+	Preferencias map[string]map[string]any `json:"preferencias,omitempty"`
 
 	// malformado separa dos clases de fallo que no son lo mismo: «la app llama a algo que el MVP no
 	// cubre» (se sigue con el modelo y rc 0) y «estos bytes no son un dex ejecutable», que el comando
@@ -159,6 +165,13 @@ type objetoDalvik struct {
 	// intentClase es el destino de un `Intent(Context, Class)` de una actividad propia: es lo que
 	// `startActivity` lee para abrir la pantalla siguiente
 	intentClase string
+	// bundle es el contenido de un `Bundle` del framework: sus claves y valores, ya normalizados. El
+	// editor de SharedPreferences usa `editor` para los cambios pendientes hasta apply/commit.
+	bundle map[string]any
+	// prefsFichero nombra el fichero de SharedPreferences que este objeto representa; el editor lo
+	// hereda para saber dónde aplicar sus cambios.
+	prefsFichero string
+	editor       map[string]any
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -340,6 +353,14 @@ type maquinaDalvik struct {
 	// el Intent que un `startActivity` acaba de entregar: el bucle de navegación lo pasa a la
 	// máquina de la actividad nueva
 	intentoSaliente *objetoDalvik
+	// almacen es el SharedPreferences de la ejecución: en memoria, sin ficheros, y compartido por
+	// todas las actividades y por la instancia recreada
+	almacen *almacenPreferencias
+	// bundleInicial es el `savedInstanceState` con el que arranca esta máquina: nil salvo que venga
+	// de una recreación, que es cuando el framework lo entrega no nulo
+	bundleInicial *objetoDalvik
+	// estadoGuardado es lo que la última `onSaveInstanceState` dejó en el Bundle, para publicarlo
+	estadoGuardado map[string]any
 }
 
 type oyenteRegistrado struct {
@@ -350,9 +371,52 @@ type oyenteRegistrado struct {
 	metodo string
 }
 
+// almacenPreferencias es el SharedPreferences de la ejecución: un mapa por nombre de fichero. Vive
+// en memoria y no toca el disco; la ejecución lo publica en el modelo para que otra la reproduzca.
+type almacenPreferencias struct {
+	ficheros map[string]map[string]any
+}
+
+func nuevoAlmacenPreferencias() *almacenPreferencias {
+	return &almacenPreferencias{ficheros: map[string]map[string]any{}}
+}
+
+// de devuelve las claves de un fichero y lo crea si no existe, como hace `getSharedPreferences`.
+func (a *almacenPreferencias) de(fichero string) map[string]any {
+	if a == nil {
+		return map[string]any{}
+	}
+	if a.ficheros == nil {
+		a.ficheros = map[string]map[string]any{}
+	}
+	claves := a.ficheros[fichero]
+	if claves == nil {
+		claves = map[string]any{}
+		a.ficheros[fichero] = claves
+	}
+	return claves
+}
+
+// volcado devuelve el almacén para publicarlo; nil cuando no se escribió ninguna preferencia, para
+// no inventar un campo vacío en el modelo.
+func (a *almacenPreferencias) volcado() map[string]map[string]any {
+	if a == nil || len(a.ficheros) == 0 {
+		return nil
+	}
+	salida := make(map[string]map[string]any, len(a.ficheros))
+	for nombre, claves := range a.ficheros {
+		copia := make(map[string]any, len(claves))
+		for k, v := range claves {
+			copia[k] = v
+		}
+		salida[nombre] = copia
+	}
+	return salida
+}
+
 func nuevaMaquina(p *programaDalvik, tabla *tablaRecursos) *maquinaDalvik {
 	return &maquinaDalvik{prog: p, tabla: tabla, vistos: map[string]bool{},
-		vistas: map[uint32]*objetoDalvik{}}
+		vistas: map[uint32]*objetoDalvik{}, almacen: nuevoAlmacenPreferencias()}
 }
 
 // siembraTextosDelLayout deja en la máquina el `android:text` que el layout declara para cada id y
@@ -576,6 +640,23 @@ func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad strin
 // repetir su `onCreate`, que es lo que hace que el estado vuelva como estaba.
 func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string,
 	preparar func(m *maquinaDalvik), declaradas map[string]bool) (*resultadoEjecucion, uint32, error) {
+	return ejecutaOnCreateConOrdenes(d, tabla, actividad, ordenesDePulsos(pulsos), preparar, declaradas)
+}
+
+// ordenesDePulsos convierte la lista clásica de `--pulsar` en órdenes, para las envolturas y las
+// pruebas que no necesitan recrear.
+func ordenesDePulsos(pulsos []string) []ordenEjecucion {
+	ordenes := make([]ordenEjecucion, 0, len(pulsos))
+	for _, p := range pulsos {
+		ordenes = append(ordenes, ordenEjecucion{Tipo: ordenPulsarTipo, Valor: p})
+	}
+	return ordenes
+}
+
+// ejecutaOnCreateConOrdenes es el arranque con ciclo de vida, navegación y la secuencia de órdenes
+// (`--pulsar` y `--recrear`) entregada en el orden en que se escribió.
+func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad string, ordenes []ordenEjecucion,
+	preparar func(m *maquinaDalvik), declaradas map[string]bool) (*resultadoEjecucion, uint32, error) {
 	res := &resultadoEjecucion{Metodo: "onCreate"}
 	prog, err := cargaPrograma(d)
 	if err != nil {
@@ -655,6 +736,7 @@ func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string
 				nueva := nuevaMaquina(prog, tabla)
 				nueva.declaradas = m.declaradas
 				nueva.registro = m.registro
+				nueva.almacen = m.almacen
 				nueva.intent = m.intentoSaliente
 				if err := nueva.abreActividad(destino, preparar, true); err != nil {
 					m.avisa("la actividad %s no arrancó: %v", claseCorta(destino), err)
@@ -684,29 +766,70 @@ func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string
 	}
 	estabiliza()
 
-	// los clics pedidos, en orden y solo si la app llegó viva a este punto. El estado que ve cada
+	// recreaActual mata y vuelve a crear la actividad que está delante con su Bundle, como una
+	// rotación: guarda el estado, ejecuta la secuencia de cierre y arranca una máquina nueva que
+	// recibe ese Bundle no nulo. Las actividades cubiertas no se tocan: la pila conserva su sitio y
+	// solo la recreada repite su `onCreate`.
+	recreaActual := func() error {
+		if m.actividad == nil || m.actividad.clase == "" {
+			return fmt.Errorf("--recrear sin actividad que recrear")
+		}
+		claseRecreada := m.actividad.clase
+		bundle := m.despideParaRecrear()
+		nueva := nuevaMaquina(prog, tabla)
+		nueva.declaradas = m.declaradas
+		nueva.registro = m.registro
+		nueva.almacen = m.almacen
+		nueva.intent = m.intent
+		nueva.bundleInicial = bundle
+		nueva.estadoGuardado = m.estadoGuardado
+		if err := nueva.abreActividad(claseRecreada, preparar, true); err != nil {
+			m.avisa("la recreación de %s no arrancó: %v", claseCorta(claseRecreada), err)
+			return fmt.Errorf("--recrear de %s: %w", claseCorta(claseRecreada), err)
+		}
+		todas = append(todas, nueva)
+		if len(pila) == 0 {
+			pila = append(pila, nueva)
+		} else {
+			pila[len(pila)-1] = nueva
+		}
+		m = nueva
+		res.Pantallas = append(res.Pantallas, claseCorta(claseRecreada))
+		return nil
+	}
+
+	// las órdenes pedidas, en orden y solo si la app llegó viva a este punto. El estado que ve cada
 	// `onClick` incluye los anteriores, porque comparten la misma máquina: es lo que hace que
-	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1. Entre clic y clic se estabiliza la
-	// navegación: el siguiente clic va a la pantalla que quedó delante.
+	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1. Entre orden y orden se estabiliza la
+	// navegación: la siguiente va a la pantalla que quedó delante.
 	var errPulsos error
 	if res.Error == "" {
 		entregados := 0
-		for _, pedido := range pulsos {
+		for _, orden := range ordenes {
 			if entregados >= pulsacionesMaximas {
-				m.avisa("se dejaron clics sin entregar por el tope de %d", pulsacionesMaximas)
+				m.avisa("se dejaron órdenes sin entregar por el tope de %d", pulsacionesMaximas)
 				break
 			}
-			id, err := idDePulsacion(tabla, pedido)
+			if orden.Tipo == ordenRecrearTipo {
+				if err := recreaActual(); err != nil {
+					errPulsos = err
+					break
+				}
+				entregados++
+				estabiliza()
+				continue
+			}
+			id, err := idDePulsacion(tabla, orden.Valor)
 			if err != nil {
 				errPulsos = err
 				break
 			}
 			if !m.pulsa(id) {
 				errPulsos = fmt.Errorf("no se puede pulsar %q: ninguna vista con ese id se registró "+
-					"como OnClickListener%s", pedido, listaDeOyentes(m))
+					"como OnClickListener%s", orden.Valor, listaDeOyentes(m))
 				break
 			}
-			res.Pulsaciones = append(res.Pulsaciones, pedido)
+			res.Pulsaciones = append(res.Pulsaciones, orden.Valor)
 			entregados++
 			estabiliza()
 		}
@@ -727,6 +850,12 @@ func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string
 		}
 	}
 	res.Ciclo = ciclo
+	// el estado que sobrevive a la ejecución se publica tal cual: el Bundle de la última recreación
+	// y el SharedPreferences de toda la ejecución, sin inventar lo que la app no escribió
+	if m.estadoGuardado != nil {
+		res.Bundle = m.estadoGuardado
+	}
+	res.Preferencias = m.almacen.volcado()
 	// la consola se renumera al unir las pantallas: `secuencia` es el orden real de emisión
 	for i := range res.Consola {
 		res.Consola[i].Secuencia = i + 1
@@ -764,8 +893,13 @@ func (m *maquinaDalvik) abreActividad(clase string, preparar func(*maquinaDalvik
 	if onCreate == nil {
 		return fmt.Errorf("%s no tiene onCreate(Landroid/os/Bundle;)V", claseCorta(clase))
 	}
+	// en una recreación el framework entrega un Bundle no nulo; en el arranque normal, null
+	var savedInstanceState any
+	if m.bundleInicial != nil {
+		savedInstanceState = m.bundleInicial
+	}
 	m.anotaCiclo("onCreate")
-	if _, err := m.ejecutaCuerpo(clase, onCreate, []any{obj, nil},
+	if _, err := m.ejecutaCuerpo(clase, onCreate, []any{obj, savedInstanceState},
 		[]string{clase, "Landroid/os/Bundle;"}); err != nil {
 		return err
 	}
@@ -787,6 +921,14 @@ func (m *maquinaDalvik) abreActividad(clase string, preparar func(*maquinaDalvik
 		if err := m.cicloDe("onStart", "()V"); err != nil {
 			return err
 		}
+		// el framework llama a `onRestoreInstanceState` entre `onStart` y `onResume`, con el mismo
+		// Bundle que recibió `onCreate`
+		if m.bundleInicial != nil {
+			if err := m.cicloDeCon("onRestoreInstanceState", "(Landroid/os/Bundle;)V",
+				[]any{m.bundleInicial}, []string{"Landroid/os/Bundle;"}); err != nil {
+				return err
+			}
+		}
 		if err := m.cicloDe("onResume", "()V"); err != nil {
 			return err
 		}
@@ -798,6 +940,11 @@ func (m *maquinaDalvik) abreActividad(clase string, preparar func(*maquinaDalvik
 // cicloDe llama a un método del ciclo de vida si la actividad lo declara. No lo inventa: si no está
 // en el dex, no se anota ni se ejecuta.
 func (m *maquinaDalvik) cicloDe(nombre, proto string) error {
+	return m.cicloDeCon(nombre, proto, nil, nil)
+}
+
+// cicloDeCon es el mismo ciclo con argumentos extra, para `onRestoreInstanceState(Bundle)`.
+func (m *maquinaDalvik) cicloDeCon(nombre, proto string, extra []any, tipos []string) error {
 	if m.actividad == nil {
 		return nil
 	}
@@ -806,7 +953,9 @@ func (m *maquinaDalvik) cicloDe(nombre, proto string) error {
 		return nil
 	}
 	m.anotaCiclo(nombre)
-	if _, err := m.ejecutaCuerpo(m.actividad.clase, met, []any{m.actividad}, []string{m.actividad.clase}); err != nil {
+	args := append([]any{m.actividad}, extra...)
+	argTipos := append([]string{m.actividad.clase}, tipos...)
+	if _, err := m.ejecutaCuerpo(m.actividad.clase, met, args, argTipos); err != nil {
 		return err
 	}
 	return nil
@@ -872,6 +1021,53 @@ func (m *maquinaDalvik) cierra() {
 	if err := m.cicloDe("onDestroy", "()V"); err != nil {
 		m.avisa("onDestroy de %s falló: %v", claseCorta(m.actividad.clase), err)
 	}
+}
+
+// despideParaRecrear ejecuta la secuencia con la que el framework mata la actividad para volver a
+// crearla: `onPause`, luego `onSaveInstanceState` y solo después `onStop` y `onDestroy`. Devuelve el
+// Bundle que la app llenó; nunca nil, porque al recrear el framework entrega uno no nulo.
+func (m *maquinaDalvik) despideParaRecrear() *objetoDalvik {
+	if m.actividad == nil {
+		return m.guardaEstado()
+	}
+	if m.arrancada {
+		if err := m.cicloDe("onPause", "()V"); err != nil {
+			m.avisa("onPause de %s falló: %v", claseCorta(m.actividad.clase), err)
+		}
+	}
+	bundle := m.guardaEstado()
+	if m.arrancada {
+		if err := m.cicloDe("onStop", "()V"); err != nil {
+			m.avisa("onStop de %s falló: %v", claseCorta(m.actividad.clase), err)
+		}
+		m.arrancada = false
+	}
+	if err := m.cicloDe("onDestroy", "()V"); err != nil {
+		m.avisa("onDestroy de %s falló: %v", claseCorta(m.actividad.clase), err)
+	}
+	return bundle
+}
+
+// guardaEstado llama a `onSaveInstanceState` con un Bundle vacío, guarda lo que la app dejó en él y
+// lo devuelve. El Bundle se publica después en `ejecucion.bundle`, para que la recreación se pueda
+// reproducir sin volver a ejecutar la app.
+func (m *maquinaDalvik) guardaEstado() *objetoDalvik {
+	bundle := &objetoDalvik{clase: "Landroid/os/Bundle;", campos: map[string]any{},
+		bundle: map[string]any{}}
+	if m.actividad != nil {
+		if met := m.buscaMetodo(m.actividad.clase, "onSaveInstanceState", "(Landroid/os/Bundle;)V"); met != nil {
+			m.anotaCiclo("onSaveInstanceState")
+			if _, err := m.ejecutaCuerpo(m.actividad.clase, met, []any{m.actividad, bundle},
+				[]string{m.actividad.clase, "Landroid/os/Bundle;"}); err != nil {
+				m.avisa("onSaveInstanceState de %s falló: %v", claseCorta(m.actividad.clase), err)
+			}
+		}
+	}
+	m.estadoGuardado = make(map[string]any, len(bundle.bundle))
+	for k, v := range bundle.bundle {
+		m.estadoGuardado[k] = v
+	}
+	return bundle
 }
 
 // oyentesDeVista resume los listeners registrados con un id de recurso, sin repetir: es la lista con
@@ -1949,6 +2145,102 @@ func (m *maquinaDalvik) rechaza(nombre, proto, motivo, retorno string) (any, boo
 	return valorCero(retorno), true, nil
 }
 
+// esAlmacenDeEstado dice si un objeto representa un Bundle o un SharedPreferences, que son los dos
+// sitios donde la app guarda estado con clave.
+func esAlmacenDeEstado(obj *objetoDalvik) bool {
+	return obj != nil && (obj.bundle != nil || obj.prefsFichero != "")
+}
+
+// valorDeEstado lee una clave del Bundle o del SharedPreferences del objeto.
+func (m *maquinaDalvik) valorDeEstado(obj *objetoDalvik, clave string) (any, bool) {
+	if obj == nil {
+		return nil, false
+	}
+	if obj.bundle != nil {
+		v, ok := obj.bundle[clave]
+		return v, ok
+	}
+	if obj.prefsFichero != "" {
+		if m.almacen == nil {
+			return nil, false
+		}
+		v, ok := m.almacen.ficheros[obj.prefsFichero][clave]
+		return v, ok
+	}
+	return nil, false
+}
+
+// guardaValor pone un valor con clave en el Bundle o en el editor del SharedPreferences, ya
+// normalizado (texto, entero, booleano o long), para que el volcado a JSON sea el mismo en cada
+// ejecución. Devuelve falso si la firma no es la de un `put*` que emulamos.
+func guardaValor(destino map[string]any, nombre string, vals []any) bool {
+	if len(vals) != 2 {
+		return false
+	}
+	clave := textoDe(vals[0])
+	switch nombre {
+	case "putString":
+		destino[clave] = textoDe(vals[1])
+	case "putInt":
+		n, err := aInt32(vals[1])
+		if err != nil {
+			return false
+		}
+		destino[clave] = n
+	case "putBoolean":
+		destino[clave] = boolDe(vals[1])
+	case "putLong":
+		n, err := aInt64(vals[1])
+		if err != nil {
+			return false
+		}
+		destino[clave] = n
+	default:
+		return false
+	}
+	return true
+}
+
+// boolDe lleva a booleano el valor de un registro, que en Dalvik es un entero.
+func boolDe(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case int32:
+		return x != 0
+	case int64:
+		return x != 0
+	}
+	return false
+}
+
+// enteroDeEstado lleva a int64 un valor guardado, sin inventar: lo que no es un número vale cero,
+// que es lo que devuelve una lectura de una clave ausente.
+func enteroDeEstado(v any) int64 {
+	switch x := v.(type) {
+	case int32:
+		return int64(x)
+	case int64:
+		return x
+	case bool:
+		if x {
+			return 1
+		}
+		return 0
+	case string:
+		n, err := strconv.ParseInt(strings.TrimSpace(x), 10, 64)
+		if err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// cadenaObjeto arma el String que devuelve una lectura de texto, como el que devuelve `getText`.
+func cadenaObjeto(s string) *objetoDalvik {
+	return &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{}, texto: s}
+}
+
 // intentaStub resuelve las llamadas de framework que la app toca. `candidatos` son las clases por
 // las que se busca (la del objeto, la que declara el método); los sufijos bastan porque lo que
 // distingue un `setText` es el nombre y su firma, no la jerarquía entera del framework.
@@ -2029,6 +2321,74 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if es("Landroid/app/Activity;", "Landroid/app/ListActivity;", "Landroid/app/ActivityGroup;") {
 			return nil, true, nil
 		}
+	case "getSharedPreferences":
+		// el SharedPreferences de la app: un almacén en memoria por nombre de fichero, compartido por
+		// todas las pantallas y por la instancia recreada. El fichero no se crea hasta que se escribe,
+		// para que el volcado no publique un almacén que la app solo leyó.
+		if len(vals) == 2 && obj != nil && obj == m.actividad {
+			nombre := textoDe(vals[0])
+			return &objetoDalvik{clase: "Landroid/content/SharedPreferences;",
+				campos: map[string]any{}, prefsFichero: nombre}, true, nil
+		}
+	case "edit":
+		if len(vals) == 0 && obj != nil && obj.prefsFichero != "" {
+			return &objetoDalvik{clase: "Landroid/content/SharedPreferences$Editor;",
+				campos: map[string]any{}, prefsFichero: obj.prefsFichero,
+				editor: map[string]any{}}, true, nil
+		}
+	case "putString", "putInt", "putBoolean", "putLong":
+		// los mismos cuatro `put*` sirven para el Bundle y para el Editor de SharedPreferences; se
+		// distinguen por el destino que lleva el objeto
+		if obj != nil {
+			if obj.editor != nil && guardaValor(obj.editor, nombre, vals) {
+				return obj, true, nil
+			}
+			if obj.bundle != nil && guardaValor(obj.bundle, nombre, vals) {
+				return nil, true, nil
+			}
+		}
+	case "apply", "commit":
+		// `apply` y `commit` vuelcan el editor en el almacén: commit devuelve true, apply no devuelve
+		// nada, como en el framework. El almacén no toca el disco.
+		if obj != nil && obj.editor != nil {
+			destino := m.almacen.de(obj.prefsFichero)
+			for k, v := range obj.editor {
+				destino[k] = v
+			}
+			obj.editor = map[string]any{}
+			if nombre == "commit" {
+				return int32(1), true, nil
+			}
+			return nil, true, nil
+		}
+	case "getInt", "getLong", "getBoolean":
+		if len(vals) >= 1 && len(vals) <= 2 && esAlmacenDeEstado(obj) {
+			v, ok := m.valorDeEstado(obj, textoDe(vals[0]))
+			if !ok {
+				if len(vals) == 2 {
+					switch nombre {
+					case "getInt":
+						n, _ := aInt32(vals[1])
+						return n, true, nil
+					case "getLong":
+						n, _ := aInt64(vals[1])
+						return n, true, nil
+					}
+					return boolAInt(boolDe(vals[1])), true, nil
+				}
+				if nombre == "getLong" {
+					return int64(0), true, nil
+				}
+				return int32(0), true, nil
+			}
+			switch nombre {
+			case "getInt":
+				return int32(enteroDeEstado(v)), true, nil
+			case "getLong":
+				return enteroDeEstado(v), true, nil
+			}
+			return boolAInt(boolDe(v)), true, nil
+		}
 	case "setContentView":
 		if len(vals) == 1 {
 			if id, err := aInt32(vals[0]); err == nil {
@@ -2096,6 +2456,20 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return obj, true, nil
 		}
 	case "getString":
+		// getString(clave, porDefecto) del Bundle o del SharedPreferences devuelve el texto guardado,
+		// y getString(clave) devuelve null si no está, como el framework
+		if len(vals) == 2 && esAlmacenDeEstado(obj) {
+			if v, ok := m.valorDeEstado(obj, textoDe(vals[0])); ok {
+				return cadenaObjeto(textoDe(v)), true, nil
+			}
+			return textoDe(vals[1]), true, nil
+		}
+		if len(vals) == 1 && esAlmacenDeEstado(obj) {
+			if v, ok := m.valorDeEstado(obj, textoDe(vals[0])); ok {
+				return cadenaObjeto(textoDe(v)), true, nil
+			}
+			return nil, true, nil
+		}
 		// `getString(R.string.x)` lo resuelve la actividad contra la tabla. El dueño del invoke es
 		// la clase de la actividad (el emisor no escribe `android/content/Context;`), así que se
 		// reconoce por el receptor y no por el nombre de la clase.
@@ -2342,7 +2716,11 @@ func igualesDalvik(a, b any) bool {
 func (m *maquinaDalvik) comparaIf(op byte, a, b any) (bool, error) {
 	if op == 0x32 || op == 0x33 { // if-eq / if-ne
 		eq := false
-		if esReferencia(a) || esReferencia(b) {
+		// en Dalvik el registro nulo y el cero entero son el mismo patrón de bits: `if-eqz` sobre una
+		// referencia compara con null e `if (x != null)` llega aquí con el cero como otro operando
+		if (a == nil && b == int32(0)) || (b == nil && a == int32(0)) {
+			eq = true
+		} else if esReferencia(a) || esReferencia(b) {
 			eq = igualesDalvik(a, b)
 		} else {
 			av, err := aInt64(a)

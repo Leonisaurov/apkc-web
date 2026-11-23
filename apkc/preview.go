@@ -247,7 +247,7 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
@@ -257,15 +257,21 @@ there: it does NOT click anything on its own. An android:onClick="metodo" declar
 bound before any click, as the framework does on inflate, so --pulsar reaches it. Each --pulsar id runs the OnClickListener registered
 on that view, in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal); the
 text the app writes (TextView.setText) comes back in ejecucion.capturas and in each node's
-textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.consola. Repeating the
-same list reproduces the same screen. No process is started and nothing is written, so it runs
-inside the tab.
+textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.consola. Each --recrear
+destroys and recreates the current activity with its Bundle, as a rotation does, so onSaveInstanceState
+feeds savedInstanceState in the new onCreate and SharedPreferences survives the run; both stores come
+back in ejecucion.bundle and ejecucion.preferencias. --pulsar and --recrear are delivered in the order
+they are written. Repeating the same list reproduces the same screen. No process is started and nothing
+is written, so it runs inside the tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
 	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
-	var pulsos listaRepetida
-	set.Var(&pulsos, "pulsar", "id de la vista cuyo OnClickListener se ejecuta (repetible, en orden)")
+	var ordenes []ordenEjecucion
+	set.Var(ordenDePulsar{destino: &ordenes}, "pulsar",
+		"id de la vista cuyo OnClickListener se ejecuta (repetible, en orden)")
+	set.Var(ordenDeRecrear{destino: &ordenes}, "recrear",
+		"recrea la actividad actual con su Bundle, como una rotación (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
@@ -274,8 +280,8 @@ inside the tab.
 		fmt.Fprintln(os.Stderr, "preview: se espera un apk")
 		os.Exit(2)
 	}
-	if *sinEjecutar && len(pulsos) > 0 {
-		fmt.Fprintln(os.Stderr, "preview: --pulsar necesita ejecutar el dex; quita --sin-ejecutar")
+	if *sinEjecutar && len(ordenes) > 0 {
+		fmt.Fprintln(os.Stderr, "preview: --pulsar y --recrear necesitan ejecutar el dex; quita --sin-ejecutar")
 		os.Exit(2)
 	}
 	datos, err := os.ReadFile(rutas[0])
@@ -283,7 +289,7 @@ inside the tab.
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
-	modelo, err := modeloVistaDeAPKConPulsos(datos, *layout, !*sinEjecutar, pulsos)
+	modelo, err := modeloVistaDeAPKConOrdenes(datos, *layout, !*sinEjecutar, ordenes)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
@@ -296,19 +302,47 @@ inside the tab.
 	fmt.Println(string(salida))
 }
 
-// listaRepetida es un flag que acumula cada aparición: `--pulsar a --pulsar b` pide dos clics en ese
-// orden, que es lo que hace reproducible una pantalla tras varios toques.
-type listaRepetida []string
+// ordenEjecucion es una orden del emulador en el orden en que se escribió: `pulsar` lleva el id de
+// la vista y `recrear` no lleva valor. El orden importa: `--pulsar id/a --recrear` recrea el estado
+// que dejó el clic, no el del arranque.
+type ordenEjecucion struct {
+	Tipo  string
+	Valor string
+}
 
-func (l *listaRepetida) String() string { return strings.Join(*l, ",") }
+const (
+	ordenPulsarTipo  = "pulsar"
+	ordenRecrearTipo = "recrear"
+)
 
-func (l *listaRepetida) Set(v string) error {
+// ordenDePulsar y ordenDeRecrear son los dos flag.Value del mismo acumulador: el paquete flag llama
+// a Set en el orden de la línea de comandos, y así `--pulsar a --recrear --pulsar b` conserva su
+// orden. `--recrear` es una bandera sin valor (`IsBoolFlag`), que es como se escribe.
+type ordenDePulsar struct{ destino *[]ordenEjecucion }
+
+func (o ordenDePulsar) String() string { return "" }
+
+func (o ordenDePulsar) Set(v string) error {
 	if strings.TrimSpace(v) == "" {
 		return fmt.Errorf("--pulsar necesita un id: id/pulsar, 0x7f010000 o su decimal")
 	}
-	*l = append(*l, v)
+	*o.destino = append(*o.destino, ordenEjecucion{Tipo: ordenPulsarTipo, Valor: v})
 	return nil
 }
+
+type ordenDeRecrear struct{ destino *[]ordenEjecucion }
+
+func (o ordenDeRecrear) String() string { return "false" }
+
+func (o ordenDeRecrear) Set(v string) error {
+	if v == "true" {
+		*o.destino = append(*o.destino, ordenEjecucion{Tipo: ordenRecrearTipo})
+	}
+	return nil
+}
+
+// IsBoolFlag deja que `--recrear` se escriba sin valor, como una bandera.
+func (o ordenDeRecrear) IsBoolFlag() bool { return true }
 
 // modeloVistaDeAPK es el cuerpo del comando con el intérprete de la Fase 2 activo. Se queda como
 // envoltorio para que las pruebas de la Fase 1 no cambien de forma de llamada.
@@ -328,6 +362,14 @@ func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVis
 // orden dentro de la misma ejecución. Un clic que no se puede entregar devuelve error: un modelo con
 // la pantalla a medias se leería como si el clic hubiera funcionado.
 func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulsos []string) (*modeloVista, error) {
+	return modeloVistaDeAPKConOrdenes(datos, layout, ejecutar, ordenesDePulsos(pulsos))
+}
+
+// modeloVistaDeAPKConOrdenes es el cuerpo con la secuencia completa de órdenes (`--pulsar` y
+// `--recrear`), que se entrega en orden dentro de la misma ejecución. Un clic o una recreación que
+// no se pueden entregar devuelven error: un modelo con la pantalla a medias se leería como si la
+// orden hubiera funcionado.
+func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, ordenes []ordenEjecucion) (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(datos), int64(len(datos)))
 	if err != nil {
 		return nil, fmt.Errorf("el apk no es un zip: %w", err)
@@ -379,7 +421,7 @@ func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulso
 			if d, err := readDex(dexBytes); err == nil {
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
 				var errPulsos error
-				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreateNavegando(d, tabla, preferida, pulsos,
+				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreateConOrdenes(d, tabla, preferida, ordenes,
 					func(m *maquinaDalvik) { preparaVistasDelLayout(m, zr, tabla, layout) }, declaradas)
 				if errPulsos != nil {
 					return nil, errPulsos
