@@ -335,6 +335,10 @@ process is started and nothing is written, so it runs inside the tab.
 		"clase/metodo(proto)=fichero.dex: sustituye o añade ese método en la sesión viva, sin "+
 			"recrear la actividad ni sus objetos; sin /metodo, toda la clase (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
+		// `flag` ya imprimió el error y la ayuda; se repite el error al final para que quien lee la
+		// última línea (la vista previa de la pestaña muestra esa) vea la causa y no el cierre de la
+		// ayuda. Un binario wasm anterior a un flag nuevo se diagnostica así en una línea.
+		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
 	rutas := set.Args()
