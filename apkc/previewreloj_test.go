@@ -566,7 +566,8 @@ func TestElGuionDelPreviewConservaElOrden(t *testing.T) {
 		t.Fatalf("el guion tiene %d pasos y se esperaban %d: %+v", len(guion), len(esperado), guion)
 	}
 	for i := range esperado {
-		if guion[i] != esperado[i] {
+		// el dex de un hot swap no entra en esta comparación: el guion de este caso no lleva ninguno
+		if guion[i].Tipo != esperado[i].Tipo || guion[i].Dato != esperado[i].Dato {
 			t.Errorf("el paso %d es %+v y se esperaba %+v", i, guion[i], esperado[i])
 		}
 	}

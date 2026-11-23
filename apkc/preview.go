@@ -264,7 +264,7 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--menu]… [--menu-item menu/N]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--menu]… [--menu-item menu/N]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… [--intercambiar clase/metodo(proto)=fichero.dex]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
@@ -296,7 +296,14 @@ there are no threads and no wall clock, so the clock and the task count come bac
 and ejecucion.tareas and the same command reproduces the same JSON. --pulsar, --escribir, --marcar,
 --desmarcar, --recrear and --avanzar are delivered in the order they are written. A ListView whose
 adapter is the project's own is painted with one child per row, texts included: --pulsar id/lista:1
-delivers onItemClick for row 1 of that list. Repeating the same list reproduces the same screen. No
+delivers onItemClick for row 1 of that list. --intercambiar clase/metodo(proto)=fichero.dex is the
+hot swap: the dex is the new body already compiled, and it replaces that method in the live session
+(the class descriptor form Lcom/hola/Saludo;, the method with its proto, or no /metodo for the whole
+class). Objects keep their identity and their fields, so a reference taken before the swap is the
+same object after it and the new body sees the state the old one left; a method that did not exist is
+added and the rest of the class is untouched. The static fields keep their current value. It does NOT
+change the shape of the fields: a new body that reads a field the app never declared gets its zero.
+Repeating the same list reproduces the same screen. No
 process is started and nothing is written, so it runs inside the tab.
 `)
 	}
@@ -324,6 +331,9 @@ process is started and nothing is written, so it runs inside the tab.
 			"(repetible, en orden)")
 	set.Var(guionDeEntrada{tipo: "avanzar", eventos: &guion}, "avanzar",
 		"milisegundos que avanza el reloj lógico y ejecuta las tareas vencidas (repetible, en orden)")
+	set.Var(ordenDeIntercambio{eventos: &guion}, "intercambiar",
+		"clase/metodo(proto)=fichero.dex: sustituye o añade ese método en la sesión viva, sin "+
+			"recrear la actividad ni sus objetos; sin /metodo, toda la clase (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
@@ -364,11 +374,12 @@ type ordenEjecucion struct {
 }
 
 const (
-	ordenPulsarTipo   = "pulsar"
-	ordenRecrearTipo  = "recrear"
-	ordenAvanzarTipo  = "avanzar"
-	ordenMenuTipo     = "menu"
-	ordenMenuItemTipo = "menu-item"
+	ordenPulsarTipo       = "pulsar"
+	ordenRecrearTipo      = "recrear"
+	ordenAvanzarTipo      = "avanzar"
+	ordenMenuTipo         = "menu"
+	ordenMenuItemTipo     = "menu-item"
+	ordenIntercambiarTipo = "intercambiar"
 )
 
 // guionDeEntrada es el flag de una orden de entrada. Todas las órdenes van a la misma lista, en el
@@ -412,6 +423,70 @@ func (g guionDeEntrada) Set(v string) error {
 	}
 	*g.eventos = append(*g.eventos, eventoUsuario{Tipo: g.tipo, Dato: dato})
 	return nil
+}
+
+// ordenDeIntercambio es el flag del hot swap: `--intercambiar clase/metodo(proto)=fichero.dex`. Lee
+// el dex al parsear (el comando sí tiene ficheros; la pestaña pasará los bytes en el evento) y lo
+// deja en el guion con su clase y su método, para que se enganche en el orden en que se escribió.
+type ordenDeIntercambio struct{ eventos *[]eventoUsuario }
+
+func (o ordenDeIntercambio) String() string {
+	partes := make([]string, 0, len(*o.eventos))
+	for _, e := range *o.eventos {
+		if e.Tipo == ordenIntercambiarTipo {
+			partes = append(partes, e.Dato)
+		}
+	}
+	return strings.Join(partes, ",")
+}
+
+func (o ordenDeIntercambio) Set(v string) error {
+	ev, err := eventoDeIntercambio(v)
+	if err != nil {
+		return err
+	}
+	*o.eventos = append(*o.eventos, ev)
+	return nil
+}
+
+// eventoDeIntercambio parte `clase/metodo(proto)=fichero.dex` en el evento del guion. La clase es un
+// descriptor (`Lcom/hola/Saludo;`) y el método empieza tras el `;`, así que las barras del paquete no
+// se confunden con la que separa el método. Sin `/metodo` el evento pide la clase entera.
+func eventoDeIntercambio(valor string) (eventoUsuario, error) {
+	espec, ruta, ok := strings.Cut(valor, "=")
+	if !ok || strings.TrimSpace(ruta) == "" {
+		return eventoUsuario{}, fmt.Errorf("--intercambiar necesita clase/metodo(proto)=fichero.dex, "+
+			"no %s", strconv.Quote(valor))
+	}
+	i := strings.LastIndex(espec, ";")
+	if i < 0 {
+		return eventoUsuario{}, fmt.Errorf("--intercambiar necesita el descriptor de la clase "+
+			"(Lcom/hola/Saludo;), no %s", strconv.Quote(espec))
+	}
+	clase := espec[:i+1]
+	cola := strings.TrimSpace(espec[i+1:])
+	ev := eventoUsuario{Tipo: ordenIntercambiarTipo, Dato: valor, Clase: clase}
+	if cola != "" {
+		cola = strings.TrimPrefix(cola, "/")
+		abre := strings.Index(cola, "(")
+		if abre <= 0 {
+			return eventoUsuario{}, fmt.Errorf("--intercambiar necesita el método con su proto, "+
+				"como valor()I, no %s", strconv.Quote(cola))
+		}
+		ev.Metodo = cola[:abre]
+		ev.Proto = cola[abre:]
+		cierra := strings.Index(ev.Proto, ")")
+		if cierra < 0 || cierra+1 >= len(ev.Proto) {
+			return eventoUsuario{}, fmt.Errorf("--intercambiar: el proto de %s no tiene la forma "+
+				"(parametros)retorno", ev.Metodo)
+		}
+	}
+	datos, err := os.ReadFile(ruta)
+	if err != nil {
+		return eventoUsuario{}, fmt.Errorf("--intercambiar: %w", err)
+	}
+	ev.Dex = datos
+	return ev, nil
 }
 
 // ordenDeRecrear es la bandera sin valor de `--recrear`: entra en el mismo guion que las demás

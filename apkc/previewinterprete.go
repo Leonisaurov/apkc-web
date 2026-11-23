@@ -67,12 +67,20 @@ const (
 // avance del reloj lógico— con el nombre del flag que la pidió. Se entregan en el orden de la línea
 // de comandos, dentro de la misma ejecución, así que cada una ve el estado que dejó la anterior.
 type eventoUsuario struct {
-	// Tipo es el flag que la pidió: "pulsar", "escribir", "marcar", "desmarcar", "recrear" o
-	// "avanzar".
+	// Tipo es el flag que la pidió: "pulsar", "escribir", "marcar", "desmarcar", "recrear",
+	// "avanzar", "menu", "menu-item" o "intercambiar".
 	Tipo string
-	// Dato lleva el id de la vista, el texto pegado tras el primer «/» de «escribir» o los
-	// milisegundos de «avanzar»; en «recrear» va vacío.
+	// Dato lleva el id de la vista, el texto pegado tras el primer «/» de «escribir», los
+	// milisegundos de «avanzar» o la forma escrita del intercambio; en «recrear» va vacío.
 	Dato string
+	// Un evento «intercambiar» lleva además el dex del código nuevo ya compilado y el método que
+	// instala en la sesión viva. Viajan en el evento, no en una ruta: dentro de la pestaña no hay
+	// ficheros que leer, y así el guion es el mismo con bytes de un lado y de otro. `Metodo` vacío
+	// significa la clase entera.
+	Dex    []byte
+	Clase  string
+	Metodo string
+	Proto  string
 }
 
 // tareaReloj es una tarea diferida: su instante en milisegundos del reloj lógico, el orden en que se
@@ -229,6 +237,9 @@ type resultadoEjecucion struct {
 	// ejecutó la cola. Los dos son deterministas: salen del guion, no de un reloj de pared.
 	Reloj  int64 `json:"reloj,omitempty"`
 	Tareas int   `json:"tareas,omitempty"`
+	// Intercambios es lo que los hot swaps del guion cambiaron en la tabla de despacho, en orden:
+	// qué método se sustituyó o se añadió, para que la pestaña pueda enseñarlo.
+	Intercambios []resultadoIntercambio `json:"intercambios,omitempty"`
 
 	// malformado separa dos clases de fallo que no son lo mismo: «la app llama a algo que el MVP no
 	// cubre» (se sigue con el modelo y rc 0) y «estos bytes no son un dex ejecutable», que el comando
@@ -367,13 +378,16 @@ type arregloDalvik struct {
 }
 
 // metodoDalvik es un método del dex listo para ejecutarse. `item` es nil cuando el método no tiene
-// cuerpo (abstracto o nativo), y entonces solo puede atenderse como stub.
+// cuerpo (abstracto o nativo), y entonces solo puede atenderse como stub. `dex` es el fichero de
+// donde salieron sus `insns`: un code_item no es autónomo, sus índices apuntan a los pools de SU dex,
+// así que tras un hot swap cada método se interpreta contra el suyo y no contra el de la sesión.
 type metodoDalvik struct {
 	nombre  string
 	proto   string
 	retorno string
 	acceso  uint32
 	item    *codeItem
+	dex     *dexFile
 }
 
 type claseDalvik struct {
@@ -417,6 +431,7 @@ func cargaPrograma(d *dexFile) (*programaDalvik, error) {
 				proto:   descDeProto(ref.proto),
 				retorno: ref.proto.returnType,
 				acceso:  m.accessFlags,
+				dex:     d,
 			}
 			if m.codeOff != 0 {
 				item, err := d.readCodeItem(m.codeOff)
@@ -1543,6 +1558,32 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 		// lo que la app posteó en el arranque sin retraso corre antes de cualquier orden
 		drena(m.ahora())
 		for _, orden := range eventos {
+			if orden.Tipo == ordenIntercambiarTipo {
+				// el hot swap del guion: el dex nuevo entra en la tabla de despacho de la sesión
+				// viva, sin recrear la actividad ni sus objetos. Va donde se escribió, así que un
+				// clic anterior ve el cuerpo viejo y uno posterior el nuevo.
+				d, err := readDex(orden.Dex)
+				if err != nil {
+					errEventos = fmt.Errorf("--intercambiar %s: %w", orden.Dato, err)
+					break
+				}
+				var hechos []resultadoIntercambio
+				if orden.Metodo == "" {
+					hechos, err = m.intercambiaClase(d, orden.Clase)
+				} else {
+					var uno resultadoIntercambio
+					uno, err = m.intercambiaMetodo(d, orden.Clase, orden.Metodo, orden.Proto)
+					hechos = []resultadoIntercambio{uno}
+				}
+				if err != nil {
+					errEventos = fmt.Errorf("--intercambiar %s: %w", orden.Dato, err)
+					break
+				}
+				res.Intercambios = append(res.Intercambios, hechos...)
+				estabiliza()
+				drena(m.ahora())
+				continue
+			}
 			if orden.Tipo == ordenAvanzarTipo {
 				ms, err := strconv.ParseInt(orden.Dato, 10, 64)
 				if err != nil || ms < 0 {
@@ -2824,12 +2865,12 @@ func leeSlebEn(b []byte, at int) (int32, int, bool) {
 // o -1 cuando ninguno lo hace. Los try_item se recorren en el orden del fichero, que es el que decide
 // qué catch gana cuando dos rangos se solapan, y dentro de un handler manda el orden de sus filas con
 // el catch-all al final, como en ART.
-func (m *maquinaDalvik) buscaHandler(it *codeItem, ex *excepcionDalvik, pc int) (int, error) {
+func (m *maquinaDalvik) buscaHandler(d *dexFile, it *codeItem, ex *excepcionDalvik, pc int) (int, error) {
 	for _, tr := range it.tries {
 		if pc < int(tr.start) || pc >= int(tr.start)+int(tr.count) {
 			continue
 		}
-		unidad, ok, err := m.handlerQueAcepta(it, tr, ex)
+		unidad, ok, err := m.handlerQueAcepta(d, it, tr, ex)
 		if err != nil {
 			return -1, err
 		}
@@ -2843,7 +2884,7 @@ func (m *maquinaDalvik) buscaHandler(it *codeItem, ex *excepcionDalvik, pc int) 
 // handlerQueAcepta recorre el encoded_catch_handler de un try_item: su tamaño en sleb (negativo cuando
 // lleva catch-all), los pares (tipo, dirección) en orden y la dirección del catch-all. Devuelve la
 // primera dirección cuyo tipo recibe la excepción.
-func (m *maquinaDalvik) handlerQueAcepta(it *codeItem, tr tryItem, ex *excepcionDalvik) (int, bool, error) {
+func (m *maquinaDalvik) handlerQueAcepta(d *dexFile, it *codeItem, tr tryItem, ex *excepcionDalvik) (int, bool, error) {
 	b := it.handlers
 	at := int(tr.handlerOff)
 	if at < 0 || at >= len(b) {
@@ -2868,11 +2909,11 @@ func (m *maquinaDalvik) handlerQueAcepta(it *codeItem, tr tryItem, ex *excepcion
 			return 0, false, malformado("la dirección del handler del try_item en %d no cabe", tr.start)
 		}
 		pos = p2
-		if int(tipoIdx) >= len(m.prog.dex.types) {
+		if int(tipoIdx) >= len(d.types) {
 			return 0, false, malformado(
 				"el handler del try_item en %d nombra el tipo %d, fuera de type_ids", tr.start, tipoIdx)
 		}
-		if m.tipoAcepta(m.prog.dex.types[tipoIdx], ex.tipo) {
+		if m.tipoAcepta(d.types[tipoIdx], ex.tipo) {
 			return int(direccion), true, nil
 		}
 	}
@@ -2894,6 +2935,12 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 	}
 	if met.item == nil {
 		return m.stubSinCuerpo(clase, met, args)
+	}
+	// El code_item se interpreta contra el dex del que salió: tras un hot swap la sesión viva tiene
+	// métodos de dos ficheros y sus índices no se mezclan.
+	d := met.dex
+	if d == nil {
+		d = m.prog.dex
 	}
 	it := met.item
 	if m.profundidad >= profundidadMaximaDalvik {
@@ -3099,31 +3146,31 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				if int(w) >= len(m.prog.dex.strings) {
+				if int(w) >= len(d.strings) {
 					return nil, fmt.Errorf("const-string con la cadena %d fuera del pool", w)
 				}
-				poner(aa, m.prog.dex.strings[w])
+				poner(aa, d.strings[w])
 				pc += 2
 			case 0x1b: // const-string/jumbo
 				if pc+2 >= len(ins) {
 					return nil, fmt.Errorf("código cortado en un const-string/jumbo")
 				}
 				idx := uint32(ins[pc+1]) | uint32(ins[pc+2])<<16
-				if int(idx) >= len(m.prog.dex.strings) {
+				if int(idx) >= len(d.strings) {
 					return nil, fmt.Errorf("const-string/jumbo con la cadena %d fuera del pool", idx)
 				}
-				poner(aa, m.prog.dex.strings[idx])
+				poner(aa, d.strings[idx])
 				pc += 3
 			case 0x1c: // const-class
 				w, err := segunda()
 				if err != nil {
 					return nil, err
 				}
-				if int(w) >= len(m.prog.dex.types) {
+				if int(w) >= len(d.types) {
 					return nil, fmt.Errorf("const-class con el tipo %d fuera de type_ids", w)
 				}
 				poner(aa, &objetoDalvik{clase: "Ljava/lang/Class;", campos: map[string]any{
-					"Ljava/lang/Class;.$tipo": m.prog.dex.types[w],
+					"Ljava/lang/Class;.$tipo": d.types[w],
 				}})
 				pc += 2
 
@@ -3133,8 +3180,8 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				if obj, ok := regs[aa].(*objetoDalvik); ok && int(w) < len(m.prog.dex.types) {
-					obj.clase = m.prog.dex.types[w]
+				if obj, ok := regs[aa].(*objetoDalvik); ok && int(w) < len(d.types) {
+					obj.clase = d.types[w]
 				}
 				pc += 2
 			case 0x20: // instance-of (22c)
@@ -3143,8 +3190,8 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 					return nil, err
 				}
 				es := false
-				if obj, ok := regs[int(u>>12)].(*objetoDalvik); ok && int(w) < len(m.prog.dex.types) {
-					es = m.esDe(obj, m.prog.dex.types[w])
+				if obj, ok := regs[int(u>>12)].(*objetoDalvik); ok && int(w) < len(d.types) {
+					es = m.esDe(obj, d.types[w])
 				}
 				poner(aa&0xf, boolAInt(es))
 				pc += 2
@@ -3160,10 +3207,10 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				if int(w) >= len(m.prog.dex.types) {
+				if int(w) >= len(d.types) {
 					return nil, fmt.Errorf("new-instance con el tipo %d fuera de type_ids", w)
 				}
-				poner(aa, &objetoDalvik{clase: m.prog.dex.types[w], campos: map[string]any{}})
+				poner(aa, &objetoDalvik{clase: d.types[w], campos: map[string]any{}})
 				pc += 2
 			case 0x23: // new-array (22c)
 				w, err := segunda()
@@ -3178,8 +3225,8 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 					return nil, fmt.Errorf("new-array con longitud %d", n)
 				}
 				tipo := ""
-				if int(w) < len(m.prog.dex.types) {
-					tipo = m.prog.dex.types[w]
+				if int(w) < len(d.types) {
+					tipo = d.types[w]
 				}
 				poner(int(u>>8)&0xf, &arregloDalvik{tipo: tipo, datos: make([]any, n)})
 				pc += 2
@@ -3193,8 +3240,8 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 					return nil, err
 				}
 				tipo := ""
-				if int(w) < len(m.prog.dex.types) {
-					tipo = m.prog.dex.types[w]
+				if int(w) < len(d.types) {
+					tipo = d.types[w]
 				}
 				regsArg := registros35c(u, t)
 				datos := make([]any, 0, len(regsArg))
@@ -3214,8 +3261,8 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 					return nil, err
 				}
 				tipo := ""
-				if int(w) < len(m.prog.dex.types) {
-					tipo = m.prog.dex.types[w]
+				if int(w) < len(d.types) {
+					tipo = d.types[w]
 				}
 				primero, cuenta := int(t), int(u>>8)
 				datos := make([]any, 0, cuenta)
@@ -3354,7 +3401,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				v, err := m.leeCampo(uint32(w), regs[int(u>>12)], false)
+				v, err := m.leeCampo(d, uint32(w), regs[int(u>>12)], false)
 				if err != nil {
 					return nil, err
 				}
@@ -3369,7 +3416,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				if err := m.escribeCampo(uint32(w), regs[int(u>>12)], regs[int(u>>8)&0xf], false); err != nil {
+				if err := m.escribeCampo(d, uint32(w), regs[int(u>>12)], regs[int(u>>8)&0xf], false); err != nil {
 					return nil, err
 				}
 				pc += 2
@@ -3378,7 +3425,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				v, err := m.leeCampo(uint32(w), nil, true)
+				v, err := m.leeCampo(d, uint32(w), nil, true)
 				if err != nil {
 					return nil, err
 				}
@@ -3393,7 +3440,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				if err := m.escribeCampo(uint32(w), nil, regs[aa], true); err != nil {
+				if err := m.escribeCampo(d, uint32(w), nil, regs[aa], true); err != nil {
 					return nil, err
 				}
 				pc += 2
@@ -3408,7 +3455,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				if err != nil {
 					return nil, err
 				}
-				v, err := m.invoca(op, uint32(w), registros35c(u, t), regs, clase)
+				v, err := m.invoca(op, d, uint32(w), registros35c(u, t), regs, clase)
 				if err != nil {
 					return nil, err
 				}
@@ -3428,7 +3475,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				for i := 0; i < cuenta; i++ {
 					regsArg[i] = primero + i
 				}
-				v, err := m.invoca(op-6, uint32(w), regsArg, regs, clase)
+				v, err := m.invoca(op-6, d, uint32(w), regsArg, regs, clase)
 				if err != nil {
 					return nil, err
 				}
@@ -3522,7 +3569,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 		if ex == nil {
 			return nil, err
 		}
-		unidad, errBusca := m.buscaHandler(it, ex, pc)
+		unidad, errBusca := m.buscaHandler(d, it, ex, pc)
 		if errBusca != nil {
 			return nil, errBusca
 		}
@@ -3641,8 +3688,10 @@ func (m *maquinaDalvik) esDe(obj *objetoDalvik, tipo string) bool {
 
 // --- campos ---------------------------------------------------------------------------------
 
-func (m *maquinaDalvik) leeCampo(idx uint32, receptor any, estatico bool) (any, error) {
-	d := m.prog.dex
+func (m *maquinaDalvik) leeCampo(d *dexFile, idx uint32, receptor any, estatico bool) (any, error) {
+	if d == nil {
+		d = m.prog.dex
+	}
 	if int(idx) >= len(d.fields) {
 		return nil, fmt.Errorf("campo %d fuera de field_ids", idx)
 	}
@@ -3676,8 +3725,10 @@ func (m *maquinaDalvik) leeEstatico(f dexField) (any, error) {
 	return valorCero(f.typeOf), nil
 }
 
-func (m *maquinaDalvik) escribeCampo(idx uint32, receptor any, v any, estatico bool) error {
-	d := m.prog.dex
+func (m *maquinaDalvik) escribeCampo(d *dexFile, idx uint32, receptor any, v any, estatico bool) error {
+	if d == nil {
+		d = m.prog.dex
+	}
 	if int(idx) >= len(d.fields) {
 		return fmt.Errorf("campo %d fuera de field_ids", idx)
 	}
@@ -3707,8 +3758,10 @@ func (m *maquinaDalvik) escribeCampo(idx uint32, receptor any, v any, estatico b
 // invoca resuelve una instrucción invoke: primero las clases del propio dex, y si el método no está
 // ahí, los stubs de framework. `op` es el opcode del invoke (0x6e..0x72) y `palabras` los registros
 // que llevan los argumentos, contados en palabras.
-func (m *maquinaDalvik) invoca(op byte, idx uint32, palabras []int, regs []any, claseActual string) (any, error) {
-	d := m.prog.dex
+func (m *maquinaDalvik) invoca(op byte, d *dexFile, idx uint32, palabras []int, regs []any, claseActual string) (any, error) {
+	if d == nil {
+		d = m.prog.dex
+	}
 	if int(idx) >= len(d.methods) {
 		return nil, fmt.Errorf("invoke con el método %d fuera de method_ids", idx)
 	}
