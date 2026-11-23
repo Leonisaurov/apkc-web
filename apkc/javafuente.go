@@ -1547,6 +1547,30 @@ func (a *analizadorJava) argumentosDeTipo() ([]tipoArgumento, error) {
 	return args, nil
 }
 
+// leeArgumentosDeTipoDelNuevo es el interruptor de la sonda del `new` con argumentos de tipo: apagado,
+// el parser vuelve a la ruta de antes y rechaza `new ArrayList<>()` con el mensaje literal del usuario.
+// Lo usa la falsificación de `javaemisor_diamante_test.go`; encendido en el binario que se publica.
+var leeArgumentosDeTipoDelNuevo = true
+
+// argumentosDeTipoDelNuevo consume los argumentos de tipo de un `new` si los trae: el diamante
+// `new ArrayList<>()`, cuyo argumento se infiere de la declaración, y la forma explícita
+// `new ArrayList<Apk>()`. En los dos casos el `.class` de javac no lleva `Signature` para el `new`
+// —el argumento es del tipo de la variable, no de la expresión— y el descriptor es el del borrado,
+// así que lo único que hace falta es consumirlos y dejar el nombre crudo en `tipo`.
+func (a *analizadorJava) argumentosDeTipoDelNuevo() error {
+	if !leeArgumentosDeTipoDelNuevo || !a.es('p', "<") {
+		return nil
+	}
+	// el diamante `<>`: los dos signos van seguidos y no hay tipo que leer
+	if a.i+1 < len(a.toks) && a.toks[a.i+1].kind == 'p' && a.toks[a.i+1].valor == ">" {
+		a.avanzar()
+		a.avanzar()
+		return nil
+	}
+	_, err := a.argumentosDeTipo()
+	return err
+}
+
 // argumentoDeTipo lee un tipo con sus corchetes y, si los tiene, sus propios argumentos.
 func (a *analizadorJava) argumentoDeTipo() (tipoArgumento, error) {
 	nombre, err := a.nombrePunto()
@@ -2534,6 +2558,9 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		a.avanzar()
 		tipo, err := a.nombrePunto()
 		if err != nil {
+			return nil, err
+		}
+		if err := a.argumentosDeTipoDelNuevo(); err != nil {
 			return nil, err
 		}
 		if a.es('p', "[") {
