@@ -325,17 +325,16 @@ func TestRechazaLoQueNoEstaMedido(t *testing.T) {
 		t.Errorf("the refusal does not name the byte: %v", err)
 	}
 
-	// un local que cae en v16 con el registro de cuatro bits de un 11n/12x/35c: se rechaza, no se
-	// recorta (aload_0 + ireturn, las dos medidas). El techo lo pone la pasada que escribe las
-	// palabras (`techo`), que es la que tiene que caber de verdad: la de medida usa una conjetura de
-	// base y sus números de registro son provisionales.
-	conBaseAncha := classMethod{HasCode: true, Name: "devuelve", Desc: "()I", LocalCount: 1, ArgCount: 1, MaxStack: 1,
-		Code: []byte{0x2a, 0xac}}
-	p := &traduce{t: td, x: poolIndex{p: cf.p}, clase: cf, m: conBaseAncha, locales: 1, base: 16, techo: true}
-	if err := p.recorre(); err == nil {
+	// un registro por encima de v15 en un formato de cuatro bits no se recorta: `nibble` lo rechaza
+	// en la pasada que escribe las palabras, que es la que tiene que caber de verdad (la de medida
+	// usa una conjetura de base y sus números de registro son provisionales). El `aload_0`/`aload_1`
+	// de un hueco alto ya no llega aquí: `bajaAlto` lo copia a un temporal con `move-object/from16`
+	// (lo comprueba `TestDexLasCargasDeLocalBajanUnHuecoAlto`).
+	ajustado := &traduce{techo: true}
+	if ajustado.nibble(16, jvmInstr{name: "getfield"}) {
 		t.Error("a register above v15 in a four-bit format was accepted")
-	} else if !strings.Contains(err.Error(), "four-bit") {
-		t.Errorf("the refusal does not say why: %v", err)
+	} else if ajustado.err == nil || !strings.Contains(ajustado.err.Error(), "four-bit") {
+		t.Errorf("the refusal does not say why: %v", ajustado.err)
 	}
 }
 

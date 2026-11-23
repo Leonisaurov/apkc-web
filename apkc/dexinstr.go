@@ -1088,6 +1088,34 @@ func mueveFrom16(op byte) byte {
 	return opMueveFrom16
 }
 
+// tomaBajo: un temporal que quepa en cuatro bits. `toma` devuelve el último libre, que con muchos
+// temporales vivos puede pasar de v15; si el que tocó no cabe, se devuelve a la bolsa y se busca el
+// más bajo que quepa. El caso normal —el que tocó ya cabía— no cambia, así que los planes de registro
+// ya medidos siguen siendo los mismos.
+func (p *traduce) tomaBajo(in jvmInstr, techo int) int {
+	r := p.toma(in)
+	if p.err != nil {
+		return 0
+	}
+	if r <= techo {
+		return r
+	}
+	p.libres = append(p.libres, r)
+	mejor := -1
+	for i, v := range p.libres {
+		if v <= techo && (mejor < 0 || v < p.libres[mejor]) {
+			mejor = i
+		}
+	}
+	if mejor < 0 {
+		p.falla(in, "no low register is free to carry a high slot down")
+		return 0
+	}
+	v := p.libres[mejor]
+	p.libres = append(p.libres[:mejor], p.libres[mejor+1:]...)
+	return v
+}
+
 // bajaAlto: atar a un temporal bajo un hueco cuyo registro no cabe en cuatro bits, y devolver ese
 // registro. `d8` resuelve esto renombrando el local (medido en `D16d.reasignaEntero`, donde el `k` del
 // argumento v16 se va a v4); aquí no hace falta ningún análisis de viveza: el hueco queda atado al
@@ -1107,15 +1135,18 @@ func (p *traduce) bajaAlto(in jvmInstr, n int, op byte) int {
 	var t int
 	if ancho {
 		t = p.tomaPar(in)
+		if p.err != nil {
+			return 0
+		}
+		if t > techo {
+			p.falla(in, "no low register is free to carry a high slot down")
+			return 0
+		}
 	} else {
-		t = p.toma(in)
-	}
-	if p.err != nil {
-		return 0
-	}
-	if t > techo {
-		p.falla(in, "no low register is free to carry a high slot down")
-		return 0
+		t = p.tomaBajo(in, techo)
+		if p.err != nil {
+			return 0
+		}
 	}
 	p.palabra(unidad22v(mueveFrom16(op), t))
 	p.palabra(uint16(r))
@@ -1948,20 +1979,12 @@ func (p *traduce) recorre() error {
 		case "ldc":
 			p.ldc(in)
 		case "aload_0":
-			r := p.local(0)
-			if !p.nibble(r, in) {
-				return p.err
-			}
-			p.push(r)
-			// el tipo del local 0, que en un método estático puede ser un arreglo `[B`/`[Z`
-			p.ponTipoCima(p.tipoLocal[0])
+			// por el mismo camino que el `aload` genérico: si el local 0 (`this` o el primer
+			// argumento) cae por encima de v15, `bajaAlto` lo copia a un temporal con
+			// `move-object/from16` en vez de fallar en el nibble
+			p.cargaLocal(in, 0, opMueveObjeto)
 		case "aload_1":
-			r := p.local(1)
-			if !p.nibble(r, in) {
-				return p.err
-			}
-			p.push(r)
-			p.ponTipoCima(p.tipoLocal[1])
+			p.cargaLocal(in, 1, opMueveObjeto)
 		case "pop":
 			p.suelta(p.pop(in))
 		case "pop2":
@@ -2305,7 +2328,13 @@ func (p *traduce) saltoTabla(in jvmInstr) {
 		}
 	}
 	p.cargas = append(p.cargas, c)
-	p.salto(opSalto, defecto, 0, in)
+	// el «ninguna clave casa» es un `goto` detrás del switch; si el bloque es largo, ese `goto`
+	// tampoco cabe en 10t y se promueve a `goto/16`, con el pc del switch como clave
+	if p.promover[in.pc] {
+		p.salto16(opGoto16, defecto, in)
+	} else {
+		p.salto(opSalto, defecto, 0, in)
+	}
 }
 
 // cierraCargas escribe los payloads detrás del último cuerpo, alineados a cuatro bytes como los deja

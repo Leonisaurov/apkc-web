@@ -64,3 +64,47 @@ func TestDexElGotoLargoSePromueveAGoto16(t *testing.T) {
 		t.Errorf("no hay un goto/16 fuera de +-127 en %04x", ci.insns)
 	}
 }
+
+// switchLargoJavac: `javac 21 --release 8 -g:lines,source SwitchLargo.java` y `base64 -w0 SwitchLargo.class`.
+const switchLargoJavac = "yv66vgAAADQAEAoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvT2JqZWN0AQAGPGluaXQ+AQADKClWBwAIAQALU3dpdGNoTGFyZ28BAARDb2RlAQAPTGluZU51bWJlclRhYmxlAQAGZ3JhbmRlAQAEKEkpSQEADVN0YWNrTWFwVGFibGUBAApTb3VyY2VGaWxlAQAQU3dpdGNoTGFyZ28uamF2YQAhAAcAAgAAAAAAAgABAAUABgABAAkAAAAdAAEAAQAAAAUqtwABsQAAAAEACgAAAAYAAQAAAAEACAALAAwAAQAJAAAFhQABAAIAAAJaAzwaqgAAAlMAAAAAAAAABQAAACUAAACCAAAA3wAAATwAAAGZAAAB9oQBAYQBAoQBA4QBBIQBBYQBBoQBB4QBCIQBCYQBCoQBC4QBDIQBDYQBDoQBD4QBEIQBEYQBEoQBE4QBFIQBFYQBFoQBF4QBGIQBGYQBGoQBG4QBHIQBHYQBHqcB1oQBC4QBDIQBDYQBDoQBD4QBEIQBEYQBEoQBE4QBFIQBFYQBFoQBF4QBGIQBGYQBGoQBG4QBHIQBHYQBHoQBH4QBIIQBIYQBIoQBI4QBJIQBJYQBJoQBJ4QBKKcBeYQBFYQBFoQBF4QBGIQBGYQBGoQBG4QBHIQBHYQBHoQBH4QBIIQBIYQBIoQBI4QBJIQBJYQBJoQBJ4QBKIQBKYQBKoQBK4QBLIQBLYQBLoQBL4QBMIQBMYQBMqcBHIQBH4QBIIQBIYQBIoQBI4QBJIQBJYQBJoQBJ4QBKIQBKYQBKoQBK4QBLIQBLYQBLoQBL4QBMIQBMYQBMoQBM4QBNIQBNYQBNoQBN4QBOIQBOYQBOoQBO4QBPKcAv4QBKYQBKoQBK4QBLIQBLYQBLoQBL4QBMIQBMYQBMoQBM4QBNIQBNYQBNoQBN4QBOIQBOYQBOoQBO4QBPIQBPYQBPoQBP4QBQIQBQYQBQoQBQ4QBRIQBRYQBRqcAYoQBM4QBNIQBNYQBNoQBN4QBOIQBOYQBOoQBO4QBPIQBPYQBPoQBP4QBQIQBQYQBQoQBQ4QBRIQBRYQBRoQBR4QBSIQBSYQBSoQBS4QBTIQBTYQBToQBT4QBUKcABQKsG6wAAAACAAoAAAL6AL4AAAADAAIABAAoAAYAKwAHAC4ACAAxAAkANAAKADcACwA6AAwAPQANAEAADgBDAA8ARgAQAEkAEQBMABIATwATAFIAFABVABUAWAAWAFsAFwBeABgAYQAZAGQAGgBnABsAagAcAG0AHQBwAB4AcwAfAHYAIAB5ACEAfAAiAH8AIwCCACQAhQAmAIgAJwCLACgAjgApAJEAKgCUACsAlwAsAJoALQCdAC4AoAAvAKMAMACmADEAqQAyAKwAMwCvADQAsgA1ALUANgC4ADcAuwA4AL4AOQDBADoAxAA7AMcAPADKAD0AzQA+ANAAPwDTAEAA1gBBANkAQgDcAEMA3wBEAOIARgDlAEcA6ABIAOsASQDuAEoA8QBLAPQATAD3AE0A+gBOAP0ATwEAAFABAwBRAQYAUgEJAFMBDABUAQ8AVQESAFYBFQBXARgAWAEbAFkBHgBaASEAWwEkAFwBJwBdASoAXgEtAF8BMABgATMAYQE2AGIBOQBjATwAZAE/AGYBQgBnAUUAaAFIAGkBSwBqAU4AawFRAGwBVABtAVcAbgFaAG8BXQBwAWAAcQFjAHIBZgBzAWkAdAFsAHUBbwB2AXIAdwF1AHgBeAB5AXsAegF+AHsBgQB8AYQAfQGHAH4BigB/AY0AgAGQAIEBkwCCAZYAgwGZAIQBnACGAZ8AhwGiAIgBpQCJAagAigGrAIsBrgCMAbEAjQG0AI4BtwCPAboAkAG9AJEBwACSAcMAkwHGAJQByQCVAcwAlgHPAJcB0gCYAdUAmQHYAJoB2wCbAd4AnAHhAJ0B5ACeAecAnwHqAKAB7QChAfAAogHzAKMB9gCkAfkApgH8AKcB/wCoAgIAqQIFAKoCCACrAgsArAIOAK0CEQCuAhQArwIXALACGgCxAh0AsgIgALMCIwC0AiYAtQIpALYCLAC3Ai8AuAIyALkCNQC6AjgAuwI7ALwCPgC9AkEAvgJEAL8CRwDAAkoAwQJNAMICUADDAlMAxAJWAMYCWADIAA0AAAAZAAj8ACgB+wBc+wBc+wBc+wBc+wBc+wBcAQABAA4AAAACAA8="
+
+// TestDexElGotoPorDefectoDeUnSwitchLargoSePromueve: el «ninguna clave casa» de un `tableswitch` es un
+// `goto` detrás del switch; si los cuerpos son largos, ese `goto` tampoco cabe en 10t y se emite como
+// `goto/16` 0x29. Sin la promoción del switch en `saltoTabla`, dexar el fixture revienta con la
+// promoción repetida y esta prueba muere.
+func TestDexElGotoPorDefectoDeUnSwitchLargoSePromueve(t *testing.T) {
+	datos, err := base64.StdEncoding.DecodeString(switchLargoJavac)
+	if err != nil {
+		t.Fatalf("el fixture no es base64: %v", err)
+	}
+	clase, err := readClassFull(datos)
+	if err != nil {
+		t.Fatalf("el fixture de javac no se lee: %v", err)
+	}
+	if _, err := dexDeClases([]classFull{clase}); err != nil {
+		t.Fatalf("dexando el .class de javac: %v", err)
+	}
+	td := newDexTables()
+	if err := td.collectClasses([]classFull{clase}); err != nil {
+		t.Fatalf("internando: %v", err)
+	}
+	td.orderTables()
+	m, ok := buscaMetodo(clase, "grande")
+	if !ok {
+		t.Fatal("grande: no está en el fixture de javac")
+	}
+	ci, err := td.codeItemDe(clase, m)
+	if err != nil {
+		t.Fatalf("grande: dexando: %v", err)
+	}
+	for i := 0; i+1 < len(ci.insns); i++ {
+		if byte(ci.insns[i]) != opGoto16 {
+			continue
+		}
+		if d := int(int16(ci.insns[i+1])); d > 127 || d < -127 {
+			t.Logf("goto/16 del switch en la unidad %d con desplazamiento %d", i, d)
+			return
+		}
+	}
+	t.Errorf("no hay un goto/16 fuera de +-127 en %04x", ci.insns)
+}
