@@ -364,8 +364,14 @@ func marcoDeJar(abrir func(nombre string) (io.ReadCloser, error), nombre string)
 	return leeMarco(arsc)
 }
 
-// marcoDelAndroidJar es la puerta normal: abre el jar con archive/zip y busca resources.arsc dentro.
+// marcoDelAndroidJar es la puerta normal: busca resources.arsc dentro del jar. Primero por el
+// índice de I5 (jarindice.go), que evita que archive/zip recorra y materialice el directorio central
+// entero —el coste fijo que `check` pagaba en cada pasada con `--proyecto` sin una R escrita—; si la
+// caché no está o no sirve para esta entrada, se cae al archive/zip de siempre.
 func marcoDelAndroidJar(ruta string) (*marcoRecursos, error) {
+	if datos, ok := leerEntradaDelJarIndizada(ruta, entradaMarcoDelJar); ok {
+		return leeMarco(datos)
+	}
 	zr, err := zip.OpenReader(ruta)
 	if err != nil {
 		return nil, fmt.Errorf("el android.jar %s no abre como zip: %w", ruta, err)
@@ -379,5 +385,5 @@ func marcoDelAndroidJar(ruta string) (*marcoRecursos, error) {
 		}
 		return nil, fmt.Errorf("no hay %s dentro del jar", nombre)
 	}
-	return marcoDeJar(abrir, "resources.arsc")
+	return marcoDeJar(abrir, entradaMarcoDelJar)
 }

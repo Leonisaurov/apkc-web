@@ -47,7 +47,9 @@ const (
 
 	// marcaIndiceDelJar dice de qué fichero se trata y con qué forma. El 2 es la forma que lleva el
 	// digest del directorio central en vez de la fecha del jar: una caché de la 1 se ignora entera.
-	marcaIndiceDelJar   = "apkc-jarindice-2\n"
+	// El 3 añade `resources.arsc` al índice, que es lo que deja a `check` resolver la tabla del
+	// framework sin volver a recorrer el zip: una caché de la 2 se ignora y se reindexa una vez.
+	marcaIndiceDelJar   = "apkc-jarindice-3\n"
 	largoMarcaIndiceJar = 17
 
 	// cabeceraIndiceDelJar: marca (17), sha1 de la ruta del jar (20), tamaño del jar (8), CRC-32 del
@@ -67,6 +69,10 @@ const (
 	// colaMaximaDelJar es lo que puede ocupar un fin de directorio central con el comentario más
 	// largo que admite el formato: más atrás no hay otro.
 	colaMaximaDelJar = 22 + 0xffff
+
+	// entradaMarcoDelJar es la única entrada que no es una clase y que el índice guarda: la tabla
+	// de recursos del framework, que `check` lee para enlazar el res/ del proyecto.
+	entradaMarcoDelJar = "resources.arsc"
 )
 
 var (
@@ -78,6 +84,17 @@ var (
 	// lee una prueba: por fuera, «salió de build/jarindice.bin» y «volvió a recorrer el zip» se
 	// comportan igual, y sin esto la reutilización de la caché no se puede afirmar, solo suponer.
 	parseosDelDirectorio int
+
+	// extraccionesDelIndice cuenta las entradas servidas por el índice sin pasar por archive/zip.
+	// La lee una prueba de `check` para fijar que el marco del framework sale de la caché y no de
+	// recorrer el jar otra vez.
+	extraccionesDelIndice int
+
+	// directorioDeIndicesDelJar mueve build/jarindice cuando quien llama no trabaja desde la raíz
+	// del proyecto. `check` recibe la raíz en `--proyecto` y no cambia su cwd (la pestaña lanza el
+	// comando con el cwd que dejó el último), así que la fija aquí para leer y actualizar el mismo
+	// índice que dejó el build. Vacío significa la ruta relativa de siempre.
+	directorioDeIndicesDelJar = ""
 )
 
 // entradaJar dice dónde está una clase dentro del jar y cómo leerla sin archive/zip.
@@ -124,7 +141,11 @@ func huellaDelJarTexto(rutaJar string) string {
 // que decide si el fichero vale (leerIndiceDelJar).
 func ficheroIndiceDelJar(rutaJar string) string {
 	digest := sha1.Sum([]byte(rutaJar))
-	return filepath.Join(dirIndiceDelJar, hex.EncodeToString(digest[:])+".bin")
+	dir := dirIndiceDelJar
+	if directorioDeIndicesDelJar != "" {
+		dir = directorioDeIndicesDelJar
+	}
+	return filepath.Join(dir, hex.EncodeToString(digest[:])+".bin")
 }
 
 // leerIndiceDelJar devuelve el índice de build/jarindice/ cuando su cabecera dice que es el de este
@@ -181,10 +202,17 @@ func leerIndiceDelJar(rutaJar string, tamano int64, directorio uint32) (map[stri
 // escribirIndiceDelJar deja el índice en disco. Es lo mejor que se puede hacer, no una obligación: sin
 // build/ (una prueba que no está en un proyecto) o con el disco lleno se sigue compilando.
 func escribirIndiceDelJar(rutaJar string, tamano int64, directorio uint32, indice map[string]entradaJar) {
-	if st, err := os.Stat("build"); err != nil || !st.IsDir() {
+	dir := dirIndiceDelJar
+	if directorioDeIndicesDelJar != "" {
+		dir = directorioDeIndicesDelJar
+	}
+	// la caché vive dentro de build/ y `apkc clean` se la lleva con el resto. Si build/ no existe
+	// (un fuente suelto, una prueba sin proyecto) no se crea: el diagnóstico no deja directorios
+	// nuevos en el árbol del proyecto, que es el contrato de `check`.
+	if st, err := os.Stat(filepath.Dir(dir)); err != nil || !st.IsDir() {
 		return
 	}
-	if err := os.MkdirAll(dirIndiceDelJar, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}
 	nombres := make([]string, 0, len(indice))
@@ -313,7 +341,13 @@ func parseaDirectorioCentral(cd []byte, cuenta int) (map[string]entradaJar, erro
 			return nil, fmt.Errorf("directorio central cortado en el byte %d", p)
 		}
 		nombre := string(cd[p+46 : p+46+largoNombre])
-		if interno, ok := recortaClase(nombre); ok {
+		interno, ok := recortaClase(nombre)
+		if !ok && nombre == entradaMarcoDelJar {
+			// la tabla del framework también se guarda: `check` la necesita para enlazar res/ y
+			// sin ella abriría el zip entero solo por esta entrada
+			interno, ok = nombre, true
+		}
+		if ok {
 			if _, ya := indice[interno]; !ya {
 				indice[interno] = entradaJar{cabecera: int64(offset), comprimido: comprimido, crc: crc, metodo: metodo}
 			}
@@ -339,6 +373,44 @@ func recortaClase(nombre string) (string, bool) {
 		return "", false
 	}
 	return nombre[:len(nombre)-len(sufijo)], true
+}
+
+// leerEntradaDelJarIndizada saca una entrada del jar sin abrirlo con archive/zip: el directorio
+// central se lee una vez para su digest, el índice sale de build/jarindice/ cuando su cabecera
+// cuadra y la entrada se lee por su offset. Es el mismo camino que ya usa el emisor para las clases
+// (abrirBuscador) y el que ahorra a `check` recorrer el jar entero solo por `resources.arsc`.
+// Devuelve false cuando esta forma no sirve —zip64, caché de otra forma, entrada ausente— y el
+// llamador se queda con archive/zip, que es el respaldo de siempre.
+func leerEntradaDelJarIndizada(rutaJar, nombre string) ([]byte, bool) {
+	directorio, tamano, cuenta, err := leeDirectorioCentral(rutaJar)
+	if err != nil {
+		return nil, false
+	}
+	huella := crc32.ChecksumIEEE(directorio)
+	indice, cacheado := leerIndiceDelJar(rutaJar, tamano, huella)
+	if !cacheado {
+		propio, err := parseaDirectorioCentral(directorio, cuenta)
+		if err != nil {
+			return nil, false
+		}
+		indice = propio
+		escribirIndiceDelJar(rutaJar, tamano, huella, indice)
+	}
+	e, hay := indice[nombre]
+	if !hay {
+		return nil, false
+	}
+	archivo, err := os.Open(rutaJar)
+	if err != nil {
+		return nil, false
+	}
+	defer archivo.Close()
+	datos, err := datosDeLaEntrada(archivo, e)
+	if err != nil {
+		return nil, false
+	}
+	extraccionesDelIndice++
+	return datos, true
 }
 
 // datosDeLaEntrada lee y descomprime una entrada con el offset del índice, sin archive/zip. Pasa por

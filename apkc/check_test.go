@@ -157,6 +157,43 @@ func TestRaizDelProyectoSubeHastaElManifiesto(t *testing.T) {
 	}
 }
 
+// TestCheckAprovechaElIndiceDelJar fija la parte de I5 que `check` usa: cuando el proyecto tiene
+// build/ —el estado tras un `apkc build`— la tabla del framework sale del índice que dejó el build
+// en build/jarindice, sin que archive/zip recorra el jar otra vez. El contador es lo único que
+// distingue los dos caminos. Y sin build/ el check no lo crea: el diagnóstico no escribe en el
+// árbol del proyecto, que es el contrato de esta fase.
+func TestCheckAprovechaElIndiceDelJar(t *testing.T) {
+	jar := jarDelSDK(t)
+	raiz, fuente := proyectoDeCheck(t)
+
+	// proyecto recién creado: no hay build/, así que se enlaza res/ y no se deja nada escrito
+	r := revisarFuenteJava(fuente, "MainActivity.java", jar, raiz)
+	if len(r.Errores) != 0 || !r.Emisor {
+		t.Fatalf("sin build/ el check no compiló: %+v", r)
+	}
+	if _, err := os.Stat(filepath.Join(raiz, "build")); err == nil {
+		t.Fatal("el check creó build/: no puede dejar directorios en el proyecto")
+	}
+
+	// con build/ (lo que deja un build), la primera pasada escribe el índice y la segunda lo usa
+	if err := os.MkdirAll(filepath.Join(raiz, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if r := revisarFuenteJava(fuente, "MainActivity.java", jar, raiz); len(r.Errores) != 0 {
+		t.Fatalf("con build/ el check da errores: %+v", r.Errores)
+	}
+	extracciones, parseos := extraccionesDelIndice, parseosDelDirectorio
+	if r := revisarFuenteJava(fuente, "MainActivity.java", jar, raiz); len(r.Errores) != 0 || !r.Emisor {
+		t.Fatalf("la segunda pasada con el índice no compiló: %+v", r)
+	}
+	if extraccionesDelIndice == extracciones {
+		t.Fatal("la segunda pasada no sacó resources.arsc del índice: volvió a abrir el jar con archive/zip")
+	}
+	if parseosDelDirectorio != parseos {
+		t.Fatal("la segunda pasada volvió a parsear el directorio central teniendo el índice")
+	}
+}
+
 // fuenteApkCualificada es el caso de D4: un campo de la propia clase escrito con el receptor `this`,
 // que es la forma que trae el `Apk.java` del usuario. La asignacion cae en la linea 7.
 const fuenteApkCualificada = `package com.hola.apkcstudio;
