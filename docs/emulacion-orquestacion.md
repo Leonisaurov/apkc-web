@@ -99,9 +99,9 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - I3 **cerrada** como `d3803bb` tras el **APROBAR** de `ses_df9baefaeffemtyU4YC0gXywOR`; la pregunta
   abierta del classpath queda adscrita a I5, que sigue pendiente con I4. Detalle en
   `docs/plan-incremental-web.md`.
-- **Interfaz del emulador:** integrada como `0b6dc83` y verificada en la pestaña real con CDP
+- **Interfaz del emulador:** integrada y verificada en la pestaña real con CDP
   (`http://127.0.0.1:8801/`, `crossOriginIsolated=true`, cero excepciones). Los dos puntos
-  `INCIERTO` del crítico quedan cerrados:
+  `INCIERTO` del crítico y el cierre visual final quedan cerrados:
   - **Última APK:** compilé debug desde la pestaña; `#ultimo-codigo` quedó en `0`, `/sdk/ultimo.apk`
     mide 10.286 B y `/sdk/ultimo.json` registra origen `/proyecto/build/app.apk`, tipo debug y
     SHA-256 `3d4b4382…`. «Usar última APK» pintó 53 nodos **sin compilar**.
@@ -111,10 +111,23 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
     puntero `23a827f`). Tras el fix el canvas mide 314×561 en (690,303) antes, apagado, encendido y
     con el inspector abierto: idéntico en los cuatro estados. El botón `#vista-oyentes button`
     pasa de «sin clics» a «1 clic» tras el ciclo apagado/encendido.
+  - **Cierre visual final (`5637944` y `5f4b9ce`, puntero `89fc27f`, `studio/` en `0fce105`):**
+    consola libre en las dos vistas, asa de arrastre con `pointer-events` y pantalla completa con
+    `position: fixed`; acoplar la consola no reescala el canvas (`ajustarCanvas` memoiza `caja|dp`,
+    `pausarAjusteCanvas` durante gestos y el `ResizeObserver` no ajusta con el emulador apagado).
+    El gate anterior fallaba porque `previa-inspector-cab` tapaba el canvas (`elementFromPoint`
+    devolvía la cabecera); se corrigió con `pointer-events: none` en la cabecera y `auto` solo en
+    botones y asas (`previa-inspector-asidero`, `vista-lado-asidero`). CDP: apagado, canvas
+    `309×712` en libre, acoplada y minimizada, con `elementFromPoint` = `previa-lateral-canvas`;
+    encendido desde la última APK, `309×549` en los tres modos y el mismo hit-test; pantalla
+    completa en el panel del editor, `505×899` en (708,54) con `full=true` y sin recarga, también
+    en la vista Pantalla. El texto de estado sigue fuera del flujo (`previa-estado-oculto`, caja
+    1×1) y 400 caracteres no cambiaron el canvas. `node --check` y `node prueba.js` en verde en el
+    submódulo.
 - **Editor auditado:** `e121270` en el submódulo (cherry-pick de `e600a66`), puntero `6243d9d`;
   F1, C1-C4 y F2 cerrados, F5 sigue `INCIERTO`. `node --check` sin salida y `prueba.js` en
   `todo en orden`.
-- **Pendiente de gate:** la carrera real con DOM y worker (F1/F5); F5 sigue `INCIERTO`.
-- **Activas:** ninguna de emulación; el gate final está **en curso** por otro agente, con `PREFIX`
-  y puertos únicos.
+- **Pendiente de gate:** F5, la carrera de tecleo durante la carga; sigue `INCIERTO`.
+- **Activas:** ninguna de emulación; el gate final está **en curso** por otro agente sobre
+  `89fc27f`, con `PREFIX` y puertos únicos.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.

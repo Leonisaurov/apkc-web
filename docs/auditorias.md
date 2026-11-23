@@ -28,8 +28,9 @@ hecho por analogía (regla 11).
   drawable (`previa-panel.js:2096`). La generación de clave sí pasa por lock (`:2237`).
 - **F5 (INCIERTO).** Teclear durante la ventana de carga marca sucio el doc nuevo con `texto=null`
   y la lectura posterior descarta lo tecleado. No se cerró con `e121270`; sigue `INCIERTO`.
-- **Frontera de gate.** La carrera real con DOM y worker (F1 y F5) no se puede reproducir en
-  `prueba.js`; queda para el gate con navegador.
+- **Frontera de gate.** La carrera real con DOM y worker queda reducida a F5; el hit-test y la
+  geometría del emulador ya están verificados en navegador real. Lo que no se puede reproducir en
+  `prueba.js` es el tecleo durante la carga, y eso sigue para el gate con navegador.
 
 ### 1.2 Compilación y panel de resultado
 
@@ -149,7 +150,14 @@ en su worktree con tres casos nuevos en `prueba.js`.
   SHA-256 `3d4b4382…`; y el inspector ya no redimensiona el canvas (314×561 en (690,303) en los
   cuatro estados), con el clic de `#vista-oyentes button` pasando de «sin clics» a «1 clic». El
   brinco lo causaba `.marco-previa { position: relative }`; se corrigió en `studio/style.css`
-  (`786e195`, puntero `23a827f`).
+  (`786e195`, puntero `23a827f`). El cierre visual final (`5637944` y `5f4b9ce`, puntero `89fc27f`,
+  `studio/` en `0fce105`) dejó la consola libre en las dos vistas, el asa con `pointer-events` y la
+  pantalla completa con `position: fixed`; acoplar la consola no reescala el canvas. El gate
+  anterior fallaba porque `previa-inspector-cab` tapaba el canvas (`elementFromPoint` devolvía la
+  cabecera): se corrigió con `pointer-events: none` y `auto` solo en botones y asas. CDP final:
+  apagado `309×712` en libre, acoplada y minimizada; encendido `309×549` en los tres modos, con
+  `elementFromPoint` = `previa-lateral-canvas`; pantalla completa `505×899` en (708,54) con
+  `full=true` y sin recarga. `node --check` y `node prueba.js` en verde.
 - Red de seguridad del manifiesto integrada: submódulo `70433f1`, puntero `7f2fae6`; gate sobre el
   árbol integrado con `PREFIX`/`GOTMPDIR` en disco: `pestaña: 223 comprobaciones`, `e2e: todo en orden`.
 - Reglas de tmpfs y limpieza: commits `7b61cf7`, `6a24066`, `6ad5aac`, todos sobre el `AGENTS.md`
