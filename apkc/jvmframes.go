@@ -675,6 +675,19 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		if err := a.guardaLocal(int(op-0x47), 'd'); err != nil {
 			return nil, false, err
 		}
+	case op == 0x74 || op == 0x75 || op == 0x76 || op == 0x77: // ineg, lneg, fneg, dneg
+		// una palabra (o un par) dentro y la misma fuera: `ineg` deja un entero, `lneg` un largo y
+		// `fneg`/`dneg` el ancho que niegan. Medido con javac 17 sobre `-total`, `-(a+b)` y `-f()`
+		// (entero) y sobre `-x` en los cuatro anchos.
+		t, err := a.saca()
+		if err != nil {
+			return nil, false, err
+		}
+		esperado := map[byte]byte{0x74: 'i', 0x75: 'j', 0x76: 'f', 0x77: 'd'}[op]
+		if t.etiqueta != esperado {
+			return nil, false, fmt.Errorf("el %s sobre un %s", in.name, t)
+		}
+		a.empuja(t)
 	case op == 0x62 || op == 0x66 || op == 0x6a || op == 0x6e || op == 0x72: // fadd, fsub, fmul, fdiv, frem
 		if err := a.sacaDe('f'); err != nil {
 			return nil, false, err

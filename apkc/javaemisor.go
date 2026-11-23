@@ -108,6 +108,14 @@ const (
 	opIand  = 0x7e
 	opIor   = 0x80
 	opIxor  = 0x82
+	// las negaciones unarias de la aritmética: `ineg` 0x74, `lneg` 0x75, `fneg` 0x76 y `dneg` 0x77,
+	// un byte y ningún operando. Medidas con javac 17 sobre `-total`, `-(a+b)`, `-x` en los cuatro
+	// anchos y `-f()`; el dexer las baja al 12x de DEX (`neg-int` 0x7b, `neg-long` 0x7d,
+	// `neg-float` 0x7f y `neg-double` 0x80), medido con `d8` y `dexdump`
+	opIneg = 0x74
+	opLneg = 0x75
+	opFneg = 0x76
+	opDneg = 0x77
 )
 
 // descPrimitivo: el descriptor de cada tipo escrito en el fuente. `long` y `double` ocupan dos huecos
@@ -742,6 +750,8 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 		ctx.registrarExpresion(v.der)
 	case jnegacion:
 		ctx.registrarExpresion(v.dentro)
+	case jnegativo:
+		ctx.registrarExpresion(v.dentro)
 	}
 }
 
@@ -824,6 +834,8 @@ func anonimasDe(c *jclas) []*jclas {
 		case jcast:
 			expr(v.dentro)
 		case jinstanceof:
+			expr(v.dentro)
+		case jnegativo:
 			expr(v.dentro)
 		case jnuevoArreglo:
 			if v.largo != nil {
@@ -2592,6 +2604,8 @@ func posDeExpr(x jexpr) pos {
 		return v.donde
 	case jnegacion:
 		return v.donde
+	case jnegativo:
+		return v.donde
 	}
 	return pos{}
 }
@@ -2873,6 +2887,31 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return "I", nil
 	case jnegacion:
 		return "", fmt.Errorf("linea %d: la negacion no esta medida en este emisor", v.donde.linea)
+	case jnegativo:
+		// la `-` de la aritmetica: el operando va primero y debajo suyo la negacion de su ancho,
+		// **sin conversion previa** (medido con javac 17: `-total` es `iload_1; ineg`, `-(a+b)` es
+		// `iload_0; iload_1; iadd; ineg` y `-f()` `invokestatic; ineg`; `lneg`, `fneg` y `dneg` salen
+		// igual de `-x` en cada ancho). `char`, `byte` y `short` viajan como enteros de una palabra y
+		// su negacion es `ineg` con resultado `int` (`-c` medido: `iload_0; ineg`).
+		d, err := e.exp(v.dentro)
+		if err != nil {
+			return "", err
+		}
+		switch {
+		case len(d) == 1 && strings.IndexByte("IBCS", d[0]) >= 0:
+			e.emite(opIneg)
+			return "I", nil
+		case d == "J":
+			e.emite(opLneg)
+			return "J", nil
+		case d == "F":
+			e.emite(opFneg)
+			return "F", nil
+		case d == "D":
+			e.emite(opDneg)
+			return "D", nil
+		}
+		return "", fmt.Errorf("linea %d: la negacion de un %s no esta medida (solo los numeros)", v.donde.linea, d)
 	}
 	return "", fmt.Errorf("una expresion de %T no esta medida", x)
 }
@@ -3155,6 +3194,26 @@ func plegarConstante(x jexpr) (constNum, bool) {
 			r = float64(float32(r))
 		}
 		return constNum{tipo: t, real: r}, true
+	case jnegativo:
+		// javac también dobla la `-` sobre una cuenta de constantes, antes de emitir nada: medido con
+		// javac 17, `-(1 + 2)` es `bipush -3`, `-(1L + 2L)` un `ldc2_w -3l`, y `-(1.0 + 2.0)` y
+		// `-(1.5f + 2.5f)` las constantes negativas del pool. La negación es la del ancho de dentro
+		// (un `char` pliega como entero, como en su suma); el desborde de `int` envuelve, igual que en
+		// las cuentas.
+		c, ok := plegarConstante(v.dentro)
+		if !ok {
+			return constNum{}, false
+		}
+		if c.tipo == 'I' {
+			// la negación de `int` envuelve como la de la JVM: `-(-2147483648)` sigue siendo el mismo
+			// entero (medido: javac dobla la constante y no protesta)
+			c.entero = int64(-int32(c.entero))
+		} else if c.tipo == 'J' {
+			c.entero = -c.entero
+		} else {
+			c.real = -c.real
+		}
+		return c, true
 	}
 	return constNum{}, false
 }
@@ -4388,6 +4447,22 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			n = len(v.dimensiones)
 		}
 		return strings.Repeat("[", n) + d, nil
+	case jnegativo:
+		// `-x` conserva el ancho de su operando (`-l` es largo, `-f` flotante) salvo el estrecho,
+		// `char`/`byte`/`short`, que se niega como entero y devuelve `int` (medido con javac 17:
+		// `-c` es `iload_0; ineg` y la vuelta es `I`). Así `imprime(-n)` elige la misma sobrecarga
+		// que javac.
+		d, err := e.tipoEstimado(v.dentro)
+		if err != nil {
+			return "", err
+		}
+		if len(d) == 1 && strings.IndexByte("IJFD", d[0]) >= 0 {
+			return d, nil
+		}
+		if len(d) == 1 && strings.IndexByte("BCS", d[0]) >= 0 {
+			return "I", nil
+		}
+		return "", fmt.Errorf("linea %d: la negacion de un %s no esta medida (solo los numeros)", v.donde.linea, d)
 	case jllamada:
 		// una llamada sin receptor escrito: la vuelta de su unica candidata en esa aridad (medido al
 		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74)
@@ -4456,6 +4531,21 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 			n = len(v.dimensiones)
 		}
 		return strings.Repeat("[", n) + d, true
+	case jnegativo:
+		// `-x` tiene el ancho de su operando, y el estrecho (`char`, `byte`, `short`) se niega como
+		// entero: `-c` es `iload_0; ineg` y deja `I` (medido con javac 17). Así `l + (-x)` sabe que
+		// tiene que ensanchar el lado de la negación antes de sumar.
+		d, ok := e.tipoPrevisto(v.dentro)
+		if !ok {
+			return "", false
+		}
+		if d == "C" || d == "B" || d == "S" {
+			return "I", true
+		}
+		if d == "I" || d == "J" || d == "F" || d == "D" {
+			return d, true
+		}
+		return "", false
 	case jacceso:
 		segs, base := aplanar(v)
 		if base != nil || len(segs) == 0 {

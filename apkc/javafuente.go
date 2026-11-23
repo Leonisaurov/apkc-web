@@ -821,6 +821,29 @@ func (a *analizadorJava) mira(n int) tokenJava {
 	return a.toks[i]
 }
 
+// puedeAbrirExpresion: si el token puede empezar una expresión unaria. Hace falta para deshacer la
+// ambigüedad de `(x)`: `tipo()` acepta un nombre suelto como molde, pero un molde tiene que llevar
+// algo detrás. Sin esta comprobación, `-(x)` se leía como el molde de `x` y el `;` siguiente rompía
+// el parser; medido con javac 17, `-(x)` es un paréntesis y `(int) x` es un molde.
+func puedeAbrirExpresion(t tokenJava) bool {
+	switch t.kind {
+	case 'i', 'n', 's', 'c':
+		return true
+	case 'k':
+		switch t.valor {
+		case "this", "new", "true", "false", "null", "super":
+			return true
+		}
+		return false
+	case 'p':
+		switch t.valor {
+		case "(", "!", "-", "++", "--":
+			return true
+		}
+	}
+	return false
+}
+
 func (a *analizadorJava) comer(kind byte, valor string) error {
 	if !a.es(kind, valor) {
 		return fmt.Errorf("linea %d: se esperaba %q y hay %q", a.actual().donde.linea, valor, a.actual().valor)
@@ -2203,34 +2226,48 @@ func (a *analizadorJava) expresionBinaria(min int) (jexpr, error) {
 
 func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 	if a.es('p', "-") {
-		// solo el menos de un literal entero: javac lo dobla (`-1` es `iconst_m1`) y el resto de la
-		// negacion sigue sin medir
+		// el menos de un literal lo dobla javac en el fuente (`-1` es `iconst_m1`, `-2.5` una
+		// constante negativa del pool, `-'a'` un `bipush -97`); sobre cualquier otra expresión es una
+		// negación que se emite en su sitio después de su operando (`iload_1; ineg` para `-total`,
+		// medido con javac 17).
 		donde := a.actual().donde
 		a.avanzar()
-		t := a.actual()
-		if t.kind != 'n' {
-			return nil, fmt.Errorf("linea %d: la negacion de algo que no es un literal entero no esta medida", donde.linea)
-		}
-		a.avanzar()
-		if esLiteralFlotante(t.valor) {
-			v, tipo, err := flotanteJava(t.valor)
+		if t := a.actual(); t.kind == 'n' || t.kind == 'c' {
+			a.avanzar()
+			if t.kind == 'c' {
+				// el literal `char` pliega como el entero que es: javac lo escribe `bipush -97`, y el
+				// resultado de la cuenta es un `int`, no un `char` (medido con javac 17)
+				n, err := enteroJava(t.valor)
+				if err != nil {
+					return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+				}
+				return jlit{tipoJ: 'i', entero: -n, donde: donde}, nil
+			}
+			if esLiteralFlotante(t.valor) {
+				v, tipo, err := flotanteJava(t.valor)
+				if err != nil {
+					return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+				}
+				return jlit{tipoJ: tipo, flotante: -v, donde: donde}, nil
+			}
+			if esLiteralLargo(t.valor) {
+				n, err := enteroLargoJava(t.valor)
+				if err != nil {
+					return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+				}
+				return jlit{tipoJ: 'j', largo: -n, donde: donde}, nil
+			}
+			n, err := enteroJava(t.valor)
 			if err != nil {
 				return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
 			}
-			return jlit{tipoJ: tipo, flotante: -v, donde: donde}, nil
+			return jlit{tipoJ: 'i', entero: -n, donde: donde}, nil
 		}
-		if esLiteralLargo(t.valor) {
-			n, err := enteroLargoJava(t.valor)
-			if err != nil {
-				return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
-			}
-			return jlit{tipoJ: 'j', largo: -n, donde: donde}, nil
-		}
-		n, err := enteroJava(t.valor)
+		e, err := a.expresionUnaria()
 		if err != nil {
-			return nil, fmt.Errorf("linea %d: %w", donde.linea, err)
+			return nil, err
 		}
-		return jlit{tipoJ: 'i', entero: -n, donde: donde}, nil
+		return jnegativo{dentro: e, donde: donde}, nil
 	}
 	if a.es('p', "++") || a.es('p', "--") {
 		donde := a.actual().donde
@@ -2259,7 +2296,7 @@ func (a *analizadorJava) expresionUnaria() (jexpr, error) {
 		marca := a.i
 		a.avanzar()
 		tipo, err := a.tipo()
-		if err == nil && a.es('p', ")") {
+		if err == nil && a.es('p', ")") && puedeAbrirExpresion(a.mira(1)) {
 			a.avanzar()
 			e, err := a.expresionUnaria()
 			if err != nil {
@@ -2713,6 +2750,17 @@ type jnegacion struct {
 }
 
 func (jnegacion) jexprPuede() {}
+
+// jnegativo: la `-` unaria de la aritmética. Va aparte de `jnegacion` (que es la `!` booleana y se
+// branquea con `ifeq`/`ifne`) porque se baja a `ineg`/`lneg`/`fneg`/`dneg` **después** de emitir el
+// operando. Los literales numéricos siguen doblándose en el analizador (`-1` es `iconst_m1`) y no
+// llegan aquí; esto es la negación de todo lo demás (`-total`, `-(a+b)`, `-f()`).
+type jnegativo struct {
+	dentro jexpr
+	donde  pos
+}
+
+func (jnegativo) jexprPuede() {}
 
 // sinPaquete quita el paquete a un nombre de clase interno (com/miapp/R$layout -> R$layout).
 func sinPaquete(nombre string) string {
