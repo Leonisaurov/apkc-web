@@ -1,0 +1,66 @@
+# Coordinación de la orquestación de emulación (2026-11-22)
+
+Este fichero es el tablero de la operación, no una medición. Las mediciones siguen en
+`docs/evidencia.md` y los planes en `docs/plan-emulacion.md` y `docs/auditorias.md`.
+Se actualiza al integrar cada frente para que la cola y el estado sobrevivan a una compactación.
+
+## Objetivo
+
+Dejar la vista previa y el emulador **completos y conectados**: E1.1 (correcciones de la auditoría)
+y E2 a E7 del plan de emulación. Quedan fuera de esta operación el `android.jar`, el diagnóstico D2,
+el incremental I3-I5, la deuda general de auditoría y las dependencias Maven. **No se publica, no se
+empaqueta `sitio/` y no se hace push a `origin`;** eso solo cuando el usuario lo pida y el producto
+esté terminado.
+
+## Entorno común
+
+- Repositorio raíz: `/home/leonisauro/Develop/Go/apkc-web` (rama `web`, 27 commits por delante de
+  `origin/web`; no se reconcilia hacia atrás ni se sube nada).
+- `HOME_APKC_WEB=/home/leonisauro`, `ANDROID_HOME=/home/leonisauro/opt/android-sdk`.
+- `APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar`
+  (26.361.808 bytes). Es el oráculo local; no se sirve ni se versiona.
+- Prueba base ejecutada en la raíz antes de lanzar nada:
+  `APKC_ANDROID_JAR=… tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElPreviewNavegaEntreActividadesPropias|TestElPreviewNoAbreUnaActividadNoDeclarada' -v .`
+  da `PASS`, `ok github.com/ajinasokan/apkc 0.073s`.
+- Los comandos pesados van por `tcr -c 2 -m 1536M -r 256M -- …`. Si un test pide más memoria y
+  sale con 137, se sube a `-m 2G` y se ejecuta en solitario, no en paralelo con otros.
+- Hay ~2 GiB de RAM libre y ~6,7 GiB de swap libre: como máximo **tres constructores activos**.
+  Los tests son enfocados (`go test -run …`), nunca la suite completa ni un gate.
+
+## Reglas para todos los agentes
+
+1. Trabajar **solo** en la ruta absoluta de su worktree; usar rutas absolutas en cada comando.
+2. **No ejecutar** `tools/entorno.sh gate`, `test`, `wasm`, `banco`, `sitio` ni `publicar`; no
+   lanzar chromium ni `prueba-pestana.js`. La verificación es el test enfocado que dice cada encargo.
+3. No tocar `docs/`, `INFORMA-SEGURIDAD.md`, `sitio/` ni el submódulo `studio/`: la documentación la
+   escribe el documentador al integrar y los cambios de la página se coordinan desde la raíz.
+4. Sin red, sin descargas, sin `git push`, sin `surge`. Commit local con mensaje
+   `<type>(<scope>): <summary>` en español cuando el frente esté verde.
+5. Prosa y comentarios en español con ortografía completa y cero caracteres de otros alfabetos.
+6. Si una API no se puede emular sin red, runtime ajeno o aparato, se rechaza por nombre con aviso
+   y se escribe la frontera en el informe; no se finge.
+
+## Worktrees y cola
+
+| Frente | Worktree | PREFIX | Prueba de aceptación | Ola |
+| --- | --- | --- | --- | --- |
+| E1.1 auditoría (3.1-3.4 y D7) | `/home/leonisauro/.local/share/opencode/worktree/c6f089/emu-e1-audit` | `$HOME/.cache/apkc-web/emu-e1-audit` | pruebas enfocadas del intérprete + `TestElPreviewNavegaEntreActividadesPropias` | 2 |
+| E2 listas y adaptadores | `…/emu-e2-listas` | `$HOME/.cache/apkc-web/emu-e2-listas` | `TestElPreviewPintaUnaListaConSuAdaptador` | 1 |
+| E3 estado y persistencia | `…/emu-e3-estado` | `$HOME/.cache/apkc-web/emu-e3-estado` | `TestElPreviewConservaElEstadoAlRecrear` | 1 |
+| E4 fidelidad visual | `…/emu-e4-visual` | `$HOME/.cache/apkc-web/emu-e4-visual` | `TestElPreviewRespetaVisibilidadTextoColorEImagen` | 1 |
+| E5 entrada de usuario | `…/emu-e5-entrada` | `$HOME/.cache/apkc-web/emu-e5-entrada` | `TestElPreviewEscribeYMarcaLoQueSeLePide` | 2 |
+| E6 reloj lógico | `…/emu-e6-reloj` | `$HOME/.cache/apkc-web/emu-e6-reloj` | `TestElPreviewAvanzaElRelojLogico` | 2 |
+| E7 diálogos y avisos | `…/emu-e7-dialogos` | `$HOME/.cache/apkc-web/emu-e7-dialogos` | `TestElPreviewMuestraUnDialogoPropio` | 2 |
+
+Orden de integración: E1.1, E2, E3, E4, E5, E6, E7. Cada frente se integra en la raíz con su
+commit, pasa por `critico` y solo entonces se marca cerrado y se lanza el siguiente de la cola.
+El documentador es una sola sesión que se reanuda por `sessionID` para no duplicar trabajo.
+
+## Estado
+
+- Preparación: worktrees creados, `PREFIX` en disco, prueba base en verde.
+- Ola 1 lanzada: E1.1, E2, E3 y E4 (sesiones `ses_df9f9f6b7ffeak2NyTsKfjWq9G`,
+  `ses_df9faaecaffeJpx6NiHwB2xnD6`, `ses_df9fa7681ffeSncJk5w47iIaHS` y
+  `ses_df9fa481dffetVrg53DFv1Beom`).
+- Ola 2 en cola: E5, E6 y E7; se lanzan conforme se integra cada frente de la ola 1.
+- Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.
