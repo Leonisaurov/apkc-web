@@ -698,8 +698,12 @@ la pantalla principal.
 - **Kotlin** (el `apk` de kotlin que ve el gate sale del camino con JVM; en Go no hay frontend).
 - **`multianewarray`, `synchronized`/`monitorenter`/`monitorexit`, `assert`, y reflexión** — ninguna sonda;
   siguen rechazados por nombre.
-- **Más de 65 536 métodos (varios `classes.dex`)** y **.aab con `split` por densidad/idioma**: son fases
-  propias, no ítems de ésta.
+- **Más de 65 536 métodos (varios `classes.dex`)**: el reparto de **buckets de dependencias** ya está
+  **hecho y medido en §223**: 700 clases y 70 000 métodos caben en 2 dex de dependencias (`classes2.dex` y
+  `classes3.dex`), que junto al `classes.dex` de la app dan **tres dex en el apk**, y ninguno supera
+  65 536 `method_id` (firma v1/v2/v3 y `zipalign ok`). Lo que queda es el **dex de la app**, que sigue sin
+  repartirse (`compilar.go` llama `dexDeClasesConCache`); esa es la frontera real.
+- **`.aab` con `split` por densidad/idioma**: sigue siendo fase propia y abierta, no ítem de ésta.
 - **Interoperabilidad con Gradle**: no está en la ambición.
 - **`d8` como referencia para lo optimizado**: no imitaremos las reescrituras de `d8` (fusiones de cadena,
   dead code). El oráculo manda sobre las *palabras y las estructuras*, no sobre el cuerpo optimizado, que ya
