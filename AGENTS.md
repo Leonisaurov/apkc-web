@@ -91,6 +91,13 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
       fases; cada una conserva su estado y su prueba.
     - **No se anuncia «0 pendientes» ni «terminado»** hasta que la última fila tenga su prueba en
       verde sobre el árbol final.
+ 12. **Nada de temporales en tmpfs en escritorio.** `/tmp` es una tmpfs con cuota de usuario: `df`
+     puede mostrar gigabytes libres y aun así fallar un `cat` de un kilobyte con `Disk quota exceeded`
+     (medido el 2026-11-22, con 2,0 G acumulados en `/tmp/opencode`). Usa siempre
+     `$HOME/.cache/apkc-web/…` para binarios, `PREFIX`, `TMP`, `GOTMPDIR`, perfiles de chromium y
+     sondas, y fíjalos en disco antes de `tcr … tools/entorno.sh gate`. Un `starship init fish` que
+     no define `enable_transience` es síntoma de esa cuota, no un fallo de fish. Si ya hay artefactos
+     viejos en `/tmp/opencode`, muévelos a disco en lugar de borrarlos; no los dejes ahí.
 
 ## Entorno (Termux/Android aarch64)
 
@@ -164,11 +171,12 @@ publica. §152.
 
 En un escritorio sin Termux los guiones usan `#!/bin/sh` y `$XDG_CACHE_HOME/apkc-web` como
 temporales; `tools/entorno.sh gate` levanta el SDK espejo de `tools/sdk34.sh` y usa JDK 17. §154.
+`/tmp` es tmpfs con cuota de usuario y está prohibida para temporales (regla 12), incluidas las
+sondas y los perfiles de chromium: un `disk quota exceeded` en `/tmp/go-build*` se arregla con
+`GOTMPDIR=$HOME/.cache/apkc-web/gotmp` y `PREFIX`/`TMP` en disco, no reintentando.
 La publicación es **manual**: `tools/entorno.sh sitio` y `cd sitio && surge . publish`, sobre
 `apkc-studio.surge.sh`. Surge no respeta `_headers`: el SW de `studio/` pone COOP/COEP y la página
 se recarga una vez (§153); verificar siempre con `SITIO_URL=… node studio/prueba-sitio.js` (§155).
-Si `go build` dice `disk quota exceeded` al escribir en `/tmp/go-build*`, pon
-`GOTMPDIR=$HOME/.cache/apkc-web/gotmp` (disco, no tmpfs); no es un fallo del código.
 
 ## Lo que ya está medido, para no reabrirlo
 
