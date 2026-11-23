@@ -9312,7 +9312,8 @@ este cambio: `tools/entorno.sh sitio` y `surge . publish` siguen pendientes.
 Medido el 2026-11-22 sobre la raíz de `web` con `def0b85` integrado (cherry-pick de `1e3b277` del
 worktree `emu-e1-audit`). Es la fase E1.1 de `docs/plan-emulacion.md`: cierra los hallazgos 3.1, 3.2
 y 3.4 de `docs/auditorias.md`; 3.3 (`getText` dentro de `onCreate`) ya estaba cerrado por `81d6acf`
-y no se repitió aquí.
+y no se repitió aquí. Las líneas de código que se citan son las de `def0b85`; las integraciones
+posteriores desplazan la numeración.
 
 **Qué cambió, con su línea.** (1) Una actividad abierta por `startActivity` que no llama a
 `setContentView` devuelve error y `estabiliza` avisa y reanuda la anterior, en vez de pintar el

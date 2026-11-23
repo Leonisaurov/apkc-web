@@ -53,22 +53,23 @@ hecho por analogía (regla 11).
 
 - **3.1. CORREGIDO en `def0b85` (§206).** Una actividad abierta con `startActivity` que no llama a
   `setContentView` devuelve error y `estabiliza` avisa y reanuda la anterior, en vez de caer al
-  layout `main` de la lanzadora (`previewinterprete.go:777`; antes `:763`;
+  layout `main` de la lanzadora (`def0b85`: `previewinterprete.go:777`; antes `:763`;
   `preview.go:314,336`). El crítico validó el arreglo y dio **APROBAR**; queda una pregunta
   `INCIERTA` (abajo).
 - **3.2. CORREGIDO en `def0b85` (§206).** El `setOnClickListener` del `onCreate` gana al
   `android:onClick` del XML, como en Android: el enlace declarativo se salta si ya hay un oyente
-  programático (`previewinterprete.go:990`). `pulsa` no se invirtió: sigue valiendo el contrato
-  «último registrado gana» de `:925-927`.
+  programático (`def0b85`: `previewinterprete.go:990`). `pulsa` no se invirtió: sigue valiendo el
+  contrato «último registrado gana» de `:925-927`.
 - **3.3. CORREGIDO por `81d6acf`.** `getText()` dentro de `onCreate` devuelve el texto actual. No se
   movió `preparaVistasDelLayout` antes de `onCreate`, porque depende de `m.layoutID`. No se repitió
   en E1.1.
 - **3.4. CORREGIDO en `def0b85` (§206).** El clic 33 no congela (Go avisa y hace `break`,
-  `previewinterprete.go:695-696`) y ahora tiene prueba
+  `def0b85`: `previewinterprete.go:695-696`) y ahora tiene prueba
   (`TestElPreviewClicNumeroTreintaYTresNoSeEntrega`). Se añadió el tope simétrico de 32 pantallas
-  (`pantallasMaximas`, `:47-50`, corte en `:639`): una navegación circular que antes encadenaba
-  pantallas sin fin ahora avisa y deja delante la última que arrancó. Matiz del crítico: los tests
-  aseveran contra las constantes, no contra el literal 32.
+  (`pantallasMaximas`, `def0b85`: `:47-50`, corte en `:639`): una navegación circular que antes
+  encadenaba pantallas sin fin ahora avisa y deja delante la última que arrancó. Matiz del crítico:
+  los tests aseveran contra las constantes, no contra el literal 32. Las citas de línea son las de
+  `def0b85`.
 - **3.5.** `try`/`catch` en `onCreate` mata la ejecución entera (`:1044-1046`, `:614-622`).
   Limitación del MVP, sin arreglo trivial.
 - **3.6.** `RelativeLayout` y los `*Layout` no lineales se apilan en el origen
@@ -82,8 +83,8 @@ hecho por analogía (regla 11).
 - **INCIERTO:** el orden de ciclo de vida de `previewinterprete.go:643` no se ha medido en aparato.
 - **INCIERTA (pregunta abierta de E1.1, no bloqueante):** en un redirect sin layout que vuelve al
   frente porque el destino llama a `finish()`, `layoutID==0` podría caer al layout `main`
-  (`previewinterprete.go:777`; `preview.go:314,336`). No se ejecutó el probe de tres actividades que
-  lo decidiría, así que no se escribe como cierre.
+  (`def0b85`: `previewinterprete.go:777`; `preview.go:314,336`). No se ejecutó el probe de tres
+  actividades que lo decidiría, así que no se escribe como cierre.
 
 ### 1.4 Entrega
 

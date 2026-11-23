@@ -162,7 +162,8 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
   simétrico de 32 pantallas, que corta una navegación circular que antes colgaba. 3.3 ya estaba
   cerrado por `81d6acf`.
 - **Queda abierto.** La pregunta `INCIERTA` del crítico (redirect sin layout que vuelve por
-  `finish()` del destino; `previewinterprete.go:777`, `preview.go:314,336`) no se ejecutó como probe
+  `finish()` del destino; `def0b85`: `previewinterprete.go:777`, `preview.go:314,336`) no se ejecutó
+  como probe
   de tres actividades, y la prueba de pestaña que ejerza `startActivity` (D7) sigue pendiente en
   `docs/auditorias.md`. Matiz del crítico: los tests del tope aseveran contra `pulsacionesMaximas`,
   no contra el literal 32, así que cambiar el valor no los rompería.
