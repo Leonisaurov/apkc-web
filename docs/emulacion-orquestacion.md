@@ -72,8 +72,12 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 ## Estado
 
 - Preparación: worktrees creados, `PREFIX` en disco, prueba base en verde.
-- Ola 1 lanzada: E1.1, E2, E3 y E4 (sesiones `ses_df9f9f6b7ffeak2NyTsKfjWq9G`,
-  `ses_df9faaecaffeJpx6NiHwB2xnD6`, `ses_df9fa7681ffeSncJk5w47iIaHS` y
-  `ses_df9fa481dffetVrg53DFv1Beom`).
-- Ola 2 en cola: E5, E6 y E7; se lanzan conforme se integra cada frente de la ola 1.
+- E1.1 **integrada** en la raíz como `def0b85` y con sus siete tests enfocados en verde. Crítico en
+  curso (`ses_df9f4b884ffepDlg2y2VQsIBYZ`). La vista previa se reconstruyó con ella
+  (`sha256 95f8eb36…`).
+- Ola 1 activa: E2 (`ses_df9faaecaffeJpx6NiHwB2xnD6`), E3 (`ses_df9fa7681ffeSncJk5w47iIaHS`) y
+  E4 (`ses_df9fa481dffetVrg53DFv1Beom`). Sus worktrees se crearon antes de `def0b85`: si el
+  cherry-pick a la raíz conflictúa, se resuelve conservando ambos cambios.
+- Ola 2: E5 lanzada (`ses_df9f49694ffeE3qK56KapEVMkJ`, con `def0b85` cherry-pickeado). E6 y E7
+  entran al liberarse un hueco.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.
