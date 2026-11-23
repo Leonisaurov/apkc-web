@@ -10433,7 +10433,8 @@ Medido el 2026-11-23 sobre `18af2ae` (`fix(apkc): valida package y actividad ant
 puntero de `studio/` en ese momento fue `6d5c6aa` (`chore(studio): topes de descompresión en el
 importador`, submódulo `e5c6dbf`) y después `30d66ea` (`fix(studio): topa la lectura de clases para
 autocompletar`); **`6d5c6aa` y su submódulo `e5c6dbf` son estado histórico**: este checkout ya no los
-resuelve (`git -C studio show 6d5c6aa` da `unknown revision`) y el árbol actual apunta a `30d66ea`.
+resuelve (`git -C studio show 6d5c6aa` da `unknown revision`). En **esa** corrida el puntero apuntaba a
+`30d66ea`; el HEAD de hoy ya está en otro sitio y se mueve con cada integración de `studio/`.
 
 ```sh
 # en apkc/
