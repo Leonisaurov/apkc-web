@@ -416,7 +416,7 @@ type jclas struct {
 	constantes    []string
 	linea         int
 	paquete       string
-	imports       []string
+	imports       []string // los del fuente donde se declaró la clase: su alcance, no el del llamador
 	nombreExterno string
 
 	// anonima: la clase que crea un `new Tipo(args) { ... }`. javac le pone el campo this$0, un constructor

@@ -594,6 +594,9 @@ func internoDe(paquete string, nombre string) string {
 
 func (ctx *contextoJava) registrar(c *jclas) {
 	ctx.orden = append(ctx.orden, c)
+	// el alcance (paquete e imports) del fuente donde se declaró la clase viaja con ella: al resolver un
+	// descriptor suyo desde otro fichero se usa éste, no el del llamador
+	c.imports = ctx.imports
 	ctx.propias[internoDe(c.paquete, c.nombre)] = c
 	antes := ctx.registrando
 	ctx.registrando = c
@@ -972,7 +975,48 @@ func (ctx *contextoJava) padreDe(c *jclas) (string, error) {
 	if c.super == "" {
 		return "java/lang/Object", nil
 	}
-	return ctx.tipoAInterno(c.super)
+	var interno string
+	err := ctx.enAlcanceDe(c, func() error {
+		var e error
+		interno, e = ctx.tipoAInterno(c.super)
+		return e
+	})
+	return interno, err
+}
+
+// enAlcanceDe ejecuta f con el paquete y los imports del fuente donde se declaró c. Los tipos de la
+// firma de otra clase se resuelven con **su** alcance: `new Lienzo(this)` desde una clase que no
+// importa `Context` tiene que resolver el parámetro de `Lienzo(Context)`, que sí lo importa.
+func (ctx *contextoJava) enAlcanceDe(c *jclas, f func() error) error {
+	paquete, imports := ctx.paquete, ctx.imports
+	ctx.paquete, ctx.imports = c.paquete, c.imports
+	defer func() {
+		ctx.paquete, ctx.imports = paquete, imports
+	}()
+	return f()
+}
+
+// descriptorDeEn resuelve un tipo escrito en c con el alcance de c, no con el del llamador.
+func (ctx *contextoJava) descriptorDeEn(c *jclas, tipo string) (string, error) {
+	var desc string
+	err := ctx.enAlcanceDe(c, func() error {
+		var e error
+		desc, e = ctx.descriptorDe(tipo)
+		return e
+	})
+	return desc, err
+}
+
+// descDeMetodoEn: el descriptor `(tipos)vuelta` de un método declarado en c, resuelto con el alcance de
+// su fuente. Es el que usa la resolución de llamadas cuando el método es de otra clase del proyecto.
+func (ctx *contextoJava) descDeMetodoEn(c *jclas, m jmetodo) (string, error) {
+	var desc string
+	err := ctx.enAlcanceDe(c, func() error {
+		var e error
+		desc, e = ctx.descDeMetodo(m)
+		return e
+	})
+	return desc, err
 }
 
 // accesosDe: los access_flags del tipo, como los veria javap. De los propios se toman los modificadores
@@ -1434,7 +1478,7 @@ func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarar
 			if !(len(m.params) == argc || (conVarargs && aridadSirve(len(m.params), m.varargs, argc))) {
 				continue
 			}
-			d, err := ctx.descDeMetodo(m)
+			d, err := ctx.descDeMetodoEn(propia, m)
 			if err != nil {
 				return nil, err
 			}
@@ -1536,7 +1580,7 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 				if f.nombre != nombre {
 					continue
 				}
-				d, err := ctx.descriptorDe(f.tipo)
+				d, err := ctx.descriptorDeEn(propia, f.tipo)
 				if err != nil {
 					return campoResuelto{}, err
 				}
@@ -1709,6 +1753,9 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.nombre, err)
 		}
+		// el paquete y los imports se ponen antes de registrar para que cada clase se quede con los de su
+		// fuente: un descriptor suyo se resuelve después con ese alcance aunque lo pida otro fichero
+		ctx.paquete, ctx.imports = a.paquete, a.imports
 		for _, c := range a.clases {
 			ctx.registrar(c)
 		}
