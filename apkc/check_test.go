@@ -332,6 +332,31 @@ func TestCheckColumnaEnCaracteres(t *testing.T) {
 	}
 }
 
+// fuenteNuloEnCampoPrimitivo: null no cabe en un campo int. El emisor debe rechazarlo con el
+// descriptor esperado (I) frente al que tipa el literal (Ljava/lang/Object;), no aceptarlo de paso.
+const fuenteNuloEnCampoPrimitivo = `package com.hola.apkcstudio;
+
+public class Apk {
+    private int n;
+
+    public Apk() {
+        n = null;
+    }
+}
+`
+
+func TestCheckAsignacionNulaAUnCampoPrimitivo(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteNuloEnCampoPrimitivo, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("`n = null` dio %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	mensaje := r.Errores[0].Mensaje
+	if !strings.Contains(mensaje, "n es I y se le asigna un") {
+		t.Fatalf("el error no nombra el tipo del campo: %q", mensaje)
+	}
+}
+
 // TestCheckBloqueSinCerrarApuntaALaUltimaLinea: una llave sin cerrar se atribuye al fin de fichero, y
 // ese token tiene que estar en la **última línea con contenido**. Antes se contaba la línea que hay
 // tras el salto final, y el usuario veía la marca una línea por debajo del `}` que sí está escrito.
