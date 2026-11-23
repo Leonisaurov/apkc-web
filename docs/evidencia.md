@@ -10391,7 +10391,8 @@ rechazo nombra el sitio y el bootstrap `ObjectMethods.bootstrap` (`apkc/lambda.g
 en una lambda mal emitida.
 
 **`condy`.** `TestCondySeRechazaConNombre` (`apkc/indy_condy_test.go:78`): se rechaza en
-`apkc/classreader.go:451`, y el oráculo `d8` da rc 1, la misma frontera que `d8`.
+`apkc/classreader.go:590` (la cita original decía `:451`; corregida en §243), y el oráculo `d8` da rc 1,
+la misma frontera que `d8`.
 
 **Fronteras de este `§`.** Los bootstraps distintos de `LambdaMetafactory` no se midieron; `condy`
 queda rechazado, no soportado; y la API < 21 sigue documentada como fuera del subconjunto. No se tocó
@@ -10673,3 +10674,35 @@ quedó en 215/0. La vista previa final es `8b1e471d…`, verificada por HTTP en 
 `android.jar` montado, sin los `testdata` y con permisos de `os.CreateTemp` no POSIX), y **el gate no
 ejecuta esa capa**, así que no la cubre. El CI remoto y el push de los commits nuevos siguen pendientes, y
 el sitio publicado (`apkc-studio.surge.sh`) no se actualizó.
+
+## 243. Las dos fronteras que quedan: `condy` y API < 21
+
+Medido el 2026-11-23, sin suite, gate ni chromium. Son las dos fronteras que el mapa arrastraba desde
+`§235` y el frente de dependencias, y la pregunta era si son **carencia** del fork o límite del oráculo y
+del formato.
+
+**`condy`: frontera del formato, no carencia.** El `d8` de build-tools 35.0.1 (R8 8.6.2) rechaza el
+fixture `ConstantDynamic` con rc 1 en `min-api` 21, 26 y 34, con `Unsupported dynamic constant (runtime
+provided bootstrap method)` y `const-dynamic are not supported at any API level known by the compiler`.
+Nuestro rechazo está en `apkc/classreader.go:590` (el `cpDynamic` del `refuseOutsideSubset`, llamado
+desde `apkc/classreader.go:187`): DEX no tiene constante dinámica y el emisor Go no la produce. Se
+reabriría solo con un `.class` de `jar/` que la use, y entonces el oráculo tendría que ser la JVM o
+`app_process`, no `d8`.
+
+**API < 21: el runtime no abre un segundo dex.** Con 70 000 métodos, `d8 --min-api 19` da `Cannot fit
+requested classes in a single dex file … Try supplying a main-dex list` y rc 1, mientras que `min-api 21`
+sin banderas parte solo en 2 dex. Con `--main-dex-rules "-keep class Big0 { *; }"` a `min-api` 19 sale
+rc 0: `classes.dex` con `Big0`..`Big8` (63 000 `method_id`) y `classes2.dex` con `Big9`, y `dexdump -f`
+lee los dos. `--main-dex-list` con `.class` está retirado en R8 8.6.2. En el fork no hay banderas de
+main-dex (`apkc/build.go:924`), `splitDeps := api >= 21` (`apkc/build.go:282`), el reparto es voraz
+(`apkc/reparto.go:90`), no hay `androidx.multidex` en el árbol y `apkc/manifest.go:91-99` no lee
+`android:name`. Las vías serían: (1) fijar el main-dex dentro del reparto, (2) importar el AAR desde
+disco, (3) enganchar `Application.attachBaseContext`. Lo que bloquea la verificación en runtime es que no
+hay dispositivo API ≤ 20: hoy lo medible es el contrato de bytes.
+
+**Fronteras de este `§`.** No se corrió suite Go, gate ni chromium; no hay `.aab` real con `min-api` < 21;
+y el desborde se midió con un fixture sintético, porque dexar el `android.jar` agotó la RAM.
+
+**Cita corregida.** `§235` decía `apkc/classreader.go:451` para este rechazo; la línea vigente es
+`:590`, y ya está cambiada allí. El comentario de `apkc/indy_condy_test.go:11` sigue nombrando la antigua
+y no se toca: la cita buena es la de este `§`.
