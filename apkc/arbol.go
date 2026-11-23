@@ -83,10 +83,17 @@ func leerArbolDe(f fuenteXML) (*arbolFuente, error) {
 			continue // y los comentarios tampoco
 		case xml.StartElement:
 			nodo := &nodoFuente{nombre: v.Name.Local, linea: lineaDeApertura(v.Name.Local)}
+			// Las declaraciones `xmlns:` se leen ANTES que los atributos de la etiqueta: en XML el
+			// orden de los atributos no significa nada y el fuente puede declarar el namespace
+			// detrás de su uso (`<Lienzo android:layout_width="…" xmlns:android="…"/>`). Leerlos
+			// en el orden escrito dejaba esos atributos con el prefijo vacío, el binario los
+			// escribía sin namespace ni id y el framework abortaba el inflado con «You must supply
+			// a layout_width attribute» aunque el valor estuviera en el fichero (medido en el
+			// aparato con el layout de la vista propia).
 			for _, a := range v.Attr {
 				if a.Name.Space == "xmlns" {
-					// xmlns:android="…" : el prefijo es el nombre del atributo. Solo se guarda el del
-					// namespace de recursos: los demas no dejan huella en el binario (parrafo 30).
+					// xmlns:android="…" : el prefijo es el nombre del atributo. Solo se guarda el
+					// del namespace de recursos: los demás no dejan huella en el binario (§30).
 					if a.Value == uriDeRecursos {
 						if _, visto := salida.lineaDe[a.Name.Local]; !visto {
 							salida.prefijos[a.Value] = a.Name.Local
@@ -100,7 +107,14 @@ func leerArbolDe(f fuenteXML) (*arbolFuente, error) {
 						salida.prefijos[a.Value] = ""
 						salida.lineaDe[""] = nodo.linea
 					}
-					continue
+				}
+			}
+			for _, a := range v.Attr {
+				if a.Name.Space == "xmlns" {
+					continue // ya registrado en la pasada de arriba
+				}
+				if a.Name.Local == "xmlns" && a.Value == uriDeRecursos {
+					continue // idem, la declaración sin prefijo
 				}
 				// un atributo de un namespace que no es el de recursos no llega al binario: medido en
 				// el parrafo 30 con tools:ignore, que aapt2 descarta junto con su declaracion. Si aqui

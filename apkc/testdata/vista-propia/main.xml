@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- El elemento es una clase propia totalmente cualificada, no un widget del framework: el
+     enlazador no la conoce y aun así tiene que copiar android:layout_width y layout_height con el
+     id del framework. `xmlns:android` va a propósito DETRÁS de los atributos que lo usan: en XML
+     el orden de los atributos de una etiqueta no significa nada, y leerlos en el orden escrito
+     dejaba esos dos sin namespace, el binario los escribía sin id y el framework abortaba el
+     inflado con «You must supply a layout_width attribute» aunque el valor estuviera en el
+     fichero (medido en el aparato con esta misma etiqueta). -->
+<FrameLayout
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <com.ejemplo.lienzo.Lienzo
+        android:id="@+id/lienzo"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+</FrameLayout>
