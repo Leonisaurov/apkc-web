@@ -13,6 +13,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -1433,5 +1434,113 @@ func TestElInterpreteRechazaPorNombreLoQueNoEmula(t *testing.T) {
 				t.Errorf("el aviso de %s es %v y tenía que nombrarlo con %q", c.nombre, m.avisos, c.espera)
 			}
 		})
+	}
+}
+
+// fuenteClickDeLosDos declara el clic en los dos sitios que admite Android: el `android:onClick`
+// del layout y un `setOnClickListener` en `onCreate`. En el aparato gana el programático, porque el
+// inflado enlaza el del XML antes y el de `onCreate` lo sustituye; el preview hacía lo contrario y
+// ejecutaba el método del XML.
+const fuenteClickDeLosDos = `package com.hola.contador;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    TextView total;
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                total.setText("Programatico");
+            }
+        });
+    }
+
+    public void sumar(View v) {
+        total.setText("Declarativo");
+    }
+}
+`
+
+// TestElPreviewOnClickProgramaticoGanaAlDelLayout fija la precedencia de Android: con el mismo
+// botón declarado en el XML (`android:onClick="sumar"`, método que existe) y un
+// `setOnClickListener` en `onCreate`, el clic corre el programático y el oyente publicado es uno
+// solo. Antes, el oyente declarativo se enlazaba después y ganaba por ser el último.
+func TestElPreviewOnClickProgramaticoGanaAlDelLayout(t *testing.T) {
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layout, err := escribeAXML(layoutConOnClickDeclarativo())
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	apk := zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layout,
+		"classes.dex": dexDeFuentes(t,
+			fuenteJava{nombre: "R.java", contenido: rContador(t)},
+			fuenteJava{nombre: "MainActivity.java", contenido: fuenteClickDeLosDos}),
+	})
+
+	reposo, err := modeloVistaDeAPKConPulsos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk con los dos oyentes no se lee: %v", err)
+	}
+	if len(reposo.Ejecucion.Oyentes) != 1 || reposo.Ejecucion.Oyentes[0].ID != "id/pulsar" {
+		t.Fatalf("los oyentes publicados son %+v y se esperaba solo id/pulsar", reposo.Ejecucion.Oyentes)
+	}
+	if avisos := reposo.Ejecucion.Avisos; len(avisos) != 0 {
+		t.Errorf("la precedencia dejó avisos: %v", avisos)
+	}
+
+	uno, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pulsar"})
+	if err != nil {
+		t.Fatalf("el clic falló: %v", err)
+	}
+	if got := uno.Raiz.Hijos[0].TextoDinamico; got != "Programatico" {
+		t.Errorf("el clic corrió %q y tenía que correr el setOnClickListener del onCreate", got)
+	}
+	if uno.Ejecucion.Interacciones != 1 {
+		t.Errorf("las interacciones son %d y se entregó un solo clic", uno.Ejecucion.Interacciones)
+	}
+}
+
+// TestElPreviewClicNumeroTreintaYTresNoSeEntrega fija el tope de `--pulsar` en el lado Go: con 33
+// clics pedidos se entregan 32, el 33 se avisa en vez de recortarse en silencio y el comando no
+// devuelve error ni se cuelga. La pestaña tiene que mandar como mucho el mismo número (D7).
+func TestElPreviewClicNumeroTreintaYTresNoSeEntrega(t *testing.T) {
+	apk := apkDelContador(t, fuentesDelContador(t)...)
+	pedidos := make([]string, pulsacionesMaximas+1)
+	for i := range pedidos {
+		pedidos[i] = "id/pulsar"
+	}
+	m, err := modeloVistaDeAPKConPulsos(apk, "", true, pedidos)
+	if err != nil {
+		t.Fatalf("los %d clics devolvieron error: %v", len(pedidos), err)
+	}
+	if len(m.Ejecucion.Pulsaciones) != pulsacionesMaximas {
+		t.Errorf("se entregaron %d clics y el tope es %d", len(m.Ejecucion.Pulsaciones), pulsacionesMaximas)
+	}
+	if m.Ejecucion.Interacciones != pulsacionesMaximas {
+		t.Errorf("las interacciones son %d y el tope es %d", m.Ejecucion.Interacciones, pulsacionesMaximas)
+	}
+	tope := fmt.Sprintf("tope de %d", pulsacionesMaximas)
+	if !strings.Contains(strings.Join(m.Ejecucion.Avisos, "\n"), tope) {
+		t.Errorf("el clic que sobra no se avisó con %q: %v", tope, m.Ejecucion.Avisos)
+	}
+	if got := m.Raiz.Hijos[0].TextoDinamico; got != fmt.Sprintf("Pulsos: %d", pulsacionesMaximas) {
+		t.Errorf("tras el tope el texto es %q", got)
 	}
 }

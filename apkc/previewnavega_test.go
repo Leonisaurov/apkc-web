@@ -6,6 +6,7 @@ package main
 // versionados).
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -226,6 +227,19 @@ func apkDelNavega(t *testing.T) []byte {
 // para dejar la segunda actividad fuera de la declaración sin cambiar el dex.
 func apkDelNavegaConManifiesto(t *testing.T, manifiestoDoc documentoAXML) []byte {
 	t.Helper()
+	return apkDelNavegaConSegunda(t, manifiestoDoc, fuenteSegundaNavega)
+}
+
+// apkDelNavegaConSegunda es el mismo APK con otra fuente para la segunda actividad: lo usan las
+// pruebas de la auditoría E1.1 (la pantalla que no pide layout y la navegación circular).
+func apkDelNavegaConSegunda(t *testing.T, manifiestoDoc documentoAXML, fuenteSegunda string) []byte {
+	t.Helper()
+	return apkDelNavegaCon(t, manifiestoDoc, fuenteMainNavega, fuenteSegunda)
+}
+
+// apkDelNavegaCon es el mismo APK con las dos fuentes de actividad que pida la prueba.
+func apkDelNavegaCon(t *testing.T, manifiestoDoc documentoAXML, fuenteMain, fuenteSegunda string) []byte {
+	t.Helper()
 	manifiesto, err := escribeAXML(manifiestoDoc)
 	if err != nil {
 		t.Fatalf("el manifiesto: %v", err)
@@ -253,8 +267,8 @@ func apkDelNavegaConManifiesto(t *testing.T, manifiestoDoc documentoAXML) []byte
 		"res/layout/segunda.xml": segunda,
 		"classes.dex": dexDeFuentes(t,
 			fuenteJava{nombre: "R.java", contenido: r},
-			fuenteJava{nombre: "MainActivity.java", contenido: fuenteMainNavega},
-			fuenteJava{nombre: "SegundaActivity.java", contenido: fuenteSegundaNavega}),
+			fuenteJava{nombre: "MainActivity.java", contenido: fuenteMain},
+			fuenteJava{nombre: "SegundaActivity.java", contenido: fuenteSegunda}),
 	})
 }
 
@@ -404,5 +418,127 @@ func TestElPreviewNoAbreUnaActividadNoDeclarada(t *testing.T) {
 	avisos := strings.Join(m.Ejecucion.Avisos, "\n")
 	if !strings.Contains(avisos, "no está declarada en el manifiesto") {
 		t.Errorf("falta el aviso de actividad no declarada: %v", m.Ejecucion.Avisos)
+	}
+}
+
+// fuenteSegundaSinLayout es una segunda actividad que no llama a `setContentView`: en el aparato se
+// queda en blanco. El preview caía al layout `main` de la lanzadora y pintaba una pantalla que la
+// app no pidió, sin avisar.
+const fuenteSegundaSinLayout = `package com.hola.navega;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class SegundaActivity extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+    }
+
+    public void onStart() { }
+    public void onResume() { }
+}
+`
+
+// TestElPreviewRechazaUnaActividadSinSetContentView cierra el 3.1 de la auditoría: al abrir una
+// actividad que no pide layout, el preview avisa y se queda en la anterior, en vez de enseñar el
+// `main` de la lanzadora como si fuera la pantalla nueva. El clic sí se entrega, así que el comando
+// no devuelve error: la navegación es lo que se rechaza, no el clic.
+func TestElPreviewRechazaUnaActividadSinSetContentView(t *testing.T) {
+	apk := apkDelNavegaConSegunda(t, manifiestoDelNavega(), fuenteSegundaSinLayout)
+	m, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/abrir"})
+	if err != nil {
+		t.Fatalf("el clic que abre la actividad sin layout devolvió error: %v", err)
+	}
+	if m.Layout != "res/layout/main.xml" {
+		t.Errorf("se pintó el layout %q y la actividad abierta no pidió ninguno", m.Layout)
+	}
+	if m.Actividad == "com.hola.navega.SegundaActivity" {
+		t.Errorf("la pantalla que queda delante es la segunda actividad, que no pidió layout")
+	}
+	if m.Ejecucion.Actividad != "com.hola.navega.MainActivity" {
+		t.Errorf("la ejecución dice que corre %q y se esperaba la lanzadora", m.Ejecucion.Actividad)
+	}
+	if len(m.Ejecucion.Pantallas) != 1 {
+		t.Errorf("el recorrido abrió una pantalla sin layout: %v", m.Ejecucion.Pantallas)
+	}
+	avisos := strings.Join(m.Ejecucion.Avisos, "\n")
+	if !strings.Contains(avisos, "no llamó a setContentView") {
+		t.Errorf("falta el aviso de la actividad sin layout: %v", m.Ejecucion.Avisos)
+	}
+	// la anterior vuelve a estar delante: se pausó para abrir y se reanuda al rechazar
+	if !tienePaso(m.Ejecucion.Ciclo, "com.hola.navega.MainActivity.onResume") {
+		t.Errorf("no se reanudó la actividad anterior: %v", m.Ejecucion.Ciclo)
+	}
+}
+
+// fuenteMainCircular abre la segunda en su `onCreate`, sin esperar a un clic.
+const fuenteMainCircular = `package com.hola.navega;
+
+import android.app.*;
+import android.content.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        startActivity(new Intent(this, SegundaActivity.class));
+    }
+
+    public void onStart() { }
+    public void onResume() { }
+    public void onPause() { }
+    public void onStop() { }
+    public void onDestroy() { }
+}
+`
+
+// fuenteSegundaCircular vuelve a la primera en su `onCreate`: con la primera forma un ciclo.
+const fuenteSegundaCircular = `package com.hola.navega;
+
+import android.app.*;
+import android.content.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class SegundaActivity extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.segunda);
+        startActivity(new Intent(this, MainActivity.class));
+    }
+
+    public void onStart() { }
+    public void onResume() { }
+    public void onPause() { }
+    public void onStop() { }
+    public void onDestroy() { }
+}
+`
+
+// TestElPreviewTopeDeNavegacionCircular fija el tope simétrico del bucle de pantallas: dos
+// actividades que se abren la una a la otra en su `onCreate` encadenarían pantallas sin fin. Al
+// llegar al tope se avisa y queda delante la última que arrancó, en vez de colgar el preview.
+func TestElPreviewTopeDeNavegacionCircular(t *testing.T) {
+	apk := apkDelNavegaCon(t, manifiestoDelNavega(), fuenteMainCircular, fuenteSegundaCircular)
+	m, err := modeloVistaDeAPKConPulsos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("la navegación circular devolvió error: %v", err)
+	}
+	if len(m.Ejecucion.Pantallas) != pantallasMaximas {
+		t.Errorf("el recorrido se paró en %d pantallas y el tope es %d",
+			len(m.Ejecucion.Pantallas), pantallasMaximas)
+	}
+	tope := fmt.Sprintf("tope de %d pantallas", pantallasMaximas)
+	if !strings.Contains(strings.Join(m.Ejecucion.Avisos, "\n"), tope) {
+		t.Errorf("el ciclo no se avisó con %q: %v", tope, m.Ejecucion.Avisos)
+	}
+	if m.Ejecucion.Error != "" {
+		t.Errorf("el tope dejó un error de ejecución: %s", m.Ejecucion.Error)
 	}
 }

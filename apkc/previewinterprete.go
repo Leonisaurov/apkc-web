@@ -44,6 +44,10 @@ const (
 	// pulsacionesMaximas acota la lista de `--pulsar`: un clic de más no puede encadenar una
 	// ejecución sin fin, y el tope se avisa en vez de recortar en silencio.
 	pulsacionesMaximas = 32
+	// pantallasMaximas es el tope simétrico del otro bucle: una actividad que en su `onCreate`
+	// lanza a otra y esa a la primera encadenaría pantallas sin fin. Al llegar al tope se avisa y
+	// se deja delante la última que sí arrancó.
+	pantallasMaximas = 32
 	// consolaMaximas acota las líneas de consola, con el mismo criterio que las capturas.
 	consolaMaximas = 128
 )
@@ -632,6 +636,13 @@ func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string
 			if m.pendiente != "" {
 				destino := m.pendiente
 				m.pendiente = ""
+				if len(todas) >= pantallasMaximas {
+					// el tope simétrico de los clics: una navegación circular se corta aquí en vez
+					// de encadenar pantallas sin fin; se avisa y se queda delante la última viva
+					m.avisa("startActivity a %s no se abrió: el tope de %d pantallas", claseCorta(destino),
+						pantallasMaximas)
+					continue
+				}
 				if _, ok := prog.clases[destino]; !ok {
 					m.avisa("startActivity a %s: la clase no está en el dex", claseCorta(destino))
 					continue
@@ -757,6 +768,15 @@ func (m *maquinaDalvik) abreActividad(clase string, preparar func(*maquinaDalvik
 	if _, err := m.ejecutaCuerpo(clase, onCreate, []any{obj, nil},
 		[]string{clase, "Landroid/os/Bundle;"}); err != nil {
 		return err
+	}
+	// una actividad abierta por `startActivity` que no llama a `setContentView` no tiene nada que
+	// enseñar: en el aparato se queda en blanco. Sin este rechazo el modelo caía al layout `main`
+	// de la lanzadora y la pantalla mentía. `estabiliza` ya avisa con este error y reanuda la
+	// actividad anterior. No es un defecto si la pantalla navega o se cierra en su `onCreate`
+	// (un redirect de arranque): en ese caso nunca llega a pintarse y la pila sigue su curso.
+	if exigirLayout && m.layoutID == 0 && m.pendiente == "" && !m.terminada {
+		return fmt.Errorf("%s no llamó a setContentView: una actividad abierta no hereda el layout "+
+			"de la lanzadora", claseCorta(clase))
 	}
 	// el layout ya se sabe (lo dijo `setContentView`): sus `android:onClick` se enlazan aquí, como
 	// haría el inflado, antes de que la app lea nada en `onStart` o `onResume`
@@ -966,6 +986,18 @@ func (m *maquinaDalvik) registraOnClickDeclarativo(id uint32, nombre string) str
 	if m.buscaMetodo(m.actividad.clase, nombre, "(Landroid/view/View;)V") == nil {
 		return fmt.Sprintf("android:onClick=%q y %s no tiene %s(View)", nombre,
 			claseCorta(m.actividad.clase), nombre)
+	}
+	// precedencia de Android: el inflado enlaza el `android:onClick` y el `setOnClickListener` que
+	// corre después en `onCreate` lo sustituye. Este enlace se hace con la actividad ya creada, así
+	// que un oyente programático sobre la misma vista es el que manda y el del XML no se enlaza
+	// (`metodo` vacío distingue el programático del declarativo).
+	for _, reg := range m.oyentes {
+		if reg.metodo != "" {
+			continue
+		}
+		if vista, ok := reg.vista.(*objetoDalvik); ok && vista.id == id {
+			return ""
+		}
 	}
 	vista := m.vista(id)
 	m.oyentes = append(m.oyentes, oyenteRegistrado{oyente: m.actividad, vista: vista, metodo: nombre})
