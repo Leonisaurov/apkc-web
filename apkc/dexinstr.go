@@ -215,6 +215,7 @@ type traduce struct {
 	locales   int           // m.LocalCount, medido sobre el .class
 	enPila    []int         // registro de cada entrada de la pila JVM
 	pilaTipo  []byte        // tipo de arreglo primitivo de cada entrada (0 si no lo es o no se sabe)
+	pilaAncho []bool        // la entrada ocupa dos palabras (`long`/`double`), para las permutaciones
 	tipoLocal map[int]byte  // por ranura de local JVM: tipo de arreglo primitivo (0 si no)
 	libres    []int         // temporales ya muertos
 	renom     map[int]int   // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
@@ -389,7 +390,7 @@ func (p *traduce) cargaLargo(in jvmInstr, v int64) {
 			p.palabra(uint16(uint64(v) >> uint(16*i)))
 		}
 	}
-	p.push(r)
+	p.pushAncho(r)
 }
 
 // cuentaAncha: las cinco cuentas de `long`, `float` y `double`, con el mismo reparto que
@@ -420,6 +421,8 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		return
 	}
 	conmuta := strings.HasSuffix(in.name, "add") || strings.HasSuffix(in.name, "mul")
+	// el `long` y el `double` ocupan dos palabras; el `float` comparte la tabla pero es una
+	ancho := in.name[0] == 'l' || in.name[0] == 'd'
 	b := p.pop(in)
 	a := p.pop(in)
 	if p.err != nil {
@@ -450,7 +453,11 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 		u1, u2 := unidad23x(tresOp, destino, a, b)
 		p.palabra(u1)
 		p.palabra(u2)
-		p.push(destino)
+		if ancho {
+			p.pushAncho(destino)
+		} else {
+			p.push(destino)
+		}
 		p.sueltaPar(a)
 		p.sueltaPar(b)
 	}
@@ -461,7 +468,11 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 				return
 			}
 			p.palabra(unidad12x(op, a, b))
-			p.push(a)
+			if ancho {
+				p.pushAncho(a)
+			} else {
+				p.push(a)
+			}
 			p.sueltaPar(b)
 			return
 		}
@@ -472,7 +483,11 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 				return
 			}
 			p.palabra(unidad12x(op, b, a))
-			p.push(b)
+			if ancho {
+				p.pushAncho(b)
+			} else {
+				p.push(b)
+			}
 			p.sueltaPar(a)
 			return
 		}
@@ -533,7 +548,11 @@ func (p *traduce) negacion(in jvmInstr) {
 		return
 	}
 	p.palabra(unidad12x(especificacion.op, destino, a))
-	p.push(destino)
+	if especificacion.ancho {
+		p.pushAncho(destino)
+	} else {
+		p.push(destino)
+	}
 	if destino != a {
 		if especificacion.ancho {
 			p.sueltaPar(a)
@@ -675,7 +694,7 @@ func (p *traduce) cargaDoble(in jvmInstr, v float64) {
 			p.palabra(uint16(bits >> uint(16*i)))
 		}
 	}
-	p.push(r)
+	p.pushAncho(r)
 }
 
 // convierteEnAncho: `i2l` sale `int-to-long vA, vB` (`8120` para v0, v2), un registro suelto dentro de
@@ -694,7 +713,7 @@ func (p *traduce) convierteEnAncho(in jvmInstr, op byte) {
 	}
 	p.palabra(unidad12x(op, d, r))
 	p.suelta(r)
-	p.push(d)
+	p.pushAncho(d)
 }
 
 // convierteDeAncho: `l2i` sale `long-to-int v1, v0` (`8401`).
@@ -766,17 +785,43 @@ func (p *traduce) pop(in jvmInstr) int {
 	if n := len(p.pilaTipo); n > 0 {
 		p.pilaTipo = p.pilaTipo[:n-1]
 	}
+	if n := len(p.pilaAncho); n > 0 {
+		p.pilaAncho = p.pilaAncho[:n-1]
+	}
 	return r
 }
 
-func (p *traduce) push(r int) { p.pushTipo(r, 0) }
+func (p *traduce) push(r int) { p.pushValor(r, 0, false) }
 
 // pushTipo apila un registro con el tipo de arreglo primitivo que lleva, si es uno: 'B', 'Z', 'C' o
 // 'S', o 0 cuando no es un arreglo de esos. Es lo que permite elegir entre `aget-byte` 0x48 y
 // `aget-boolean` 0x47 para el `baload` y el `bastore` del JVMS, que no distinguen `[B` de `[Z`.
-func (p *traduce) pushTipo(r int, tipo byte) {
+func (p *traduce) pushTipo(r int, tipo byte) { p.pushValor(r, tipo, false) }
+
+// pushAncho apila un valor de dos palabras (`long` o `double`), que es una sola entrada de la pila
+// JVM pero dos ranuras: lo que necesitan `dup2`, `dup2_x1`, `dup2_x2` y `swap` para no confundir una
+// pareja ancha con dos valores sueltos.
+func (p *traduce) pushAncho(r int) { p.pushValor(r, 0, true) }
+
+func (p *traduce) pushValor(r int, tipo byte, ancho bool) {
 	p.enPila = append(p.enPila, r)
 	p.pilaTipo = append(p.pilaTipo, tipo)
+	p.pilaAncho = append(p.pilaAncho, ancho)
+}
+
+// anchoCima: la entrada de arriba ocupa dos palabras.
+func (p *traduce) anchoCima() bool {
+	if n := len(p.pilaAncho); n > 0 {
+		return p.pilaAncho[n-1]
+	}
+	return false
+}
+
+// ponAnchoCima fija si la entrada de arriba ocupa dos palabras, después de apilarla.
+func (p *traduce) ponAnchoCima(ancho bool) {
+	if n := len(p.pilaAncho); n > 0 {
+		p.pilaAncho[n-1] = ancho
+	}
 }
 
 // tipoCima: el tipo de arreglo de la entrada de arriba de la pila, 0 si no se sabe.
@@ -794,19 +839,117 @@ func (p *traduce) ponTipoCima(tipo byte) {
 	}
 }
 
-// duplicaCima apila otra vez el registro de arriba con su tipo (el `dup` y el `dup2` no emiten
-// nada: las dos entradas comparten registro).
-func (p *traduce) duplicaCima() {
+// valorPila es una entrada de la pila JVM con lo que hace falta para permutarla: el registro, el
+// tipo de arreglo que lleva y si ocupa dos palabras. Las permutaciones del JVMS (`dup*`, `swap`) no
+// emiten instrucción en DEX —los valores comparten registro—, pero la pila virtual tiene que quedar
+// con la forma del JVMS para que la instrucción siguiente consuma los registros correctos.
+type valorPila struct {
+	r     int
+	tipo  byte
+	ancho bool
+}
+
+// saca desapila una entrada con su tipo y su ancho.
+func (p *traduce) saca(in jvmInstr) valorPila {
 	if len(p.enPila) == 0 {
-		return
+		p.falla(in, "the JVM stack is empty: there is nothing to drop")
+		return valorPila{}
 	}
-	p.pushTipo(p.enPila[len(p.enPila)-1], p.tipoCima())
+	n := len(p.enPila)
+	v := valorPila{r: p.enPila[n-1], tipo: p.pilaTipo[n-1], ancho: p.pilaAncho[n-1]}
+	p.enPila = p.enPila[:n-1]
+	p.pilaTipo = p.pilaTipo[:n-1]
+	p.pilaAncho = p.pilaAncho[:n-1]
+	return v
+}
+
+// mete apila una entrada con su tipo y su ancho.
+func (p *traduce) mete(v valorPila) { p.pushValor(v.r, v.tipo, v.ancho) }
+
+// bloqueDos saca las dos ranuras de arriba como una lista en orden de abajo a arriba: un valor ancho
+// ocupa las dos, o dos valores de una palabra. Es lo que distingue las cuatro formas del `dup2_x2`.
+func (p *traduce) bloqueDos(in jvmInstr) []valorPila {
+	if p.anchoCima() {
+		return []valorPila{p.saca(in)}
+	}
+	v1 := p.saca(in)
+	v2 := p.saca(in)
+	return []valorPila{v2, v1}
+}
+
+// permutaPila: las siete permutaciones de pila del JVMS (`dup`, `dup_x1`, `dup_x2`, `dup2`,
+// `dup2_x1`, `dup2_x2`, `swap`) sobre la pila virtual. Duplicar o intercambiar valores que ya están
+// en sus registros no escribe ninguna palabra; solo se reordena `enPila` (con tipo y ancho) para que
+// la siguiente instrucción encuentre lo que espera. Medido con `javac`/`d8`/`dexdump` sobre `Pila`:
+// `oa[0] = oa[1] = null` deja `dup_x2` forma 1 y `la[0] = la[1] = 7L` deja `dup2_x2` con el tope
+// ancho; en DEX los dos desaparecen y d8 solo reutiliza registros.
+func (p *traduce) permutaPila(in jvmInstr) {
+	switch in.name {
+	case "dup":
+		v := p.saca(in)
+		p.mete(v)
+		p.mete(v)
+	case "dup_x1":
+		v1 := p.saca(in)
+		v2 := p.saca(in)
+		p.mete(v1)
+		p.mete(v2)
+		p.mete(v1)
+	case "dup_x2":
+		// [.., v3, v2, v1] -> [.., v1, v3, v2, v1]  (o [.., V2, v1] -> [.., v1, V2, v1])
+		v1 := p.saca(in)
+		n := p.bloqueDos(in)
+		p.mete(v1)
+		for _, v := range n {
+			p.mete(v)
+		}
+		p.mete(v1)
+	case "dup2":
+		// [.., V1] -> [.., V1, V1]  o  [.., v2, v1] -> [.., v2, v1, v2, v1]
+		t := p.bloqueDos(in)
+		for _, v := range t {
+			p.mete(v)
+		}
+		for _, v := range t {
+			p.mete(v)
+		}
+	case "dup2_x1":
+		// [.., v3, V1] -> [.., V1, v3, V1]  o  [.., v3, v2, v1] -> [.., v2, v1, v3, v2, v1]
+		t := p.bloqueDos(in)
+		v := p.saca(in)
+		for _, x := range t {
+			p.mete(x)
+		}
+		p.mete(v)
+		for _, x := range t {
+			p.mete(x)
+		}
+	case "dup2_x2":
+		// [.., next2, T] -> [.., T, next2, T], con T y next2 de una o dos ranuras cada uno
+		t := p.bloqueDos(in)
+		n := p.bloqueDos(in)
+		for _, v := range t {
+			p.mete(v)
+		}
+		for _, v := range n {
+			p.mete(v)
+		}
+		for _, v := range t {
+			p.mete(v)
+		}
+	case "swap":
+		v1 := p.saca(in)
+		v2 := p.saca(in)
+		p.mete(v1)
+		p.mete(v2)
+	}
 }
 
 // vaciaPila deja la pila JVM vacía (tras un `athrow`), también la de tipos.
 func (p *traduce) vaciaPila() {
 	p.enPila = p.enPila[:0]
 	p.pilaTipo = p.pilaTipo[:0]
+	p.pilaAncho = p.pilaAncho[:0]
 }
 
 // tipoDeArregloPrimitivo: el tipo de elemento de un descriptor `[B`, `[Z`, `[C` o `[S`, que son los
@@ -914,10 +1057,15 @@ func (p *traduce) cargaLocal(in jvmInstr, n int, op byte) {
 	if p.err != nil {
 		return
 	}
-	p.push(r)
-	// el tipo de arreglo del local viaja con la entrada que se apila: es lo que decide, más lejos,
-	// entre `aget-byte` y `aget-boolean` para el mismo `baload`
-	p.ponTipoCima(p.tipoLocal[n])
+	if op == opMueveWide {
+		// un `lload`/`dload` apila un valor de dos palabras
+		p.pushAncho(r)
+	} else {
+		p.push(r)
+		// el tipo de arreglo del local viaja con la entrada que se apila: es lo que decide, más
+		// lejos, entre `aget-byte` y `aget-boolean` para el mismo `baload`
+		p.ponTipoCima(p.tipoLocal[n])
+	}
 }
 
 // cargaLocalPar: lo mismo para un `long` o un `double`, cuyo valor ocupa DOS registros: la pareja de
@@ -1192,7 +1340,7 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 		}
 		return
 	}
-	p.pushTipo(r, tipoDeArregloPrimitivo(desc))
+	p.pushValor(r, tipoDeArregloPrimitivo(desc), esAncho(desc))
 }
 
 // parcheDEX: una branquia cuyo desplazamiento todavía no se conoce. `desde` es la unidad donde
@@ -1415,7 +1563,7 @@ func (p *traduce) nuevoArreglo(in jvmInstr) {
 	if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of new-array") {
 		return
 	}
-	p.pushTipo(r, tipoDeArregloPrimitivo(desc))
+	p.pushValor(r, tipoDeArregloPrimitivo(desc), esAncho(desc))
 	p.suelta(largo)
 }
 
@@ -1464,7 +1612,12 @@ func (p *traduce) leeArreglo(in jvmInstr) {
 	a, b := unidad23x(op, r, arreglo, indice)
 	p.palabra(a)
 	p.palabra(b)
-	p.push(r)
+	if ancho {
+		// `laload`/`daload` dejan una pareja de dos palabras
+		p.pushAncho(r)
+	} else {
+		p.push(r)
+	}
 	p.suelta(arreglo)
 	p.suelta(indice)
 }
@@ -1799,46 +1952,10 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.sueltaPar(r)
-		case "dup2":
-			// el par duplicado comparte registros y no emite nada: el `dup2` del access$ de un
-			// estático ancho (`E.access$002`: `lload_0; dup2; putstatic; lreturn`, párrafo 83)
-			if len(p.enPila) == 0 {
-				p.falla(in, "dup2 with an empty JVM stack")
-				return p.err
-			}
-			p.duplicaCima()
-		case "dup2_x1":
-			// pila [objeto, par] -> [par, objeto, par]: las tres entradas comparten registros y no se
-			// emite nada, igual que el `dup_x1` del parrafo 72. Medido en `D.access$002`, que d8 dexa
-			// como `iput-wide v1, v0` y `return-wide v1`.
-			if len(p.enPila) < 2 {
-				p.falla(in, "dup2_x1 with fewer than two values on the JVM stack")
-				return p.err
-			}
-			par := p.pop(in)
-			obj := p.pop(in)
-			p.push(par)
-			p.push(obj)
-			p.push(par)
-		case "dup":
-			if len(p.enPila) == 0 {
-				p.falla(in, "dup with an empty JVM stack")
-				return p.err
-			}
-			p.duplicaCima()
-		case "dup_x1":
-			if len(p.enPila) < 2 {
-				p.falla(in, "dup_x1 with fewer than two values on the JVM stack")
-				return p.err
-			}
-			// [objeto, valor] -> [valor, objeto, valor]. Las tres entradas comparten registros y no se
-			// emite nada: suelta solo recicla cuando ninguna entrada viva lo nombra (lo mismo que `dup`).
-			// d8 lo baja igual: el `access$002` de la sonda sale `iput v1, v0` + `return v1` (parrafo 72).
-			valor := p.pop(in)
-			objeto := p.pop(in)
-			p.push(valor)
-			p.push(objeto)
-			p.push(valor)
+		case "dup", "dup_x1", "dup_x2", "dup2", "dup2_x1", "dup2_x2", "swap":
+			// las permutaciones de pila no emiten nada en DEX: solo reordenan la pila virtual, con el
+			// ancho de cada valor para no confundir una pareja ancha con dos valores sueltos
+			p.permutaPila(in)
 		case "return":
 			p.palabra(uint16(opRetornaV))
 		case "ireturn", "freturn":
@@ -2341,7 +2458,7 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		}
 		p.palabra(unidad12x(op, r, objeto))
 		p.suelta(objeto)
-		p.pushTipo(r, tipoDeArregloPrimitivo(desc))
+		p.pushValor(r, tipoDeArregloPrimitivo(desc), esAncho(desc))
 	}
 	p.indice(campo, in, "the field_id of the access")
 }
@@ -2514,7 +2631,7 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 			return
 		}
 		p.palabra(unidad11x(opMueveResultWide, r))
-		p.push(r)
+		p.pushAncho(r)
 	case esObjeto(ret):
 		r := p.toma(in)
 		p.palabra(unidad11x(opMueveResultObj, r))
