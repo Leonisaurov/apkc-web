@@ -1095,13 +1095,10 @@ func (ctx *contextoJava) firmaDeMetodo(m jmetodo) (string, error) {
 		}
 	}
 	sb.WriteString(vuelta)
-	for _, t := range m.lanza {
-		interno, err := ctx.tipoAInterno(t)
-		if err != nil {
-			return "", err
-		}
-		sb.WriteString("L" + interno + ";")
-	}
+	// los `throws` NO van aquí: en una `Signature` solo caben los de tipo variable (`^TT;`), que están
+	// fuera de este subconjunto; los concretos viajan en el atributo `Exceptions` del method_info.
+	// Medido con javac 17 `--release 8` y por defecto: `void guardar(List<Apk>) throws IOException,
+	// IllegalStateException` deja la firma `(Ljava/util/List<…>;)V`, sin los dos tipos detrás.
 	return sb.String(), nil
 }
 

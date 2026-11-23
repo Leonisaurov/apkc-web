@@ -7,6 +7,7 @@ package main
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -117,6 +118,91 @@ func TestCampoGenericoContraJavac17(t *testing.T) {
 				t.Errorf("%s: el descriptor es %q y el crudo es %q", nombre, f.Desc, quiero)
 			}
 		}
+	}
+	compararMetodos(t, nuestra, suya)
+
+	if err := compararDex(t, nuestras, deJavac); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fuenteConThrows: el método genérico del caso del crítico, con dos excepciones concretas en el
+// `throws`. JVMS 4.7.9.1 solo admite en la `Signature` los throws de tipo variable (`^TT;`), así que
+// la firma es la del método sin ellos y los dos tipos van solo en el atributo `Exceptions`.
+const fuenteConThrows = `package com.hola.apkcstudio;
+
+import java.util.List;
+
+public class Guarda {
+    void guardar(List<Apk> apks) throws java.io.IOException, IllegalStateException {
+    }
+}
+`
+
+// TestThrowsFueraDeLaSignatureContraJavac17: la `Signature` del método no lleva los throws, el
+// `Exceptions` sí los lleva a los dos, y el dex entero coincide byte a byte con javac 17.
+func TestThrowsFueraDeLaSignatureContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	raiz := t.TempDir()
+	pon(t, raiz, "Apk.java", fuenteApkDelCampo)
+	pon(t, raiz, "Guarda.java", fuenteConThrows)
+
+	nuestras, err := compilarProyectoJava([]fuenteJava{
+		{nombre: "Apk.java", contenido: fuenteApkDelCampo},
+		{nombre: "Guarda.java", contenido: fuenteConThrows},
+	}, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó el método con throws: %v", err)
+	}
+
+	salida := filepath.Join(raiz, "javac-out")
+	cmd := exec.Command(javac, "--release", "8", "-g:lines,source", "-classpath", jar, "-d", salida,
+		filepath.Join(raiz, "Apk.java"), filepath.Join(raiz, "Guarda.java"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("javac 17 rechazó el caso: %v\n%s", err, out)
+	}
+	deJavac, err := leeClases([]string{salida})
+	if err != nil {
+		t.Fatalf("leyendo lo de javac: %v", err)
+	}
+
+	nuestra, suya := buscarClaseEmitida(t, nuestras, "Lcom/hola/apkcstudio/Guarda;", deJavac)
+	busca := func(c classFull, nombre, desc string) *classMethod {
+		for i := range c.Methods {
+			if c.Methods[i].Name == nombre && c.Methods[i].Desc == desc {
+				return &c.Methods[i]
+			}
+		}
+		return nil
+	}
+	desc := "(Ljava/util/List;)V"
+	nuestro := busca(nuestra, "guardar", desc)
+	suyo := busca(suya, "guardar", desc)
+	if nuestro == nil || suyo == nil {
+		t.Fatalf("falta guardar%s: nuestro %v, javac %v", desc, nuestro, suyo)
+	}
+	if quiero := "(Ljava/util/List<Lcom/hola/apkcstudio/Apk;>;)V"; suyo.Signature != quiero {
+		t.Fatalf("la Signature de javac es %q y se midió %q", suyo.Signature, quiero)
+	}
+	if nuestro.Signature != suyo.Signature {
+		t.Errorf("la Signature es %q y la de javac %q; los throws concretos van solo en Exceptions",
+			nuestro.Signature, suyo.Signature)
+	}
+	if len(nuestro.Thrown) != 2 || len(suyo.Thrown) != 2 {
+		t.Fatalf("Exceptions lleva %v y javac %v; se esperaban las dos excepciones", nuestro.Thrown, suyo.Thrown)
+	}
+	for i := range suyo.Thrown {
+		if nuestro.Thrown[i] != suyo.Thrown[i] {
+			t.Errorf("Exceptions[%d] es %q y el de javac %q", i, nuestro.Thrown[i], suyo.Thrown[i])
+		}
+	}
+	unido := strings.Join(nuestro.Thrown, " ")
+	if !strings.Contains(unido, "IOException") || !strings.Contains(unido, "IllegalStateException") {
+		t.Errorf("Exceptions no nombra las dos excepciones: %q", unido)
+	}
+	if nuestro.Access != suyo.Access {
+		t.Errorf("los flags son %#04x y los de javac %#04x", nuestro.Access, suyo.Access)
 	}
 	compararMetodos(t, nuestra, suya)
 
