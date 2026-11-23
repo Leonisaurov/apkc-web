@@ -1,9 +1,10 @@
 # Plan de incremental para el modo web (`build --linker go --compiler go`)
 
-**Estado: I1 e I2 hechas, I3 hecha en parte; I4 e I5 pendientes.** `--inc` está activo en la
-pestaña y el ahorro se midió en chromium/OPFS; el cuello que queda está en compilar y dexar. Este
-fichero es un plan con mediciones: cada cifra lleva el comando que la reproduce (regla 1 del
-`AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y no se usa para decidir.
+**Estado: I1 e I2 hechas; I3 integrada en `d3803bb`, en verificación por el crítico; I4 e I5
+pendientes.** `--inc` está activo en la pestaña y el ahorro se midió en chromium/OPFS; el cuello que
+queda está en compilar y dexar. Este fichero es un plan con mediciones: cada cifra lleva el comando
+que la reproduce (regla 1 del `AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y
+no se usa para decidir.
 
 Fecha: 2026-11-22. Origen: comprobar si `--inc` ayuda a la pestaña y, si no, diseñar un incremento
 propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `web`, sobre el fork
@@ -15,7 +16,7 @@ propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `
 | --- | --- | --- | --- |
 | I1, pasar `--inc` desde la pestaña | **hecha** | `sh tools/entorno.sh gate` (con `PREFIX` propio y los puertos del gate libres) | la página compila con `--inc`; el apk es igual entrada por entrada al de un build completo (7 entradas, 0 distintas en el proyecto de la prueba; 80 y 0 en `banco/incremental.sh`); un recurso nuevo o editado reenlaza y llega a `resources.arsc` (hallazgo del crítico, arreglado) |
 | I2, medir en chromium y OPFS | **hecha** | el mismo gate; las cifras salen del test `12c` de `studio/prueba-pestana.js` | con `--inc` solo: 1831 ms en frío → 1034 ms en caliente (−44 %); con I3: 1458 → 152 ms (−90 %; otras tandas 1539 → 166, 1357 → 201 y 1877 → 138). El criterio era ≥15 % |
-| I3, reutilizar las clases emitidas por hash | **hecha en parte** | gate + `go test -count=1 ./...` con `APKC_ANDROID_JAR=…` | `compile go` 390 ms → 0 y `dex go` 106 → 0 en wasm (criterio: ≥30 %), dex idéntico; en nativo el atajo se paga en parte por el estado más grande (véase I3) |
+| I3, reutilizar las clases emitidas por hash | **integrada en `d3803bb`, en verificación por crítico** | gate + `go test -count=1 ./...` con `APKC_ANDROID_JAR=…` | `compile go` 390 ms → 0 y `dex go` 106 → 0 en wasm (criterio: ≥30 %), dex idéntico; en nativo el atajo se paga en parte por el estado más grande (véase I3) |
 | I3, caché de AST por fuente dentro del proceso | **descartada por estructura** | `studio/hospedador.js:240` | cada comando de la página arranca una instancia nueva de Go: ninguna caché en memoria cruza dos builds |
 | I4, dexado por clase | pendiente | `cmp build/classes.dex` entre completo e incremental | — |
 | I5, índice del `android.jar` entre pasadas | pendiente | el test del shim sobre el proyecto mínimo | — |
@@ -240,7 +241,19 @@ fuentes gana más en el enlace (es el 23 % medido en wasm sobre 232 fuentes) per
 compilador, que I3 solo se salta cuando no cambió ningún fuente. Las cifras de 232 fuentes siguen
 siendo las de la medición 1 (nativo) y la 3 (shim), no las de chromium.
 
-## I3: reutilizar las clases emitidas por hash (hecho en parte)
+## I3: reutilizar las clases emitidas por hash (integrada, en verificación)
+
+**Integración.** `d3803bb` (`feat(apkc): reutiliza build/classes cuando ningun fuente cambio`) es
+cherry-pick de `3b7f4e3` del worktree `inc-i3`. Los tests enfocados pasan
+(`TestCompilarEnGoReutilizaLasClasesSinFuentesCambiados`,
+`TestIncrementalReenlazaCuandoUnRecursoEsNuevoOEditado`, `TestAuxRoster.*` y las regresiones de
+reloj y de topes): `ok … 0.553s`; el paquete completo en el worktree, `ok … 57.097s`. El builder
+midió en nativo un proyecto de 92 fuentes: 315 ms en frío y 15 ms sin cambios, con
+`ningun fuente cambio: se reutilizan las clases de build/classes` y
+`nothing to put in the package this round`, los mismos SHA-256 de APK y dex (`1e2c5df7…` y
+`6a2e683d…`) y `incremental.json` de 24 700 B. El crítico
+`ses_df9baefaeffemtyU4YC0gXywOR` está en curso: la fase queda **integrada**, no cerrada, y su
+comando de medición irá al `§` cuando dictamine. I4 e I5 siguen pendientes.
 
 Lo que **sí** se puede hacer, y está hecho:
 
@@ -397,9 +410,11 @@ analogía.
   Prueba: sección `12c` de `studio/prueba-pestana.js`. Reproducción: `sh banco/incremental.sh`.
 - **I2, medir en chromium y OPFS. HECHA.** Resultado: 1831 → 1034 ms con `--inc` solo (−44 %),
   1357 → 201 ms con I3 (−85 %), apk igual entrada por entrada. Criterio ≥15 % superado.
-- **I3, reutilizar las clases emitidas. HECHA EN PARTE.** La vuelta sin fuentes cambiados no compila
-  (`compile go` 300 → 0 ms, dex idéntico). No cabe caché en memoria porque cada comando arranca una
-  instancia nueva de Go (`studio/hospedador.js:240`); lo que queda es emitir solo fuentes cambiados.
+- **I3, reutilizar las clases emitidas. INTEGRADA, EN VERIFICACIÓN.** `d3803bb`; la vuelta sin
+  fuentes cambiados no compila (`compile go` 300 → 0 ms, dex idéntico). No cabe caché en memoria
+  porque cada comando arranca una instancia nueva de Go (`studio/hospedador.js:240`); lo que queda
+  es emitir solo fuentes cambiados. Pendiente del crítico
+  `ses_df9baefaeffemtyU4YC0gXywOR`.
 - **I4, dexado por clase (H2). PENDIENTE.** `cmp build/classes.dex` entre completo e incremental;
   abandono si el dex difiere.
   no idéntico (el layout de ART no se negocia).

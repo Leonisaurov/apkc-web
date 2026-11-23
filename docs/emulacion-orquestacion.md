@@ -93,9 +93,13 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - E7 **cerrada**: lógica aprobada por `ses_df9d13306ffehyseNhLIqoaYfh`, `usage` corregido en
   `2dd70c8` y `which` verificado en `969b045` por el QA `ses_df9c1482fffeKi6lTSOz6CBbk0`.
   Evidencia: §211.
-- La vista previa se reconstruyó con E6 y E5 (`sha256 468500fd…`), verificada contra el `/apkc.wasm`
-  servido.
-- **Activas:** E6, pendiente del crítico. I3 (incremental) se trabaja en un worktree aparte, fuera
-  de esta cola.
+- La vista previa se reconstruyó con E6, E5 e I3 (`sha256 e9a85261…`), verificada contra el
+  `/apkc.wasm` servido con `curl`.
+- I3 **integrada** como `d3803bb` (cherry-pick de `3b7f4e3` del worktree `inc-i3`), **en
+  verificación**: el crítico `ses_df9baefaeffemtyU4YC0gXywOR` está en curso. I4 e I5 siguen
+  pendientes. Detalle en `docs/plan-incremental-web.md`.
+- La interfaz del emulador está **integrada** como `0b6dc83` (puntero del submódulo) y verificada
+  en la pestaña con CDP: los ids nuevos están presentes y no hay excepciones.
+- **Activas:** E6, pendiente del crítico.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.
