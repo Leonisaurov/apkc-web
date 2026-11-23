@@ -10,10 +10,10 @@ comparten código con apkc, así que no se aprueban a sí mismos.
 ```sh
 sh banco/validar-apk/validar.sh
 
-# el límite de 16 bits, con 700 clases de 100 métodos (tarda y pide memoria: es opt-in)
+# el techo de 16 bits, con 700 clases de 100 métodos (tarda y pide memoria: es opt-in)
 PROBAR_LIMITE=1 sh banco/validar-apk/validar.sh
 
-# la pasada con un jar de verdad; hoy sale con 3 y dice por qué
+# la pasada con un jar de verdad; con el dexer actual sale con 3 y nombra la forma que falta
 JAR_REAL=/ruta/android-support-v4.jar sh banco/validar-apk/validar.sh
 
 # y, si hay aparato, instalar y arrancar el caso multi-dex
@@ -28,7 +28,7 @@ no se versiona ningún binario (regla 2). Los jars que el guion genera en `jar/`
 ## Qué mide
 
 Dos pasadas sobre la misma app, con el jar local del fixture (`saludo/Saludo`, el mismo patrón de
-`banco/deps-ejemplo`, que ya dexa en verde):
+`banco/deps-ejemplo`, que ya dexa en verde), y una tercera opcional con otro proyecto:
 
 1. **Un jar**: el APK queda con `classes.dex` (la app) y `classes2.dex` (la dependencia).
 2. **Veintidós jars**: el dexado de dependencias parte en tres buckets (`depBuckets` agrupa de diez
@@ -36,6 +36,11 @@ Dos pasadas sobre la misma app, con el jar local del fixture (`saludo/Saludo`, e
    huecos. La app llama a `saludo.Saludo`, que cae en el último dex, y a `dep.D20`, que cae en el
    segundo: los dos métodos se invocan desde `classes.dex` y se definen en otro fichero, que es lo
    que el cargador de dex de Android resuelve por nombre.
+3. **El techo de 16 bits** (opt-in, `PROBAR_LIMITE=1`): 700 clases y 70 000 métodos encadenados, que
+   no caben en un dex. El dexado reparte el bucket en `classes.dex`…`classes3.dex`; el guion exige
+   que ninguno pase de 65 536 `method_id` y que las 700 clases queden repartidas entre los dos dex
+   de dependencias, sin perder ni duplicar ninguna (los detalles, en «El techo de 65 536
+   referencias»).
 
 En las dos pasadas el guion exige:
 
@@ -60,18 +65,42 @@ Pasada 2: `dexed 22 jars in 3 buckets`, `classes.dex` 1908 B, `classes2.dex` 139
 En el aparato, la app multi-dex arranca y la sonda enseña `text="hola, apkc d20=20"`: el texto sale
 del método del segundo y del cuarto dex.
 
+Pasada del techo de 16 bits (`PROBAR_LIMITE=1`, binario del árbol `d4da31c`): el build termina en
+verde y deja `classes.dex` 1432 B (la app, 9 `method_id`), `classes2.dex` 2 772 816 B (645 clases,
+65 446 `method_id`) y `classes3.dex` 251 112 B (55 clases, 5 756 `method_id`); `Verifies`, v1/v2/v3
+`true`, `zipalign ok`, las 700 clases `grande.C0…C699` entre los dos dex de dependencias sin huecos
+ni repetidas, y `classes2.dex` invoca `Lgrande/C680;.m0`, que define `classes3.dex`.
+
+## El techo de 65 536 referencias
+
+Un dex referencia sus métodos, campos, tipos y cadenas con índices de 16 bits: la segunda unidad de
+un 21c, un 22c y un 35c es un u16, y el dexer rechaza el índice que no cabe en vez de recortarlo
+(`apkc/dexinstr.go`, la guarda de `indice`). El techo es del fichero, no del bucket, así que el
+dexer reparte las clases en `classes.dex`, `classes2.dex`, … (`apkc/reparto.go`): mide las tablas
+del grupo antes de ensamblarlo y lo cierra cuando la siguiente clase lo sacaría del techo. El
+comando que lo reproduce es
+
+```sh
+PROBAR_LIMITE=1 sh banco/validar-apk/validar.sh
+```
+
+y exige rc 0, `app.apk`, los tres dex sin huecos, la firma v1/v2/v3, `zipalign`, ningún dex por
+encima de 65 536 `method_id`, las 700 clases del jar repartidas sin perder ni duplicar ninguna y un
+método invocado en un dex de dependencias y definido en el otro. Sin el reparto, el build se para
+con `Lgrande/C0;<init>: at pc 1, invokespecial: the method index does not fit a 16-bit index` y no
+deja APK.
+
 ## Fronteras
 
-- **65 536 referencias de método.** Un bucket no parte por su cuenta: con 70 000 métodos el dexer
-  rechaza con `Lgrande/C0;<init>: at pc 1, invokespecial: the method index does not fit a 16-bit
-  index` (`apkc/dexinstr.go:1258`, la guarda de `indice`) y **no deja apk**, así que no escribe un
-  dex con índices recortados. Reparto de un bucket en varios dex es trabajo del dexer, no de este
-  guion; el comando que lo reproduce es `PROBAR_LIMITE=1 sh banco/validar-apk/validar.sh`.
-- **El jar real todavía no dexa.** `android-support-v4.jar` (648 327 B, 520 clases) se para en
-  `Landroid/support/v4/app/BackStackRecord;.dump`: `a goto of -259 code units: the 10t form reaches
-  +-127 and goto/16 is not measured here` (`apkc/dexinstr.go:1428`). Es una frontera de opcodes: se
-  arregla en `dexinstr.go`, no aquí. `JAR_REAL=… sh banco/validar-apk/validar.sh` imprime ese
-  rechazo y sale con 3; cuando el dexer lo acepte, el mismo comando valida el APK del jar real y
-  comprueba que `classes.dex` invoca `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode`.
+- **El jar real todavía no dexa, pero ya no por `goto/16`.** `android-support-v4.jar` (648 327 B,
+  520 clases) se paraba en `a goto of -259 code units: the 10t form reaches +-127 and goto/16 is not
+  measured here`, y esa frontera se cerró en `295ac58`. Con el árbol de `d4da31c` el mismo pase se
+  para más adelante, en
+  `Landroid/support/v4/view/GestureDetectorCompat$GestureDetectorCompatImplBase;.onTouchEvent`: `at
+  pc 505, i2l: register v17 does not fit a four-bit format (the /range or /from16 form is not
+  measured here)`. Es una frontera de formas de registro y se arregla en `dexinstr.go`, no aquí:
+  `JAR_REAL=… sh banco/validar-apk/validar.sh` imprime ese rechazo y sale con 3; cuando el dexer la
+  acepte, el mismo comando valida el APK del jar real y comprueba que `classes.dex` invoca
+  `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode`.
 
 Este guion no corre gate, chromium, red ni publicación.

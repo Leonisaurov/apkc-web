@@ -15,11 +15,18 @@
 # uno de los dex de dependencias y que el de la segunda pasada invoca `Ldep/D20;.valor`, la clase que
 # solo existe en un jar sintético.
 #
+# Con PROBAR_LIMITE=1 hace una tercera pasada, de otro proyecto: 700 clases y 70 000 métodos
+# encadenados, que no caben en un dex. El dexer reparte el bucket en classes.dex…classes3.dex y el
+# guion exige que ninguno pase de 65 536 method_id, que las 700 clases queden repartidas entre los
+# dos dex de dependencias sin perder ni duplicar ninguna y que un método se invoque en uno y se
+# defina en el otro. Sin el reparto, ese build se paraba en la guarda de los índices de 16 bits.
+#
 # Los artefactos van a $HOME/.cache/apkc-web/validar-apk: no se versiona ningún binario (regla 2).
 # Variables: APKC (binario), APKC_ANDROID_JAR o ANDROID_JAR, JAVA_HOME, APKC_WEB_CACHE y, opcional,
 # SERIE_APARATO (p. ej. 10.177.0.2:5555) para instalar y arrancar la app del caso multi-dex.
 #
-# Códigos de salida: 0 si las dos pasadas y sus oráculos salen en verde; 1 en cualquier otro caso.
+# Códigos de salida: 0 si las pasadas pedidas y sus oráculos salen en verde; 1 en cualquier otro
+# caso; 3 si la pasada opcional del jar real todavía se para en una forma que el dexer no mide.
 set -eu
 
 AQUI=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -155,7 +162,12 @@ verifica() {
 	echo "-- dexdump de cada dex"
 	for d in "$SALIDA"/dex/classes*.dex; do
 		printf '   %s (%s B): ' "$(basename "$d")" "$(wc -c <"$d")"
-		"$DEXDUMP" -f "$d" | sed -n "s/.*Class descriptor  : '\(.*\)'/\1/p" | tr '\n' ' '
+		descriptores=$("$DEXDUMP" -f "$d" | sed -n "s/.*Class descriptor  : '\(.*\)'/\1/p")
+		# un dex de dependencias puede llevar cientos de clases: se enseñan las primeras y el
+		# total, que es lo que hace legible el registro sin dejar de decir qué define cada uno
+		printf '%s\n' "$descriptores" | sed '/^$/d' | head -8 | tr '\n' ' '
+		total=$(printf '%s\n' "$descriptores" | sed '/^$/d' | wc -l)
+		if [ "$total" -gt 8 ]; then printf '… (%d clases)' "$total"; fi
 		echo
 	done
 }
@@ -213,10 +225,12 @@ done
 echo "   las tres dependencias definen las 21 clases dep.D0…D20"
 
 # ---------------------------------------------------------------- opt-in: el jar real
-# La pasada con un jar de verdad (android-support-v4.jar, 520 clases). Hoy el dexer se para en un
-# `goto` de más de 127 unidades y por eso este pase termina con 3: la frontera es de opcodes y se
-# arregla en dexinstr.go, no aquí. Cuando el dexer lo acepte, el mismo comando pasa a los tres
-# oráculos y comprueba que la app invoca un método del jar real.
+# La pasada con un jar de verdad (android-support-v4.jar, 520 clases). La frontera de `goto/16` que
+# este pase citaba se cerró en `295ac58`, pero el dexer todavía se para más adelante, en una forma
+# de registro de cuatro bits (medido: `i2l` con v17 en GestureDetectorCompat; el README lleva el
+# mensaje literal). Es una frontera de opcodes y se arregla en dexinstr.go, no aquí: por eso este
+# pase sale con 3 en vez de validar. Cuando el binario en uso la acepte, el mismo comando pasa a los
+# tres oráculos y comprueba que la app invoca un método del jar real.
 #
 #   JAR_REAL=/ruta/android-support-v4.jar sh banco/validar-apk/validar.sh
 if [ -n "${JAR_REAL:-}" ]; then
@@ -246,13 +260,17 @@ if [ -n "${JAR_REAL:-}" ]; then
 		"Landroid/support/v4/text/TextUtilsCompat;" "$SALIDA/dex/classes.dex"
 fi
 
-# ---------------------------------------------------------------- opcional: el límite de 16 bits
-# Un bucket con más de 65 536 referencias de método no cabe en los índices de 16 bits de las
-# instrucciones. Este pase lo fuerza con 700 clases de 100 métodos encadenados (70 000 métodos) y
-# comprueba que el dexer lo rechaza con su mensaje, en vez de escribir un dex recortado.
+# ---------------------------------------------------------------- opt-in: el techo de 16 bits
+# Un dex referencia sus métodos, campos, tipos y cadenas con índices de 16 bits: la segunda unidad
+# de un 21c, un 22c y un 35c es un u16, y el dexer rechaza el índice que no cabe en vez de
+# recortarlo (apkc/dexinstr.go, la guarda de `indice`). El techo es del fichero, no del bucket:
+# este pase lo fuerza con 700 clases de 100 métodos encadenados (70 000 métodos) y comprueba que
+# el dexer reparte el bucket en classes.dex, classes2.dex… en vez de abortar, que no pierde ni
+# duplica una clase al cerrar un grupo y que el APK pasa los tres oráculos. El reparto y sus
+# pruebas viven en apkc/reparto.go y apkc/reparto_test.go.
 if [ "${PROBAR_LIMITE:-0}" = "1" ]; then
 	echo
-	echo "== límite de 65 536 referencias de método (opt-in: PROBAR_LIMITE=1)"
+	echo "== techo de 65 536 referencias de método (opt-in: PROBAR_LIMITE=1)"
 	L=$CACHE/limite
 	rm -rf "$L"
 	mkdir -p "$L/src/grande" "$L/clases" "$L/proyecto/jar" "$L/proyecto/src/com/ejemplo/limite" \
@@ -292,12 +310,57 @@ PY
 	rc=$?
 	set -e
 	sed 's/^/   | /' "$L/build.log"
-	[ "$rc" -ne 0 ] || falla "el dexer aceptó 70 000 métodos sin decir nada"
-	grep -q 'the method index does not fit a 16-bit index' "$L/build.log" ||
-		falla "el rechazo no fue el de los índices de 16 bits"
-	[ ! -f "$L/proyecto/build/app.apk" ] ||
-		falla "el build falló pero dejó un app.apk"
-	echo "   el dexer rechaza el bucket con su mensaje y no deja apk: es la frontera, no un dex recortado"
+	[ "$rc" -eq 0 ] ||
+		falla "el build con 70 000 métodos salió con $rc y el dexer no repartió el bucket (la guarda de los índices de 16 bits es la de apkc/dexinstr.go)"
+	[ -f "$L/proyecto/build/app.apk" ] ||
+		falla "el build dijo terminar y no dejó $L/proyecto/build/app.apk"
+	verifica "$L/proyecto/build/app.apk" "classes.dex classes2.dex classes3.dex "
+
+	# el techo se cumple en cada fichero, que es la propiedad que se está midiendo y no un efecto
+	# colateral: un dex con más method_id de los que caben en un u16 no se puede ejecutar
+	echo "-- method_id de cada dex (techo 65 536)"
+	for d in "$SALIDA"/dex/classes*.dex; do
+		metodos=$("$DEXDUMP" -f "$d" | sed -n 's/.*method_ids_size *: *\([0-9]*\).*/\1/p' | head -1)
+		[ -n "$metodos" ] || falla "dexdump no dice los method_id de $(basename "$d")"
+		[ "$metodos" -le 65536 ] ||
+			falla "$(basename "$d") lleva $metodos method_id, más de los 65 536 que caben en un índice de 16 bits"
+		echo "   $(basename "$d"): $metodos"
+	done
+
+	# el reparto no pierde ni duplica una clase al cerrar el grupo: las 700 del jar están entre
+	# los dos dex de dependencias, cada una una sola vez. La lista de cada uno sirve después para
+	# emparejar la invocación con la definición.
+	for n in 2 3; do
+		"$DEXDUMP" -f "$SALIDA/dex/classes$n.dex" |
+			sed -n "s/.*Class descriptor  : '\(Lgrande\/C[0-9]*;\)'/\1/p" | sort >"$L/define$n.txt"
+	done
+	cat "$L/define2.txt" "$L/define3.txt" | sort >"$L/clases.txt"
+	definidas=$(sort -u "$L/clases.txt" | wc -l)
+	[ "$definidas" -eq 700 ] ||
+		falla "los dex de dependencias definen $definidas clases grande.Cn distintas y hay 700"
+	[ "$(wc -l <"$L/clases.txt")" -eq 700 ] ||
+		falla "una clase grande.Cn está en los dos dex de dependencias: el reparto la duplicó"
+	echo "   los dos dex de dependencias definen las 700 clases grande.C0…C699, sin huecos ni repetidas"
+
+	# la frontera del reparto: un método que un dex de dependencias invoca y el otro define. El
+	# par se busca en vez de fijar una clase, porque dónde cierra cada grupo no lo decide el guion
+	metodo_cruzado=
+	for par in 2:3 3:2; do
+		invoca=${par%:*}
+		define=${par#*:}
+		clase=$(
+			"$DEXDUMP" -d "$SALIDA/dex/classes$invoca.dex" |
+				sed -n "s/.*invoke-[a-z/]*.*\(Lgrande\/C[0-9]*;\)\.m0:()I.*/\1/p" |
+				grep -F -m1 -f "$L/define$define.txt" || true
+		)
+		[ -n "$clase" ] || continue
+		metodo_cruzado="$clase.m0"
+		verifica_metodo "$metodo_cruzado" "$clase" "$SALIDA/dex/classes$invoca.dex"
+		break
+	done
+	[ -n "$metodo_cruzado" ] ||
+		falla "ningún dex de dependencias invoca un método que defina el otro: el jar no cruzó la frontera del reparto"
+	echo "   el bucket de 70 000 métodos se repartió en tres dex y cada uno cabe en los índices de 16 bits"
 fi
 
 # ---------------------------------------------------------------- opcional: el aparato
@@ -316,3 +379,6 @@ fi
 
 echo
 echo "OK: los dos APK llevan los dex esperados, la firma pasa por los tres esquemas y los oráculos ven el método del jar"
+if [ "${PROBAR_LIMITE:-0}" = "1" ]; then
+	echo "OK: el bucket de 70 000 métodos se repartió en tres dex, ninguno pasa de 65 536 method_id y el APK verifica"
+fi
