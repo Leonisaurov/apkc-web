@@ -4460,6 +4460,12 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 	return nil
 }
 
+// resuelveCampoDeLocal es el interruptor de la sonda del tipo de un campo de una local: apagado, la
+// cadena `info.applicationInfo` no se resuelve desde el tipo estático del receptor y `tipoEstimado`
+// vuelve al rechazo de antes. Lo usa la falsificación de `javaemisor_campo_local_test.go`; encendido en
+// el binario que se publica.
+var resuelveCampoDeLocal = true
+
 // descDeCampos: el descriptor del último campo de una cadena `a.b.c` sobre un receptor cuyo tipo ya se
 // conoce, sin escribir el `aload`/`getfield` que emitiría `cadenaDeCampos`. `length` sobre un arreglo da
 // `I`, como el `arraylength` de 0xbe. Lo que no se resuelve sin código sale con ok falso.
@@ -4492,6 +4498,11 @@ func (e *emisor) tipoSinEmitir(x jexpr) (string, bool) {
 	case jacceso:
 		segs, base := aplanar(v)
 		if len(segs) == 0 {
+			return "", false
+		}
+		if !resuelveCampoDeLocal && (base != nil || len(segs) > 1) {
+			// apagado, la cadena de campos no se toca: la resuelve el llamador como pueda, que es el
+			// rechazo que medía el usuario antes de §242
 			return "", false
 		}
 		var actual string
@@ -4938,6 +4949,11 @@ func esEnteroDesc(desc string) bool {
 	return strings.IndexByte("IBCSZ", desc[0]) >= 0
 }
 
+// comparaArregloConNulo es el interruptor de la sonda del arreglo contra null: apagado, un `[` deja de
+// contar como referencia y `condicionBranca` vuelve al rechazo de antes. Lo usa la falsificación de
+// `javaemisor_campo_local_test.go`; encendido en el binario que se publica.
+var comparaArregloConNulo = true
+
 // condicionBranca escribe los operandos de la condicion de un `if` y devuelve el opcode de salto con
 // la INVERSION que aplica javac, leida en el parrafo 52 comparando las seis relaciones contra cero,
 // contra una constante, contra otro entero y contra null:
@@ -5046,7 +5062,7 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 		}
 		// un arreglo es una referencia: `info.splitSourceDirs == null` compara `[Ljava/lang/String;`
 		// con null y javac branquea con `ifnonnull` sobre el objeto (§242)
-		if !esObjeto(d) {
+		if !esObjeto(d) || (!comparaArregloConNulo && d[0] == '[') {
 			return 0, 0, fmt.Errorf("linea %d: comparar con null algo que no es una referencia (%s) no esta medido", linea, d)
 		}
 		if op.op == "==" {
