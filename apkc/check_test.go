@@ -571,3 +571,77 @@ public class MainActivity extends Activity {
 		t.Fatalf("sin salto final el error no cae en la línea 5: %+v", r.Errores)
 	}
 }
+
+// fuenteCampoGenerico es el caso del usuario: el campo con `final` y `List<Apk>` era «se esperaba un
+// nombre de miembro y hay "<"». Añade el anidado, el cualificado, el arreglo y un parámetro y una
+// local genéricos, que van por el mismo lector del tipo. `Apk` va en el mismo fichero para que el
+// argumento se resuelva sin más fuentes.
+const fuenteCampoGenerico = `package com.hola.apkcstudio;
+
+import java.util.List;
+import java.util.Map;
+
+public class ApkAdapter {
+    private final List<Apk> apks;
+    private Map<String, List<Apk>> porNombre;
+    private android.widget.ArrayAdapter<Apk> adaptador;
+    private List<Apk>[] tandas;
+
+    public ApkAdapter() {
+        this.apks = null;
+    }
+
+    public void guardar(List<Apk> copia) {
+        List<Apk> otra = copia;
+        porNombre = null;
+    }
+}
+
+class Apk {
+    private String ruta;
+
+    Apk(String ruta) {
+        this.ruta = ruta;
+    }
+}
+`
+
+// TestCheckCampoGenerico: `private final List<Apk> apks;` no puede dar ni un error y el emisor tiene
+// que correr. El `<` del tipo ya no es el final de la declaración, y `final` se aceptaba ya.
+func TestCheckCampoGenerico(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteCampoGenerico, "ApkAdapter.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("el campo genérico da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
+// fuenteCampoGenericoSinImport deja `List` sin importar: el control negativo. El error tiene que
+// nombrar el tipo base que falta, no el `<` ni el nombre del campo.
+const fuenteCampoGenericoSinImport = `package com.hola.apkcstudio;
+
+public class Roto {
+    private List<Apk> apks;
+}
+
+class Apk {
+}
+`
+
+func TestCheckCampoGenericoNombraElTipoBase(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteCampoGenericoSinImport, "Roto.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	mensaje := r.Errores[0].Mensaje
+	if !strings.Contains(mensaje, "List") {
+		t.Errorf("el error no nombra el tipo base que falta: %q", mensaje)
+	}
+	if strings.Contains(mensaje, "se esperaba un nombre de miembro") {
+		t.Errorf("el error sigue siendo el del parser en el `<`: %q", mensaje)
+	}
+}

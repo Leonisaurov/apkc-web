@@ -324,7 +324,10 @@ type jcaso struct {
 type jparam struct {
 	tipo   string
 	nombre string
-	donde  pos
+	// generico es el parámetro declarado con argumentos de tipo (`List<Apk>`): su firma va al atributo
+	// Signature del método y el descriptor sigue siendo el del borrado
+	generico *tipoArgumento
+	donde    pos
 }
 
 // anotValorJ es un valor de elemento de una anotación. El subconjunto cubre los «elementos simples»
@@ -353,8 +356,11 @@ type anotacionJ struct {
 }
 
 type jcampo struct {
-	nombre      string
-	tipo        string
+	nombre string
+	tipo   string
+	// generico es el tipo declarado con sus argumentos, cuando los trae (`List<Apk>`): el descriptor
+	// sale de tipo (el borrado) y la `Signature` genérica del `.class` de aquí.
+	generico    *tipoArgumento
 	esEstatico  bool
 	esFinal     bool
 	esPublico   bool
@@ -367,15 +373,18 @@ type jcampo struct {
 }
 
 type jmetodo struct {
-	nombre      string
-	retorno     string // "" si constructor
-	params      []jparam
-	cuerpo      []jstmt
-	esEstatico  bool
-	esPublico   bool
-	esPrivado   bool
-	esProtegido bool
-	esFinal     bool
+	nombre  string
+	retorno string // "" si constructor
+	// retornoGenerico es el tipo de vuelta con sus argumentos (`List<Apk> f()`); va a la Signature
+	// genérica del method_info y no cambia el descriptor, que sigue siendo el del borrado.
+	retornoGenerico *tipoArgumento
+	params          []jparam
+	cuerpo          []jstmt
+	esEstatico      bool
+	esPublico       bool
+	esPrivado       bool
+	esProtegido     bool
+	esFinal         bool
 	// locales: parametros y locales declarados, para resolver una captura de una anonima (5.14).
 	locales map[string]string
 	// abstracto: el metodo no tiene cuerpo; en una interface es implicito y en una clase viene del
@@ -447,15 +456,22 @@ type captura struct {
 	tipo   string
 }
 
-// tipoArgumento es un tipo dentro de unos argumentos de tipo: el nombre tal como lo escribe el fuente,
-// los corchetes del arreglo y, si a su vez es genérico, sus propios argumentos. Se guarda entero
-// porque la `Signature` genérica de javac los escribe anidados (`List<List<String>>`), aunque el
-// descriptor siga siendo el del borrado (`Ljava/util/List;`). Los comodines (`?`, `? extends X`) no
-// están medidos: el `?` ni siquiera es un símbolo de este subconjunto.
+// tipoArgumento es un tipo dentro de unos argumentos de tipo, y también el tipo declarado de un campo:
+// el nombre tal como lo escribe el fuente, los corchetes del arreglo y, si a su vez es genérico, sus
+// propios argumentos. Se guarda entero porque la `Signature` genérica de javac los escribe anidados
+// (`List<List<String>>`) y con los corchetes delante (`List<String>[]` es `[Ljava/util/List<…>;`),
+// aunque el descriptor siga siendo el del borrado. Los comodines (`?`, `? extends X`) no están
+// medidos: el `?` ni siquiera es un símbolo de este subconjunto.
 type tipoArgumento struct {
 	nombre   string
 	arreglos int
 	args     []tipoArgumento
+}
+
+// crudo es el nombre tal como lo lee el descriptor: los corchetes pegados y sin argumentos, que el
+// borrado tira (`List<Apk>[]` -> `List[]`, que es `[Ljava/util/List;`).
+func (t tipoArgumento) crudo() string {
+	return t.nombre + strings.Repeat("[]", t.arreglos)
 }
 
 // archivoJava es un fuente entero: el paquete, los imports y la clase principal con sus anidadas.
@@ -1154,8 +1170,8 @@ cuerpo:
 	// medidos en el parrafo 72 con `javap -v`; en un campo ya venian del parrafo 49. Un miembro privado
 	// del exterior que usa una anonima pasa por los metodos sinteticos `access$NNN`, que mide ese mismo
 	// parrafo.
-	leerMetodo := func(retorno string) (interface{}, error) {
-		m, err := a.metodo(c, retorno, esEstatico, esFinal, esPublico, esPrivado, esProtegido, linea)
+	leerMetodo := func(retorno string, retornoGenerico *tipoArgumento) (interface{}, error) {
+		m, err := a.metodo(c, retorno, retornoGenerico, esEstatico, esFinal, esPublico, esPrivado, esProtegido, linea)
 		if err != nil {
 			return m, err
 		}
@@ -1175,26 +1191,39 @@ cuerpo:
 	}
 	if a.es('k', "void") {
 		a.avanzar()
-		return leerMetodo("void")
+		return leerMetodo("void", nil)
 	}
 	// un constructor: `Nombre(`. El nombre lo consume `metodo`, que es quien distingue el `<init>`
 	// por `retorno == c.nombre`; avanzarlo tambien aqui se comia el parentesis (parrafo 91).
 	if a.actual().kind == 'i' && a.actual().valor == sinPaquete(c.nombre) && a.pegaParentesis() {
-		return leerMetodo(c.nombre)
+		return leerMetodo(c.nombre, nil)
 	}
-	tipo, err := a.tipo()
+	decl, err := a.tipoConArgumentos()
 	if err != nil {
 		return nil, err
 	}
+	tipo := decl.crudo()
 	if a.actual().kind != 'i' {
 		return nil, fmt.Errorf("linea %d: se esperaba un nombre de miembro y hay %q", a.actual().donde.linea, a.actual().valor)
 	}
 	if a.pegaParentesis() {
-		return leerMetodo(tipo)
+		if len(decl.args) > 0 {
+			// un método que devuelve `List<Apk>` lleva la `Signature` genérica en el method_info; el
+			// descriptor sigue siendo el del borrado
+			generico := decl
+			return leerMetodo(tipo, &generico)
+		}
+		return leerMetodo(tipo, nil)
 	}
 	nombre := a.avanzar().valor
 	campo := jcampo{nombre: nombre, tipo: tipo, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico,
 		esPrivado: esPrivado, esProtegido: esProtegido, anotaciones: anots, donde: pos{linea: linea}}
+	if len(decl.args) > 0 {
+		// la Signature genérica del campo: el descriptor sigue siendo el del borrado, `List<Apk>` es
+		// `Ljava/util/List;`, y los argumentos solo viajan en el atributo
+		generico := decl
+		campo.generico = &generico
+	}
 	// un campo con inicializador: `public static final int main=0x7f020000;`, que es justo la forma en
 	// que el enlazador de la Fase 3 escribe la R.java que despues hay que compilar
 	if a.es('p', "=") {
@@ -1212,9 +1241,9 @@ cuerpo:
 }
 
 // metodo lee la firma y el cuerpo. `retorno` viene vacio para el constructor.
-func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, esPublico, esPrivado, esProtegido bool, linea int) (jmetodo, error) {
-	m := jmetodo{retorno: retorno, esEstatico: esEstatico, esFinal: esFinal, esPublico: esPublico,
-		esPrivado: esPrivado, esProtegido: esProtegido, linea: linea}
+func (a *analizadorJava) metodo(c *jclas, retorno string, retornoGenerico *tipoArgumento, esEstatico, esFinal, esPublico, esPrivado, esProtegido bool, linea int) (jmetodo, error) {
+	m := jmetodo{retorno: retorno, retornoGenerico: retornoGenerico, esEstatico: esEstatico, esFinal: esFinal,
+		esPublico: esPublico, esPrivado: esPrivado, esProtegido: esProtegido, linea: linea}
 	if retorno == c.nombre {
 		m.nombre = "<init>"
 		// el descriptor de un constructor vuelve V: el nombre de la clase no es su tipo de vuelta
@@ -1228,10 +1257,11 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 	}
 	if !a.es('p', ")") {
 		for {
-			tipo, err := a.tipo()
+			decl, err := a.tipoConArgumentos()
 			if err != nil {
 				return m, err
 			}
+			tipo := decl.crudo()
 			esVarargs := false
 			if a.es('p', "...") {
 				// `tipo... nombre` es azucar del ultimo parametro: el tipo que se guarda es el arreglo
@@ -1239,13 +1269,21 @@ func (a *analizadorJava) metodo(c *jclas, retorno string, esEstatico, esFinal, e
 				// ACC_VARARGS, que es lo que fija el bit 0x0080 del method_info (§194).
 				a.avanzar()
 				esVarargs = true
-				tipo += "[]"
+				decl.arreglos++
+				tipo = decl.crudo()
 			}
 			if a.actual().kind != 'i' {
 				return m, fmt.Errorf("linea %d: un parametro necesita nombre", a.actual().donde.linea)
 			}
 			nombre := a.avanzar().valor
-			m.params = append(m.params, jparam{tipo: tipo, nombre: nombre, donde: pos{linea: linea}})
+			p := jparam{tipo: tipo, nombre: nombre, donde: pos{linea: linea}}
+			if len(decl.args) > 0 {
+				// el parámetro genérico (`List<Apk>`) lleva su firma al atributo Signature del método;
+				// el descriptor del parámetro sigue siendo el del borrado (`Ljava/util/List;`)
+				generico := decl
+				p.generico = &generico
+			}
+			m.params = append(m.params, p)
 			if esVarargs {
 				// JLS 8.4.1: solo el ultimo parametro puede ser varargs. Si sigue otro, se rechaza
 				// nombrando el que lo era en vez de aceptar una firma que javac no admite.
@@ -1501,11 +1539,16 @@ func (a *analizadorJava) argumentoDeTipo() (tipoArgumento, error) {
 		}
 		arg.arreglos++
 	}
-	if arg.arreglos > 0 && len(arg.args) > 0 {
-		// `T<U>[]` no es un tipo válido en Java: un arreglo de un tipo parametrizado no existe
-		return tipoArgumento{}, fmt.Errorf("linea %d: un arreglo del tipo genérico %s no es Java", a.actual().donde.linea, arg.nombre)
-	}
 	return arg, nil
+}
+
+// tipoConArgumentos lee un tipo declarado —el de un campo, un parámetro o una variable local—: el
+// nombre crudo con sus corchetes y, si los trae, sus argumentos de tipo. El crudo es lo que va al
+// descriptor —el borrado tira los argumentos, así que `List<Apk>` es `Ljava/util/List;`— y los
+// argumentos solo se usan para escribir la `Signature` genérica, que es lo que javac deja en el
+// `.class` del campo o del método.
+func (a *analizadorJava) tipoConArgumentos() (tipoArgumento, error) {
+	return a.argumentoDeTipo()
 }
 
 // cierraAngulo come el `>` que cierra unos argumentos de tipo. El tokenizador junta los `>` seguidos
@@ -1956,10 +1999,11 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	tipoActual := a.actual()
 	if (tipoActual.kind == 'i' || (tipoActual.kind == 'k' && esNombreDeTipo(tipoActual.valor))) && !a.es('k', "void") {
 		if a.pareceDeclaracion() {
-			tipo, err := a.tipo()
+			decl, err := a.tipoConArgumentos()
 			if err != nil {
 				return nil, false, err
 			}
+			tipo := decl.crudo()
 			final := esFinalDeClaracion(tipo)
 			if a.actual().kind != 'i' {
 				return nil, false, fmt.Errorf("linea %d: la declaracion no tiene nombre", a.actual().donde.linea)
@@ -2062,6 +2106,35 @@ func (a *analizadorJava) pareceDeclaracion() bool {
 		return false
 	}
 	i++
+	// los argumentos de tipo del tipo declarado (`List<Apk> xs`, `Map<String,List<Apk>> xs`). Se cuentan
+	// los `<` y los `>`, y el `>>` del tokenizador cierra dos; si no cierran, no es una declaración
+	// (`a < b` es una comparación) y se vuelve a la ruta de la expresión.
+	if i < len(a.toks) && a.toks[i].kind == 'p' && a.toks[i].valor == "<" {
+		hondo := 0
+		for ; i < len(a.toks); i++ {
+			t := a.toks[i]
+			if t.kind != 'p' {
+				continue
+			}
+			switch t.valor {
+			case "<":
+				hondo++
+			case ">":
+				hondo--
+			case ">>":
+				hondo -= 2
+			case ">>>":
+				hondo -= 3
+			}
+			if hondo <= 0 {
+				i++
+				break
+			}
+		}
+		if hondo != 0 {
+			return false
+		}
+	}
 	// los corchetes del tipo de arreglo: `int[] v` o `String[][] v`. Solo cuentan los vacios; un
 	// `v[i]` no es una declaracion, es un indice, y aqui se distingue por eso.
 	for i+1 < len(a.toks) && a.toks[i].kind == 'p' && a.toks[i].valor == "[" &&

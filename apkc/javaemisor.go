@@ -1036,18 +1036,73 @@ func (ctx *contextoJava) firmaDeClausula(nombre string, args []tipoArgumento) (s
 	return sb.String(), nil
 }
 
-// firmaDeArgumento: un argumento de tipo. Un arreglo se escribe con sus `[` delante, como en el
-// descriptor; un argumento genérico anida sus propios argumentos (`List<List<String>>`).
+// firmaDeArgumento: un tipo declarado o un argumento de tipo. Un arreglo se escribe con sus `[`
+// delante, como en el descriptor (`List<Apk>[]` es `[Ljava/util/List<…>;`); un argumento genérico
+// anida sus propios argumentos (`List<List<String>>`).
 func (ctx *contextoJava) firmaDeArgumento(t tipoArgumento) (string, error) {
-	if t.arreglos > 0 && len(t.args) > 0 {
-		// `T<U>[]` no es un tipo válido en Java: un arreglo de un tipo parametrizado no existe
-		return "", fmt.Errorf("un arreglo del tipo genérico %s no es Java", t.nombre)
-	}
 	firma, err := ctx.firmaDeClausula(t.nombre, t.args)
 	if err != nil {
 		return "", err
 	}
 	return strings.Repeat("[", t.arreglos) + firma, nil
+}
+
+// firmaDeMetodo escribe la `Signature` genérica de un método: los tipos de los parámetros, el de
+// vuelta y los `throws`, con los argumentos de tipo que traigan. Devuelve "" cuando ni el retorno ni
+// ningún parámetro son genéricos, que es cuando javac no escribe el atributo. Medido con javac 17
+// `--release 8`: `void guardar(List<Apk> copia)` deja el descriptor `(Ljava/util/List;)V` y la firma
+// `(Ljava/util/List<Lcom/hola/apkcstudio/Apk;>;)V`.
+func (ctx *contextoJava) firmaDeMetodo(m jmetodo) (string, error) {
+	generica := m.retornoGenerico != nil
+	for _, p := range m.params {
+		if p.generico != nil {
+			generica = true
+		}
+	}
+	if !generica {
+		return "", nil
+	}
+	sb := strings.Builder{}
+	sb.WriteString("(")
+	for _, p := range m.params {
+		var firma string
+		var err error
+		if p.generico != nil {
+			firma, err = ctx.firmaDeArgumento(*p.generico)
+		} else {
+			firma, err = ctx.descriptorDe(p.tipo)
+		}
+		if err != nil {
+			return "", fmt.Errorf("el parámetro %s: %w", p.nombre, err)
+		}
+		sb.WriteString(firma)
+	}
+	sb.WriteString(")")
+	var vuelta string
+	var err error
+	switch {
+	case m.nombre == "<init>":
+		vuelta = "V"
+	case m.retornoGenerico != nil:
+		vuelta, err = ctx.firmaDeArgumento(*m.retornoGenerico)
+		if err != nil {
+			return "", err
+		}
+	default:
+		vuelta, err = ctx.descriptorDe(m.retorno)
+		if err != nil {
+			return "", err
+		}
+	}
+	sb.WriteString(vuelta)
+	for _, t := range m.lanza {
+		interno, err := ctx.tipoAInterno(t)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString("L" + interno + ";")
+	}
+	return sb.String(), nil
 }
 
 // descDeMetodo: el descriptor `(tipos)vuelta` de un metodo declarado en el fuente.
@@ -6979,6 +7034,20 @@ func (e *emisor) campoDeClassFile(f jcampo) ([]byte, error) {
 		attrs = append(attrs, b...)
 		conte++
 	}
+	if f.generico != nil {
+		// la Signature genérica del campo, que es lo que javac pone en el field_info: el descriptor sigue
+		// siendo el del borrado. Si un argumento no se resuelve en esta pasada (un fuente suelto de
+		// `check`), se omite la firma sin falsificar el error: el campo sigue siendo válido.
+		firma, err := e.ctx.firmaDeArgumento(*f.generico)
+		if err != nil {
+			if !strings.Contains(err.Error(), "no se resuelve") {
+				return nil, fmt.Errorf("el campo %s: %w", f.nombre, err)
+			}
+		} else {
+			attrs = append(attrs, attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8(firma))))...)
+			conte++
+		}
+	}
 	b := u2be(uint16(acc))
 	b = append(b, u2be(uint16(e.pool.utf8(f.nombre)))...)
 	b = append(b, u2be(uint16(e.pool.utf8(desc)))...)
@@ -7216,6 +7285,23 @@ func (e *emisor) valorDeAnotacion(v anotValorJ) ([]byte, error) {
 	return nil, fmt.Errorf("el valor de anotación de tipo %q no está medido", string(rune(v.kind)))
 }
 
+// firmaDeMetodoAttr: el atributo Signature genérico del método, o nil si no lo lleva. Si un argumento
+// de tipo no está entre los fuentes de esta pasada (un fuente suelto de `check`), se omite sin
+// falsificar el error: el descriptor sigue siendo el del borrado.
+func (e *emisor) firmaDeMetodoAttr(m jmetodo) ([]byte, error) {
+	firma, err := e.ctx.firmaDeMetodo(m)
+	if err != nil {
+		if strings.Contains(err.Error(), "no se resuelve") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("linea %d: %w", m.linea, err)
+	}
+	if firma == "" {
+		return nil, nil
+	}
+	return attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8(firma)))), nil
+}
+
 func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	desc, err := e.ctx.descDeMetodo(m)
 	if err != nil {
@@ -7244,6 +7330,12 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
+			attrs = append(attrs, b...)
+			conte++
+		}
+		if b, err := e.firmaDeMetodoAttr(m); err != nil {
+			return nil, err
+		} else if b != nil {
 			attrs = append(attrs, b...)
 			conte++
 		}
@@ -7347,6 +7439,12 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		attrs = append(attrs, b...)
+		conte++
+	}
+	if b, err := e.firmaDeMetodoAttr(m); err != nil {
+		return nil, err
+	} else if b != nil {
 		attrs = append(attrs, b...)
 		conte++
 	}
