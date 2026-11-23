@@ -128,6 +128,14 @@ type Data struct {
 	// leaves the record of a compile it never finished. This is the second half of
 	// that answer (classRosterSHA).
 	ClassRoster string `json:"classRoster,omitempty"`
+	// AndroidJar is the fingerprint of the android.jar the classes were emitted
+	// against: its path, its size and its date (huellaDelJarTexto). The emitter
+	// resolves every name of the project against that jar, so another jar can change
+	// the classes with no source moving, and nothing else in this table notices: the
+	// digest of jar/ is the dex of the dependencies, a different stage. A state
+	// written before this field existed has none, which reads as "another jar" and
+	// costs exactly one recompilation.
+	AndroidJar string `json:"androidJar,omitempty"`
 }
 
 const DataFile = "build/incremental.json"

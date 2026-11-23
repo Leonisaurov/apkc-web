@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -335,36 +336,79 @@ func retorno(desc byte) byte {
 // ----- resolucion de nombres contra el android.jar -----
 
 // buscadorDeClases abre el jar y recuerda lo que ya leyó. Un enlace no deberia leer mas de una veintena de
-// entradas del jar, que son ficheros de pocos KB: el android.jar entero no se toca.
+// entradas del jar, que son ficheros de pocos KB: el android.jar entero no se toca. El índice de entradas
+// sale de build/jarindice.bin cuando la huella del jar cuadra (jarindice.go), y si no se recorre el
+// directorio central; en los dos casos se lee con `archivo`, que es el jar abierto para ReadAt.
 type buscadorDeClases struct {
-	zr      *zip.ReadCloser
-	indice  map[string]*zip.File // nombre internal -> entrada, para no andar el listado en cada lectura
-	nombres map[string]bool      // las entradas .class que hay dentro, para resolver los imports con *
+	archivo *os.File              // el jar abierto para leer las entradas por su offset
+	zr      *zip.ReadCloser       // el respaldo: cuando el directorio central no se pudo recorrer
+	indice  map[string]entradaJar // nombre internal -> entrada, para no andar el listado en cada lectura
 	cache   map[string]*classFull
 }
 
 func abrirBuscador(rutaJar string) (*buscadorDeClases, error) {
+	b := &buscadorDeClases{indice: map[string]entradaJar{}, cache: map[string]*classFull{}}
+	indice, cacheado := leerIndiceDelJar(rutaJar)
+	if !cacheado {
+		propio, err := directorioCentralDelJar(rutaJar)
+		if err != nil {
+			// zip64 o un zip con prefijo: lo lee el archive/zip de siempre, que ya sabe de esas formas
+			return abrirBuscadorConZip(rutaJar)
+		}
+		indice = propio
+	}
+	archivo, err := os.Open(rutaJar)
+	if err != nil {
+		return abrirBuscadorConZip(rutaJar)
+	}
+	b.archivo = archivo
+	b.indice = indice
+	if !cacheado {
+		escribirIndiceDelJar(rutaJar, indice)
+	}
+	return b, nil
+}
+
+// abrirBuscadorConZip es el camino de siempre, el que archive/zip resuelve solo. Se queda como
+// respaldo de las formas de zip que el lector propio no sigue, y es también el oráculo de las pruebas.
+func abrirBuscadorConZip(rutaJar string) (*buscadorDeClases, error) {
 	zr, err := zip.OpenReader(rutaJar)
 	if err != nil {
 		return nil, fmt.Errorf("el android.jar %s no abre: %w", rutaJar, err)
 	}
-	b := &buscadorDeClases{zr: zr, indice: map[string]*zip.File{}, nombres: map[string]bool{}, cache: map[string]*classFull{}}
+	b := &buscadorDeClases{zr: zr, indice: map[string]entradaJar{}, cache: map[string]*classFull{}}
 	for _, f := range zr.File {
-		if !strings.HasSuffix(f.Name, ".class") {
+		internal, ok := recortaClase(f.Name)
+		if !ok {
 			continue
 		}
-		internal := strings.TrimSuffix(f.Name, ".class")
-		b.nombres[internal] = true
 		if _, ya := b.indice[internal]; !ya {
-			b.indice[internal] = f
+			// sin offset: en este camino la entrada se abre con archive/zip, que lee su cabecera
+			// local por su cuenta, y sacar el offset de cada una cuesta más que recorrer el zip
+			b.indice[internal] = entradaJar{
+				comprimido: uint32(f.CompressedSize64),
+				crc:        f.CRC32,
+				metodo:     f.Method,
+				f:          f,
+			}
 		}
 	}
 	return b, nil
 }
 
-func (b *buscadorDeClases) cerrar() { _ = b.zr.Close() }
+func (b *buscadorDeClases) cerrar() {
+	if b.zr != nil {
+		_ = b.zr.Close()
+	}
+	if b.archivo != nil {
+		_ = b.archivo.Close()
+	}
+}
 
-func (b *buscadorDeClases) hayEnElJar(internal string) bool { return b.nombres[internal] }
+func (b *buscadorDeClases) hayEnElJar(internal string) bool {
+	_, ok := b.indice[internal]
+	return ok
+}
 
 // claseDelJar lee una entrada del jar y la pasa por el lector de la Fase 2, que es el que ya sabe andar un
 // constant pool de verdad.
@@ -372,22 +416,29 @@ func (b *buscadorDeClases) claseDelJar(internal string) (*classFull, error) {
 	if c, ok := b.cache[internal]; ok {
 		return c, nil
 	}
-	f, ok := b.indice[internal]
+	e, ok := b.indice[internal]
 	if !ok {
 		return nil, fmt.Errorf("%s no esta en el android.jar", internal)
 	}
-	rc, err := f.Open()
-	if err != nil {
-		return nil, err
+	var data []byte
+	var err error
+	if e.f != nil {
+		// el respaldo ya tiene la entrada abierta: archive/zip lee la cabecera local por su cuenta
+		rc, e2 := e.f.Open()
+		if e2 != nil {
+			return nil, e2
+		}
+		data, err = io.ReadAll(rc)
+		_ = rc.Close()
+	} else {
+		data, err = datosDeLaEntrada(b.archivo, e)
 	}
-	data, err := io.ReadAll(rc)
-	_ = rc.Close()
 	if err != nil {
 		return nil, err
 	}
 	c, err := readClassFull(data)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", f.Name, err)
+		return nil, fmt.Errorf("%s: %w", internal, err)
 	}
 	b.cache[internal] = &c
 	return &c, nil

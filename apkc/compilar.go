@@ -183,6 +183,7 @@ func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 		// comparar en la vuelta siguiente y el atajo de arriba no se abre nunca
 		updateRecords(nombres)
 		DataTable.ClassRoster = classRosterSHA()
+		DataTable.AndroidJar = huellaDelJarTexto(androidJar)
 	}
 	LogI("build", len(nombres), "fuentes de Java en Go ->", len(clases), "clases")
 	return nombres, true
@@ -196,6 +197,12 @@ func clasesAlDia() bool {
 	loadTable()
 	fuentes, _ := getFiles("src", ".java", false)
 	if len(fuentes) == 0 {
+		return false
+	}
+	// el classpath es un dato de la compilación igual que los fuentes: otro jar resuelve los
+	// nombres contra otras clases, así que las de build/classes dejan de estar al día aunque no
+	// haya cambiado ni un byte del proyecto
+	if huellaDelJarTexto(androidJar) != DataTable.AndroidJar {
 		return false
 	}
 	for _, fuente := range fuentes {

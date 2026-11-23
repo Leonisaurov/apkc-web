@@ -1,11 +1,11 @@
 # Plan de incremental para el modo web (`build --linker go --compiler go`)
 
 **Estado: I1 e I2 hechas; I3 cerrada en `d3803bb` tras el APROBAR del crítico; I4 hecha en el
-camino nativo (dex idéntico y `dex go` 100 → 45 ms), con el gate pendiente; I5 pendiente.** `--inc`
-está activo en la pestaña y el ahorro se midió en chromium/OPFS; el cuello que
-queda está en compilar y dexar. Este fichero es un plan con mediciones: cada cifra lleva el comando
-que la reproduce (regla 1 del `AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y
-no se usa para decidir.
+camino nativo (dex idéntico y `dex go` 100 → 45 ms), con el gate pendiente; I5 medida (ahorra
+82-92 ms por build en wasm, por debajo del criterio de ≥100 ms) y no cerrada.** `--inc` está activo
+en la pestaña y el ahorro se midió en chromium/OPFS; el cuello que queda está en compilar y dexar.
+Este fichero es un plan con mediciones: cada cifra lleva el comando que la reproduce (regla 1 del
+`AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y no se usa para decidir.
 
 Fecha: 2026-11-22. Origen: comprobar si `--inc` ayuda a la pestaña y, si no, diseñar un incremento
 propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `web`, sobre el fork
@@ -20,7 +20,7 @@ propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `
 | I3, reutilizar las clases emitidas por hash | **cerrada en `d3803bb` (APROBAR del crítico)** | gate + `go test -count=1 ./...` con `APKC_ANDROID_JAR=…` | `compile go` 390 ms → 0 y `dex go` 106 → 0 en wasm (criterio: ≥30 %), dex idéntico; en nativo el atajo se paga en parte por el estado más grande (véase I3) |
 | I3, caché de AST por fuente dentro del proceso | **descartada por estructura** | `studio/hospedador.js:240` | cada comando de la página arranca una instancia nueva de Go: ninguna caché en memoria cruza dos builds |
 | I4, dexado por clase | **hecha en nativo, gate pendiente** | `sh banco/incremental.sh` (bloque «dex por clase») y `go test -count=1 -run TestDexadoPorClaseReutilizaYNoCambiaUnByte .` | `cmp` mudo entre la vuelta caliente y el dexado completo del mismo árbol; `dex go` 100 → 45 ms con 244 clases y 1875 `code_item` (1866 reutilizados tras editar un fuente); el dex no cambia ni un byte |
-| I5, índice del `android.jar` entre pasadas | pendiente | el test del shim sobre el proyecto mínimo | — |
+| I5, índice del `android.jar` entre pasadas | **medida, por debajo del criterio** | `TestIndiceDelJarMideElAhorro` en el shim con el jar montado, tres procesos nuevos | 82-92 ms menos por build (criterio ≥100 ms, abandono <50 ms): el zip cuesta 90-100 ms la primera pasada y 57-75 en régimen, y con la caché puesta son 4,0-7,5 ms |
 
 
 ## Estado anterior (lo que el plan encontró)
@@ -152,8 +152,9 @@ Dos diferencias con el nativo, ambas del mismo origen:
 - La reutilización de entradas del paquete no se nota (137 ms frente a 140 ms): el zip vive en
   memoria y lo que cuesta es la firma, no copiar bytes.
 
-El coste fijo del `android.jar` en wasm no se midió con el proyecto mínimo: el test quedó escrito y
-compilado, pero no se ejecutó. Queda como pregunta abierta de I5, no como cifra.
+El coste fijo del `android.jar` en wasm se midió después, con el proyecto mínimo y en el hospedador
+de Node: 90-100 ms la primera pasada de un proceso y 57-75 ms en régimen, que con la caché de I5 se
+quedan en 4,0-7,5 ms. El detalle y la tabla están en «I5: el índice del `android.jar` entre pasadas».
 
 ## Comparación de los apks
 
@@ -255,8 +256,8 @@ midió en nativo un proyecto de 92 fuentes: 315 ms en frío y 15 ms sin cambios,
 `6a2e683d…`) y `incremental.json` de 24 700 B. El crítico
 `ses_df9baefaeffemtyU4YC0gXywOR` dio **APROBAR** sobre `d3803bb`, sin hallazgos `CONFIRMADO`, y la
 fase queda **cerrada**. Queda una pregunta abierta no bloqueante: el classpath no invalida el
-reuse; se adscribe a I5, que sigue pendiente, igual que I4. La medición del builder queda en este
-plan; no se abre `§` en `docs/evidencia.md`.
+reuse; I5 la resolvió con la huella del jar en `clasesAlDia()` (véase «I5»). La medición del builder
+queda en este plan; no se abre `§` en `docs/evidencia.md`.
 
 Lo que **sí** se puede hacer, y está hecho:
 
@@ -300,6 +301,58 @@ ficheros y pliega constantes de otras clases, así que reutilizar la emisión de
 índice de API por clase como el `ClassAPI` que ya usa el camino de javac (`apkc/utils.go`), y el
 criterio de I3 prohíbe que el dex cambie ni un byte. Queda como la parte abierta de la fase, con este
 mismo banco como comando.
+
+## I5: el índice del `android.jar` entre pasadas (medido, por debajo del criterio)
+
+`abrirBuscador` (`apkc/javaemisor.go:349`) recorría el zip del `android.jar` en cada build: 13 968
+entradas de directorio central, 5 720 de ellas clases. Ahora el directorio se lee en una pasada propia
+(`apkc/jarindice.go`) y se deja en `build/jarindice.bin` con la huella del jar —ruta, tamaño y fecha—
+en la cabecera; la vuelta siguiente lee ese fichero de 230 KB y no abre el zip. Si la huella no cuadra,
+si el fichero está truncado o si el zip es zip64 se vuelve a recorrer el directorio, y si el lector
+propio no puede se cae al `archive/zip` de siempre, que es también el oráculo de la prueba
+(`TestDirectorioCentralDelJarContraArchiveZip`: mismas 5 720 entradas, método, tamaño y CRC, y una
+muestra de 24 clases byte a byte).
+
+La caché se invalida con el jar, no solo con los fuentes. Además de la cabecera de
+`build/jarindice.bin`, la huella entra en `build/incremental.json` (`Data.AndroidJar`) y
+`clasesAlDia()` la exige, así que cambiar el classpath tira también las clases reutilizadas de I3 —
+la pregunta abierta de su crítico. Un estado escrito antes de este campo no lo tiene, lo que se lee
+como «otro jar» y cuesta una recompilación.
+
+Comando, en el hospedador de Node con el jar montado en `/sdk/android.jar`. Tres procesos: cada
+comando de la pestaña arranca una instancia nueva de Go, así que la primera pasada de un proceso es la
+que paga un build.
+
+```sh
+cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$TMP/jar.wasm" .
+node shim/navegador-sim.js --montar "$ANDROID_JAR:/sdk/android.jar" "$TMP/jar.wasm" \
+  -test.run TestIndiceDelJarMideElAhorro -test.v
+```
+
+Milisegundos, tres procesos, en el orden en que los imprime la prueba:
+
+| vuelta | `archive/zip` (como antes) | lector propio, caché vacía | caché puesta |
+| --- | --- | --- | --- |
+| 1.ª de un proceso nuevo | 90,4 / 99,9 / 89,6 | 25,7 / 22,7 / 23,0 | 7,5 / 7,5 / 7,6 |
+| mediana de tres vueltas | 65,2 / 74,5 / 70,6 | 12,4 / 13,5 / 11,5 | 4,0 / 4,4 / 4,3 |
+
+El proyecto mínimo (la plantilla de `apkc create`, `compilarProyectoJava` entero) pasa de 73,6-79,6 ms
+a 28,8-33,3 ms en la primera vuelta de cada proceso.
+
+**Lo que da y lo que no.** El ahorro por build es de **82-92 ms** (mediana 83) en la primera pasada de
+un proceso nuevo, y de **61-70 ms** en régimen. El criterio de aceptación era ≥100 ms y **no se
+alcanza**: el techo es el propio zip, que cuesta 90-100 ms la primera vez y 57-75 en régimen, y la
+caché ya se queda en 4-7,5 ms de eso. El umbral de abandono (<50 ms) no se toca. El criterio se fijó
+antes de medir el coste (la medición 1 lo dejaba abierto), y la medición dice que el techo del ahorro
+es el coste del zip. La vía siguiente es medirla en la pestaña, donde el jar vive en OPFS y el zip lee
+1,29 MB de disco contra los 230 KB de la caché: allí el ahorro debería ser mayor que en el shim, donde
+el fichero está en memoria. Ese es el comando de I2 (`studio/prueba-pestana.js`).
+
+Lo que la prueba cierra además del cronómetro: `TestIndiceDelJarSeReutilizaYSeInvalida` escribe un jar,
+lo abre (deja la caché), lo cambia (otra entrada) y comprueba que el índice se reescribió; después
+rompe el fin de directorio del zip con el mismo tamaño y la misma fecha y comprueba que la vuelta
+siguiente abre igual y lee las clases por el offset guardado —o sea, que no tocó el zip—, y por último
+le cambia la fecha para comprobar que entonces no reutiliza nada.
 
 ## Hallazgo del crítico: un recurso nuevo no reenlazaba (arreglado)
 
@@ -417,7 +470,8 @@ analogía.
   fuentes cambiados no compila (`compile go` 300 → 0 ms, dex idéntico). No cabe caché en memoria
   porque cada comando arranca una instancia nueva de Go (`studio/hospedador.js:240`); lo que queda
   es emitir solo fuentes cambiados. El crítico `ses_df9baefaeffemtyU4YC0gXywOR` dio **APROBAR** sin
-  hallazgos `CONFIRMADO`; la pregunta abierta del classpath se adscribe a I5, pendiente.
+  hallazgos `CONFIRMADO`; la pregunta abierta del classpath la resolvió I5 (la huella del jar entra en
+  `clasesAlDia()`).
 - **I4, dexado por clase (H2). HECHA EN NATIVO, GATE PENDIENTE.** `cmp build/classes.dex` entre el
   dexado completo y el de la vuelta que reutiliza: **idéntico** (§200 de `docs/evidencia.md`). El
   ensamblado tiene offsets absolutos, así que no se parchea el fichero anterior: se guarda por método
@@ -433,8 +487,12 @@ analogía.
   idéntico; §201). Lo que aún se paga en esta etapa —`leeClases` 11 ms,
   `collectClasses` 13 ms y el ensamblado de las áreas globales— no es I5: I5 es el índice del
   `android.jar` entre pasadas, que ataca a la compilación, no al dex.
-- **I5, índice del `android.jar` entre pasadas (H3).** Comando: el test del shim sobre el proyecto
-  mínimo, con y sin caché. Aceptación: ≥100 ms menos en wasm. Abandono: <50 ms.
+- **I5, índice del `android.jar` entre pasadas (H3). MEDIDA, POR DEBAJO DEL CRITERIO.** El
+  directorio central se lee una pasada y se deja en `build/jarindice.bin`; la vuelta siguiente lee ese
+  fichero y no abre el zip. Ahorro: 82-92 ms por build en wasm (mediana 83) y 61-70 ms en régimen;
+  aceptación ≥100 ms, abandono <50 ms, así que se queda en medida y no en cerrada. La huella del jar
+  (ruta, tamaño y fecha) invalida la caché **y** las clases reutilizadas de I3, que era la pregunta
+  abierta de su crítico. Detalle en «I5: el índice del `android.jar` entre pasadas».
 
 ## Fronteras (lo que este plan no promete)
 
@@ -488,6 +546,7 @@ parchearlo; el § debe decirlo en la primera línea del apartado.
 ## Lo que no se midió
 
 - Chromium ni OPFS reales: solo el shim en memoria.
-- El coste fijo del `android.jar` en wasm (test escrito y compilado, sin ejecutar).
+- El ahorro de I5 dentro de la pestaña: en el shim el jar está en memoria, y en OPFS el zip lee
+  1,29 MB de disco contra los 230 KB de la caché, así que la cifra de allí debería ser mayor.
 - Los apks de las repeticiones 1 y 2: solo se compararon los de la 3.
 - Una medición con dependencias `jar/`, Kotlin o `--compiler javac` dentro del wasm.
