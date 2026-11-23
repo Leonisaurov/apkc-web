@@ -14,8 +14,15 @@ package main
 // El dex de las pruebas se genera en caliente con el emisor del fork, como el resto de la Fase 2.
 
 import (
+	"bytes"
+	"crypto/sha1"
+	"encoding/binary"
+	"encoding/json"
+	"hash/adler32"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +54,30 @@ public class Par {
     Par(Saludo a, Saludo b) { this.a = a; this.b = b; }
     int tocaUno() { a.sube(); return b.valor(); }
     int suma() { return a.valor() + b.valor(); }
+}
+`
+
+// Las fuentes de la pregunta abierta: el cuerpo que se intercambia usa una constante de cadena, y el
+// dex de la sesión trae otra clase con sus propias cadenas, así que el índice del `const-string` del
+// cuerpo nuevo no significa lo mismo en los dos ficheros.
+const fuenteEtiquetaV1 = `package com.hola;
+public class Etiqueta {
+    public String texto() { return "viejo"; }
+}
+`
+
+const fuenteRelleno = `package com.hola;
+public class Relleno {
+    public String uno() { return "alfa"; }
+    public String dos() { return "beta"; }
+    public String tres() { return "gamma"; }
+    public String cuatro() { return "delta"; }
+}
+`
+
+const fuenteEtiquetaV2 = `package com.hola;
+public class Etiqueta {
+    public String texto() { return "nuevo"; }
 }
 `
 
@@ -154,6 +185,60 @@ func TestElHotSwapConservaIdentidadYEstadoYCambiaElDespacho(t *testing.T) {
 	}
 }
 
+// mismoEvento compara dos eventos del guion campo a campo. El struct lleva el dex del swap como
+// []byte y por eso no vale `==`; comparar solo Tipo y Dato dejaría sin verificar el dex, la clase, el
+// método y el proto, que es justo lo que un guion mal parseado rompería en silencio.
+func mismoEvento(a, b eventoUsuario) bool {
+	return a.Tipo == b.Tipo && a.Dato == b.Dato && a.Clase == b.Clase &&
+		a.Metodo == b.Metodo && a.Proto == b.Proto && bytes.Equal(a.Dex, b.Dex)
+}
+
+// TestElIntercambioSoloSerializaSusCamposPublicos exige que `ejecucion.intercambios` lleve solo lo
+// que el consumidor necesita: el `metodoDalvik` de Antes/Despues lleva su code_item y su dex, y sin
+// `json:"-"` se serializaba como `{}` y ensuciaba el modelo.
+func TestElIntercambioSoloSerializaSusCamposPublicos(t *testing.T) {
+	m, _, _, _ := sesionDelHotSwap(t)
+	d2, err := readDex(dexDeFuentes(t, fuenteJava{nombre: "Saludo.java", contenido: fuenteSaludoV2}))
+	if err != nil {
+		t.Fatalf("el dex de la versión 2 no se lee: %v", err)
+	}
+	r, err := m.intercambiaMetodo(d2, "Lcom/hola/Saludo;", "valor", "()I")
+	if err != nil {
+		t.Fatalf("el swap falló: %v", err)
+	}
+	if r.Antes == nil || r.Despues == nil {
+		t.Fatalf("la prueba necesita las dos implementaciones y el swap dio %+v", r)
+	}
+
+	res := resultadoEjecucion{Intercambios: []resultadoIntercambio{r}}
+	datos, err := json.Marshal(res)
+	if err != nil {
+		t.Fatalf("el resultado no se serializa: %v", err)
+	}
+	var crudo struct {
+		Intercambios []map[string]any `json:"intercambios"`
+	}
+	if err := json.Unmarshal(datos, &crudo); err != nil {
+		t.Fatalf("el JSON no se relee: %v", err)
+	}
+	if len(crudo.Intercambios) != 1 {
+		t.Fatalf("el JSON lleva %d intercambios y se esperaba 1: %s", len(crudo.Intercambios), datos)
+	}
+	claves := make([]string, 0, len(crudo.Intercambios[0]))
+	for k := range crudo.Intercambios[0] {
+		claves = append(claves, k)
+	}
+	sort.Strings(claves)
+	if got := strings.Join(claves, ","); got != "clase,existia,metodo,proto" {
+		t.Fatalf("el JSON del intercambio lleva %q y solo se esperaban clase,existia,metodo,proto: %s",
+			got, datos)
+	}
+	if strings.Contains(string(datos), `"Antes"`) || strings.Contains(string(datos), `"Despues"`) ||
+		strings.Contains(string(datos), `"{}"`) {
+		t.Fatalf("el JSON del intercambio se ensució con las implementaciones: %s", datos)
+	}
+}
+
 // TestElFlagDeHotSwapParteClaseYMetodo comprueba la forma del comando, que es lo único que la
 // primitiva no ve: la clase, el método y el proto salen de `clase/metodo(proto)=fichero.dex`, el
 // dex se lee al parsear, y las formas ambiguas se rechazan antes de ejecutar nada.
@@ -168,12 +253,32 @@ func TestElFlagDeHotSwapParteClaseYMetodo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("la forma clase/metodo(proto)=fichero no se parsea: %v", err)
 	}
-	if ev.Tipo != ordenIntercambiarTipo || ev.Clase != "Lcom/hola/Saludo;" ||
-		ev.Metodo != "valor" || ev.Proto != "()I" {
-		t.Fatalf("el evento salió %+v", ev)
+	esperado := eventoUsuario{
+		Tipo:   ordenIntercambiarTipo,
+		Dato:   "Lcom/hola/Saludo;/valor()I=" + ruta,
+		Dex:    datos,
+		Clase:  "Lcom/hola/Saludo;",
+		Metodo: "valor",
+		Proto:  "()I",
 	}
-	if len(ev.Dex) != len(datos) {
-		t.Fatalf("el evento lleva %d bytes y el dex tiene %d", len(ev.Dex), len(datos))
+	if !mismoEvento(ev, esperado) {
+		t.Fatalf("el evento salió %+v y se esperaba %+v", ev, esperado)
+	}
+	// y la comparación no es sorda: cambiar cualquier campo, el dex incluido, la rompe
+	for _, caso := range []struct {
+		nombre string
+		otro   eventoUsuario
+	}{
+		{"Tipo", eventoUsuario{Tipo: "otro", Dato: esperado.Dato, Dex: datos, Clase: esperado.Clase, Metodo: esperado.Metodo, Proto: esperado.Proto}},
+		{"Dato", eventoUsuario{Tipo: esperado.Tipo, Dato: "otro", Dex: datos, Clase: esperado.Clase, Metodo: esperado.Metodo, Proto: esperado.Proto}},
+		{"Dex", eventoUsuario{Tipo: esperado.Tipo, Dato: esperado.Dato, Dex: datos[:len(datos)-1], Clase: esperado.Clase, Metodo: esperado.Metodo, Proto: esperado.Proto}},
+		{"Clase", eventoUsuario{Tipo: esperado.Tipo, Dato: esperado.Dato, Dex: datos, Clase: "Lcom/hola/Otra;", Metodo: esperado.Metodo, Proto: esperado.Proto}},
+		{"Metodo", eventoUsuario{Tipo: esperado.Tipo, Dato: esperado.Dato, Dex: datos, Clase: esperado.Clase, Metodo: "otro", Proto: esperado.Proto}},
+		{"Proto", eventoUsuario{Tipo: esperado.Tipo, Dato: esperado.Dato, Dex: datos, Clase: esperado.Clase, Metodo: esperado.Metodo, Proto: "()V"}},
+	} {
+		if mismoEvento(esperado, caso.otro) {
+			t.Errorf("mismoEvento no distingue %s", caso.nombre)
+		}
 	}
 
 	// sin /metodo, la clase entera
@@ -270,5 +375,160 @@ func TestElHotSwapEsAditivoYNoTocaOtrosMetodos(t *testing.T) {
 	}
 	if cl.estaticos["Lcom/hola/Saludo;.base"] != int32(40) {
 		t.Fatalf("el swap devolvió el estático base a %v", cl.estaticos["Lcom/hola/Saludo;.base"])
+	}
+}
+
+// indiceDeConstString devuelve el string_idx de la primera constante de cadena del cuerpo de un
+// método: `const-string vAA, string@BBBB` es 0x1a y la palabra siguiente es el índice.
+func indiceDeConstString(t *testing.T, d *dexFile, clase, nombre, proto string) uint32 {
+	t.Helper()
+	met, err := metodoDeDex(d, clase, nombre, proto)
+	if err != nil {
+		t.Fatalf("no se pudo leer %s.%s%s: %v", claseCorta(clase), nombre, proto, err)
+	}
+	if met.item == nil {
+		t.Fatalf("%s.%s%s no tiene cuerpo", claseCorta(clase), nombre, proto)
+	}
+	ins := met.item.insns
+	for i := 0; i+1 < len(ins); i++ {
+		if byte(ins[i]) == 0x1a {
+			return uint32(ins[i+1])
+		}
+	}
+	t.Fatalf("%s.%s%s no lleva const-string en su cuerpo: %#v", claseCorta(clase), nombre, proto, ins)
+	return 0
+}
+
+// TestElHotSwapInterpretaElCuerpoNuevoContraSuPropioDex cierra la pregunta abierta: un code_item no es
+// autónomo, sus índices apuntan a los pools de SU fichero. El cuerpo nuevo se compila en un dex con
+// menos cadenas que el de la sesión, así que el índice de su `const-string` no vale lo mismo en los
+// dos; si el intérprete lo resolviera contra `m.prog.dex`, devolvería otra cadena (o fallaría por
+// índice fuera del pool) en vez de "nuevo".
+func TestElHotSwapInterpretaElCuerpoNuevoContraSuPropioDex(t *testing.T) {
+	d1, err := readDex(dexDeFuentes(t,
+		fuenteJava{nombre: "Etiqueta.java", contenido: fuenteEtiquetaV1},
+		fuenteJava{nombre: "Relleno.java", contenido: fuenteRelleno},
+	))
+	if err != nil {
+		t.Fatalf("el dex de la versión 1 no se lee: %v", err)
+	}
+	prog, err := cargaPrograma(d1)
+	if err != nil {
+		t.Fatalf("el programa no carga: %v", err)
+	}
+	m := nuevaMaquina(prog, nil)
+	etiqueta := &objetoDalvik{clase: "Lcom/hola/Etiqueta;", campos: map[string]any{}}
+	texto := func() string {
+		t.Helper()
+		v := llamaProyecto(t, m, "Lcom/hola/Etiqueta;", "texto", "()Ljava/lang/String;", etiqueta)
+		s, ok := v.(string)
+		if !ok {
+			t.Fatalf("texto() devolvió %T (%v) y se esperaba una cadena", v, v)
+		}
+		return s
+	}
+	if got := texto(); got != "viejo" {
+		t.Fatalf("antes del swap texto() = %q y se esperaba \"viejo\"", got)
+	}
+
+	d2, err := readDex(dexDeFuentes(t, fuenteJava{nombre: "Etiqueta.java", contenido: fuenteEtiquetaV2}))
+	if err != nil {
+		t.Fatalf("el dex de la versión 2 no se lee: %v", err)
+	}
+	idx := indiceDeConstString(t, d2, "Lcom/hola/Etiqueta;", "texto", "()Ljava/lang/String;")
+	if d2.strings[idx] != "nuevo" {
+		t.Fatalf("el const-string del cuerpo nuevo apunta a %q y debía ser \"nuevo\"", d2.strings[idx])
+	}
+	if int(idx) < len(d1.strings) && d1.strings[idx] == "nuevo" {
+		t.Fatalf("el índice %d dice \"nuevo\" también en el dex de la sesión: la prueba no discrimina", idx)
+	}
+	t.Logf("el cuerpo nuevo usa string@%d (\"nuevo\" en su dex); en el dex de la sesión ese índice es %q",
+		idx, d1.strings[idx])
+
+	if _, err := m.intercambiaMetodo(d2, "Lcom/hola/Etiqueta;", "texto", "()Ljava/lang/String;"); err != nil {
+		t.Fatalf("el swap de texto() falló: %v", err)
+	}
+	if got := texto(); got != "nuevo" {
+		t.Fatalf("tras el swap texto() = %q y se esperaba \"nuevo\": el cuerpo nuevo no se interpretó "+
+			"contra su propio dex", got)
+	}
+}
+
+// offsetDeCodeItem da la posición del code_item de un método en el fichero, que es lo que hay que
+// tocar para fabricar un módulo roto sin inventarse bytes.
+func offsetDeCodeItem(t *testing.T, d *dexFile, clase, nombre, proto string) uint32 {
+	t.Helper()
+	datos, err := d.methodsDeCadaClase()
+	if err != nil {
+		t.Fatalf("los class_data no se leen: %v", err)
+	}
+	cd, ok := datos[clase]
+	if !ok {
+		t.Fatalf("el dex no declara %s", claseCorta(clase))
+	}
+	for _, m := range append(append([]encodedMethod{}, cd.directs...), cd.virtuals...) {
+		ref := d.methods[m.methodIdx]
+		if ref.name == nombre && descDeProto(ref.proto) == proto {
+			return m.codeOff
+		}
+	}
+	t.Fatalf("el dex no trae %s.%s%s", claseCorta(clase), nombre, proto)
+	return 0
+}
+
+// dexConSellos recalcula la firma y el adler32 de un dex parcheado: el lector comprueba las dos, así
+// que un byte cambiado sin sellar no llega ni a la prueba.
+func dexConSellos(b []byte) []byte {
+	out := append([]byte(nil), b...)
+	sum := sha1.Sum(out[32:])
+	copy(out[12:32], sum[:])
+	binary.LittleEndian.PutUint32(out[8:12], adler32.Checksum(out[12:]))
+	return out
+}
+
+// TestElHotSwapDeClaseEsTodoONada mide la atomicidad: con un módulo cuyo último code_item no cabe,
+// `intercambiaClase` falla al leer y NO deja la clase con unos métodos nuevos y otros viejos. Es la
+// razón de leer y validar todo antes de tocar la tabla, en vez de deshacer a mano.
+func TestElHotSwapDeClaseEsTodoONada(t *testing.T) {
+	m, _, par, _ := sesionDelHotSwap(t)
+	datos := dexDeFuentes(t, fuenteJava{nombre: "Saludo.java", contenido: fuenteSaludoV2})
+	d2, err := readDex(datos)
+	if err != nil {
+		t.Fatalf("el dex de la versión 2 no se lee: %v", err)
+	}
+	// el último método que se leería: si la instalación fuera incremental, ya estaría dentro
+	off := offsetDeCodeItem(t, d2, "Lcom/hola/Saludo;", "valor", "()I")
+	roto := append([]byte(nil), datos...)
+	binary.LittleEndian.PutUint32(roto[off+12:], 0x7fffffff) // insns_size imposible
+	dRoto, err := readDex(dexConSellos(roto))
+	if err != nil {
+		t.Fatalf("el dex parcheado no se lee: %v", err)
+	}
+	if _, err := metodoDeDex(dRoto, "Lcom/hola/Saludo;", "valor", "()I"); err == nil {
+		t.Fatal("el code_item roto se leyó sin error: la prueba no discrimina")
+	}
+
+	cl := m.prog.clases["Lcom/hola/Saludo;"]
+	antes := map[string]*metodoDalvik{}
+	for k, v := range cl.metodos {
+		antes[k] = v
+	}
+	if _, err := m.intercambiaClase(dRoto, "Lcom/hola/Saludo;"); err == nil {
+		t.Fatal("el swap aceptó un módulo con un code_item roto")
+	}
+	if len(cl.metodos) != len(antes) {
+		t.Fatalf("la tabla quedó con %d métodos y tenía %d: la instalación no fue todo o nada",
+			len(cl.metodos), len(antes))
+	}
+	for k, v := range antes {
+		if cl.metodos[k] != v {
+			t.Fatalf("el swap fallido cambió %s: la instalación no fue todo o nada", k)
+		}
+	}
+	if _, hay := cl.metodos["extra()I"]; hay {
+		t.Fatal("el swap fallido añadió extra()I: la instalación no fue todo o nada")
+	}
+	if got := enteroDe(t, llamaProyecto(t, m, "Lcom/hola/Par;", "suma", "()I", par), "suma"); got != 204 {
+		t.Fatalf("tras el swap fallido suma() = %d y se esperaba 204: la sesión cambió", got)
 	}
 }
