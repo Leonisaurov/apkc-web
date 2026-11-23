@@ -2061,6 +2061,9 @@ type parcheSalto struct {
 	en       int
 	etiqueta int
 	op       byte
+	// largo avisa que el hueco ya se ensanchó: el `goto` ocupa 5 bytes (0xc8) o el condicional
+	// 8 (la condición invertida y un `goto_w` detrás). Lo fija la pasada de colocación.
+	largo bool
 }
 
 // parcheSalto4: un desplazamiento de 32 bits con signo, como el `default` y cada destino de un
@@ -2154,18 +2157,16 @@ func (e *emisor) saltoEmite(op byte, destino int, consume int) {
 	e.baja(consume)
 }
 
-// cierra anota la posicion actual como destino de la etiqueta y completa los saltos que la esperaban.
-// El operando JVM es un desplazamiento en bytes contados desde el principio de la instruccion, no
-// desde el operando: por eso se guarda `en` en la direccion de la branquia y se escribe en en+1.
-// ensanchaSalto convierte un `goto` de 3 bytes en `goto_w` de 5 cuando el desplazamiento no cabe
-// en dos bytes con signo. Insertar dos bytes corre todo lo que viene detrás, así que hay que
-// desplazar también las etiquetas, los parches pendientes, las filas de línea y la tabla de
-// excepciones (medido en §169 con un método de 48000 bytes de código).
+// inserta abre un hueco de `n` bytes en `en` y corre todo lo que viene detrás: etiquetas, parches
+// pendientes, filas de línea y tabla de excepciones. Lo usa `resuelveSaltos` al ensanchar una rama.
 func (e *emisor) inserta(en, n int) {
 	e.codigo = append(e.codigo, make([]byte, n)...)
 	copy(e.codigo[en+n:], e.codigo[en:len(e.codigo)-n])
 	desplaza := func(v int) int {
-		if v > en {
+		// `>=` y no `>`: un destino o un parche que empiece justo en el hueco se corre con él. La
+		// vuelta de un bucle termina exactamente donde se cierra la etiqueta del fin, y dejarla sin
+		// correr apuntaba dos bytes dentro del `goto_w`.
+		if v >= en {
 			return v + n
 		}
 		return v
@@ -2189,85 +2190,101 @@ func (e *emisor) inserta(en, n int) {
 	}
 }
 
-func (e *emisor) ensanchaSalto(p parcheSalto, destino int) {
-	en := p.en
-	e.inserta(en+3, 2)
-	e.codigo[en] = 0xc8 // goto_w
-	rel := uint32(int32(destino - en))
-	e.codigo[en+1] = byte(rel >> 24)
-	e.codigo[en+2] = byte(rel >> 16)
-	e.codigo[en+3] = byte(rel >> 8)
-	e.codigo[en+4] = byte(rel)
-}
-
-// reencaminaCondicional: javac no alarga una branquia condicional; la invierte para que salte un
-// goto_w corto y pone el salto larguísimo en ese goto (medido en §169: `ifgt 11; goto_w 48016`).
+// inversaCondicion: javac no alarga una branquia condicional; la invierte para que salte un goto_w
+// corto y pone el salto larguísimo en ese goto (medido en §169: `ifgt 11; goto_w 48016`).
 var inversaCondicion = map[byte]byte{
 	0x99: 0x9a, 0x9a: 0x99, 0x9b: 0x9c, 0x9c: 0x9b, 0x9d: 0x9e, 0x9e: 0x9d,
 	0x9f: 0xa0, 0xa0: 0x9f, 0xa1: 0xa2, 0xa2: 0xa1, 0xa3: 0xa4, 0xa4: 0xa3,
 	0xa5: 0xa6, 0xa6: 0xa5, 0xc6: 0xc7, 0xc7: 0xc6,
 }
 
-func (e *emisor) reencaminaCondicional(p parcheSalto, id int) {
-	inv, ok := inversaCondicion[p.op]
-	if !ok {
-		panic(fmt.Sprintf("no se sabe invertir la condición %#02x", p.op))
+// resuelveSaltos coloca la forma definitiva de cada salto y escribe su operando. Va después de
+// emitir todo el método y antes de calcular el marco: mientras el cuerpo crece, cualquier rama
+// puede quedarse corta, y ensanchar una corre las demás, así que los saltos que ya cabían también
+// pueden pasarse de rosca. La pasada repite el ensanchado hasta que nadie cambia y solo entonces
+// escribe los desplazamientos, ya sobre posiciones definitivas. Así la vuelta de un bucle a más de
+// 32 KB (`goto_w` hacia atrás) y la rama que se ensancha delante del cuerpo no se pisan: antes,
+// resolver una y ensanchar la otra dejaba el desplazamiento de la primera corto.
+func (e *emisor) resuelveSaltos() error {
+	for {
+		cambiado := false
+		for i := range e.parches {
+			p := &e.parches[i]
+			destino, ok := e.etiquetas[p.etiqueta]
+			if !ok {
+				return fmt.Errorf("un salto a una etiqueta que no se cerro")
+			}
+			if p.largo {
+				continue
+			}
+			rel := destino - p.en
+			if rel >= -32768 && rel <= 32767 {
+				continue
+			}
+			if p.op == opGOTO {
+				// `goto` de 3 bytes -> `goto_w` de 5, con el opcode en el mismo sitio
+				e.inserta(p.en+3, 2)
+				e.codigo[p.en] = 0xc8
+			} else {
+				inv, ok := inversaCondicion[p.op]
+				if !ok {
+					return fmt.Errorf("no se sabe invertir la condicion %#02x", p.op)
+				}
+				// la condición se invierte y salta por encima del `goto_w` que lleva el destino
+				e.inserta(p.en+3, 5)
+				e.codigo[p.en] = inv
+				e.codigo[p.en+1], e.codigo[p.en+2] = 0, 8
+				e.codigo[p.en+3] = 0xc8
+			}
+			p.largo = true
+			cambiado = true
+		}
+		if !cambiado {
+			break
+		}
 	}
-	en := p.en
-	e.inserta(en+3, 5)
-	e.codigo[en] = inv
-	e.codigo[en+1], e.codigo[en+2] = 0, 8 // 3 bytes de la condición + 5 del goto_w
-	e.codigo[en+3] = 0xc8
-	destino := e.etiquetas[id]
-	rel := uint32(int32(destino - (en + 3)))
-	e.codigo[en+4] = byte(rel >> 24)
-	e.codigo[en+5] = byte(rel >> 16)
-	e.codigo[en+6] = byte(rel >> 8)
-	e.codigo[en+7] = byte(rel)
-}
-
-func (e *emisor) cierra(id int) {
-	if e.etiquetas == nil {
-		e.etiquetas = map[int]int{}
-	}
-	e.etiquetas[id] = len(e.codigo)
-	anchos := []parcheSalto{}
-	condicionales := []parcheSalto{}
-	for _, p := range e.parches {
-		if p.etiqueta != id {
+	for i := range e.parches {
+		p := &e.parches[i]
+		destino := e.etiquetas[p.etiqueta]
+		if p.largo {
+			base := p.en + 1
+			desde := p.en
+			if p.op != opGOTO {
+				// el `goto_w` vive detrás de la condición invertida: su desplazamiento se cuenta
+				// desde el principio de ese `goto_w`, no desde la condición
+				base, desde = p.en+4, p.en+3
+			}
+			rel := uint32(int32(destino - desde))
+			e.codigo[base] = byte(rel >> 24)
+			e.codigo[base+1] = byte(rel >> 16)
+			e.codigo[base+2] = byte(rel >> 8)
+			e.codigo[base+3] = byte(rel)
 			continue
 		}
-		rel := len(e.codigo) - p.en
-		if rel <= 32767 && rel >= -32768 {
-			e.codigo[p.en+1] = byte(rel >> 8)
-			e.codigo[p.en+2] = byte(rel)
-			continue
-		}
-		if p.op == opGOTO {
-			anchos = append(anchos, p)
-		} else {
-			condicionales = append(condicionales, p)
-		}
+		rel := destino - p.en
+		e.codigo[p.en+1] = byte(rel >> 8)
+		e.codigo[p.en+2] = byte(rel)
 	}
-	for _, p := range condicionales {
-		e.reencaminaCondicional(p, id)
-	}
-	for _, p := range anchos {
-		e.ensanchaSalto(p, e.etiquetas[id])
-	}
-	quedan := e.parches4[:0]
-	for _, p := range e.parches4 {
-		if p.etiqueta != id {
-			quedan = append(quedan, p)
-			continue
-		}
-		rel := uint32(int32(len(e.codigo) - p.base))
+	for i := range e.parches4 {
+		p := &e.parches4[i]
+		destino := e.etiquetas[p.etiqueta]
+		rel := uint32(int32(destino - p.base))
 		e.codigo[p.en] = byte(rel >> 24)
 		e.codigo[p.en+1] = byte(rel >> 16)
 		e.codigo[p.en+2] = byte(rel >> 8)
 		e.codigo[p.en+3] = byte(rel)
 	}
-	e.parches4 = quedan
+	return nil
+}
+
+// cierra anota la posicion actual como destino de la etiqueta. El operando de cada salto se
+// completa más tarde, en `resuelveSaltos`, cuando ya se sabe si el método entero obliga a una forma
+// larga en alguna rama.
+func (e *emisor) cierra(id int) {
+	if e.etiquetas == nil {
+		e.etiquetas = map[int]int{}
+	}
+	e.etiquetas[id] = len(e.codigo)
 }
 
 // cuatro: reserva un desplazamiento de 32 bits que se completa al cerrarse la etiqueta.
@@ -2287,6 +2304,9 @@ func (e *emisor) cuatroConstante(v int32) {
 // de otro `if` con `else`: escribe `13: goto 27`, mientras que el primer borrador nuestro escribia
 // `13: goto 20` y en 20 estaba el `goto 27` del bloque. La etiqueta intermedia no separa ninguna
 // instruccion, es un salto vacio, y encadenarlo no cambia por donde pasa el programa.
+//
+// Solo cambia a qué etiqueta apunta el salto: los desplazamientos los escribe `resuelveSaltos`
+// cuando ya están colocadas las formas largas.
 func (e *emisor) encadenaGotos() {
 	if len(e.parches) == 0 || len(e.etiquetas) == 0 {
 		return
@@ -2297,7 +2317,8 @@ func (e *emisor) encadenaGotos() {
 			gotoEn[p.en] = p.etiqueta
 		}
 	}
-	for i, p := range e.parches {
+	for i := range e.parches {
+		p := &e.parches[i]
 		if p.op != opGOTO {
 			continue
 		}
@@ -2315,11 +2336,8 @@ func (e *emisor) encadenaGotos() {
 				break
 			}
 			donde = posicion
-			e.parches[i].etiqueta = siguiente
+			p.etiqueta = siguiente
 		}
-		rel := donde - p.en
-		e.codigo[p.en+1] = byte(rel >> 8)
-		e.codigo[p.en+2] = byte(rel)
 	}
 }
 
@@ -5238,28 +5256,15 @@ func (e *emisor) cambio(v jswitch) error {
 	return nil
 }
 
-// resuelveAtras completa los saltos que apuntan a una etiqueta **ya cerrada**, que es el `goto` del
-// final de un bucle: `cierra` solo parchea cuando se cierra, y la cabeza se cerró antes del cuerpo. El
-// operando es un desplazamiento de 16 bits con signo contado desde el principio de la branquia.
+// resuelveAtras valida el `goto` del final de un bucle, que apunta a una etiqueta **ya cerrada**. El
+// desplazamiento no se escribe aquí: `resuelveSaltos` lo coloca con la forma que pida el método
+// entero, corta o `goto_w` de 32 bits, cuando ya no se va a mover ningún byte.
 func (e *emisor) resuelveAtras(id int) error {
-	destino, ok := e.etiquetas[id]
-	if !ok {
+	if _, ok := e.etiquetas[id]; !ok {
 		return fmt.Errorf("un salto hacia atras a una etiqueta que no se cerro")
 	}
-	quedan := e.parches[:0]
-	for _, p := range e.parches {
-		if p.etiqueta != id {
-			quedan = append(quedan, p)
-			continue
-		}
-		rel := destino - p.en
-		if rel < -32768 || rel > 32767 {
-			return fmt.Errorf("un salto hacia atras de %d bytes: goto_w no esta medido", rel)
-		}
-		e.codigo[p.en+1] = byte(rel >> 8)
-		e.codigo[p.en+2] = byte(rel)
-	}
-	e.parches = quedan
+	// el desplazamiento se escribe en `resuelveSaltos`, con el ancho que pida el método entero:
+	// una vuelta de bucle de más de 32 KB cabe igual que cualquier otra rama larga.
 	return nil
 }
 
@@ -7192,6 +7197,7 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.codigo = nil
 	e.lineas = nil
 	e.parches = nil
+	e.parches4 = nil
 	e.etiquetas = nil
 	e.siguienteEtiqueta = 0
 	e.quiebres = nil
@@ -7209,6 +7215,9 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 // dependen de los anchos definitivos de los saltos.
 func (e *emisor) codeAttr() ([]byte, error) {
 	e.encadenaGotos()
+	if err := e.resuelveSaltos(); err != nil {
+		return nil, err
+	}
 	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc, e.excepciones)
 	if err != nil {
 		return nil, err
