@@ -73,6 +73,12 @@ type classFull struct {
 	// pool entries, so the pool belongs with the class it came from; it is not part of what
 	// the shape of the class means.
 	p *pool
+
+	// huella es el SHA-1 de los bytes del fichero `.class` del que salió esta clase, y vacío
+	// (todo ceros) en las sintéticas que añade la expansión de lambdas, que no tienen fichero
+	// detrás. Es la clave con la que el dexado por clase (I4, dexreuso.go) decide si el
+	// `code_item` que guardó de esta clase sigue siendo el que el traductor escribiría.
+	huella [20]byte
 }
 
 // classEnclosing: el contenido del atributo EnclosingMethod. Nombre y descriptor vienen vacios

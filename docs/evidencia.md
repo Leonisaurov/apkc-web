@@ -9619,3 +9619,51 @@ commit.
 sondas eran pruebas temporales y no viven en el árbol; lo permanente son las pruebas de reloj del
 bloque. (3) No hay medición en aparato: el reloj es lógico. (4) El sitio publicado no se ha
 empaquetado con `35d5f79`.
+
+## 200. I4: dexado por clase, sin cambiar un byte del `classes.dex`
+
+Medido el 2026-11-22 en el worktree `inc-i4-i5` sobre `banco/gen-proyecto-grande.py` (231 fuentes,
+244 clases, 1875 `code_item`, 195 844 bytes de dex). El ensamblado del dex tiene offsets absolutos
+—cambiar una instrucción de una clase mueve todo lo que va detrás—, así que lo que se guarda entre
+pasadas no es el fichero sino lo que **no nombra ningún offset**: el `code_item` de cada método
+(`debug_info_off` a cero, lo parchea el ensamblado) y su `debug_info_item`. Eso es el 41 % del
+tiempo de la etapa: con `-cpuprofile` sobre esas 244 clases, `areaCodigo` acumula 200 de 480
+muestras y `collectCode` 60.
+
+La validez de lo guardado es una sola condición, y es lo que hace que el fichero no pueda diferir:
+las cinco tablas ordenadas tienen que ser las mismas, porque cada operando traducido es un índice de
+`string_ids`, `type_ids`, `proto_ids`, `field_ids` o `method_ids`. `huellaTablas` las resume en un
+SHA-1; si no coincide, la caché se tira y la vuelta es un dexado completo. La clave de cada método
+es el SHA-1 del fichero `.class` de su clase más su nombre y descriptor: cualquier cambio de la
+clase re-traduce todos sus métodos, y las clases sintéticas de las lambdas (sin fichero detrás)
+quedan fuera.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 128M -- go test -count=1 \
+  -run 'TestDexadoPorClaseReutilizaYNoCambiaUnByte' -v .
+# y el criterio del plan, sobre el proyecto grande, reproducible desde el repo:
+REPETICIONES=1 APKC=… sh banco/incremental.sh   # imprime «dex por clase: … identicos»
+```
+
+**Resultado.** Las tres vueltas de la prueba `PASS` (`ok github.com/ajinasokan/apkc 0.052s`): el
+frío no reutiliza nada y deja la caché, la edición de un cuerpo con las tablas iguales reutiliza 6
+de 9 `code_item` y su dex es `bytes.Equal` al de un dexado desde cero, y una clase nueva que mueve
+las tablas no reutiliza nada y también sale idéntica.
+
+Sobre el proyecto grande (`banco/incremental.sh`, una repetición):
+
+| vuelta | `code_item` reutilizados | `dex go` | `cmp` contra el dexado completo |
+| --- | --- | --- | --- |
+| frío (sin caché) | 0 de 1875 | 100 ms | — |
+| caliente tras editar `Mod037.java` | 1866 de 1875 | 45 ms | idéntico (`cmp` mudo) |
+| completo del mismo árbol (`apkc clean` y build) | 0 de 1875 | 100 ms | referencia |
+
+El build entero pasó de 581 a 508 ms en esa tanda, y el apk sigue igual entrada por entrada (80
+entradas, 0 con bytes distintos) con `apksigner verify` y `zipalign -c -p 4` correctos.
+
+**Fronteras de este `§`.** (1) No se corrió el gate, chromium, `prueba-pestana.js` ni la suite wasm:
+la cifra es nativa. (2) La prueba de identidad es la del repo; el `cmp` sobre el proyecto grande
+salió de `banco/incremental.sh` con un `TRABAJO` propio. (3) Lo que queda por recortar en la etapa
+—`leeClases` 11 ms, `collectClasses` 13 ms y el ensamblado de las áreas globales— no se tocó: I5 es
+el índice del `android.jar` entre pasadas y ataca a la compilación, no al dex.

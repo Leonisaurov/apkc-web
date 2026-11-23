@@ -47,6 +47,11 @@ type dexTables struct {
 	protoIdx  map[protoKey]int
 	fieldIdx  map[fieldKey]int
 	methodIdx map[methodKey]int
+
+	// cache es la del dexado por clase (I4): nil cuando la etapa corre sin ella, como en `apkc dex`.
+	// La pone dexDeClasesConCache después de ordenar las tablas, que es cuando ya se puede saber si
+	// lo guardado sigue valiendo.
+	cache *cacheDex
 }
 
 func newDexTables() *dexTables {

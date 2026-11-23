@@ -220,7 +220,7 @@ func (td *dexTables) armaDex(clases []classFull) ([]byte, error) {
 	cuantos := map[dexKind]uint32{
 		0x0001: uint32(len(td.strings)), 0x0002: uint32(len(td.types)), 0x0003: uint32(len(td.protos)),
 		0x0004: uint32(len(td.fields)), 0x0005: uint32(len(td.methods)), 0x0006: uint32(len(clases)),
-		0x2001: uint32(len(cuerpos)), 0x2003: uint32(cuantasDepuracion), 0x1001: uint32(cuantasListas),
+		0x2001: uint32(len(relCodigo)), 0x2003: uint32(cuantasDepuracion), 0x1001: uint32(cuantasListas),
 		0x2002: uint32(len(td.strings)), 0x2004: uint32(plan.nItems), 0x1003: uint32(plan.nSets),
 		0x2006: uint32(plan.nDirs),
 		0x2000: uint32(len(clases)), tipoArrayCodificado: uint32(cuantosArrays),
@@ -383,10 +383,6 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[3]string]uint3
 			if !m.HasCode {
 				continue
 			}
-			ci, donde, err := td.codeItemConPc(cf, m)
-			if err != nil {
-				return nil, nil, nil, nil, fmt.Errorf("%s%s: %w", cf.Name, m.Name, err)
-			}
 			for uint32(len(buf))%4 != 0 {
 				buf = append(buf, 0)
 			}
@@ -395,6 +391,24 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[3]string]uint3
 			// al mismo cuerpo (medido en `Ver` con `Ver()` y `Ver(int)` del parrafo 91).
 			clave := [3]string{cf.Name, m.Name, m.Desc}
 			rels[clave] = uint32(len(buf))
+			// El dexado por clase reutiliza el `code_item` de los métodos que no cambiaron: se
+			// escribe el blob guardado en vez de volver a traducir las instrucciones. El relleno de
+			// alineación de arriba no entra en el blob porque depende de dónde cae el item, y eso
+			// lo decide esta vuelta, no la anterior.
+			if td.cache != nil {
+				td.cache.total++
+				if reuso, claveOk := claveMetodo(cf, m); claveOk {
+					if blob, ok := td.cache.reusaCodigo(reuso); ok {
+						buf = append(buf, blob...)
+						continue
+					}
+				}
+			}
+			ci, donde, err := td.codeItemConPc(cf, m)
+			if err != nil {
+				return nil, nil, nil, nil, fmt.Errorf("%s%s: %w", cf.Name, m.Name, err)
+			}
+			ini := len(buf)
 			pcs[clave] = donde
 			buf = putU16(buf, uint16(ci.registersSize))
 			buf = putU16(buf, uint16(ci.insSize))
@@ -419,6 +433,11 @@ func (td *dexTables) areaCodigo(clases []classFull) ([]byte, map[[3]string]uint3
 				buf = append(buf, ci.handlers...)
 			}
 			cuerpos[clave] = ci.insns
+			if td.cache != nil {
+				if reuso, claveOk := claveMetodo(cf, m); claveOk {
+					td.cache.guardaCodigo(reuso, append([]byte(nil), buf[ini:]...))
+				}
+			}
 		}
 	}
 	for uint32(len(buf))%4 != 0 {

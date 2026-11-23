@@ -227,6 +227,9 @@ func classRosterSHA() string {
 
 // dexarClasesEnGo es la etapa que sustituye a d8 sobre las clases del proyecto: las lee de build/classes
 // con el lector de la Fase 2 y escribe build/classes.dex, el sitio de donde lo toma el empaquetado.
+// Desde I4 (dexreuso.go) la vuelta se lleva la caché de la anterior y reutiliza el code_item y el
+// debug_info_item de las clases cuyo fichero `.class` no cambió, siempre que las tablas del dex
+// sigan siendo las mismas; el fichero que sale es idéntico byte a byte al de un dexado completo.
 func dexarClasesEnGo() {
 	defer timeIt("dex go")()
 	clases, err := leeClases([]string{filepath.Join("build", "classes")})
@@ -236,7 +239,8 @@ func dexarClasesEnGo() {
 	if len(clases) == 0 {
 		return
 	}
-	dex, err := dexDeClases(clases)
+	cache := cargaCacheDex()
+	dex, err := dexDeClasesConCache(clases, cache)
 	if err != nil {
 		LogF("build", err.Error())
 	}
@@ -244,5 +248,15 @@ func dexarClasesEnGo() {
 	if err := os.WriteFile(ruta, dex, 0644); err != nil {
 		LogF("build", err.Error())
 	}
+	cache.guarda()
+	ultimoDexReuso = cache.resumen()
+	if r := ultimoDexReuso; r.total > 0 {
+		LogI("build", r.reutilizados, "de", r.total, "code_item reutilizados de", cacheDexFichero)
+	}
 	LogI("build", len(clases), "clases ->", len(dex), "bytes en", ruta)
 }
+
+// ultimoDexReuso es lo que la última llamada a dexarClasesEnGo reutilizó: la prueba del dexado por
+// clase lo mira para saber que hubo reutilización de verdad y no un dexado completo que casualmente
+// da los mismos bytes.
+var ultimoDexReuso resumenCacheDex

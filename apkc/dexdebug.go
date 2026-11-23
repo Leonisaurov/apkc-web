@@ -158,7 +158,26 @@ func (td *dexTables) areaDebug(clases []classFull, pcs map[[3]string]map[int]int
 				continue
 			}
 			clave := [3]string{cf.Name, m.Name, m.Desc}
-			item := td.itemDebug(m, pcs[clave], cuerpos[clave])
+			// con el dexado por clase, el item de un método cuyo cuerpo se reutilizó también está
+			// guardado: armarlo otra vez pediría la correspondencia pc JVM -> unidad dalvik, que es
+			// justo lo que la traducción del cuerpo produjo. Los items se guardan vacíos cuando el
+			// método no trae líneas, y eso es distinto de no tenerlos.
+			var item []byte
+			cacheado := false
+			if td.cache != nil {
+				if k, ok := claveMetodo(cf, m); ok {
+					cacheado = true
+					if guardado, ok := td.cache.reusaDepuracion(k); ok {
+						item = guardado
+					} else {
+						item = td.itemDebug(m, pcs[clave], cuerpos[clave])
+						td.cache.guardaDepuracion(k, append([]byte(nil), item...))
+					}
+				}
+			}
+			if !cacheado {
+				item = td.itemDebug(m, pcs[clave], cuerpos[clave])
+			}
 			if len(item) == 0 {
 				continue
 			}

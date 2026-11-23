@@ -99,6 +99,20 @@ for modo in plain inc; do
 	echo "  $modo: ${mediana} ms"
 done
 
+# I4: el dex de la vuelta caliente tiene que ser el mismo fichero, byte a byte, que el de un dexado
+# completo del mismo arbol. Se guarda el de la ultima vuelta caliente del modo inc y se compara
+# contra un build desde cero de ese mismo arbol: si difiere, el ahorro es un cambio de comportamiento
+# y no vale nada (criterio de abandono de I4 en docs/plan-incremental-web.md).
+cp "$TRABAJO/proj-inc/build/classes.dex" "$TRABAJO/dex-caliente.dex"
+( cd "$TRABAJO/proj-inc" && "$APKC" clean ) >/dev/null 2>&1 || true
+construir "$TRABAJO/proj-inc" "--inc" "dex-completo"
+if cmp "$TRABAJO/dex-caliente.dex" "$TRABAJO/proj-inc/build/classes.dex"; then
+	echo "dex por clase: la vuelta caliente y el dexado completo son identicos"
+else
+	echo "dex por clase: DIFIEREN" >&2
+	exit 1
+fi
+
 # La comparacion que hace util el numero: si los apks no son iguales entrada por entrada, el ahorro
 # es un cambio de comportamiento y no vale nada.
 python3 - "$TRABAJO/apk-r$REPETICIONES-plain.apk" "$TRABAJO/apk-r$REPETICIONES-inc.apk" <<'PY'

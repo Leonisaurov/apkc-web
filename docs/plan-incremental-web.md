@@ -1,7 +1,8 @@
 # Plan de incremental para el modo web (`build --linker go --compiler go`)
 
-**Estado: I1 e I2 hechas; I3 cerrada en `d3803bb` tras el APROBAR del crítico; I4 e I5
-pendientes.** `--inc` está activo en la pestaña y el ahorro se midió en chromium/OPFS; el cuello que
+**Estado: I1 e I2 hechas; I3 cerrada en `d3803bb` tras el APROBAR del crítico; I4 hecha en el
+camino nativo (dex idéntico y `dex go` 100 → 45 ms), con el gate pendiente; I5 pendiente.** `--inc`
+está activo en la pestaña y el ahorro se midió en chromium/OPFS; el cuello que
 queda está en compilar y dexar. Este fichero es un plan con mediciones: cada cifra lleva el comando
 que la reproduce (regla 1 del `AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y
 no se usa para decidir.
@@ -18,7 +19,7 @@ propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `
 | I2, medir en chromium y OPFS | **hecha** | el mismo gate; las cifras salen del test `12c` de `studio/prueba-pestana.js` | con `--inc` solo: 1831 ms en frío → 1034 ms en caliente (−44 %); con I3: 1458 → 152 ms (−90 %; otras tandas 1539 → 166, 1357 → 201 y 1877 → 138). El criterio era ≥15 % |
 | I3, reutilizar las clases emitidas por hash | **cerrada en `d3803bb` (APROBAR del crítico)** | gate + `go test -count=1 ./...` con `APKC_ANDROID_JAR=…` | `compile go` 390 ms → 0 y `dex go` 106 → 0 en wasm (criterio: ≥30 %), dex idéntico; en nativo el atajo se paga en parte por el estado más grande (véase I3) |
 | I3, caché de AST por fuente dentro del proceso | **descartada por estructura** | `studio/hospedador.js:240` | cada comando de la página arranca una instancia nueva de Go: ninguna caché en memoria cruza dos builds |
-| I4, dexado por clase | pendiente | `cmp build/classes.dex` entre completo e incremental | — |
+| I4, dexado por clase | **hecha en nativo, gate pendiente** | `sh banco/incremental.sh` (bloque «dex por clase») y `go test -count=1 -run TestDexadoPorClaseReutilizaYNoCambiaUnByte .` | `cmp` mudo entre la vuelta caliente y el dexado completo del mismo árbol; `dex go` 100 → 45 ms con 244 clases y 1875 `code_item` (1866 reutilizados tras editar un fuente); el dex no cambia ni un byte |
 | I5, índice del `android.jar` entre pasadas | pendiente | el test del shim sobre el proyecto mínimo | — |
 
 
@@ -417,9 +418,18 @@ analogía.
   porque cada comando arranca una instancia nueva de Go (`studio/hospedador.js:240`); lo que queda
   es emitir solo fuentes cambiados. El crítico `ses_df9baefaeffemtyU4YC0gXywOR` dio **APROBAR** sin
   hallazgos `CONFIRMADO`; la pregunta abierta del classpath se adscribe a I5, pendiente.
-- **I4, dexado por clase (H2). PENDIENTE.** `cmp build/classes.dex` entre completo e incremental;
-  abandono si el dex difiere.
-  no idéntico (el layout de ART no se negocia).
+- **I4, dexado por clase (H2). HECHA EN NATIVO, GATE PENDIENTE.** `cmp build/classes.dex` entre el
+  dexado completo y el de la vuelta que reutiliza: **idéntico** (§200 de `docs/evidencia.md`). El
+  ensamblado tiene offsets absolutos, así que no se parchea el fichero anterior: se guarda por método
+  lo que no nombra ningún offset —el `code_item` y el `debug_info_item`— en `build/dexcache.bin`, y
+  solo vale mientras las cinco tablas ordenadas sean las mismas (`huellaTablas`); si entra una cadena
+  o un método, la caché se tira y la vuelta cuesta lo de siempre. La clave es el SHA-1 del `.class`
+  entero, de modo que cualquier cambio de la clase re-traduce todos sus métodos. Medido: `dex go`
+  100 → 45 ms, 1875 `code_item`, 1866 reutilizados al editar un fuente. Prueba:
+  `TestDexadoPorClaseReutilizaYNoCambiaUnByte` (las tres vueltas: frío, edición con tablas iguales y
+  clase nueva que las mueve). Lo que aún se paga en esta etapa —`leeClases` 11 ms,
+  `collectClasses` 13 ms y el ensamblado de las áreas globales— no es I5: I5 es el índice del
+  `android.jar` entre pasadas, que ataca a la compilación, no al dex.
 - **I5, índice del `android.jar` entre pasadas (H3).** Comando: el test del shim sobre el proyecto
   mínimo, con y sin caché. Aceptación: ≥100 ms menos en wasm. Abandono: <50 ms.
 

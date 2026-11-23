@@ -15,6 +15,7 @@ package main
 // nombre.
 
 import (
+	"crypto/sha1"
 	"flag"
 	"fmt"
 	"os"
@@ -80,6 +81,12 @@ name, not a half-written dex.
 // sale es el fichero. En dos líneas para que la página la pueda llamar sin reproducir el orden de
 // internar, ordenar y ensamblar.
 func dexDeClases(clases []classFull) ([]byte, error) {
+	return dexDeClasesConCache(clases, nil)
+}
+
+// dexDeClasesConCache es lo mismo con la caché del dexado por clase (I4, dexreuso.go). Con `c` a
+// nil —`apkc dex` y las pruebas de la etapa— se traduce todo, que es el camino de referencia.
+func dexDeClasesConCache(clases []classFull, c *cacheDex) ([]byte, error) {
 	clases, err := expandirLambdas(clases)
 	if err != nil {
 		return nil, err
@@ -89,6 +96,12 @@ func dexDeClases(clases []classFull) ([]byte, error) {
 		return nil, err
 	}
 	td.orderTables()
+	if c != nil {
+		// la caché se cierra contra las tablas ya ordenadas: hasta aquí no se sabe si los índices
+		// que guarda la vuelta anterior siguen nombrando lo mismo
+		c.activa(td)
+		td.cache = c
+	}
 	return td.armaDex(clases)
 }
 
@@ -148,6 +161,7 @@ func leeClases(raices []string) ([]classFull, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", e.ruta, err)
 		}
+		cf.huella = sha1.Sum(e.datos)
 		out = append(out, cf)
 	}
 	return out, nil
