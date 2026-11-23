@@ -35,7 +35,7 @@ Cada clase se dexó en su propia invocación de `apkc dex`: el conteo de clases 
 Comando del oráculo:
 
 ```sh
-/home/leonisauro/opt/android-sdk/build-tools/36.0.0/d8 --min-api 21 --lib /home/leonisauro/opt/android-sdk/platforms/android-34/android.jar --output /home/leonisauro/.cache/apkc-web/inventario-jar/trabajo-rwefanvf/d8 /home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar
+/home/leonisauro/opt/android-sdk/build-tools/36.0.0/d8 --min-api 21 --lib /home/leonisauro/opt/android-sdk/platforms/android-34/android.jar --output /home/leonisauro/.cache/apkc-web/inventario-jar/trabajo-f603e4ac3529/d8 /home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar
 ```
 
 d8 dexa el jar completo con rc 0: `classes.dex` de 563612 bytes.

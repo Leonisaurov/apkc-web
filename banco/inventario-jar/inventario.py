@@ -18,12 +18,12 @@ import argparse
 import contextlib
 import hashlib
 import io
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import zipfile
 from collections import OrderedDict
 from pathlib import Path
@@ -71,12 +71,14 @@ def huella_de_apkc(directorio=None):
     return h.hexdigest()
 
 
-def construir_apkc(ruta, directorio=APKC_DIR):
+def construir_apkc(ruta, directorio=APKC_DIR, destino=None):
     """Devuelve el binario de apkc: el que se le pase, el del entorno o uno construido en caché.
 
     Un `--apkc` o un `APKC=...` externos se usan tal cual, sin reconstruir: quien los pasa sabe qué
     binario quiere. El de caché se reconstruye cuando la huella de contenido de `apkc/` no es la que
     se guardó al construirlo; con solo `destino.exists()` se medía con el dexer de otro commit.
+    `directorio` y `destino` existen para la falsificación: así compila una copia en un temporal y
+    nunca escribe en el árbol versionado.
     """
     if ruta:
         return str(Path(ruta))
@@ -84,8 +86,8 @@ def construir_apkc(ruta, directorio=APKC_DIR):
     if del_entorno:
         return del_entorno
     directorio = Path(directorio)
-    destino = CACHE / "apkc"
-    marca = CACHE / "apkc.huella"
+    destino = Path(destino) if destino else CACHE / "apkc"
+    marca = Path(str(destino) + ".huella")
     actual = huella_de_apkc(directorio)
     if destino.exists() and marca.exists() and marca.read_text(encoding="utf-8").strip() == actual:
         return str(destino)
@@ -492,25 +494,64 @@ def romper_primera_code(datos):
     return bytes(copia)
 
 
-def decide_construir(ruta="", directorio=None):
+def decide_construir(ruta="", directorio=None, destino=None):
     """Llama a `construir_apkc` y dice si decidió reconstruir, capturando su aviso de stderr."""
     buf = io.StringIO()
     with contextlib.redirect_stderr(buf):
-        binario = construir_apkc(ruta, directorio) if directorio else construir_apkc(ruta)
+        if directorio is not None:
+            binario = construir_apkc(ruta, directorio, destino)
+        else:
+            binario = construir_apkc(ruta)
     return binario, "construyendo apkc" in buf.getvalue()
 
 
-def comprobar_reconstruccion(trabajo):
-    """Cambia un `.go` de apkc/ y exige reconstrucción; restaura y exige que sin cambios no haya.
+def copia_de_apkc(destino):
+    """Copia el código que `go build` lee de `apkc/`, sin `.go` de pruebas ni artefactos."""
 
-    Se toca `apkc/create.go`, que no es el fichero que editan los agentes del dexer, y se restaura
-    en un `finally`. La huella es de contenido: un comentario cambia los bytes y obliga a compilar;
-    volver al contenido original obliga una vez, y la siguiente ejecución ya no compila.
+    def ignorar(directorio, nombres):
+        fuera = set()
+        for nombre in nombres:
+            ruta = Path(directorio) / nombre
+            if ruta.is_dir() and nombre in (".git", "build", "classes", "bin"):
+                fuera.add(nombre)
+            elif ruta.is_file() and (nombre.endswith("_test.go") or nombre == "apkc"):
+                fuera.add(nombre)
+        return fuera
+
+    if destino.exists():
+        shutil.rmtree(destino)
+    shutil.copytree(APKC_DIR, destino, ignore=ignorar)
+    return destino
+
+
+def apkc_versionado_limpio():
+    """Dice si `git status --porcelain apkc/` está vacío y devuelve su salida literal."""
+    r = subprocess.run(["git", "status", "--porcelain", "apkc/"], cwd=RAIZ,
+                       capture_output=True, text=True)
+    return r.returncode == 0 and not r.stdout.strip(), r.stdout.strip()
+
+
+def comprobar_reconstruccion(trabajo):
+    """Cambia un `.go` de una COPIA de apkc/ y exige reconstrucción; no toca el árbol versionado.
+
+    La sonda compila una copia en el directorio de trabajo con su propio binario y su propia
+    huella. En cada paso se exige que `git status --porcelain apkc/` siga vacío: si alguien vuelve
+    a mutar el árbol real, la falsificación lo dice en vez de depender de un `finally`.
     """
     fallos = []
-    archivo = APKC_DIR / "create.go"
-    original = archivo.read_bytes()
     lineas = ["", "## Reconstrucción por huella", ""]
+    copia = copia_de_apkc(trabajo / "apkc-copia")
+    archivo = copia / "create.go"
+    original = archivo.read_bytes()
+    binario_copia = trabajo / "apkc-copia-bin"
+
+    def limpio(momento):
+        ok, salida = apkc_versionado_limpio()
+        if not ok:
+            fallos.append(f"`git status --porcelain apkc/` no está vacío {momento}: {salida}")
+        return ok
+
+    limpio("antes de la copia")
 
     # un binario externo, por --apkc o por APKC, se usa tal cual y no se reconstruye
     externo = str(trabajo / "apkc-externo")
@@ -534,40 +575,101 @@ def comprobar_reconstruccion(trabajo):
         lineas.append("- `APKC=...` externo: se usa sin reconstruir.")
 
     modificado = original + b"\n// huella: prueba de reconstruccion del inventario\n"
-    # deja la caché al día con el código de este HEAD antes de medir la decisión
-    decide_construir()
+
+    def construir_copia():
+        return decide_construir(directorio=copia, destino=binario_copia)
+
+    # primera compilación de la copia: deja su caché al día antes de medir la decisión
+    construir_copia()
+    limpio("tras la primera compilación de la copia")
     try:
-        _, sin_cambio = decide_construir()
+        _, sin_cambio = construir_copia()
         if sin_cambio:
             fallos.append("reconstruyó sin que cambiara ningún .go")
         else:
             lineas.append("- Sin cambios: no reconstruye.")
+        limpio("sin cambios")
 
-        # un cambio real de contenido: un comentario al final, que no altera el código compilado
+        # un cambio real de contenido en la copia: un comentario que no altera el código compilado
         archivo.write_bytes(modificado)
-        _, con_cambio = decide_construir()
+        limpio("con la copia cambiada")
+        _, con_cambio = construir_copia()
         if not con_cambio:
             fallos.append("no reconstruyó tras cambiar el contenido de create.go")
         else:
             lineas.append("- Con un `.go` cambiado: reconstruye.")
+        limpio("tras cambiar la copia")
 
         archivo.write_bytes(original)
-        _, al_restaurar = decide_construir()
+        _, al_restaurar = construir_copia()
         if not al_restaurar:
             fallos.append("no reconstruyó al restaurar el .go original")
         else:
             lineas.append("- Al restaurar el `.go` original: reconstruye una vez.")
-        _, tras_restaurar = decide_construir()
+        _, tras_restaurar = construir_copia()
         if tras_restaurar:
             fallos.append("reconstruyó otra vez sin cambios tras restaurar")
         else:
             lineas.append("- Después de restaurar, sin cambios: no reconstruye.")
+        limpio("al terminar")
     finally:
-        # solo se restaura si el fichero sigue exactamente como lo dejó la sonda
+        # la copia es desechable, pero se deja como estaba por si otra sonda la reutiliza
         if archivo.read_bytes() == modificado:
             archivo.write_bytes(original)
+    if not fallos:
+        lineas.append("- `git status --porcelain apkc/` vacío durante toda la comprobación: la "
+                      "sonda no escribe en el árbol versionado.")
     lineas.append("")
     lineas.append("Veredicto de la reconstrucción: " + ("PASA" if not fallos else "FALLA"))
+    for f in fallos:
+        lineas.append(f"- {f}")
+    return lineas, 0 if not fallos else 1
+
+
+def comprobar_reproducibilidad(apkc, jar):
+    """Cuarto caso: dos ejecuciones seguidas del mismo jar dejan los mismos bytes.
+
+    Se comparan el markdown y el JSON, no los ficheros de disco, para que la prueba no dependa del
+    estado del repo; el `git status` limpio se comprueba al regenerar la evidencia de verdad. Lo que
+    se persigue es que no quede ninguna ruta aleatoria en el informe.
+    """
+    fallos = []
+    lineas = ["", "## Cuarto caso: informe reproducible", ""]
+    if not jar.exists():
+        return lineas + ["- Falta el jar del fixture; no se pudo medir."], 1
+
+    first = None
+    for vuelta in (1, 2):
+        trabajo = directorio_de_trabajo(jar)
+        informe, detalle = genera_informe(apkc, jar, trabajo, ANDROID_JAR_POR_DEFECTO, False)
+        actual = (informe, detalle)
+        if first is None:
+            first = actual
+        elif actual != first:
+            fallos.append(f"la vuelta {vuelta} no dio los mismos bytes que la primera")
+
+    informe, detalle = first
+    sha_informe = hashlib.sha256(informe.encode()).hexdigest()
+    sha_detalle = hashlib.sha256(detalle.encode()).hexdigest()
+    lineas.append(f"- Dos ejecuciones seguidas del mismo jar: `informe.md` idéntico "
+                  f"(sha256 `{sha_informe[:16]}…`).")
+    lineas.append(f"- `casos.json` idéntico (sha256 `{sha_detalle[:16]}…`).")
+
+    esperado = f"trabajo-{hashlib.sha256(jar.read_bytes()).hexdigest()[:12]}"
+    vistos = set(re.findall(r"trabajo-[A-Za-z0-9_]+", informe))
+    # el jar del fixture vive dentro del directorio de trabajo del jar real: los dos nombres son
+    # huellas de 12 hex. Lo que no puede quedar es un sufijo aleatorio de `mkdtemp`.
+    aleatorios = [visto for visto in vistos if not re.fullmatch(r"trabajo-[0-9a-f]{12}", visto)]
+    if aleatorios:
+        fallos.append(f"el informe nombra directorios de trabajo no derivados de una huella: "
+                      f"{sorted(aleatorios)}")
+    elif f"{esperado}/d8" not in informe:
+        fallos.append(f"el comando del oráculo no usa {esperado}/d8")
+    else:
+        lineas.append(f"- El oráculo usa `{esperado}/d8`, derivado del jar, no un directorio "
+                      "aleatorio.")
+    lineas.append("")
+    lineas.append("Veredicto de la reproducibilidad: " + ("PASA" if not fallos else "FALLA"))
     for f in fallos:
         lineas.append(f"- {f}")
     return lineas, 0 if not fallos else 1
@@ -640,41 +742,35 @@ def comprobar_falsificacion(apkc, trabajo):
 
     lineas_recon, rc_recon = comprobar_reconstruccion(trabajo)
     lineas.extend(lineas_recon)
-    return lineas, 0 if (not fallos and rc_recon == 0) else 1
+    lineas_repro, rc_repro = comprobar_reproducibilidad(apkc, trabajo / "fixture-sana.jar")
+    lineas.extend(lineas_repro)
+    return lineas, 0 if (not fallos and rc_recon == 0 and rc_repro == 0) else 1
 
 
-def main():
-    p = argparse.ArgumentParser(description="Inventario de límites del dexer sobre un jar real")
-    p.add_argument("--jar", default=str(JAR_POR_DEFECTO))
-    p.add_argument("--apkc", default="")
-    p.add_argument("--salida", default=str(RAIZ / "banco" / "inventario-jar" / "informe.md"))
-    p.add_argument("--android-jar", default=str(ANDROID_JAR_POR_DEFECTO))
-    p.add_argument("--sin-oraculo", action="store_true")
-    p.add_argument("--falsificar", action="store_true")
-    p.add_argument("--limite", type=int, default=None, help="mide solo las N primeras clases")
-    args = p.parse_args()
+def directorio_de_trabajo(jar):
+    """Directorio de trabajo estable, derivado del SHA-256 del jar.
 
-    jar = Path(args.jar)
-    if not jar.exists():
-        print(f"[inventario] no existe el jar {jar}", file=sys.stderr)
-        return 2
-    apkc = construir_apkc(args.apkc)
-    CACHE.mkdir(parents=True, exist_ok=True)
-    trabajo = Path(tempfile.mkdtemp(prefix="trabajo-", dir=str(CACHE)))
-    # tempfile ya creó el directorio; los jars y clases van debajo
-    print(f"[inventario] temporales en {trabajo}", file=sys.stderr)
+    No se usa un `mkdtemp`: el comando del oráculo se publica en el informe y un sufijo aleatorio
+    hacía que cada ejecución reescribiera la evidencia con una ruta distinta. La huella del jar
+    fija el nombre (`trabajo-<12 hex>`), el directorio se vacía al empezar y es solo un taller: lo
+    que se versiona es el informe, no lo que queda dentro.
+    """
+    huella = hashlib.sha256(Path(jar).read_bytes()).hexdigest()[:12]
+    trabajo = CACHE / f"trabajo-{huella}"
+    if trabajo.exists():
+        shutil.rmtree(trabajo)
+    trabajo.mkdir(parents=True, exist_ok=True)
+    return trabajo
 
-    if args.falsificar:
-        lineas, rc = comprobar_falsificacion(apkc, trabajo)
-        destino = Path(args.salida).parent / "falsificacion.md"
-        destino.parent.mkdir(parents=True, exist_ok=True)
-        destino.write_text("\n".join(lineas) + "\n")
-        print("\n".join(lineas))
-        print(f"[inventario] escrito {destino}", file=sys.stderr)
-        return rc
 
+def genera_informe(apkc, jar, trabajo, android_jar, sin_oraculo, limite=None):
+    """Mide el jar y devuelve (informe markdown, detalle JSON) sin escribir nada.
+
+    Es la misma ruta que usa el comando: la llaman `main` y la prueba de reproducibilidad, así que
+    dos ejecuciones seguidas con el mismo jar y el mismo dexer tienen que dar los mismos bytes.
+    """
     rutas = extraer_clases(jar, trabajo / "clases")
-    inv = mide(apkc, rutas, trabajo / "out.dex", args.limite)
+    inv = mide(apkc, rutas, trabajo / "out.dex", limite)
 
     # el fallo literal del comando completo: `apkc dex` sobre todas las clases de golpe
     _rc, texto_completo = dexa(apkc, trabajo / "clases", trabajo / "out.dex")
@@ -718,7 +814,7 @@ def main():
         lineas.append("")
         lineas.append(tabla_opcodes(inv))
         lineas.append("")
-    if not args.sin_oraculo:
+    if not sin_oraculo:
         lineas.append("#### Oráculo d8/dexdump")
         lineas.append("")
         muestras = []
@@ -727,24 +823,57 @@ def main():
             primero = grupo["casos"][0]
             if primero.get("clase") and primero.get("metodo"):
                 muestras.append((tipo, primero["clase"], primero["metodo"]))
-        lineas.append(oraculo_d8(jar, trabajo, Path(args.android_jar), muestras))
+        lineas.append(oraculo_d8(jar, trabajo, Path(android_jar), muestras))
     lineas.append("Comando que lo reproduce:")
     lineas.append("")
     lineas.append("```sh")
     lineas.append("tcr -c 2 -m 1536M -r 256M -- python3 banco/inventario-jar/inventario.py")
     lineas.append("```")
     lineas.append("")
-    informe = "\n".join(lineas)
+
+    detalle = {tipo: [{k: caso.get(k) for k in ("clase", "metodo", "pc", "opcode", "motivo")}
+                      for caso in grupo["casos"]]
+               for tipo, grupo in inv["limites"].items()}
+    return "\n".join(lineas), json.dumps(detalle, indent=2, ensure_ascii=False) + "\n"
+
+
+def main():
+    p = argparse.ArgumentParser(description="Inventario de límites del dexer sobre un jar real")
+    p.add_argument("--jar", default=str(JAR_POR_DEFECTO))
+    p.add_argument("--apkc", default="")
+    p.add_argument("--salida", default=str(RAIZ / "banco" / "inventario-jar" / "informe.md"))
+    p.add_argument("--android-jar", default=str(ANDROID_JAR_POR_DEFECTO))
+    p.add_argument("--sin-oraculo", action="store_true")
+    p.add_argument("--falsificar", action="store_true")
+    p.add_argument("--limite", type=int, default=None, help="mide solo las N primeras clases")
+    args = p.parse_args()
+
+    jar = Path(args.jar)
+    if not jar.exists():
+        print(f"[inventario] no existe el jar {jar}", file=sys.stderr)
+        return 2
+    apkc = construir_apkc(args.apkc)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    trabajo = directorio_de_trabajo(jar)
+    print(f"[inventario] directorio de trabajo {trabajo}", file=sys.stderr)
+
+    if args.falsificar:
+        lineas, rc = comprobar_falsificacion(apkc, trabajo)
+        destino = Path(args.salida).parent / "falsificacion.md"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        destino.write_text("\n".join(lineas) + "\n")
+        print("\n".join(lineas))
+        print(f"[inventario] escrito {destino}", file=sys.stderr)
+        return rc
+
+    informe, detalle = genera_informe(apkc, jar, trabajo, args.android_jar,
+                                      args.sin_oraculo, args.limite)
 
     salida = Path(args.salida)
     salida.parent.mkdir(parents=True, exist_ok=True)
     salida.write_text(informe)
     # el detalle máquina-legible, para que cada agente ataque un límite sin volver a correr el jar
-    import json
-    detalle = {tipo: [{k: caso.get(k) for k in ("clase", "metodo", "pc", "opcode", "motivo")}
-                      for caso in grupo["casos"]]
-               for tipo, grupo in inv["limites"].items()}
-    (salida.parent / "casos.json").write_text(json.dumps(detalle, indent=2, ensure_ascii=False) + "\n")
+    (salida.parent / "casos.json").write_text(detalle)
     print(informe)
     print(f"[inventario] escrito {salida}", file=sys.stderr)
     return 0

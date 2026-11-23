@@ -15,5 +15,14 @@ Veredicto del contador: PASA
 - Con un `.go` cambiado: reconstruye.
 - Al restaurar el `.go` original: reconstruye una vez.
 - Después de restaurar, sin cambios: no reconstruye.
+- `git status --porcelain apkc/` vacío durante toda la comprobación: la sonda no escribe en el árbol versionado.
 
 Veredicto de la reconstrucción: PASA
+
+## Cuarto caso: informe reproducible
+
+- Dos ejecuciones seguidas del mismo jar: `informe.md` idéntico (sha256 `0140ab3b9ee9a2b0…`).
+- `casos.json` idéntico (sha256 `ca3d163bab055381…`).
+- El oráculo usa `trabajo-95e423499042/d8`, derivado del jar, no un directorio aleatorio.
+
+Veredicto de la reproducibilidad: PASA

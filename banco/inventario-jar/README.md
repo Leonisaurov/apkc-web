@@ -25,9 +25,12 @@ SHA-256 sobre los `.go` de `apkc/` sin `_test.go`, `go.mod`/`go.sum` y los fiche
 recompila antes de medir; si solo cambió el mtime o se cambió de rama sin cambiar bytes, se
 reutiliza. Con `--apkc` o `APKC=...` se usa el binario externo tal cual, sin reconstruir.
 
-`--falsificar` comprueba las dos cosas: cambia un `.go` de `apkc/` y exige reconstrucción, restaura
+`--falsificar` comprueba las dos cosas sobre una **copia** de `apkc/` en el directorio de trabajo
+(nunca escribe en el árbol versionado): cambia un `.go` de la copia y exige reconstrucción, restaura
 el contenido y exige una última reconstrucción, y una ejecución más sin cambios no debe compilar.
-La sonda restaura el fichero en un `finally` y no pisa una edición ajena.
+Durante toda la sonda se exige `git status --porcelain apkc/` vacío. El cuarto caso comprueba que
+dos ejecuciones seguidas del mismo jar dejan `informe.md` y `casos.json` byte a byte iguales y que
+el comando del oráculo usa un directorio derivado de la huella del jar, no uno aleatorio.
 
 ## Qué deja
 
