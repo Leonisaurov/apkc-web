@@ -10045,7 +10045,8 @@ historial, no estado vigente.
 
 **Fronteras de este `§`.** Siguen fuera de la medida: `invokedynamic`/`condy`; un método que pase de
 32 KB y pida `goto/32` (resuelto en `23033fe`, medido en el §226); el dex de la **app**, que aún no se
-reparte (§223); API < 21; y el `check` mono-fuente. No se corrió gate, chromium ni publicación: la
+repartía en este árbol (§223; repartido en `e05213b`, medido en el §228); API < 21; y el `check`
+mono-fuente (resuelto en `a4bf224`, medido en el §227). No se corrió gate, chromium ni publicación: la
 comprobación es la del inventario y la del guion de los oráculos.
 
 ## 226. Promoción a `goto/32` de las ramas largas
@@ -10101,3 +10102,36 @@ byte-idéntico, verificado con el binario anterior.
 que no parsea deja el informe sin verificar y con aviso; la latencia de leer N fuentes no se midió con
 techo; y el comportamiento en wasm/OPFS real no está verificado, porque no se corrió gate. Tampoco se
 tocó red ni publicación.
+
+## 228. El dex de la app también se reparte
+
+Medido el 2026-11-23 sobre `e05213b` (`feat(build): reparte también el dex de la app`). Hasta este
+commit `compilar.go` dexaba el proyecto con `dexDeClasesConCache`, en un solo fichero: un proyecto con
+más de 65 536 referencias de método propias no compilaba. Ahora `dexarAppEnGo` (`apkc/compilar.go:315`)
+llama a `dexDeClasesRepartidas` —la misma etapa que un bucket de dependencias— y escribe `classes.dex`,
+`classes2.dex`, … con una caché I4 por grupo y el mismo camino para las clases de `jar/` por debajo de
+API 21 (`apkc/compilar.go:304`). Los grupos se escriben de atrás adelante y un `classesN.dex` de una
+vuelta anterior que hoy no toca se borra (`apkc/compilar.go:335`).
+
+```sh
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestDexDeLaAppSeReparteYElViejoCaminoFalla' -v .   # en apkc/
+```
+
+**Falsificación.** El mismo conjunto —70 clases de 1000 métodos declarados y un llamador de la última
+(`apkc/multidex_app_test.go:58`)— dexado con la etapa vieja falla con `the method index does not fit a
+16-bit index`; con el reparto son 2 dex y el registro dice `71 clases -> 794788 bytes en 2 dex`.
+
+**Identidad de las apps pequeñas.** El dex del reparto y el de un solo fichero son **el mismo byte a
+byte**, no aparece `classes2.dex`, y el primer grupo sigue dejando `build/dexcache.bin` como antes.
+
+**Build real, por los oráculos.** Una app sintética de 70 clases por 1000 métodos deja `classes.dex` de
+**2 425 984 B** y `classes2.dex` de **200 724 B**; `apksigner` da rc 0 en v1, v2 y v3, `zipalign` rc 0 y
+`dexdump` rc 0, con `C69.m999` en el último dex.
+
+**Suite y wasm.** La suite completa da `ok … 76.211s` y el wasm compila.
+
+**Deudas.** Dos, ninguna medida como cerrada: los `build/dexcache-gN.bin` que sobran cuando el proyecto
+encoge **no se podan** —los borra `apkc clean`, que hace `os.RemoveAll("build")`
+(`apkc/build.go:470-472`)—; y el `.aab` multi-dex no está medido con `bundletool`.
+
+**Fronteras de este `§`.** No se corrió gate, chromium, red ni publicación.

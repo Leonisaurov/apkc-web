@@ -698,11 +698,13 @@ la pantalla principal.
 - **Kotlin** (el `apk` de kotlin que ve el gate sale del camino con JVM; en Go no hay frontend).
 - **`multianewarray`, `synchronized`/`monitorenter`/`monitorexit`, `assert`, y reflexión** — ninguna sonda;
   siguen rechazados por nombre.
-- **Más de 65 536 métodos (varios `classes.dex`)**: el reparto de **buckets de dependencias** ya está
+- **Más de 65 536 métodos (varios `classes.dex`)**: el reparto de **buckets de dependencias** está
   **hecho y medido en §223**: 700 clases y 70 000 métodos caben en 2 dex de dependencias (`classes2.dex` y
   `classes3.dex`), que junto al `classes.dex` de la app dan **tres dex en el apk**, y ninguno supera
-  65 536 `method_id` (firma v1/v2/v3 y `zipalign ok`). Lo que queda es el **dex de la app**, que sigue sin
-  repartirse (`compilar.go` llama `dexDeClasesConCache`); esa es la frontera real.
+  65 536 `method_id` (firma v1/v2/v3 y `zipalign ok`). El **dex de la app** también se reparte desde
+  `e05213b`, medido en §228: una app de 70 000 métodos sale en `classes.dex` + `classes2.dex`, las apps
+  pequeñas conservan su dex byte a byte y ningún dex pasa de 65 536 `method_id`. Lo que sigue abierto es
+  el **`.aab` multi-dex**, que no está medido con `bundletool`.
 - **`.aab` con `split` por densidad/idioma**: sigue siendo fase propia y abierta, no ítem de ésta.
 - **Interoperabilidad con Gradle**: no está en la ambición.
 - **`d8` como referencia para lo optimizado**: no imitaremos las reescrituras de `d8` (fusiones de cadena,
