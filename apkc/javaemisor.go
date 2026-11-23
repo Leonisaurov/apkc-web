@@ -662,6 +662,9 @@ func (ctx *contextoJava) registrarSentencia(s jstmt) {
 		if v.paso != nil {
 			ctx.registrarSentencia(v.paso)
 		}
+	case jporCada:
+		ctx.registrarExpresion(v.coleccion)
+		ctx.registrarSentencia(v.cuerpo)
 	case jhacer:
 		ctx.registrarSentencia(v.cuerpo)
 		ctx.registrarExpresion(v.cond)
@@ -798,6 +801,9 @@ func anonimasDe(c *jclas) []*jclas {
 			if v.paso != nil {
 				sent(v.paso)
 			}
+		case jporCada:
+			expr(v.coleccion)
+			sent(v.cuerpo)
 		case jhacer:
 			sent(v.cuerpo)
 			expr(v.cond)
@@ -5131,6 +5137,191 @@ func (e *emisor) para(v jpara) error {
 	return nil
 }
 
+// porCada: `for (T v : coleccion)`, el `for` con dos puntos. javac lo baja de dos maneras, las dos
+// medidas contra javac 17 `--release 8` en el §225:
+//
+//   - sobre un arreglo, copia el arreglo a un local sintético y su largo a otro, y cuenta con un
+//     índice: `astore arr$; aload arr$; arraylength; istore len$; iconst_0; istore i$` y después
+//     `iload i$; iload len$; if_icmpge fin`, con `aload arr$; iload i$; *aload; *store v` delante del
+//     cuerpo y `iinc i$, 1` al pie. El `iinc` lleva la línea del `for` y el `goto` la hereda.
+//   - sobre un `Iterable`, llama `iterator()` una vez y en cada vuelta `hasNext()`/`next()` con el
+//     `checkcast` del elemento. El `goto` de vuelta lleva la línea del cierre del cuerpo, no la del
+//     `for`, y no hay `checkcast` cuando el elemento declarado es `Object`.
+//
+// `continue` salta al `iinc` (camino del arreglo) o a la condición (camino del iterador, donde javac
+// pliega el paso vacío), y `break` al final: es la misma pila de contextos que el `for` clásico.
+func (e *emisor) porCada(v jporCada) error {
+	declarado, err := e.ctx.descriptorDe(v.tipo)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	e.marcaLinea(v.donde.linea)
+	dCol, err := e.exp(v.coleccion)
+	if err != nil {
+		return err
+	}
+	if len(dCol) > 0 && dCol[0] == '[' {
+		return e.porCadaArreglo(v, dCol, declarado)
+	}
+	return e.porCadaIterable(v, dCol, declarado)
+}
+
+// porCadaArreglo: la forma del arreglo, medida en el §225 sobre `String[]` e `int[]`. Los tres locales
+// sintéticos van en el orden de javac —arreglo, largo, índice— y la variable del `for` después; el
+// `iinc` del pie lleva la línea del `for`, que es lo que deja la LineNumberTable igual.
+func (e *emisor) porCadaArreglo(v jporCada, dCol, declarado string) error {
+	elem := dCol[1:]
+	if elem == "" {
+		return fmt.Errorf("linea %d: un arreglo sin tipo de elemento no esta medido", v.donde.linea)
+	}
+	if elem != declarado && !((elem[0] == 'L' || elem[0] == '[') && e.ctx.asignable(elem, declarado)) {
+		return fmt.Errorf("linea %d: el arreglo es %s y el elemento se declara %s", v.donde.linea, dCol, declarado)
+	}
+	arr := e.reserva("", dCol)
+	e.guardaDe(arr, dCol)
+	largo := e.reserva("", "I")
+	e.cargaDe(arr, dCol)
+	e.emite(0xbe) // arraylength
+	e.baja(1)
+	e.sube()
+	e.guardaDe(largo, "I")
+	indice := e.reserva("", "I")
+	e.cargaEntero(0)
+	e.guardaDe(indice, "I")
+	cabeza := e.nuevaEtiqueta()
+	fin := e.nuevaEtiqueta()
+	paso := e.nuevaEtiqueta()
+	e.cierra(cabeza)
+	e.cargaDe(indice, "I")
+	e.cargaDe(largo, "I")
+	e.saltoEmite(opIFICMPGE, fin, 2)
+	e.quiebres = append(e.quiebres, fin)
+	e.continuar = append(e.continuar, paso)
+	e.cargaDe(arr, dCol)
+	e.cargaDe(indice, "I")
+	if err := e.cargaDeArreglo(elem); err != nil {
+		e.quiebres = e.quiebres[:len(e.quiebres)-1]
+		e.continuar = e.continuar[:len(e.continuar)-1]
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	variable := e.reserva(v.nombre, declarado)
+	e.guardaDe(variable, declarado)
+	err := e.stm(v.cuerpo)
+	e.quiebres = e.quiebres[:len(e.quiebres)-1]
+	e.continuar = e.continuar[:len(e.continuar)-1]
+	if err != nil {
+		return err
+	}
+	e.cierra(paso)
+	e.marcaLinea(v.donde.linea)
+	if indice > 255 {
+		return fmt.Errorf("linea %d: el indice del `for` no cabe en el `iinc`", v.donde.linea)
+	}
+	e.emite(0x84, byte(indice), 1) // iinc
+	e.saltoEmite(opGOTO, cabeza, 0)
+	if err := e.resuelveAtras(cabeza); err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	e.cierra(fin)
+	return nil
+}
+
+// porCadaIterable: la forma del `Iterable`, medida en el §225 sobre `List<String>` y `ArrayList<Apk>`.
+// `iterator()` se resuelve contra el tipo estático de la colección, así que sale `invokeinterface` o
+// `invokevirtual` según sea; `hasNext`/`next` son de `java/util/Iterator` y siempre de interface. El
+// `checkcast` del elemento no se escribe cuando el tipo declarado es `Object`, y el `goto` de vuelta
+// lleva la línea del cierre del cuerpo.
+func (e *emisor) porCadaIterable(v jporCada, dCol, declarado string) error {
+	if len(dCol) == 0 || dCol[0] != 'L' {
+		return fmt.Errorf("linea %d: un `for` con dos puntos sobre %s no esta medido", v.donde.linea, dCol)
+	}
+	if len(declarado) == 0 || (declarado[0] != 'L' && declarado[0] != '[') {
+		return fmt.Errorf("linea %d: un `for` con dos puntos sobre un `Iterable` con elemento %s no esta medido", v.donde.linea, declarado)
+	}
+	receptor := dCol[1 : len(dCol)-1]
+	cand, err := e.ctx.buscarMetodo(receptor, "iterator", 0, nil)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	accesos, err := e.ctx.accesosDe(receptor)
+	if err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	opcode := byte(opInvokevirt)
+	if accesos&accInterface != 0 {
+		opcode = opInvointf
+	}
+	dIt := vueltaDe(cand.desc)
+	if dIt != "Ljava/util/Iterator;" {
+		return fmt.Errorf("linea %d: `iterator()` de %s devuelve %s y no un `Iterator`", v.donde.linea, receptor, dIt)
+	}
+	e.invoca(opcode, receptor, "iterator", cand.desc, 1)
+	it := e.reserva("", dIt)
+	e.guardaDe(it, dIt)
+	cabeza := e.nuevaEtiqueta()
+	fin := e.nuevaEtiqueta()
+	e.cierra(cabeza)
+	e.cargaDe(it, dIt)
+	e.invoca(opInvointf, "java/util/Iterator", "hasNext", "()Z", 1)
+	e.saltoEmite(opIFEQ, fin, 1)
+	e.quiebres = append(e.quiebres, fin)
+	e.continuar = append(e.continuar, cabeza)
+	e.cargaDe(it, dIt)
+	e.invoca(opInvointf, "java/util/Iterator", "next", "()Ljava/lang/Object;", 1)
+	if declarado != "Ljava/lang/Object;" {
+		interno := declarado
+		if declarado[0] == 'L' {
+			interno = declarado[1 : len(declarado)-1]
+			e.usar(interno)
+		}
+		idx := e.pool.clase(interno)
+		e.emite(opCheckcast, byte(idx>>8), byte(idx))
+	}
+	variable := e.reserva(v.nombre, declarado)
+	e.guardaDe(variable, declarado)
+	err = e.stm(v.cuerpo)
+	e.quiebres = e.quiebres[:len(e.quiebres)-1]
+	e.continuar = e.continuar[:len(e.continuar)-1]
+	if err != nil {
+		return err
+	}
+	e.marcaLinea(v.lineaCierre)
+	e.saltoEmite(opGOTO, cabeza, 0)
+	if err := e.resuelveAtras(cabeza); err != nil {
+		return fmt.Errorf("linea %d: %w", v.donde.linea, err)
+	}
+	e.cierra(fin)
+	return nil
+}
+
+// cargaDeArreglo: el `*aload` del elemento, con la cuenta de pila del §66. Es la tabla de `leeIndice`,
+// que no se toca para no mover lo ya medido.
+func (e *emisor) cargaDeArreglo(elem string) error {
+	switch elem[0] {
+	case 'I':
+		e.emite(0x2e)
+	case 'J':
+		e.emite(0x2f)
+	case 'F':
+		e.emite(0x30)
+	case 'D':
+		e.emite(0x31)
+	case 'C':
+		e.emite(0x34) // caload, medido en `Letras.lee` (parrafo 87)
+	case 'L', '[':
+		e.emite(0x32)
+	default:
+		return fmt.Errorf("un arreglo de %s no esta medido", elem)
+	}
+	e.baja(2)
+	if esAncho(elem) {
+		e.subeDos()
+	} else {
+		e.sube()
+	}
+	return nil
+}
+
 // hacer: `do { cuerpo } while (cond)`. La cabecera es la primera instrucción del cuerpo y la vuelta
 // lleva la condición **directa**: `if (cond)` salta a la cabecera, que es lo que escribe javac
 // (`if_icmplt 2`, medido en el parrafo 69). Como `condicionBranca` devuelve la forma invertida (la
@@ -5608,6 +5799,8 @@ func motivoPendiente(s jstmt, enBucle bool, bajoOtroTry bool, dentroDelFinally b
 	case jhacer:
 		apunta(motivoPendiente(v.cuerpo, true, bajoOtroTry, dentroDelFinally))
 	case jpara:
+		apunta(motivoPendiente(v.cuerpo, true, bajoOtroTry, dentroDelFinally))
+	case jporCada:
 		apunta(motivoPendiente(v.cuerpo, true, bajoOtroTry, dentroDelFinally))
 	case jswitch:
 		for _, c := range v.casos {
@@ -6356,6 +6549,8 @@ func (e *emisor) stm(s jstmt) error {
 		return e.mientras(v)
 	case jpara:
 		return e.para(v)
+	case jporCada:
+		return e.porCada(v)
 	case jhacer:
 		return e.hacer(v)
 	case jrompe:

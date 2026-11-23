@@ -258,6 +258,23 @@ type jpara struct {
 
 func (jpara) jstmtPuede() {}
 
+// jporCada: `for (T v : coleccion) cuerpo`, el `for` con dos puntos. Se guarda tal cual y lo baja el
+// emisor en las dos formas que escribe javac, medidas en el §225: sobre un arreglo, copiando el
+// arreglo y su largo a locales sintéticos y contando con un índice; sobre un `Iterable`, con
+// `iterator()`/`hasNext()`/`next()` y el `checkcast` del elemento.
+type jporCada struct {
+	tipo      string
+	nombre    string
+	coleccion jexpr
+	cuerpo    jstmt
+	donde     pos
+	// lineaCierre es la del `}` del cuerpo (o la del `;` de una sentencia suelta): javac anota con
+	// ella el `goto` de vuelta del camino del iterador, y no con la del `for` (medido en el §225)
+	lineaCierre int
+}
+
+func (jporCada) jstmtPuede() {}
+
 // capturaTry: un `catch (T e) { … }` de un `try`.
 type capturaTry struct {
 	tipos  []string
@@ -1766,6 +1783,93 @@ func (a *analizadorJava) cambio(linea int) (jstmt, bool, error) {
 	return cam, true, nil
 }
 
+// admitePorCada es el interruptor de la sonda del `for` con dos puntos: apagado, el parser vuelve a la
+// ruta de antes y rechaza `for (String path: x)` con el mensaje literal del usuario. Lo usa la
+// falsificación de `javaemisor_porcada_test.go`; encendido en el binario que se publica.
+var admitePorCada = true
+
+// esPorCada: si el encabezado del `for` que empieza en el token actual es el de la forma con dos
+// puntos, `for (T v : expr)`. Se distingue del clasico por el `:` de nivel cero del encabezado: el
+// subconjunto no tokeniza el `?`, asi que no hay `?:` que lo confunda, y el `;` de nivel cero es la
+// firma del clasico. La llave, el corchete y el parentesis suben el nivel para no leer el `:` de un
+// `new` con inicializador ni el de un indice.
+func (a *analizadorJava) esPorCada() bool {
+	if !a.es('p', "(") {
+		return false
+	}
+	// el `(` del encabezado ya esta delante: el nivel cero es su interior y el `)` que lo cierra
+	// termina la busqueda
+	hondo := 0
+	for i := a.i + 1; i < len(a.toks); i++ {
+		t := a.toks[i]
+		if t.kind == 'f' {
+			return false
+		}
+		if t.kind != 'p' {
+			continue
+		}
+		switch t.valor {
+		case "(", "[", "{":
+			hondo++
+		case ")", "]", "}":
+			if hondo == 0 {
+				return false
+			}
+			hondo--
+		case ";":
+			if hondo == 0 {
+				return false
+			}
+		case ":":
+			if hondo == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// cadaUno lee el `for` con dos puntos ya abierto: `for (T v : expr) cuerpo`. La variable entra en los
+// locales del metodo como una declaracion mas, para que una anonima del cuerpo la capture.
+func (a *analizadorJava) cadaUno(linea int) (jstmt, bool, error) {
+	if a.es('k', "final") {
+		// el `final` del encabezado no deja huella en el `.class` sin `-g:vars`: la LineNumberTable
+		// no lo mira y el descriptor del local es el del tipo
+		a.avanzar()
+	}
+	decl, err := a.tipoConArgumentos()
+	if err != nil {
+		return nil, false, err
+	}
+	tipo := decl.crudo()
+	if a.actual().kind != 'i' {
+		return nil, false, fmt.Errorf("linea %d: la variable del `for` con dos puntos no tiene nombre", a.actual().donde.linea)
+	}
+	nombre := a.avanzar().valor
+	if err := a.comerSimbolo(":"); err != nil {
+		return nil, false, err
+	}
+	coleccion, err := a.expresion()
+	if err != nil {
+		return nil, false, err
+	}
+	if err := a.comerSimbolo(")"); err != nil {
+		return nil, false, err
+	}
+	cuerpo, _, err := a.sentencia()
+	if err != nil {
+		return nil, false, err
+	}
+	if a.metodoActual != nil {
+		if a.metodoActual.locales == nil {
+			a.metodoActual.locales = map[string]string{}
+		}
+		a.metodoActual.locales[nombre] = tipo
+	}
+	return jporCada{tipo: tipo, nombre: nombre, coleccion: coleccion, cuerpo: cuerpo,
+		donde: pos{linea: linea}, lineaCierre: a.toks[a.i-1].donde.linea}, true, nil
+}
+
 func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	linea := a.actual().donde.linea
 	switch {
@@ -1831,8 +1935,12 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 		return jmientras{cond: cond, cuerpo: cuerpo, donde: pos{linea: linea}}, true, nil
 	case a.es('k', "for"):
 		a.avanzar()
+		porCada := admitePorCada && a.esPorCada()
 		if err := a.comerSimbolo("("); err != nil {
 			return nil, false, err
+		}
+		if porCada {
+			return a.cadaUno(linea)
 		}
 		var inicio jstmt
 		if a.es('p', ";") {
