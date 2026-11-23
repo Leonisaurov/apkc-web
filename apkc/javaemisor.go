@@ -4460,6 +4460,83 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 	return nil
 }
 
+// descDeCampos: el descriptor del último campo de una cadena `a.b.c` sobre un receptor cuyo tipo ya se
+// conoce, sin escribir el `aload`/`getfield` que emitiría `cadenaDeCampos`. `length` sobre un arreglo da
+// `I`, como el `arraylength` de 0xbe. Lo que no se resuelve sin código sale con ok falso.
+func (e *emisor) descDeCampos(actual string, segs []string) (string, bool) {
+	for _, seg := range segs {
+		if seg == "length" && len(actual) > 0 && actual[0] == '[' {
+			actual = "I"
+			continue
+		}
+		if len(actual) == 0 || actual[0] != 'L' {
+			return "", false
+		}
+		cr, err := e.ctx.buscarCampo(actual[1:len(actual)-1], seg)
+		if err != nil {
+			return "", false
+		}
+		actual = cr.desc
+	}
+	return actual, true
+}
+
+// tipoSinEmitir: el descriptor estático de una expresión que solo se lee, sin escribir su código. Es lo
+// que resuelve `info.applicationInfo` —el campo de una local— cuando hay que estimar su tipo como
+// argumento de una llamada y el receptor no se puede emitir todavía: la cadena de campos se apoya en el
+// tipo estático del receptor, que se conoce (la tabla de locales, `this` o un campo de la clase), y no
+// en un `aload`/`getfield` de más (§242). Devuelve ok falso en cuanto algo no se sabe sin código; el
+// llamador elige el mensaje.
+func (e *emisor) tipoSinEmitir(x jexpr) (string, bool) {
+	switch v := x.(type) {
+	case jacceso:
+		segs, base := aplanar(v)
+		if len(segs) == 0 {
+			return "", false
+		}
+		var actual string
+		if base != nil {
+			d, ok := e.tipoSinEmitir(base)
+			if !ok {
+				return "", false
+			}
+			actual = d
+		} else if lv, ok := e.locales[segs[0]]; ok {
+			// una local tapa al tipo que se llame igual
+			actual = lv.desc
+			segs = segs[1:]
+		} else if len(segs) == 1 {
+			// un campo suelto de la clase actual o del exterior que captura la anónima
+			_, cr, esCampo := e.duenioDelCampo(segs[0])
+			if !esCampo {
+				return "", false
+			}
+			return cr.desc, true
+		} else if interno, resto, ok := e.ctx.tipoDeReferencia(segs); ok {
+			d, err := e.descDeAccesoEstatico(interno, resto)
+			if err != nil {
+				return "", false
+			}
+			return d, true
+		} else {
+			return "", false
+		}
+		return e.descDeCampos(actual, segs)
+	case jnuevo:
+		// `f(new S())`: el tipo es el de la clase construida, igual que en `tipoEstimado`
+		if v.cuerpo != nil {
+			return "L" + internoDe(v.cuerpo.paquete, v.cuerpo.nombre) + ";", true
+		}
+		interno, err := e.ctx.tipoAInterno(v.tipo)
+		if err != nil {
+			return "", false
+		}
+		return "L" + interno + ";", true
+	}
+	// literales, `this`, `X.class`, elementos de arreglo, negaciones y cuentas ya se prevén sin código
+	return e.tipoPrevisto(x)
+}
+
 // tipoEstimado: el descriptor de un argumento, sin volver a emitirlo. En el subconjunto medido los
 // argumentos de un `new` son literales o variables, y ambos se saben aqui; tambien el `new` de una
 // clase propia (`f(new S())`) y el literal `null`, que llega como `tipoNulo`.
@@ -4503,32 +4580,30 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		return "Ljava/lang/Class;", nil
 	case jacceso:
 		segs, base := aplanar(v)
-		if base == nil && len(segs) == 1 {
-			if lv, ok := e.locales[segs[0]]; ok {
-				return lv.desc, nil
-			}
-			cr, err := e.ctx.buscarCampo(e.interno, segs[0])
-			if err == nil {
-				return cr.desc, nil
-			}
-		}
-		if base == nil {
-			// `R.layout.main` y cualquier `Clase.campo` / `Clase.campo.campo`, también con el tipo
-			// cualificado (`com.x.dos.Helper.CAMPO`): el tipo es el prefijo más largo que resuelve y el
-			// resto son campos. Cuando no se resuelve se devuelve **su** motivo (que suele ser una `R`
-			// que el classpath no trae) y no un «no esta medido» que escondia la causa real (§200).
-			interno, resto, ok := e.ctx.tipoDeReferencia(segs)
-			if !ok {
-				_, err := e.ctx.tipoAInterno(strings.Join(segs, "."))
-				return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
-			}
-			d, err := e.descDeAccesoEstatico(interno, resto)
-			if err != nil {
-				return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
-			}
+		// `info.applicationInfo` llega aquí con `base == nil` y dos segmentos, porque `aplanar` no
+		// distingue el campo de una local del nombre cualificado de un tipo. El tipo se resuelve desde
+		// el tipo estático del receptor —la tabla de locales, `this` o la cadena de campos— sin emitirlo
+		// (§242).
+		if d, ok := e.tipoSinEmitir(v); ok {
 			return d, nil
 		}
-		return "", fmt.Errorf("%s: no se puede estimar el tipo de %s sin emitir su receptor: eso solo pasa con accesos de un nombre, variables locales y `Clase.campo` estaticos", v.donde.sitio(), strings.Join(segs, "."))
+		if base != nil {
+			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s sin emitir su receptor: eso solo pasa con accesos de un nombre, variables locales, campos de una local y `Clase.campo` estaticos", v.donde.sitio(), strings.Join(segs, "."))
+		}
+		// `R.layout.main` y cualquier `Clase.campo` / `Clase.campo.campo`, también con el tipo
+		// cualificado (`com.x.dos.Helper.CAMPO`): el tipo es el prefijo más largo que resuelve y el
+		// resto son campos. Cuando no se resuelve se devuelve **su** motivo (que suele ser una `R`
+		// que el classpath no trae) y no un «no esta medido» que escondia la causa real (§200).
+		interno, resto, ok := e.ctx.tipoDeReferencia(segs)
+		if !ok {
+			_, err := e.ctx.tipoAInterno(strings.Join(segs, "."))
+			return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
+		}
+		d, err := e.descDeAccesoEstatico(interno, resto)
+		if err != nil {
+			return "", fmt.Errorf("%s: al estimar el tipo de %s, %w", v.donde.sitio(), strings.Join(segs, "."), err)
+		}
+		return d, nil
 	case jthis:
 		return "L" + e.interno + ";", nil
 	case jindice:
@@ -4969,7 +5044,9 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 		if err != nil {
 			return 0, 0, err
 		}
-		if len(d) == 0 || d[0] != 'L' {
+		// un arreglo es una referencia: `info.splitSourceDirs == null` compara `[Ljava/lang/String;`
+		// con null y javac branquea con `ifnonnull` sobre el objeto (§242)
+		if !esObjeto(d) {
 			return 0, 0, fmt.Errorf("linea %d: comparar con null algo que no es una referencia (%s) no esta medido", linea, d)
 		}
 		if op.op == "==" {
