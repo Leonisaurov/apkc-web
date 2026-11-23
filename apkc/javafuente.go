@@ -493,6 +493,11 @@ type tipoArgumento struct {
 	comodin byte
 	// cota es el tipo de `? extends T` o `? super T`; nil en el `?` a secas.
 	cota *tipoArgumento
+	// esFinal marca el `final` que precede a una declaración local (`final int n = 6`,
+	// `final List<Apk> apks = new ArrayList<>()`). No viaja en el descriptor ni en la `Signature`:
+	// javac no lo escribe en el `.class` con `-g:lines,source`, así que `crudo()` lo ignora y solo
+	// lo usa la sentencia para su `jdecl`.
+	esFinal bool
 }
 
 // crudo es el nombre tal como lo lee el descriptor: los corchetes pegados y sin argumentos, que el
@@ -1617,6 +1622,12 @@ func (a *analizadorJava) argumentoDeTipo() (tipoArgumento, error) {
 // se publica.
 var leeComodinesDeTipo = true
 
+// leeFinalEnDeclaracion es el interruptor de la sonda del `final` en declaraciones locales: apagado,
+// la declaración `final Tipo nombre` vuelve a la ruta de la expresión y el parser rechaza con el
+// mensaje literal que el usuario leyó —«"final" no es una expresion que este parser reconozca»—. Lo
+// usa la falsificación de `javaemisor_final_local_test.go`; encendido en el binario que se publica.
+var leeFinalEnDeclaracion = true
+
 // comodinDeTipo lee `?`, `? extends T` o `? super T`. El signo que se guarda es el que la `Signature`
 // escribe delante de la cota (JVMS 4.7.9.1): `*` sin cota, `+` para `extends` y `-` para `super`.
 func (a *analizadorJava) comodinDeTipo() (tipoArgumento, error) {
@@ -1672,7 +1683,17 @@ func (a *analizadorJava) argumentoDeTipoSinComodin() (tipoArgumento, error) {
 // argumentos solo se usan para escribir la `Signature` genérica, que es lo que javac deja en el
 // `.class` del campo o del método.
 func (a *analizadorJava) tipoConArgumentos() (tipoArgumento, error) {
-	return a.argumentoDeTipo()
+	// el `final` de una declaración local se consume aquí, antes del tipo. En un campo o en un
+	// parámetro el modificador ya lo leyó el bucle de modificadores; en una local solo lo veía
+	// `pareceDeclaracion`, y el tipo se paraba en la palabra clave.
+	esFinal := false
+	if leeFinalEnDeclaracion && a.es('k', "final") {
+		a.avanzar()
+		esFinal = true
+	}
+	t, err := a.argumentoDeTipo()
+	t.esFinal = esFinal
+	return t, err
 }
 
 // cierraAngulo come el `>` que cierra unos argumentos de tipo. El tokenizador junta los `>` seguidos
@@ -2212,14 +2233,17 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	}
 	// declaracion local o expresion
 	tipoActual := a.actual()
-	if (tipoActual.kind == 'i' || (tipoActual.kind == 'k' && esNombreDeTipo(tipoActual.valor))) && !a.es('k', "void") {
+	// el `final` de una declaración local (`final Dialog dialog = new Dialog(this);`) abre tipo igual
+	// que un nombre de tipo. `pareceDeclaracion` ya lo saltaba, pero este guardia se paraba antes de
+	// llegar y la sentencia caía en la ruta de la expresión.
+	esFinalLocal := leeFinalEnDeclaracion && tipoActual.kind == 'k' && tipoActual.valor == "final"
+	if (tipoActual.kind == 'i' || (tipoActual.kind == 'k' && (esNombreDeTipo(tipoActual.valor) || esFinalLocal))) && !a.es('k', "void") {
 		if a.pareceDeclaracion() {
 			decl, err := a.tipoConArgumentos()
 			if err != nil {
 				return nil, false, err
 			}
 			tipo := decl.crudo()
-			final := esFinalDeClaracion(tipo)
 			if a.actual().kind != 'i' {
 				return nil, false, fmt.Errorf("linea %d: la declaracion no tiene nombre", a.actual().donde.linea)
 			}
@@ -2230,7 +2254,7 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 				}
 				a.metodoActual.locales[nombre] = tipo
 			}
-			d := jdecl{tipo: tipo, nombre: nombre, donde: pos{linea: linea}, final: final}
+			d := jdecl{tipo: tipo, nombre: nombre, donde: pos{linea: linea}, final: decl.esFinal}
 			if a.es('p', "=") {
 				a.avanzar()
 				e, err := a.expresion()
@@ -2307,8 +2331,6 @@ func asignacion(destino jexpr, op string, valor jexpr, donde pos) jstmt {
 		donde:   donde,
 	}
 }
-
-func esFinalDeClaracion(tipo string) bool { return strings.HasPrefix(tipo, "final ") }
 
 // pareceDeclaracion: `Tipo nombre` (dos identificadores seguidos) o `final Tipo nombre`.
 func (a *analizadorJava) pareceDeclaracion() bool {
