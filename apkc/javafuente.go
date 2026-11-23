@@ -119,6 +119,18 @@ func (jinstanceof) jexprPuede() {}
 func (jcast) jexprPuede() {}
 
 // jnuevo: `new Tipo(args)` y, si cuerpo no es nil, la clase anonima `new Tipo(args) { ... }`.
+// jlambda es una lambda de un parametro sin tipo y cuerpo de expresion (`apk -> shareApp(apk)`). El
+// tipo destino no viaja en la expresion: lo pone el parametro formal de la llamada que la recibe, que
+// es quien declara la interface funcional (JLS 15.27.3). Un cuerpo de bloque (`x -> { … }`) queda
+// fuera de este subconjunto y se rechaza con su nombre al analizarlo.
+type jlambda struct {
+	param  string
+	cuerpo jexpr
+	donde  pos
+}
+
+func (jlambda) jexprPuede() {}
+
 type jnuevo struct {
 	tipo   string
 	args   []jexpr
@@ -546,7 +558,9 @@ var palabrasJava = map[string]bool{
 // simbolesJava, de mas largo a mas corto para que `>>` no se lea como dos `>`.
 var simbolesJava = []string{
 	"...", ">>>=", ">>=", "<<=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=",
-	"&=", "|=", "^=", ">>>", ">>", "<<", "++", "--",
+	// `->` va antes que `-`: con el guion suelto delante, la flecha de una lambda se leia como un
+	// menos seguido de un mayor y el cuerpo de la lambda se perdia (medido en el frente de ApkShare)
+	"&=", "|=", "^=", ">>>", ">>", "<<", "++", "--", "->",
 	"{", "}", "(", ")", "[", "]", ";", ",", ".", "=", ">", "<", "!", "+", "-", "*", "/", "&", "|", "^", ":", "@", "%", "?",
 }
 
@@ -2830,6 +2844,19 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 	if t.kind == 'i' {
 		a.avanzar()
 		nombre := t.valor
+		if a.es('p', "->") {
+			// `x -> expr`: la lambda de un parametro sin tipo. El cuerpo es una expresion entera, que
+			// termina donde termina el argumento que la lleva (la coma o el parentesis que cierra).
+			a.avanzar()
+			if a.es('p', "{") {
+				return nil, fmt.Errorf("linea %d: una lambda con cuerpo de bloque no esta medida; escriba su cuerpo como una expresion", t.donde.linea)
+			}
+			cuerpo, err := a.expresion()
+			if err != nil {
+				return nil, err
+			}
+			return jlambda{param: nombre, cuerpo: cuerpo, donde: t.donde}, nil
+		}
 		if !a.es('p', ".") && a.registraCaptura(nombre) {
 			// una local/parámetro effectively-final del método que crea la anónima: javac la baja a
 			// `val$nombre` y el emisor la lee como `this.val$nombre` (5.14)

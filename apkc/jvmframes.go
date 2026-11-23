@@ -137,6 +137,26 @@ func (l *lectorPool) refDe(i int) (string, string, error) {
 	return clase, desc, nil
 }
 
+// descDeSitioDinamico: el descriptor de fabrica de un CONSTANT_InvokeDynamic (tag 18), que es el del
+// NameAndType: el bootstrap (u2) y el indice del nombre y tipo.
+func (l *lectorPool) descDeSitioDinamico(i int) (string, error) {
+	e, err := l.entrada(i)
+	if err != nil {
+		return "", err
+	}
+	if len(e) < 5 || e[0] != 18 {
+		return "", fmt.Errorf("la entrada %d del pool no es un InvokeDynamic", i)
+	}
+	nt, err := l.entrada(u2De(e, 3))
+	if err != nil {
+		return "", err
+	}
+	if len(nt) < 5 || nt[0] != 12 {
+		return "", fmt.Errorf("la entrada %d del pool no es un NameAndType", u2De(e, 3))
+	}
+	return l.utf8(u2De(nt, 3))
+}
+
 // tipoDeConstante: lo que deja un `ldc`. En el subconjunto medido solo hay enteros y cadenas.
 func (l *lectorPool) tipoDeConstante(i int) (tipoVerif, error) {
 	e, err := l.entrada(i)
@@ -1028,6 +1048,35 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 		a.empuja(verifRef(clase))
+	case op == 0xba:
+		// un sitio `invokedynamic`: consume los argumentos de su descriptor de fabrica y deja su
+		// vuelta. Es el mismo efecto que un `invokestatic` de ese descriptor (JVMS 6.5). Medido en el
+		// `.class` de `MainActivity.java:156`, donde el sitio consume el `this` capturado y deja el
+		// `Consumer`.
+		desc, err := a.lector.descDeSitioDinamico(u2De(in.ops, 0))
+		if err != nil {
+			return nil, false, err
+		}
+		args, err := tiposDeArgs(desc)
+		if err != nil {
+			return nil, false, err
+		}
+		for i := len(args) - 1; i >= 0; i-- {
+			t, err := a.saca()
+			if err != nil {
+				return nil, false, err
+			}
+			if t.etiqueta != args[i].etiqueta {
+				return nil, false, fmt.Errorf("el argumento %d del sitio invokedynamic llega %s y el descriptor pide %s", i, t, args[i])
+			}
+		}
+		if v := vueltaDe(desc); v != "" && v != "V" {
+			t, err := tipoDeDesc(v)
+			if err != nil {
+				return nil, false, err
+			}
+			a.empuja(t)
+		}
 	case op == 0xc1: // instanceof: consume la referencia y deja un entero (`Ins.esCadena`, parrafo 79)
 		if _, err := a.lector.claseDe(u2De(in.ops, 0)); err != nil {
 			return nil, false, err

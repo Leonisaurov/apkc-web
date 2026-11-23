@@ -259,6 +259,34 @@ func (p *poolBuilder) campo(claseInternal, nombre, desc string) int {
 	return p.referencia(9, claseInternal, nombre, desc)
 }
 
+// metodoTipo: la entrada MethodType (tag 16) del JVMS 4.4.9: un indice a la utf8 del descriptor. Es
+// lo que llevan los argumentos del bootstrap de una lambda.
+func (p *poolBuilder) metodoTipo(desc string) int {
+	u := p.utf8(desc)
+	b := []byte{16, 0, 0}
+	binary.BigEndian.PutUint16(b[1:], uint16(u))
+	return p.agregar("mt\x00"+desc, b)
+}
+
+// metodoManejador: la entrada MethodHandle (tag 15) del JVMS 4.4.8: el `ref_kind` (1..9) y el indice
+// de la referencia que apunta (un Methodref para los sitios de lambda). `REF_invokeStatic` es 6 y
+// `REF_invokeSpecial` 7.
+func (p *poolBuilder) metodoManejador(refKind byte, ref int) int {
+	b := []byte{15, refKind, 0, 0}
+	binary.BigEndian.PutUint16(b[2:], uint16(ref))
+	return p.agregar(fmt.Sprintf("mh\x00%d|%d", refKind, ref), b)
+}
+
+// invocaDinamico: el sitio `invokedynamic` (tag 18) del JVMS 4.4.10: el indice del bootstrap y el
+// nombre y tipo de la fabrica. El opcode que lo usa es `0xba` con dos bytes reservados a cero.
+func (p *poolBuilder) invocaDinamico(bootstrap int, nombre, desc string) int {
+	nt := p.nombreYTipo(nombre, desc)
+	b := []byte{18, 0, 0, 0, 0}
+	binary.BigEndian.PutUint16(b[1:], uint16(bootstrap))
+	binary.BigEndian.PutUint16(b[3:], uint16(nt))
+	return p.agregar(fmt.Sprintf("id\x00%d|%s|%s", bootstrap, nombre, desc), b)
+}
+
 // serializar: el conteo es uno mas que el ultimo indice, como pide el formato.
 func (p *poolBuilder) serializar() []byte {
 	total := len(p.entradas) + 1
@@ -759,6 +787,10 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 		ctx.registrarExpresion(v.dentro)
 	case jnegativo:
 		ctx.registrarExpresion(v.dentro)
+	case jlambda:
+		// el cuerpo de la lambda es una expresion mas: un `new Hija()` privada dentro de ella pide el
+		// mismo constructor sintetico que fuera, y las anonimas que cree se registran igual
+		ctx.registrarExpresion(v.cuerpo)
 	}
 }
 
@@ -1326,6 +1358,10 @@ type candidato struct {
 	// javac; una llamada varargs con un arreglo del tipo declarado no empaqueta y se pasa tal cual.
 	varargs    bool
 	empaquetar bool
+	// decl es la declaracion del fuente cuando la clase es de esta pasada: por ella se sabe el tipo
+	// generico del parametro formal (`Consumer<Apk>`), que es lo que instancia el tipo de una lambda.
+	// Una candidata del classpath lo deja a nil.
+	decl *jmetodo
 }
 
 // buscarMetodo recorre la clase y sus padres por nombre y aridad, y elige la sobrecarga en las tres
@@ -1707,14 +1743,15 @@ func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarar
 			}
 			return sal, nil
 		}
-		for _, m := range propia.metodos {
+		for mi := range propia.metodos {
+			m := &propia.metodos[mi]
 			if m.nombre != nombre {
 				continue
 			}
 			if !(len(m.params) == argc || (conVarargs && aridadSirve(len(m.params), m.varargs, argc))) {
 				continue
 			}
-			d, err := ctx.descDeMetodoEn(propia, m)
+			d, err := ctx.descDeMetodoEn(propia, *m)
 			if err != nil {
 				return nil, err
 			}
@@ -1734,7 +1771,7 @@ func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarar
 			if m.esFinal {
 				acceso |= accFinal
 			}
-			poner(candidato{desc: d, acceso: acceso, varargs: m.varargs})
+			poner(candidato{desc: d, acceso: acceso, varargs: m.varargs, decl: m})
 		}
 		if nombre == "<init>" && propia.encierre != nil && !propia.anonima {
 			// el constructor de una anidada no estatica lo sintetiza el emisor con el exterior delante;
@@ -2125,6 +2162,17 @@ type emisor struct {
 	// finalmente es la pila de `finally` vivos: un `return` o un `break` que los cruza copia el bloque
 	// antes de salir (parrafo 76)
 	finalmente []*pendienteTry
+
+	// de la clase, para las lambdas del fuente: los `method_info` sinteticos que se escriben al final
+	// del ClassFile, cuantos van, y la tabla de BootstrapMethods con su indice por clave (un
+	// `invokedynamic` no se puede deduplicar sin ella). `metodo` es el nombre del metodo que se emite
+	// ahora, para nombrar el implementador `lambda$metodo$N` como javac.
+	lambdaMetodos []byte
+	lambdaCuenta  int
+	bootstraps    []classBootstrap
+	bootIdx       map[string]int
+	metodo        string
+	lambdaN       int
 }
 
 type parcheSalto struct {
@@ -2693,6 +2741,8 @@ func posDeExpr(x jexpr) pos {
 	case jnegacion:
 		return v.donde
 	case jnegativo:
+		return v.donde
+	case jlambda:
 		return v.donde
 	}
 	return pos{}
@@ -4182,31 +4232,45 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %w", n.donde.linea, err)
 	}
-	// el descriptor del constructor es el de la DECLARACION, no el de los tipos que se le pasan: con
-	// `new TextView(this)` el argumento es la actividad y el constructor es
-	// `<init>(Landroid/content/Context;)V`; firmarlo con el tipo del argumento compila y ART corta con
-	// `NoSuchMethodError` (§136)
-	tipos := make([]string, 0, len(n.args))
-	for _, arg := range n.args {
-		d, err := e.tipoEstimado(arg)
-		if err != nil {
-			return "", fmt.Errorf("linea %d: %w", n.donde.linea, err)
-		}
-		tipos = append(tipos, d)
-	}
 	// `new Hija()` dentro de la clase exterior (o de otra anidada suya) pasa el exterior como primer
 	// argumento del constructor, que es lo que javac escribe para una anidada con nombre no estatica.
 	externo, externoDesc := "", ""
 	if inner, ok := e.ctx.esInnerNoEstatica(interno); ok {
 		externo = internoDe(inner.encierre.paquete, inner.encierre.nombre)
 		externoDesc = "L" + externo + ";"
-		tipos = append([]string{externoDesc}, tipos...)
 	}
-	cantArgs := len(n.args)
+	// el descriptor del constructor es el de la DECLARACION, no el de los tipos que se le pasan: con
+	// `new TextView(this)` el argumento es la actividad y el constructor es
+	// `<init>(Landroid/content/Context;)V`; firmarlo con el tipo del argumento compila y ART corta con
+	// `NoSuchMethodError` (§136)
+	tipos := make([]string, 0, len(n.args)+1)
 	if externoDesc != "" {
-		cantArgs++
+		tipos = append(tipos, externoDesc)
 	}
-	cand, err := e.ctx.buscarMetodo(interno, "<init>", cantArgs, tipos)
+	// Una lambda no trae tipo propio: lo pone el parametro formal que la recibe (JLS 15.27.3), asi que
+	// con una en los argumentos la sobrecarga se elige mirando el parametro de la declaracion y no el
+	// tipo de la expresion, que no se puede estimar antes de haber elegido (medido en el frente de
+	// ApkShare)
+	conLambda := false
+	for _, arg := range n.args {
+		if _, es := arg.(jlambda); es {
+			conLambda = true
+			tipos = append(tipos, tipoLambda)
+			continue
+		}
+		d, err := e.tipoEstimado(arg)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: %w", n.donde.linea, err)
+		}
+		tipos = append(tipos, d)
+	}
+	cantArgs := len(tipos)
+	var cand candidato
+	if conLambda {
+		cand, err = e.ctx.buscarCtorConLambdas(interno, tipos)
+	} else {
+		cand, err = e.ctx.buscarMetodo(interno, "<init>", cantArgs, tipos)
+	}
 	if err != nil {
 		return "", fmt.Errorf("linea %d: %s: %w", n.donde.linea, interno, err)
 	}
@@ -4252,8 +4316,28 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 		// de escribir bytes que no serían los de javac
 		return "", fmt.Errorf("linea %d: el constructor varargs de %s no esta medido", n.donde.linea, interno)
 	}
-	if _, err := e.argumentos(n.args); err != nil {
-		return "", err
+	// Los argumentos se bajan con el descriptor del parametro que les toca: una lambda se convierte en
+	// su clase sintetica con el tipo funcional del parametro formal, y el resto pasa por `expA` como
+	// siempre. El exterior de una anidada ocupa el primer hueco del descriptor.
+	_, _, params := splitDescriptor(descLlamada)
+	base := 0
+	if externoDesc != "" {
+		base = 1
+	}
+	for i, arg := range n.args {
+		if lam, es := arg.(jlambda); es {
+			if _, err := e.lambdaEnParametro(lam, cand, base+i); err != nil {
+				return "", err
+			}
+			continue
+		}
+		deseado := ""
+		if base+i < len(params) {
+			deseado = params[base+i]
+		}
+		if _, err := e.expA(arg, deseado); err != nil {
+			return "", err
+		}
 	}
 	if marcador != "" {
 		e.emite(0x01) // aconst_null
@@ -4664,6 +4748,10 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s(): hay %d candidatas con %d argumentos y el tipo lo decide la sobrecarga", v.donde.sitio(), v.nombre, len(cands), len(v.args))
 		}
 		return vueltaDe(cands[0].desc), nil
+	case jlambda:
+		// una lambda no tiene descriptor propio: lo pone el parametro formal que la recibe (JLS
+		// 15.27.3), y por eso la resolucion de la llamada que la lleva va por su propio camino
+		return "", fmt.Errorf("%s: una lambda no tiene tipo propio sin el parametro formal que la recibe", v.donde.sitio())
 	}
 	return "", fmt.Errorf("%s: el tipo de una expresion %T no se puede estimar sin emitirla", posDeExpr(x).sitio(), x)
 }
@@ -7080,6 +7168,12 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
+	// los implementadores de las lambdas del fuente, con `ACC_PRIVATE|ACC_SYNTHETIC`, van al final
+	// como los escribe javac (medido con javap 17 --release 8 sobre `lambda$metodo$0`)
+	if len(e.lambdaMetodos) > 0 {
+		metodos = append(metodos, e.lambdaMetodos...)
+		conte += e.lambdaCuenta
+	}
 	// Las filas del InnerClasses van en el orden en que javac las escribe: las anidadas declaradas aqui, al
 	// reves de como se declaran (medido: la R del estudio lista style, layout, id); la propia clase si es
 	// anidada; y despues las que menciona el codigo, en orden de primer uso (medido: R$layout, MainActivity$1
@@ -7149,6 +7243,12 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 			return nil, err
 		}
 		attrs = append(attrs, attrInfo(e.pool, "EnclosingMethod", cuerpo)...)
+		conteAttrs++
+	}
+	if len(e.bootstraps) > 0 {
+		// javac escribe BootstrapMethods entre la Signature y el InnerClasses; el atributo lleva una
+		// fila por sitio, con el MethodHandle del bootstrap y sus argumentos como indices del pool
+		attrs = append(attrs, attrInfo(e.pool, "BootstrapMethods", tablaDeBootstraps(e.bootstraps))...)
 		conteAttrs++
 	}
 	if len(nombres) > 0 {
@@ -7573,6 +7673,9 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.maxProf = 0
 	e.maxLoc = 0
 	e.truncado = false
+	// el contador de lambdas del fuente es de cada metodo: javac numera `lambda$metodo$0` desde cero
+	// dentro de cada uno
+	e.lambdaN = 0
 }
 
 // codeAttr: el atributo Code con su LineNumberTable y, si hay ramas, su StackMapTable, en el orden
@@ -7817,6 +7920,7 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	}
 	// Un cuerpo vacio `{ }` no es abstracto: emite el `return` implicito con la linea de la llave.
 	e.preparaMetodo(desc, m.esEstatico)
+	e.metodo = m.nombre
 	if !m.esEstatico {
 		e.reserva("", "L") // this en el hueco 0
 	}
