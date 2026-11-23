@@ -9843,3 +9843,36 @@ sonda es su aceptación`. No hay binarios versionados.
 
 **Fronteras de este `§`.** El camino Go en verde exige `deps-dexgo`; el fixture solo clasifica el
 rechazo. Sin gate, chromium ni red.
+
+## 220. Dependencias: dex en Go, sin d8, y caché por bucket
+
+Medido el 2026-11-23 sobre `3bc6c52` (`feat(apkc): dexa dependencias en Go sin d8`), corregido por
+`e84a64f` (`fix(apkc): la caché de dex por bucket se escribe en su fichero`). El crítico
+`ses_df90847d1ffeaWfOT8dxl9zhB3` retiró con evidencia nueva su `CONFIRMADO` sobre `guarda()` y dio
+**APROBAR**.
+
+**Qué hace.** El dexer propio escribe el `classes.dex` de las dependencias sin invocar `d8`. La caché
+de cada bucket vive en `build/dexcache/deps-gocache-*.bin`, separada de `build/dexcache.bin` del
+proyecto; no quedan `.tmp` y dos buckets con `APKC_JOBS=2` no comparten temporal.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestLaCacheDelBucketSeEscribeEnSuFicheroYReutiliza|TestDexDepsDosBucketsNoCompartenTemporal|TestBuildGoDexaLaDependenciaSinD8|TestCacheDexCorruptaCaeAlDexadoCompleto' -v .
+```
+
+**Resultado**: los cuatro `PASS`, con los cinco subtests de corrupción, y `ok github.com/ajinasokan/apkc
+0.064s` en la raíz; la misma tanda en el crítico, `ok … 0.123s`, y la suite completa,
+`ok … 50.078s`. `TestBuildGoDexaLaDependenciaSinD8` usa un `d8Path` con marcador que no se ejecuta;
+`TestLaCacheDelBucketSeEscribeEnSuFicheroYReutiliza` exige `reutilizados == total` en la segunda
+vuelta, y `TestDexDepsDosBucketsNoCompartenTemporal` cubre 12 jars en 2 buckets.
+
+**End-to-end.** `sh banco/deps-ejemplo/construir.sh` sale con **rc 0** y deja
+`1 clases de 1 dependencias -> 612 bytes`; los dos dex invocan `Lsaludo/Saludo;.saludo`. Con
+`android-support-v4.jar` en el shim, el APK mide 9049 B con `classes.dex` de 1604 y
+`classes2.dex` de 612; `apksigner` v2/v3 y `dexdump` del segundo dex, en verde. El wasm se compiló y
+la preview se reconstruyó (`sha256 90fc0011…`), verificada contra `/apkc.wasm`.
+
+**Frontera, no defecto.** El dexer propio escribe **un** `classes.dex` por bucket y no parte al
+superar 65 536 referencias de método (el límite de índices de 16 bits). Un `invokedynamic` no
+medido falla nombrando el jar, la entrada y el sitio. Queda como trabajo aparte. No se corrió gate,
+chromium ni publicación.

@@ -1,9 +1,9 @@
 # Plan: dependencias Maven y red en la pestaña
 
 Estado: **autorizado y priorizado por el usuario** (2026-11-22). La vía es importar
-artefactos desde disco u OPFS (Fase 1 y Fase J); la regla 4 de `AGENTS.md` sigue intacta y
-cualquier descarga en runtime está prohibida. La Fase J está en curso en el worktree
-`deps-compiler`. Todo lo que no trae comando ejecutado va marcado HIPÓTESIS.
+artefactos desde disco u OPFS (Fase 1 y Fase K); la regla 4 de `AGENTS.md` sigue intacta y
+cualquier descarga en runtime está prohibida. La Fase J está cerrada y la Fase K, aprobada en
+nativo. Todo lo que no trae comando ejecutado va marcado HIPÓTESIS.
 
 ## Resumen ejecutivo
 
@@ -159,7 +159,7 @@ sin cooperación del servidor.
 ## 4. Arquitectura aprobada: importar sin red
 
 Fase 0 — decisión. Resuelta el 2026-11-22: el usuario autorizó y priorizó la importación sin
-red (Fase 1 y Fase J). La red en runtime sigue fuera.
+red (Fase 1; la Fase J ya está cerrada). La red en runtime sigue fuera.
 
 Fase 1 — importador sin red. Entrada: directorio o `.zip` con la salida de `apkc-deps`. Salida:
 `jar/`, `lib/<abi>/`, `res/__deps/` en OPFS. Medir con
@@ -182,7 +182,7 @@ espejo con CORS.
 Fase 4 — proxy (solo si la regla 4 se cambia explícitamente). Fuera del alcance
 de este repo mientras la regla siga en pie.
 
-Fase J — `jar/` en el compilador Go (**en curso**). El usuario quiere que
+Fase J — `jar/` en el compilador Go (**cerrada**). El usuario quiere que
 `apkc compile/build --compiler go` consuma `jar/*.jar` y `classes.jar` de los
 `.aar`, sin red y sin `apkc-deps` en runtime. Criterio de aceptación: un proyecto
 con un jar en `jar/` compila con el compilador Go y las clases del jar resuelven
@@ -192,8 +192,8 @@ artefactos; el catálogo y la red siguen fuera. Subestados:
 
 - **Clases aprobadas en nativo** (`5bc1e8c`, condiciones cerradas en `8d6ee67`;
   crítico `ses_df91c8423ffeRBUEJpqWc5sSv5`). 7/7 tests, dex idéntico a javac 17,
-  `classes.jar` de AAR, índice por jar e invalidación de I3. Frontera que sigue:
-  el dex de las dependencias con `d8`.
+  `classes.jar` de AAR, índice por jar e invalidación de I3. Su frontera de dex
+  con `d8` quedó cerrada por el subestado siguiente.
 - **Importador aprobado** (`be7b417`, `studio/` en `66c35ab`; crítico
   `ses_df91c58e7ffeuwOqrjEwncRX3Z`): sin `fetch`, Maven ni proxy; rutas OPFS
   `jar/`, `lib/<abi>/`, `res/__deps/<hash>/…` y `deps.importado.json`; traversal
@@ -202,8 +202,15 @@ artefactos; el catálogo y la red siguen fuera. Subestados:
 - **Fixture aprobado** (`8d99e52` y `aee59d4`; crítico
   `ses_df911247affeIZ83mX0fq3TTsR`): camino nativo de 1136/728 bytes y camino Go
   con `rc 3` y `OBJETIVO PENDIENTE`.
-- **Dex en Go en curso**: trabajo de `deps-dexgo`, el único tramo que falta para
-  que el fixture pase en verde.
+- **Dex en Go aprobado** (`3bc6c52`, corregido en `e84a64f`; crítico
+  `ses_df90847d1ffeaWfOT8dxl9zhB3`): el dexer propio escribe el `classes.dex` de
+  las dependencias sin `d8`, con caché por bucket en
+  `build/dexcache/deps-gocache-*.bin`, sin pisar `build/dexcache.bin` ni dejar
+  `.tmp`. 4 tests, `rc 0` del fixture y preview `sha256 90fc0011…`. Evidencia:
+  §220 de `docs/evidencia.md`.
+- **No medido / trabajo aparte**: el dexer propio escribe un `classes.dex` por
+  bucket y no parte al superar 65 536 referencias de método; un `invokedynamic`
+  no medido falla nombrando jar, entrada y sitio.
 
 Fase K — recursos `res/__deps/` y `lib/<abi>/` (**aprobada en nativo**). `976b02e`
 (`feat(apkc): enlaza recursos y lib/ de dependencias`) lee la isla `res/__deps/`, valida una carpeta
@@ -225,16 +232,19 @@ catálogo.
 
 El usuario **autorizó y priorizó** el frente de dependencias por la vía sin red: importar los
 artefactos que ya tiene desde disco u OPFS y que el compilador Go los consuma. Eso resuelve la
-Fase 0 y deja la Fase 1, la Fase J y la Fase K como trabajo activo.
+Fase 0 y deja la Fase 1 como trabajo activo; la Fase J está cerrada y la Fase K, aprobada en
+nativo.
 
 La pregunta de red en runtime **no se reabre**: la regla 4 sigue vigente y la respuesta es no.
 Proxy y Wisp siguen descartados.
 
 ## 6. Registro de estado
 
-- Fase J **en curso**: clases aprobadas en nativo (`5bc1e8c`/`8d6ee67`), importador aprobado
-  (`be7b417`/`66c35ab`) y fixture aprobado (`8d99e52`/`aee59d4`); el dex en Go queda en
-  `deps-dexgo`.
+- Fase J **cerrada**: clases aprobadas en nativo (`5bc1e8c`/`8d6ee67`), importador aprobado
+  (`be7b417`/`66c35ab`), fixture aprobado (`8d99e52`/`aee59d4`) y dex en Go aprobado
+  (`3bc6c52`/`e84a64f`).
+- No medido / trabajo aparte: un `classes.dex` por bucket, sin partir a las 65 536 referencias de
+  método; `invokedynamic` no medido.
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
   fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
