@@ -1,6 +1,9 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // El hot swap del preview: sustituir la implementación de un método en una sesión VIVA.
 //
@@ -38,37 +41,59 @@ type resultadoIntercambio struct {
 // de `clase` y lo devuelve listo para ejecutar, con su code_item leído y el dex del que salió
 // anotado. No toca la sesión: es la lectura del módulo nuevo, separada del enganche, para que un dex
 // que no trae el método falle antes de cambiar nada.
+//
+// Con `proto` vacío resuelve por nombre, que es la forma `clase/metodo` del flag: solo vale si la
+// clase declara un único método con ese nombre. Si hay sobrecargas se rechaza pidiendo el proto
+// completo, porque elegir una al azar cambiaría un método distinto del que el usuario cree.
 func metodoDeClase(d *dexFile, datos map[string]classData, clase, nombre, proto string) (*metodoDalvik, error) {
 	cd, ok := datos[clase]
 	if !ok {
 		return nil, fmt.Errorf("el dex del swap no declara la clase %s", claseCorta(clase))
 	}
 	metodos := append(append([]encodedMethod{}, cd.directs...), cd.virtuals...)
-	for _, m := range metodos {
+	elegidos := make([]int, 0, 1)
+	for i, m := range metodos {
 		if int(m.methodIdx) >= len(d.methods) {
 			return nil, fmt.Errorf("%s: el método %d no está en method_ids", claseCorta(clase), m.methodIdx)
 		}
 		ref := d.methods[m.methodIdx]
-		if ref.name != nombre || descDeProto(ref.proto) != proto {
+		if ref.name != nombre {
 			continue
 		}
-		met := &metodoDalvik{
-			nombre:  ref.name,
-			proto:   proto,
-			retorno: ref.proto.returnType,
-			acceso:  m.accessFlags,
-			dex:     d,
+		if proto != "" && descDeProto(ref.proto) != proto {
+			continue
 		}
-		if m.codeOff != 0 {
-			item, err := d.readCodeItem(m.codeOff)
-			if err != nil {
-				return nil, fmt.Errorf("%s.%s: %w", claseCorta(clase), nombre, err)
-			}
-			met.item = &item
-		}
-		return met, nil
+		elegidos = append(elegidos, i)
 	}
-	return nil, fmt.Errorf("el dex del swap no trae %s.%s%s", claseCorta(clase), nombre, proto)
+	if len(elegidos) == 0 {
+		return nil, fmt.Errorf("el dex del swap no trae %s.%s%s", claseCorta(clase), nombre, proto)
+	}
+	if len(elegidos) > 1 {
+		vistos := make([]string, 0, len(elegidos))
+		for _, i := range elegidos {
+			vistos = append(vistos, descDeProto(d.methods[metodos[i].methodIdx].proto))
+		}
+		return nil, fmt.Errorf("el dex del swap trae %s.%s sobrecargado (%s): pide el proto completo, "+
+			"como %s.%s%s", claseCorta(clase), nombre, strings.Join(vistos, ", "),
+			claseCorta(clase), nombre, vistos[0])
+	}
+	m := metodos[elegidos[0]]
+	ref := d.methods[m.methodIdx]
+	met := &metodoDalvik{
+		nombre:  ref.name,
+		proto:   descDeProto(ref.proto),
+		retorno: ref.proto.returnType,
+		acceso:  m.accessFlags,
+		dex:     d,
+	}
+	if m.codeOff != 0 {
+		item, err := d.readCodeItem(m.codeOff)
+		if err != nil {
+			return nil, fmt.Errorf("%s.%s: %w", claseCorta(clase), nombre, err)
+		}
+		met.item = &item
+	}
+	return met, nil
 }
 
 // metodoDeDex es `metodoDeClase` leyendo primero los class_data_item del fichero.
