@@ -178,9 +178,9 @@ func raizDelProyecto(dir string) string {
 }
 
 // revisarFuenteJava es el cuerpo de `check`, separado del comando para poder comprobarlo con
-// cualquier fuente sin pasar por los argumentos. Nunca escribe ficheros: compilarProyectoJava
-// solo devuelve bytes en memoria. `proyecto` es la raiz del proyecto, de donde sale la R; vacio
-// significa que solo se comprueba el fichero.
+// cualquier fuente sin pasar por los argumentos. Nunca escribe clases: compilarProyectoJava solo
+// devuelve bytes en memoria. `proyecto` es la raiz del proyecto, de donde salen la R y las
+// dependencias de `jar/`; vacio significa que solo se comprueba el fichero.
 func revisarFuenteJava(contenido, nombre, rutaJar, proyecto string) resultadoDeCheck {
 	return revisarFuenteJavaComo(contenido, nombre, nombre, rutaJar, proyecto, 0, "")
 }
@@ -207,7 +207,17 @@ func revisarFuenteJavaComo(contenido, nombreFuente, nombreInforme, rutaJar, proy
 		fuentes = append(fuentes, extras...)
 		r.Recursos = nota
 	}
-	_, err := compilarProyectoJava(fuentes, rutaJar)
+	// el classpath es el mismo que el de `compile` y `build`: el `android.jar` y las dependencias del
+	// proyecto (cada `jar/*.jar` y el `classes.jar` de cada `.aar`). Antes se compilaba contra el
+	// `android.jar` solo, y un tipo que vive en un jar se subrayaba como error que la compilación no da.
+	// El `classes.jar` de un AAR que aún no se extrajo deja el fichero de `build/aar/`, que es la caché
+	// que `build` ya usa; el diagnóstico no escribe ni un `.class` ni una `R.java`.
+	entradas, err := entradasDelClasspathEn(proyecto, rutaJar)
+	if err != nil {
+		r.agregar(err)
+		return r
+	}
+	_, err = compilarProyectoJavaConClasspath(fuentes, rutasDelClasspath(entradas))
 	if err == nil {
 		r.Emisor = true
 		return r

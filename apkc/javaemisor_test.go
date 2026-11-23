@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,11 +68,34 @@ public final class R {
 }
 `
 
-// jarDelSDK: el emisor resuelve los nombres contra el android.jar, así que sin jar no hay prueba. Se busca
-// en la variable que el enlazador ya acepta, en la ruta del teléfono (el SDK está en ~/Android, dicho en
-// AGENTS.md) y en `/sdk/android.jar`, que es donde lo monta el hospedador con forma de navegador del §39. Se
-// comprueba abriendo el jar de verdad (un `os.Stat` no responde en el fs simulado) y el resultado se guarda,
-// porque cada prueba volvería a leer los 26 MB. Si no hay jar la prueba se salva en vez de fallar.
+// rutasDelAndroidJar son los sitios donde se busca el android.jar para las pruebas: la variable que el
+// enlazador ya acepta, el SDK del escritorio (`~/opt/android-sdk`, el que instala `tools/entorno.sh jar`),
+// el del teléfono (el SDK está en `~/Android`, dicho en AGENTS.md) y `/sdk/android.jar`, que es donde lo
+// monta el hospedador con forma de navegador del §39. Se prueban en este orden y se descartan los vacíos.
+func rutasDelAndroidJar() []string {
+	candidatas := []string{os.Getenv("APKC_ANDROID_JAR")}
+	if sdk := os.Getenv("ANDROID_HOME"); sdk != "" {
+		candidatas = append(candidatas, filepath.Join(sdk, "platforms", "android-34", "android.jar"))
+	}
+	candidatas = append(candidatas,
+		homeDir()+"/Android/platforms/android-34/android.jar",
+		homeDir()+"/opt/android-sdk/platforms/android-34/android.jar",
+		"/sdk/android.jar",
+	)
+	salida := make([]string, 0, len(candidatas))
+	for _, r := range candidatas {
+		if r != "" {
+			salida = append(salida, r)
+		}
+	}
+	return salida
+}
+
+// jarDelSDK: el emisor resuelve los nombres contra el android.jar, así que sin jar no hay prueba. Se
+// comprueba abriendo el jar de verdad (un `os.Stat` no responde en el fs simulado) y el resultado se
+// guarda, porque cada prueba volvería a leer los 26 MB. Si no hay jar la prueba se salva en vez de
+// fallar; las pruebas que miden la resolución de nombres no pueden salvarse y usan
+// jarDelSDKExigido (dependencias_test.go).
 var (
 	jarUnaVez sync.Once
 	jarVisto  string
@@ -81,10 +105,7 @@ var (
 func jarDelSDK(t *testing.T) string {
 	t.Helper()
 	jarUnaVez.Do(func() {
-		for _, r := range []string{os.Getenv("APKC_ANDROID_JAR"), homeDir() + "/Android/platforms/android-34/android.jar", "/sdk/android.jar"} {
-			if r == "" {
-				continue
-			}
+		for _, r := range rutasDelAndroidJar() {
 			b, err := abrirBuscador(r)
 			if err != nil {
 				jarErr = err

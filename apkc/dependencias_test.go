@@ -2,8 +2,11 @@ package main
 
 // El compilador Go contra las dependencias de `jar/`: que una clase del fuente que nombra un tipo de
 // un jar se resuelva leyendo el jar (y no se invente el descriptor), que un `.aar` aporte su
-// `classes.jar`, que la huella del classpath cubra cada dependencia y que cambiar una de ellas abra
-// el atajo de I3. El oráculo de paridad es javac 17, que se salta si no está en la máquina.
+// `classes.jar`, que una cadena de padres cruce dos jars hasta el `android.jar`, que la huella del
+// classpath cubra cada dependencia y que cambiar una de ellas abra el atajo de I3. El oráculo de
+// paridad es javac 17. Estas pruebas **no se saltan**: sin SDK o sin javac 17 fallan, porque un SKIP
+// deja la suite en verde sin haber medido nada (el crítico de 5bc1e8c vio cuatro SKIP y
+// «ok … 0.034s»).
 
 import (
 	"os"
@@ -12,6 +15,35 @@ import (
 	"strings"
 	"testing"
 )
+
+// jarDelSDKExigido es jarDelSDK sin el SKIP: si no hay android.jar que abrir, la prueba falla y dice
+// cómo darlo. Se usa en todas las pruebas de este fichero.
+func jarDelSDKExigido(t *testing.T) string {
+	t.Helper()
+	candidatas := rutasDelAndroidJar()
+	for _, r := range candidatas {
+		b, err := abrirBuscador(r)
+		if err != nil {
+			continue
+		}
+		b.cerrar()
+		return r
+	}
+	t.Fatalf("sin android.jar que abrir: exporta APKC_ANDROID_JAR (probadas: %s); estas pruebas miden la resolución de nombres contra el SDK y no se pueden saltar",
+		strings.Join(candidatas, ", "))
+	return ""
+}
+
+// javac17Exigido es javac17 sin el SKIP: la paridad byte a byte con javac 17 es la medida, no un
+// extra, así que un entorno sin javac 17 tiene que verse.
+func javac17Exigido(t *testing.T) string {
+	t.Helper()
+	if ruta := buscarJavac17(); ruta != "" {
+		return ruta
+	}
+	t.Fatalf("sin javac 17: exporta JAVAC17 con la ruta de su javac; la paridad con javac es la medida de esta prueba y no se puede saltar")
+	return ""
+}
 
 const (
 	// fuenteDepSuma es la dependencia mínima: una clase pública con un método estático.
@@ -28,7 +60,37 @@ public class Uso {
     public int llama() { return Suma.suma(2, 3); }
 }
 `
+	// La cadena de padres que cruza dos jars: `Base` (b.jar) extiende Activity del android.jar y
+	// `A` (a.jar) extiende `Base`. Resolver `A` obliga a seguir su padre en b.jar y el de `Base` en
+	// el SDK, que es el orden real de un classpath con dependencias.
+	fuenteDepBase = `package depb;
+import android.app.Activity;
+public class Base extends Activity {
+    public int base() { return 7; }
+}
+`
+	fuenteDepA = `package depa;
+import depb.Base;
+public class A extends Base {
+    public int suma() { return base() + 1; }
+}
+`
+	fuenteUsoCadena = `package com.hola;
+import depa.A;
+public class Uso {
+    public int llama() { return new A().suma(); }
+}
+`
 )
+
+// mapaDeClases convierte lo emitido en lo que jarDePrueba monta: entrada del jar -> bytes.
+func mapaDeClases(clases []claseEmitida) map[string][]byte {
+	salida := map[string][]byte{}
+	for _, c := range clases {
+		salida[c.interno+".class"] = c.datos
+	}
+	return salida
+}
 
 // clasesDeFuente emite el fuente con el propio emisor y devuelve un mapa entrada-de-jar -> bytes,
 // que es lo que jarDePrueba necesita para montar la dependencia.
@@ -38,11 +100,7 @@ func clasesDeFuente(t *testing.T, jarSDK, nombre, fuente string) map[string][]by
 	if err != nil {
 		t.Fatalf("el emisor no compiló la dependencia de la prueba: %v", err)
 	}
-	clases := map[string][]byte{}
-	for _, c := range salida {
-		clases[c.interno+".class"] = c.datos
-	}
-	return clases
+	return mapaDeClases(salida)
 }
 
 // jarDeDependencia monta `jar/dep.jar` con la clase de la dependencia y deja el proyecto con el
@@ -61,7 +119,7 @@ func jarDeDependencia(t *testing.T, raiz string, clases map[string][]byte) strin
 // descriptor `(II)I`; sin el jar, el mismo fuente se rechaza. Las dos mitades importan: la primera
 // dice que se leyó el jar, la segunda que no se acepta por casualidad.
 func TestCompilarEnGoResuelveUnaClaseDeJar(t *testing.T) {
-	jarSDK := jarDelSDK(t)
+	jarSDK := jarDelSDKExigido(t)
 	raiz := t.TempDir()
 	jarDeDependencia(t, raiz, clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma))
 	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
@@ -117,8 +175,8 @@ func TestCompilarEnGoResuelveUnaClaseDeJar(t *testing.T) {
 // llama a un jar, dexado, tiene que dar el mismo dex que el `.class` de javac 17 para el mismo fuente
 // contra el mismo jar. Es la prueba de que el descriptor se leyó del jar y no se adivinó.
 func TestCompilarEnGoDexaIgualQueJavacConUnaDependencia(t *testing.T) {
-	jarSDK := jarDelSDK(t)
-	javac := javac17(t)
+	jarSDK := jarDelSDKExigido(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 
 	// la dependencia, compilada por javac 17 con la versión que emite el subconjunto
@@ -200,7 +258,7 @@ func dexarUnaClase(t *testing.T, clases []claseEmitida, interno string) ([]byte,
 // su `classes.jar`, extraído a build/aar/. Se comprueba que la extracción es la que se abre y que el
 // fuente resuelve la clase de dentro.
 func TestCompilarEnGoLeeElClassesJarDeUnAar(t *testing.T) {
-	jarSDK := jarDelSDK(t)
+	jarSDK := jarDelSDKExigido(t)
 	raiz := t.TempDir()
 	clases := clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma)
 	jarDePrueba(t, filepath.Join(raiz, "classes.jar"), clases)
@@ -251,11 +309,111 @@ func TestCompilarEnGoLeeElClassesJarDeUnAar(t *testing.T) {
 	}
 }
 
+// TestCompilarEnGoResuelveUnaCadenaDePadresEntreJars: la clase que usa el fuente (A, en a.jar)
+// extiende otra que solo está en b.jar, y esa extiende Activity del android.jar. El emisor tiene que
+// seguir los dos saltos —si solo leyera el primer jar, el padre quedaría sin resolver—, dexar el
+// resultado y, con el proyecto delante, dejar `check` en verde. El control negativo quita b.jar: el
+// error tiene que nombrar `Base`, no `A`, que sí está.
+func TestCompilarEnGoResuelveUnaCadenaDePadresEntreJars(t *testing.T) {
+	jarSDK := jarDelSDKExigido(t)
+	raiz := t.TempDir()
+	t.Chdir(raiz)
+	if err := os.MkdirAll(filepath.Join(raiz, "jar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// b.jar: Base, que extiende Activity y se compila solo contra el SDK
+	base, err := compilarProyectoJavaConClasspath(
+		[]fuenteJava{{nombre: "src/depb/Base.java", contenido: fuenteDepBase}}, []string{jarSDK})
+	if err != nil {
+		t.Fatalf("el emisor no compiló la base de la cadena: %v", err)
+	}
+	jarB := filepath.Join(raiz, "jar", "b.jar")
+	jarDePrueba(t, jarB, mapaDeClases(base))
+
+	// a.jar: A extiende Base, que ya no está en el fuente sino en b.jar
+	a, err := compilarProyectoJavaConClasspath(
+		[]fuenteJava{{nombre: "src/depa/A.java", contenido: fuenteDepA}}, []string{jarSDK, jarB})
+	if err != nil {
+		t.Fatalf("el emisor no compiló A contra b.jar: %v", err)
+	}
+	jarDePrueba(t, filepath.Join(raiz, "jar", "a.jar"), mapaDeClases(a))
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoCadena)
+
+	entradas, err := entradasDelClasspathEn(raiz, jarSDK)
+	if err != nil {
+		t.Fatalf("armar el classpath del proyecto: %v", err)
+	}
+	if len(entradas) != 3 {
+		t.Fatalf("%d entradas de classpath, medidas tres (android.jar, a.jar y b.jar)", len(entradas))
+	}
+	fuentes, err := fuentesJava([]string{"src"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clases, err := compilarProyectoJavaConClasspath(fuentes, rutasDelClasspath(entradas))
+	if err != nil {
+		t.Fatalf("el emisor no siguió la cadena A -> Base -> Activity: %v", err)
+	}
+	if _, err := dexarUnaClase(t, clases, "com/hola/Uso"); err != nil {
+		t.Fatalf("la clase que resolvió la cadena no se dexa: %v", err)
+	}
+
+	// el diagnóstico en vivo ve las mismas dependencias del proyecto
+	r := revisarFuenteJava(fuenteUsoCadena, "Uso.java", jarSDK, raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("check da %d errores con la cadena resoluble: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("check no llegó al emisor: aviso %q", r.Aviso)
+	}
+
+	// el control negativo: sin b.jar, Base no está en ningún sitio y el error lo nombra
+	if err := os.Remove(jarB); err != nil {
+		t.Fatal(err)
+	}
+	r = revisarFuenteJava(fuenteUsoCadena, "Uso.java", jarSDK, raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores sin b.jar, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	if !strings.Contains(r.Errores[0].Mensaje, "Base") {
+		t.Errorf("el error no nombra la clase que falta: %q", r.Errores[0].Mensaje)
+	}
+}
+
+// TestCheckResuelveElClassesJarDeUnAar: el diagnóstico en vivo arma el mismo classpath que `build`,
+// así que un tipo que solo vive en el `classes.jar` de un `.aar` resuelve. Antes se compilaba contra
+// el android.jar solo y ese tipo se subrayaba como un error que la compilación nunca da.
+func TestCheckResuelveElClassesJarDeUnAar(t *testing.T) {
+	jarSDK := jarDelSDKExigido(t)
+	raiz := t.TempDir()
+	t.Chdir(raiz)
+	jarDePrueba(t, filepath.Join(raiz, "classes.jar"),
+		clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma))
+	datos, err := os.ReadFile(filepath.Join(raiz, "classes.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(raiz, "jar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jarDePrueba(t, filepath.Join(raiz, "jar", "dep.aar"), map[string][]byte{"classes.jar": datos})
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
+
+	r := revisarFuenteJava(fuenteUsoSuma, "Uso.java", jarSDK, raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("check no vio la clase del AAR: %+v", r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("check no llegó al emisor: aviso %q", r.Aviso)
+	}
+}
+
 // TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia cierra I3 con dependencias: la vuelta sin
 // cambios reutiliza, y cambiar un byte de `jar/` —sin tocar ni un fuente— abre la compilación otra
 // vez, porque la huella del classpath entra en el estado.
 func TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia(t *testing.T) {
-	jarSDK := jarDelSDK(t)
+	jarSDK := jarDelSDKExigido(t)
 	anterior := androidJar
 	androidJar = jarSDK
 	DataTable = Data{}

@@ -36,11 +36,19 @@ type entradaClasspath struct {
 // después, en el orden de `getFiles` (léxico y estable, para que dos builds del mismo proyecto abran
 // los jars en el mismo orden).
 func entradasDelClasspath(rutaAndroidJar string) ([]entradaClasspath, error) {
+	return entradasDelClasspathEn("", rutaAndroidJar)
+}
+
+// entradasDelClasspathEn es entradasDelClasspath sobre la raíz de un proyecto: `jar/` se busca ahí y
+// no en el directorio de trabajo. `compile` y `build` pasan vacío porque trabajan sobre el cwd;
+// `check` diagnostica un fichero que puede estar fuera de él y tiene que ver las dependencias de su
+// proyecto, no las del directorio desde el que se invocó.
+func entradasDelClasspathEn(raiz, rutaAndroidJar string) ([]entradaClasspath, error) {
 	entradas := []entradaClasspath{{abrir: rutaAndroidJar, huella: huellaDelJarTexto(rutaAndroidJar)}}
-	for _, jar := range allJars() {
+	for _, jar := range jarsEn(raiz) {
 		entradas = append(entradas, entradaClasspath{abrir: jar, huella: huellaDelJarTexto(jar)})
 	}
-	for _, aar := range allAars() {
+	for _, aar := range aarsEn(raiz) {
 		classes, err := classesJarDelAar(aar)
 		if err != nil {
 			return nil, err
@@ -78,7 +86,17 @@ func huellaDelClasspath(entradas []entradaClasspath) string {
 // allAars devuelve los `.aar` del proyecto. Es la mitad que `allJars` no ve: un AAR es un zip con
 // `classes.jar`, `res/` y `lib/`, y el compilador solo consume su `classes.jar`.
 func allAars() []string {
-	aars, _ := getFiles("jar", ".aar", false)
+	return aarsEn("")
+}
+
+// jarsEn y aarsEn son las dependencias de la raíz que se les da (vacía: el directorio de trabajo).
+func jarsEn(raiz string) []string {
+	jars, _ := getFiles(filepath.Join(raiz, "jar"), ".jar", false)
+	return jars
+}
+
+func aarsEn(raiz string) []string {
+	aars, _ := getFiles(filepath.Join(raiz, "jar"), ".aar", false)
 	return aars
 }
 

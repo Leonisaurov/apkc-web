@@ -34,10 +34,9 @@ public class MainActivity extends Activity {
 }
 `
 
-// javac17 busca un javac 17 y lo devuelve, o salta el test. Es el compilador de referencia de este
-// caso: el que se midio para el subconjunto.
-func javac17(t *testing.T) string {
-	t.Helper()
+// buscarJavac17 devuelve el javac 17 de la máquina, o vacío si no hay. Es el compilador de referencia
+// de este caso: el que se midio para el subconjunto.
+func buscarJavac17() string {
 	for _, c := range []string{os.Getenv("JAVAC17"), homeDir() + "/opt/jdk17/bin/javac", "javac"} {
 		if c == "" {
 			continue
@@ -50,6 +49,14 @@ func javac17(t *testing.T) string {
 		if err != nil || !strings.Contains(string(salida), "javac 17") {
 			continue
 		}
+		return ruta
+	}
+	return ""
+}
+
+func javac17(t *testing.T) string {
+	t.Helper()
+	if ruta := buscarJavac17(); ruta != "" {
 		return ruta
 	}
 	t.Skip("sin javac 17: no hay con que comparar el acceso estatico encadenado")

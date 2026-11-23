@@ -783,8 +783,7 @@ func compileKotlin(incremental bool) ([]string, bool) {
 // allJars returns every jar of the project. It is used for classpaths, where
 // an incremental subset would silently drop dependencies.
 func allJars() []string {
-	jars, _ := getFiles("jar", ".jar", false)
-	return jars
+	return jarsEn("")
 }
 
 // classpath joins the entries the way the tool being called reads them, which is
