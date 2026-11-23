@@ -453,44 +453,95 @@ func (o ordenDeIntercambio) Set(v string) error {
 	return nil
 }
 
-// eventoDeIntercambio parte `clase/metodo(proto)=fichero.dex` en el evento del guion. La clase es un
-// descriptor (`Lcom/hola/Saludo;`) y el método empieza tras el `;`, así que las barras del paquete no
-// se confunden con la que separa el método. Sin `/metodo` el evento pide la clase entera.
+// eventoDeIntercambio parte `clase/metodo(proto)=fichero.dex` en el evento del guion. La firma la
+// parte parteFirmaDeIntercambio, que sigue la gramática del descriptor DEX; aquí solo se lee el dex y
+// se rellena el evento, porque el `=` no puede aparecer en una firma y sí al final de la ruta.
 func eventoDeIntercambio(valor string) (eventoUsuario, error) {
 	espec, ruta, ok := strings.Cut(valor, "=")
 	if !ok || strings.TrimSpace(ruta) == "" {
 		return eventoUsuario{}, fmt.Errorf("--intercambiar necesita clase/metodo(proto)=fichero.dex, "+
 			"no %s", strconv.Quote(valor))
 	}
-	i := strings.LastIndex(espec, ";")
-	if i < 0 {
-		return eventoUsuario{}, fmt.Errorf("--intercambiar necesita el descriptor de la clase "+
-			"(Lcom/hola/Saludo;), no %s", strconv.Quote(espec))
-	}
-	clase := espec[:i+1]
-	cola := strings.TrimSpace(espec[i+1:])
-	ev := eventoUsuario{Tipo: ordenIntercambiarTipo, Dato: valor, Clase: clase}
-	if cola != "" {
-		cola = strings.TrimPrefix(cola, "/")
-		abre := strings.Index(cola, "(")
-		if abre <= 0 {
-			return eventoUsuario{}, fmt.Errorf("--intercambiar necesita el método con su proto, "+
-				"como valor()I, no %s", strconv.Quote(cola))
-		}
-		ev.Metodo = cola[:abre]
-		ev.Proto = cola[abre:]
-		cierra := strings.Index(ev.Proto, ")")
-		if cierra < 0 || cierra+1 >= len(ev.Proto) {
-			return eventoUsuario{}, fmt.Errorf("--intercambiar: el proto de %s no tiene la forma "+
-				"(parametros)retorno", ev.Metodo)
-		}
+	clase, metodo, proto, err := parteFirmaDeIntercambio(espec)
+	if err != nil {
+		return eventoUsuario{}, err
 	}
 	datos, err := os.ReadFile(ruta)
 	if err != nil {
 		return eventoUsuario{}, fmt.Errorf("--intercambiar: %w", err)
 	}
-	ev.Dex = datos
-	return ev, nil
+	return eventoUsuario{
+		Tipo:   ordenIntercambiarTipo,
+		Dato:   valor,
+		Dex:    datos,
+		Clase:  clase,
+		Metodo: metodo,
+		Proto:  proto,
+	}, nil
+}
+
+// parteFirmaDeIntercambio parte la firma de `--intercambiar` con la gramática del descriptor DEX:
+// `Lcom/hola/Saludo;` termina en su **primer** `;` —el nombre de la clase no lleva `;` y sus barras
+// de paquete quedan dentro— y lo que sigue es o nada, o `/metodo` sin proto, o `/metodo(proto)retorno`.
+// El proto puede llevar tipos de referencia (`Landroid/os/Bundle;`) y arreglos (`[I`): sus `;` y sus
+// `[` vienen después del que cerró la clase, así que no la confunden. Cortar por el último `;`, como
+// se hacía antes, partía `Lcom/hola/Saludo;/onCreate(Landroid/os/Bundle;)V` dentro del parámetro y
+// rechazaba el intercambio.
+func parteFirmaDeIntercambio(espec string) (clase, metodo, proto string, err error) {
+	espec = strings.TrimSpace(espec)
+	if !strings.HasPrefix(espec, "L") {
+		return "", "", "", fmt.Errorf("--intercambiar necesita el descriptor de la clase "+
+			"(Lcom/hola/Saludo;), no %s", strconv.Quote(espec))
+	}
+	fin := strings.IndexByte(espec, ';')
+	if fin < 0 {
+		return "", "", "", fmt.Errorf("--intercambiar necesita el descriptor de la clase "+
+			"(Lcom/hola/Saludo;), no %s", strconv.Quote(espec))
+	}
+	clase = espec[:fin+1]
+	cola := espec[fin+1:]
+	if cola == "" {
+		return clase, "", "", nil
+	}
+	if !strings.HasPrefix(cola, "/") {
+		return "", "", "", fmt.Errorf("--intercambiar: tras %s se esperaba /metodo(proto), no %s",
+			clase, strconv.Quote(cola))
+	}
+	cola = cola[1:]
+	abre := strings.IndexByte(cola, '(')
+	if abre < 0 {
+		// La forma sin proto pide el método por nombre; el proto lo resuelve la sesión.
+		if cola == "" {
+			return "", "", "", fmt.Errorf("--intercambiar: falta el nombre del método tras %s", clase)
+		}
+		return clase, cola, "", nil
+	}
+	if abre == 0 {
+		return "", "", "", fmt.Errorf("--intercambiar: falta el nombre del método tras %s", clase)
+	}
+	metodo = cola[:abre]
+	proto = cola[abre:]
+	cierra := strings.IndexByte(proto, ')')
+	if cierra < 0 || cierra+1 >= len(proto) {
+		return "", "", "", fmt.Errorf("--intercambiar: el proto de %s no tiene la forma "+
+			"(parametros)retorno", metodo)
+	}
+	if !esTipoDeRetorno(proto[cierra+1:]) {
+		return "", "", "", fmt.Errorf("--intercambiar: el retorno de %s no es un descriptor de "+
+			"tipo, no %s", metodo, strconv.Quote(proto[cierra+1:]))
+	}
+	return clase, metodo, proto, nil
+}
+
+// esTipoDeRetorno dice si `t` puede ser el tipo de vuelta de un proto: `V`, un primitivo, o una
+// referencia o arreglo (`L…;`, `[…`). Se aplica ya troceado, después del `)` que cierra los
+// parámetros, así que el `;` de un parámetro de referencia no llega hasta aquí.
+func esTipoDeRetorno(t string) bool {
+	switch t[0] {
+	case 'V', 'Z', 'B', 'S', 'C', 'I', 'J', 'F', 'D', 'L', '[':
+		return true
+	}
+	return false
 }
 
 // ordenDeRecrear es la bandera sin valor de `--recrear`: entra en el mismo guion que las demás

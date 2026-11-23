@@ -241,7 +241,8 @@ func TestElIntercambioSoloSerializaSusCamposPublicos(t *testing.T) {
 
 // TestElFlagDeHotSwapParteClaseYMetodo comprueba la forma del comando, que es lo único que la
 // primitiva no ve: la clase, el método y el proto salen de `clase/metodo(proto)=fichero.dex`, el
-// dex se lee al parsear, y las formas ambiguas se rechazan antes de ejecutar nada.
+// dex se lee al parsear, y las formas sin descriptor o sin retorno se rechazan antes de ejecutar
+// nada. (La forma `/metodo` sin proto se acepta; la cubre TestLaFirmaDeIntercambioAceptaLasTresFormas.)
 func TestElFlagDeHotSwapParteClaseYMetodo(t *testing.T) {
 	ruta := filepath.Join(t.TempDir(), "saludo.dex")
 	datos := dexDeFuentes(t, fuenteJava{nombre: "Saludo.java", contenido: fuenteSaludoV2})
@@ -291,10 +292,10 @@ func TestElFlagDeHotSwapParteClaseYMetodo(t *testing.T) {
 	}
 
 	for _, malo := range []string{
-		"Lcom/hola/Saludo;/valor()I",        // sin fichero
-		"com/hola/Saludo/valor()I=" + ruta,  // sin descriptor
-		"Lcom/hola/Saludo;/valor=" + ruta,   // sin proto
-		"Lcom/hola/Saludo;/valor()=" + ruta, // sin retorno
+		"Lcom/hola/Saludo;/valor()I",         // sin fichero
+		"com/hola/Saludo/valor()I=" + ruta,   // sin descriptor
+		"Lcom/hola/Saludo;/valor()X=" + ruta, // retorno que no es descriptor
+		"Lcom/hola/Saludo;/valor()=" + ruta,  // sin retorno
 		"Lcom/hola/Saludo;/valor()I=/no/existe.dex",
 	} {
 		if _, err := eventoDeIntercambio(malo); err == nil {
