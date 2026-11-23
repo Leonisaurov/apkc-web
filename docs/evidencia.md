@@ -10521,3 +10521,40 @@ los bytes del dex y pintar `ejecucion.intercambios`. No se tocó red ni publicac
 frentes —la verificación ampliada de ART, los arreglos de seguridad y el hot swap—, así que no se puede
 leer como su verificación. Repetir `tools/entorno.sh gate` tras integrarlos queda pendiente de
 autorización del usuario.
+
+## 239. Los records: `invokedynamic` desugrado a métodos directos
+
+Medido el 2026-11-23 sobre `5f04c29` (`feat(dex): desugra los records de invokedynamic`). Hasta este
+commit un `record` caía en el rechazo nominado de `§235`; ahora el bootstrap `ObjectMethods.bootstrap` se
+desugra en la clase dueña, sin `d8` y sin exigir `min-api` 34.
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  JAVAC17=/home/leonisauro/opt/jdk17/bin/javac GOMAXPROCS=2 GOGC=50 \
+  go test -p=1 -count=1 -run 'TestRecordSeDesugra|TestRecordYLambdaEnElMismoDex|TestRecordTagNoSeDuplica|TestIndyDeRecordFueraDeSuClaseSeRechazaConNombre' -v .
+```
+
+**Resultado**: los 4 tests en verde y `ok … 0.175s`; la suite completa del builder dio `ok … 100.297s`,
+con `gofmt` y `go vet` limpios.
+
+**Los cinco pasos.** (1) `sitioDeRecord` (`apkc/record.go:71`) reconoce el bootstrap y **conserva el
+rechazo nominado** para los demás; (2) `$record$getFieldsAsObjects` se genera con boxing por tipo;
+(3) `toString`, `hashCode` y `equals` se escriben directos en la clase dueña; (4) el `p.record` queda con
+`invoke-direct` + `move-result`; y (5) se añade la `RecordTag` sintética sin pedir `min-api` 34
+(`apkc/record.go:29`, `apkc/lambda.go:158`).
+
+**Oráculos.** `javap -v` del bootstrap `ObjectMethods.bootstrap` con sus argumentos (`Class`, `"x;y"` y
+un `REF_getField` por componente); `d8 --min-api 26` y `dexdump` sobre el resultado; y ART en Droidloom
+(`10.177.0.2:5555`) con `RecordMain`, `MixMain` (diez tipos) y `LocalRec`, con salida **idéntica a la
+JVM**.
+
+**Una decisión medida, no copiada.** `hashCode` sigue a la JVM —33 para `Punto(1,2)`— y no a `d8`, que da
+160117539 y hace reventar `equals(null)`; `equals` añade guarda de nulo. `getFieldsAsObjects` usa
+`new-array` + `aput-object` (22 unidades frente a 17 de `d8`).
+
+**Falsificaciones.** Neutralizar `sitioDeRecord` devuelve el rechazo viejo; quitar la caja del `int` da
+`VerifyError`; y cambiar `invoke-direct` por `invoke-virtual`, otro `VerifyError`.
+
+**Fronteras de este `§`.** El multidex con la `RecordTag` en `extras` no está medido. No se corrió gate,
+chromium, red ni publicación.
