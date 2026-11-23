@@ -8,7 +8,7 @@ package main
 // lee en una pasada propia, sin un *zip.File por entrada, y se deja en build/jarindice.bin con su
 // huella en la cabecera; la vuelta siguiente lee ese fichero y no parsea el zip.
 //
-// La huella es el tamaño del jar y el SHA-1 de su directorio central, **no su fecha**. La fecha no es
+// La huella es el tamaño del jar y el CRC-32 de su directorio central, **no su fecha**. La fecha no es
 // un dato del contenido: el hospedador de la pestaña devolvía una fecha sintética que cambiaba en cada
 // recarga aunque el jar fuera el mismo, y con ella se reindexaba y `clasesAlDia()` recomponía el
 // proyecto entero por nada. El directorio central es exactamente lo que el índice guarda —nombres,
