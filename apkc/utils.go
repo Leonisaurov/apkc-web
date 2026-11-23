@@ -121,6 +121,13 @@ type Data struct {
 	// them, so a resource id that moved is a change for the sources that read that
 	// id and for nobody else: this table is what tells the two apart.
 	ClassFields map[string]map[string]string `json:"classFields,omitempty"`
+	// ClassRoster is the digest of every file under build/classes, names and bytes.
+	// The Go compiler hands src/ to the emitter as one project, so the classes it
+	// leaves behind can only be reused when no source moved at all; the sources alone
+	// cannot say whether the directory is whole, because a build killed halfway
+	// leaves the record of a compile it never finished. This is the second half of
+	// that answer (classRosterSHA).
+	ClassRoster string `json:"classRoster,omitempty"`
 }
 
 const DataFile = "build/incremental.json"

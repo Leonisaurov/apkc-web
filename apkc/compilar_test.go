@@ -204,7 +204,7 @@ func TestEtapasDeBuildEnGo(t *testing.T) {
 	pon(t, raiz, "src/com/hola/apkcstudio/R.java", fuenteRStudio)
 	t.Chdir(raiz)
 
-	fuente, ran := compilarFuentesEnGo()
+	fuente, ran := compilarFuentesEnGo(false)
 	if !ran {
 		t.Fatal("la etapa de compilacion no corro")
 	}
@@ -227,6 +227,54 @@ func TestEtapasDeBuildEnGo(t *testing.T) {
 		if dato[i] != esperado[i] {
 			t.Fatalf("dex distinto en el byte %d: %#02x frente a %#02x", i, dato[i], esperado[i])
 		}
+	}
+}
+
+// TestCompilarEnGoReutilizaLasClasesSinFuentesCambiados cierra el atajo de `--inc`: una vuelta sin
+// fuentes cambiados no vuelve a emitir, un fuente editado la abre otra vez, y una clase borrada a mano
+// también, porque el roster es lo que dice si build/classes sigue siendo el que la compilación dejó.
+func TestCompilarEnGoReutilizaLasClasesSinFuentesCambiados(t *testing.T) {
+	androidJar = jarDelSDK(t)
+	raiz := t.TempDir()
+	pon(t, raiz, "src/com/hola/apkcstudio/MainActivity.java", fuenteMainActivityStudio)
+	pon(t, raiz, "src/com/hola/apkcstudio/R.java", fuenteRStudio)
+	t.Chdir(raiz)
+	DataTable = Data{}
+	t.Cleanup(func() { DataTable = Data{} })
+
+	if _, ran := compilarFuentesEnGo(true); !ran {
+		t.Fatal("con el estado vacío la etapa tiene que compilar")
+	}
+	saveTable()
+	antes := classRosterSHA()
+	if antes == "" {
+		t.Fatal("la compilación no dejó clases que reutilizar")
+	}
+
+	if _, ran := compilarFuentesEnGo(true); ran {
+		t.Fatal("sin fuentes cambiados la etapa no puede volver a compilar")
+	}
+	if classRosterSHA() != antes {
+		t.Fatal("la vuelta reutilizada cambió las clases")
+	}
+
+	// una clase que desaparece de build/classes no se puede suponer: vuelve a compilar y la repone
+	clases, _ := getFiles(filepath.Join("build", "classes"), ".class", false)
+	if err := os.Remove(clases[0]); err != nil {
+		t.Fatal(err)
+	}
+	if _, ran := compilarFuentesEnGo(true); !ran {
+		t.Fatal("con una clase menos que las registradas la etapa tiene que compilar")
+	}
+	if classRosterSHA() != antes {
+		t.Fatal("la recompilación no repuso las mismas clases")
+	}
+
+	// y un fuente con otros bytes abre el atajo por su lado
+	pon(t, raiz, "src/com/hola/apkcstudio/MainActivity.java",
+		fuenteMainActivityStudio+"\nclass ExtraDeLaPrueba { static int n() { return 7; } }\n")
+	if _, ran := compilarFuentesEnGo(true); !ran {
+		t.Fatal("un fuente editado tiene que compilar")
 	}
 }
 

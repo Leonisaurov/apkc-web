@@ -293,7 +293,7 @@ func _build(o buildOpts) {
 	var compiledJava []string
 	var compJava bool
 	if o.compiler == compilerGo {
-		compiledJava, compJava = compilarFuentesEnGo()
+		compiledJava, compJava = compilarFuentesEnGo(o.incremental)
 	} else {
 		compiledJava, compJava = compileJava(o.incremental)
 	}

@@ -148,11 +148,18 @@ func revisarCompilerGo(o buildOpts) error {
 }
 
 // compilarFuentesEnGo es la etapa de `apkc build --compiler go` que sustituye a javac: lee src/*.java,
-// escribe build/classes/*.class y dice los fuentes que paso, que es lo que la firma de la etapa espera.
-// No hay incremental aqui: el emisor resuelve los nombres entre ficheros, así que un fuente que cambia
-// obliga a compilarlos todos, y eso es lo que hace.
-func compilarFuentesEnGo() ([]string, bool) {
+// escribe build/classes/*.class y dice los fuentes que pasó, que es lo que la firma de la etapa espera.
+// El emisor resuelve los nombres entre ficheros, así que mientras haya un fuente cambiado los compila
+// todos. Lo que sí se puede saltar es la vuelta en la que no cambió ninguno: no hay nada que resolver,
+// las clases de build/classes son exactamente las que el emisor escribiría otra vez, y esa es la
+// única forma de que la segunda pasada de la pestaña no pague el proyecto entero (no hay caché en
+// memoria que sobreviva: cada `apkc build` de la página arranca una instancia nueva de Go).
+func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 	defer timeIt("compile go")()
+	if incremental && clasesAlDia() {
+		LogI("build", "ningun fuente cambio: se reutilizan las clases de", filepath.Join("build", "classes"))
+		return nil, false
+	}
 	fuentes, err := fuentesJava([]string{"src"})
 	if err != nil {
 		LogF("build", err.Error())
@@ -171,8 +178,51 @@ func compilarFuentesEnGo() ([]string, bool) {
 	for _, f := range fuentes {
 		nombres = append(nombres, f.nombre)
 	}
+	if incremental {
+		// los fuentes del camino Go no los registraba nadie: sin esto no hay contra qué
+		// comparar en la vuelta siguiente y el atajo de arriba no se abre nunca
+		updateRecords(nombres)
+		DataTable.ClassRoster = classRosterSHA()
+	}
 	LogI("build", len(nombres), "fuentes de Java en Go ->", len(clases), "clases")
 	return nombres, true
+}
+
+// clasesAlDia responde si las clases de build/classes son exactamente las que el emisor escribiría
+// ahora: cada fuente de src/ conserva los bytes que vio la última compilación y el directorio de clases
+// es el mismo, nombre por nombre y byte por byte, que el que esa compilación dejó. Sin la segunda mitad
+// un build detenido a medias (o un `build/classes` tocado a mano) se creería hecho.
+func clasesAlDia() bool {
+	loadTable()
+	fuentes, _ := getFiles("src", ".java", false)
+	if len(fuentes) == 0 {
+		return false
+	}
+	for _, fuente := range fuentes {
+		if recordedDigest(fuente) == "" || hasChanged(fuente) {
+			return false
+		}
+	}
+	roster := classRosterSHA()
+	return roster != "" && roster == DataTable.ClassRoster
+}
+
+// classRosterSHA resume build/classes en un solo digest: la ruta relativa y el SHA-1 de cada fichero,
+// en el orden léxico con el que filepath.Walk los entrega. Vacío cuando no hay ninguna clase.
+func classRosterSHA() string {
+	nombres, _ := getFiles(filepath.Join("build", "classes"), ".class", false)
+	lineas := make([]string, 0, len(nombres))
+	for _, nombre := range nombres {
+		digest, err := fileSHA1(nombre)
+		if err != nil {
+			return ""
+		}
+		lineas = append(lineas, nombre+"="+digest)
+	}
+	if len(lineas) == 0 {
+		return ""
+	}
+	return sha1Text(strings.Join(lineas, "\n"))
 }
 
 // dexarClasesEnGo es la etapa que sustituye a d8 sobre las clases del proyecto: las lee de build/classes
