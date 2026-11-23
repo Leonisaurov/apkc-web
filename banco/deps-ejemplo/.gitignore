@@ -1,0 +1,5 @@
+# El jar de la dependencia y el build los produce construir.sh: no se versionan (regla 2).
+jar/*.jar
+build/
+# R.java lo escribe el enlazador en cada build (aapt2 hace lo mismo): no es fuente.
+src/**/R.java
