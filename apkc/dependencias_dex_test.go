@@ -94,6 +94,10 @@ func TestBuildGoDexaLaDependenciaSinD8(t *testing.T) {
 		t.Fatal("la etapa de compilación no corrió")
 	}
 	dexarClasesEnGo()
+	cacheProyecto, err := os.ReadFile(cacheDexFichero)
+	if err != nil {
+		t.Fatalf("la caché del proyecto no está tras dexar la app: %v", err)
+	}
 
 	jars, digests := dependenciasDexeables()
 	if len(jars) != 1 {
@@ -108,6 +112,29 @@ func TestBuildGoDexaLaDependenciaSinD8(t *testing.T) {
 	}
 	if exists(marcador) {
 		t.Fatal("el camino Go arrancó d8 para dexar la dependencia")
+	}
+	// la caché del bucket vive en su fichero y la del proyecto no se toca: escribir la global era
+	// el defecto que dejaba el bucket sin caché y se llevaba por delante la de build/classes
+	caches, err := filepath.Glob(filepath.Join("build", "dexcache", "deps-gocache-*.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caches) != 1 {
+		t.Fatalf("%d cachés de bucket, medida una: %v", len(caches), caches)
+	}
+	trasDeps, err := os.ReadFile(cacheDexFichero)
+	if err != nil {
+		t.Fatalf("dexar el bucket borró la caché del proyecto: %v", err)
+	}
+	if string(trasDeps) != string(cacheProyecto) {
+		t.Fatal("dexar el bucket sobrescribió la caché del proyecto")
+	}
+	temporales, err := filepath.Glob(filepath.Join("build", "dexcache", "*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temporales) != 0 {
+		t.Fatalf("quedaron temporales de caché sin renombrar: %v", temporales)
 	}
 
 	// el dex del proyecto y el de la dependencia son dos ficheros distintos, y cada uno lleva lo

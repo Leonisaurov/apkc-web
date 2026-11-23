@@ -30,6 +30,7 @@ import (
 	"crypto/sha1"
 	"encoding/binary"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -209,11 +210,18 @@ func (c *cacheDex) guardaDepuracion(clave [20]byte, blob []byte) {
 	c.nuevoDepuracion[clave] = blob
 }
 
-// guarda escribe la caché de esta pasada: solo lo que esta pasada tocó. Un fallo al escribir no
-// puede tumbar el build —la caché es un atajo, no un producto— y se queda en un aviso. Va por
-// fichero temporal y `rename`, como el estado incremental (`saveTable`): un build que muere a
-// mitad de la escritura deja el temporal, nunca una caché a medias en el sitio bueno.
+// guarda escribe la caché de esta pasada en **su** fichero (`c.fichero`): la del proyecto en
+// `build/dexcache.bin` y cada bucket de dependencias en el suyo. Escribir en la global era el
+// defecto que hacía que un bucket pisara la caché del proyecto y que la del bucket no existiera
+// nunca. Solo se guarda lo que esta pasada tocó. Un fallo al escribir no puede tumbar el build
+// —la caché es un atajo, no un producto— y se queda en un aviso. Va por fichero temporal y
+// `rename`, como el estado incremental (`saveTable`): un build que muere a mitad de la escritura
+// deja el temporal, nunca una caché a medias en el sitio bueno.
 func (c *cacheDex) guarda() {
+	destino := c.fichero
+	if destino == "" {
+		destino = cacheDexFichero
+	}
 	cuerpo := make([]byte, 0, 20+8+len(c.nuevoCodigo)*64)
 	cuerpo = append(cuerpo, c.huella[:]...)
 	escribe := func(mapa map[[20]byte][]byte) {
@@ -234,13 +242,22 @@ func (c *cacheDex) guarda() {
 	b = append(b, cacheDexMarca...)
 	b = append(b, resumen[:]...)
 	b = append(b, cuerpo...)
-	tmp := cacheDexFichero + ".tmp"
+	// el temporal se deriva del destino y de ninguna global: el nombre del fichero ya separa el
+	// dex del proyecto (build/dexcache.bin) de cada bucket (build/dexcache/deps-gocache-…), así
+	// que dos buckets dexando a la vez no comparten temporal y el rename publica el suyo
+	tmp := destino + ".tmp"
+	if dir := filepath.Dir(destino); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			LogW("build", "no se pudo crear", dir, ":", err.Error())
+			return
+		}
+	}
 	if err := os.WriteFile(tmp, b, 0644); err != nil {
 		LogW("build", "no se pudo escribir", tmp, ":", err.Error())
 		return
 	}
-	if err := os.Rename(tmp, cacheDexFichero); err != nil {
-		LogW("build", "no se pudo renombrar", tmp, ":", err.Error())
+	if err := os.Rename(tmp, destino); err != nil {
+		LogW("build", "no se pudo renombrar", tmp, "en", destino, ":", err.Error())
 	}
 }
 

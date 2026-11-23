@@ -1409,6 +1409,9 @@ func dexarBucketEnGo(jars []string, staging string) ([]byte, error) {
 		return nil, err
 	}
 	cache.guarda()
+	if r := cache.resumen(); r.total > 0 {
+		LogI("build", r.reutilizados, "de", r.total, "code_item reutilizados de", cache.fichero)
+	}
 	LogI("build", len(clases), "clases de", len(jars), "dependencias ->", len(dex), "bytes")
 	return nil, nil
 }
