@@ -9700,3 +9700,46 @@ cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-3
 
 **Fronteras de este `§`.** Sigue sin gate, sin chromium y sin wasm: la medición es nativa. El SHA-1
 del cuerpo detecta la corrupción, no la repara: el coste de una caché ilegible es el dexado completo.
+
+## 213. El intérprete de la vista previa ejecuta la tabla de excepciones del dex
+
+La tabla que el compilador del fork ya emitía (§71, E1.1) ahora se **ejecuta**. `readCodeItem`
+(`apkc/dexcode.go`) lee los `try_item` y la `encoded_catch_handler_list` detrás de las insns —con el
+relleno de una unidad cuando el cuerpo tiene un número impar de palabras— y guarda los bytes de la
+lista tal cual, porque el `handler_off` de cada `try_item` es un desplazamiento en bytes a ella.
+`ejecutaCuerpo` (`apkc/previewinterprete.go`) ya no rechaza `tries_size > 0`: corre el cuerpo y, si el
+error es una excepción de la app (`excepcionDalvik`), busca el primer `try_item` cuyo rango cubre la
+unidad, recorre sus filas en orden (tipo, dirección) y acepta el `catch_all`, sube por la jerarquía
+del dex y por la del framework que hace falta para despachar (`padresDeExcepcion`) y reanuda en el
+`handler_pc` con `move-exception` entregando el objeto. Un error que **no** es una excepción —un
+opcode sin decodificar, un registro fuera del marco— sigue siendo un fallo duro y no se disfraza de
+catch. El `throw` del dex lanza su objeto; `Integer.parseInt` que no parsea lanza
+`NumberFormatException`; la división y el resto entero por cero lanzan `ArithmeticException`; y
+`Throwable` gana stubs de `getMessage`, `getLocalizedMessage`, `toString` y `printStackTrace` sobre el
+mensaje que guarda su constructor. Sin handler, el error sale con el tipo y el mensaje de la
+excepción, marcado como fallo de la app y no como dex malformado.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'Test.*Try|Test.*Excepc|Test.*Catch' -v .
+```
+
+**Resultado**: `PASS` en `TestElInterpreteEjecutaElTryCatchYDejaElTexto` (un `Integer.parseInt("x")`
+lanzado desde un método propio y capturado por `catch (NumberFormatException e)` deja
+`capturado: For input string: "x"` en el `TextView`, y la prueba exige **una** sola escritura porque el
+`setText` de dentro del `try` no llega a ejecutarse), en
+`TestElInterpreteEjecutaElTryYAtrapaLaDivisionPorCero` (`4 / 2` imprime `resultado 2` y `4 / 0`
+imprime `fallo -1`, que es el `catch`) y en `TestElInterpretePropagaElThrowNoCapturado` (el error
+nombra `IllegalStateException` y `boom`, no hay capturas y `malformado` es falso). La suite entera
+queda verde: `ok github.com/ajinasokan/apkc 58.559s`. La prueba que medía la frontera anterior
+—`TestElInterpreteRechazaLasExcepcionesPorSuNombre`— se reescribió como la del try con división por
+cero: esa frontera ya no existe.
+
+**Fronteras de este `§`.** El `finally` y el multi-catch **no** se han medido: el compilador los emite
+como catch-all y como varias filas del mismo handler, y el despacho debería cubrirlos, pero eso no
+está probado y no se afirma. Una excepción que cruce de una actividad a otra no existe: el emulador no
+tiene pila de actividades. Los tipos del framework fuera de `padresDeExcepcion` se reconocen por el
+sufijo `Exception;`/`Error;` para el `throw`, pero un `catch (PadreDesconocido e)` no casaría con su
+hijo: la tabla de padres es la que hay, no la de Android entera. Sigue sin gate, sin chromium y sin
+wasm: la medición es nativa.

@@ -131,7 +131,85 @@ func (d *dexFile) readCodeItem(off uint32) (codeItem, error) {
 	for i := uint32(0); i < c.insnsSize; i++ {
 		c.insns[i] = binary.LittleEndian.Uint16(d.raw[off+16+i*2:])
 	}
+	if err := d.readTries(&c, off); err != nil {
+		return c, err
+	}
 	return c, nil
+}
+
+// readTries lee la tabla de excepciones que va detrás de las insns: los try_item y la lista de
+// encoded_catch_handler. Los bytes de la lista se guardan tal cual porque el `handler_off` de cada
+// try_item es un desplazamiento en bytes desde su principio, y la lista abre con su propio recuento.
+func (d *dexFile) readTries(c *codeItem, off uint32) error {
+	if c.triesSize == 0 {
+		return nil
+	}
+	at := int(off) + 16 + 2*int(c.insnsSize)
+	if c.insnsSize%2 != 0 {
+		at += 2 // relleno de una unidad entre las insns y la tabla
+	}
+	fin := at + 8*int(c.triesSize)
+	if fin > len(d.raw) {
+		return fmt.Errorf("the code_item at %d claims %d try items, past the end of the file", off, c.triesSize)
+	}
+	c.tries = make([]tryItem, 0, c.triesSize)
+	for i := 0; i < int(c.triesSize); i++ {
+		b := d.raw[at+i*8:]
+		c.tries = append(c.tries, tryItem{
+			start:      binary.LittleEndian.Uint32(b),
+			count:      binary.LittleEndian.Uint16(b[4:]),
+			handlerOff: binary.LittleEndian.Uint16(b[6:]),
+		})
+	}
+	cuantos, pos, err := d.uleb(uint32(fin))
+	if err != nil {
+		return fmt.Errorf("the handler list at %d: %w", fin, err)
+	}
+	for i := uint32(0); i < cuantos; i++ {
+		if pos, err = d.saltaCatchHandler(pos); err != nil {
+			return fmt.Errorf("handler #%d at %d: %w", i, pos, err)
+		}
+	}
+	c.handlers = append([]byte(nil), d.raw[fin:pos]...)
+	for _, tr := range c.tries {
+		if uint64(tr.start)+uint64(tr.count) > uint64(c.insnsSize) {
+			return fmt.Errorf("the try item at %d covers [%d,%d) and the code has %d words",
+				off, tr.start, tr.start+uint32(tr.count), c.insnsSize)
+		}
+		if int(tr.handlerOff) >= len(c.handlers) {
+			return fmt.Errorf("the try item at %d points to the handler at %d, past the %d byte list",
+				off, tr.handlerOff, len(c.handlers))
+		}
+	}
+	return nil
+}
+
+// saltaCatchHandler recorre un encoded_catch_handler y devuelve la posición siguiente: su tamaño en
+// sleb (negativo cuando lleva catch-all), los pares (tipo, dirección) y la dirección del catch-all,
+// que va al final y existe cuando el tamaño es negativo o cero.
+func (d *dexFile) saltaCatchHandler(at uint32) (uint32, error) {
+	n, pos, err := d.sleb(at)
+	if err != nil {
+		return 0, err
+	}
+	pares := n
+	if pares < 0 {
+		pares = -pares
+	}
+	for i := int32(0); i < pares; i++ {
+		if _, pos, err = d.uleb(pos); err != nil {
+			return 0, err
+		}
+		if _, pos, err = d.uleb(pos); err != nil {
+			return 0, err
+		}
+	}
+	if n <= 0 {
+		if _, pos, err = d.uleb(pos); err != nil {
+			return 0, err
+		}
+	}
+	return pos, nil
 }
 
 // classData is what a class declares about itself: which fields and methods belong to it, named by

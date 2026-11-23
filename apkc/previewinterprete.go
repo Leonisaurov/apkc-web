@@ -23,10 +23,14 @@ package main
 //     orden de emisión y numerada con `secuencia`, que es el panel de consola de la pestaña. Las
 //     escrituras de view siguen en `capturas`, que es el registro del emulador.
 //
-// Lo que NO hace: JNI, bibliotecas `.so`, multidex, excepciones (`try`/`catch` se rechazan por
-// nombre), `fill-array-data` y cualquier API de framework fuera de los stubs. Una llamada que no se
-// sabe resolver no se inventa: se devuelve el cero de su tipo y se anota un aviso en el JSON, que es
-// lo único que impide que una aproximación se confunda con una ejecución completa.
+// Lo que NO hace: JNI, bibliotecas `.so`, multidex, `fill-array-data` y cualquier API de framework
+// fuera de los stubs. Las excepciones SÍ se ejecutan cuando las lanza el propio intérprete (un
+// `throw` del dex, el `parseInt` que no parsea, una división entera por cero): se busca el handler
+// del `try_item` que cubre la unidad, se respeta el orden de sus filas y el catch-all, y si no hay
+// ninguno el error se propaga con su tipo y su mensaje. Lo que todavía no se mide: el `finally` y el
+// multi-catch, que el compilador emite como catch-all y como varias filas del mismo handler. Una
+// llamada que no se sabe resolver no se inventa: se devuelve el cero de su tipo y se anota un aviso
+// en el JSON, que es lo único que impide que una aproximación se confunda con una ejecución completa.
 //
 // Es código propio (MIT). NekoDroid se leyó como referencia de comportamiento, no de código, y
 // WineDroid (GPL) no se ha traducido ni copiado.
@@ -290,6 +294,9 @@ type objetoDalvik struct {
 	// vistas son las vistas de ESTA instancia inflada, por id: dos filas del mismo layout no
 	// comparten el `findViewById`, como no lo comparten en el aparato.
 	vistas map[uint32]*objetoDalvik
+	// mensajeExcepcion es el texto que un `Throwable` recibió en su constructor: es lo que devuelve
+	// `getMessage()` y lo que el aviso de una excepción sin capturar enseña.
+	mensajeExcepcion string
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -2391,6 +2398,216 @@ func (m *maquinaDalvik) buscaMetodo(clase, nombre, proto string) *metodoDalvik {
 	return nil
 }
 
+// excepcionDalvik es una excepción de la app en vuelo: el descriptor de la clase lanzada y el objeto,
+// que es lo que `move-exception` deja en el registro del handler. Implementa error para subir por las
+// mismas vías que un fallo del intérprete, pero solo ella se busca en la tabla del método: el resto de
+// errores son fallos duros (código que no cabe, un opcode sin decodificar) y no se finge que un catch
+// los atrape.
+type excepcionDalvik struct {
+	tipo   string
+	objeto *objetoDalvik
+}
+
+func (e *excepcionDalvik) Error() string {
+	if e.objeto != nil && e.objeto.mensajeExcepcion != "" {
+		return claseCorta(e.tipo) + ": " + e.objeto.mensajeExcepcion
+	}
+	return claseCorta(e.tipo)
+}
+
+// nuevaExcepcion arma la excepción de un tipo con su mensaje, que es lo que `getMessage()` devuelve si
+// un catch la captura y lo que enseña el aviso cuando nadie la captura.
+func nuevaExcepcion(tipo, formato string, args ...any) *excepcionDalvik {
+	obj := &objetoDalvik{clase: tipo, campos: map[string]any{},
+		mensajeExcepcion: fmt.Sprintf(formato, args...)}
+	return &excepcionDalvik{tipo: tipo, objeto: obj}
+}
+
+// excepcionDe busca una excepción de la app en la cadena de errores. Se recorre con Unwrap, como
+// `esMalformado`, para no arrastrar `errors.As` al binario de wasm.
+func excepcionDe(err error) *excepcionDalvik {
+	for err != nil {
+		if ex, ok := err.(*excepcionDalvik); ok {
+			return ex
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return nil
+		}
+		err = u.Unwrap()
+	}
+	return nil
+}
+
+// padresDeExcepcion es la jerarquía del framework que hace falta para despachar un catch: el dex solo
+// trae las clases del proyecto, y un `catch (Exception e)` nombra un padre del framework mientras el
+// objeto lanzado es un hijo suyo. Las claves y los valores son descriptores del dex.
+var padresDeExcepcion = map[string]string{
+	"Ljava/lang/NumberFormatException;":           "Ljava/lang/IllegalArgumentException;",
+	"Ljava/lang/IllegalArgumentException;":        "Ljava/lang/RuntimeException;",
+	"Ljava/lang/IllegalStateException;":           "Ljava/lang/RuntimeException;",
+	"Ljava/lang/NullPointerException;":            "Ljava/lang/RuntimeException;",
+	"Ljava/lang/ArithmeticException;":             "Ljava/lang/RuntimeException;",
+	"Ljava/lang/ClassCastException;":              "Ljava/lang/RuntimeException;",
+	"Ljava/lang/IndexOutOfBoundsException;":       "Ljava/lang/RuntimeException;",
+	"Ljava/lang/ArrayIndexOutOfBoundsException;":  "Ljava/lang/IndexOutOfBoundsException;",
+	"Ljava/lang/StringIndexOutOfBoundsException;": "Ljava/lang/IndexOutOfBoundsException;",
+	"Ljava/lang/NegativeArraySizeException;":      "Ljava/lang/RuntimeException;",
+	"Ljava/lang/UnsupportedOperationException;":   "Ljava/lang/RuntimeException;",
+	"Ljava/lang/SecurityException;":               "Ljava/lang/RuntimeException;",
+	"Ljava/lang/RuntimeException;":                "Ljava/lang/Exception;",
+	"Ljava/io/IOException;":                       "Ljava/lang/Exception;",
+	"Ljava/io/FileNotFoundException;":             "Ljava/io/IOException;",
+	"Ljava/lang/InterruptedException;":            "Ljava/lang/Exception;",
+	"Ljava/lang/ReflectiveOperationException;":    "Ljava/lang/Exception;",
+	"Ljava/lang/ClassNotFoundException;":          "Ljava/lang/ReflectiveOperationException;",
+	"Ljava/lang/InstantiationException;":          "Ljava/lang/ReflectiveOperationException;",
+	"Ljava/lang/IllegalAccessException;":          "Ljava/lang/ReflectiveOperationException;",
+	"Ljava/lang/NoSuchMethodException;":           "Ljava/lang/ReflectiveOperationException;",
+	"Ljava/lang/NoSuchFieldException;":            "Ljava/lang/ReflectiveOperationException;",
+	"Ljava/lang/CloneNotSupportedException;":      "Ljava/lang/Exception;",
+	"Ljava/text/ParseException;":                  "Ljava/lang/Exception;",
+	"Ljava/lang/Exception;":                       "Ljava/lang/Throwable;",
+	"Ljava/lang/Error;":                           "Ljava/lang/Throwable;",
+	"Ljava/lang/AssertionError;":                  "Ljava/lang/Error;",
+	"Ljava/lang/VirtualMachineError;":             "Ljava/lang/Error;",
+	"Ljava/lang/OutOfMemoryError;":                "Ljava/lang/VirtualMachineError;",
+	"Ljava/lang/StackOverflowError;":              "Ljava/lang/VirtualMachineError;",
+}
+
+// esThrowable dice si un descriptor es una excepción o un error: lo que un `catch` puede nombrar y lo
+// que un `throw` puede lanzar. El sufijo cubre las clases del framework que no están en
+// `padresDeExcepcion`; las del proyecto se resuelven subiendo por el dex.
+func esThrowable(descriptor string) bool {
+	return strings.HasSuffix(descriptor, "Exception;") || strings.HasSuffix(descriptor, "Error;") ||
+		descriptor == "Ljava/lang/Throwable;"
+}
+
+// tipoAcepta dice si un catch de `atrapa` recibe una excepción de tipo `lanzado`: sube por la
+// jerarquía del dex y, cuando la clase no está en el dex, por `padresDeExcepcion`.
+func (m *maquinaDalvik) tipoAcepta(atrapa, lanzado string) bool {
+	for i := 0; i < 32; i++ {
+		if lanzado == atrapa {
+			return true
+		}
+		if cl, ok := m.prog.clases[lanzado]; ok && cl.super != "" && cl.super != lanzado {
+			lanzado = cl.super
+			continue
+		}
+		padre, ok := padresDeExcepcion[lanzado]
+		if !ok {
+			return false
+		}
+		lanzado = padre
+	}
+	return false
+}
+
+// leeUlebEn y leeSlebEn recorren un uleb128/sleb128 dentro de la lista de handlers, que ya está
+// extraída del fichero: `d.uleb` trabaja sobre el dex entero y aquí solo quedan esos bytes.
+func leeUlebEn(b []byte, at int) (uint32, int, bool) {
+	var v uint32
+	var shift uint
+	for {
+		if at >= len(b) || shift > 28 {
+			return 0, at, false
+		}
+		c := b[at]
+		at++
+		v |= uint32(c&0x7f) << shift
+		if c&0x80 == 0 {
+			return v, at, true
+		}
+		shift += 7
+	}
+}
+
+func leeSlebEn(b []byte, at int) (int32, int, bool) {
+	var v int32
+	var shift uint
+	for {
+		if at >= len(b) || shift > 28 {
+			return 0, at, false
+		}
+		c := b[at]
+		at++
+		v |= int32(c&0x7f) << shift
+		shift += 7
+		if c&0x80 == 0 {
+			if shift < 32 && c&0x40 != 0 {
+				v |= -1 << shift
+			}
+			return v, at, true
+		}
+	}
+}
+
+// buscaHandler devuelve la unidad del primer handler que cubre `pc` y acepta el tipo de la excepción,
+// o -1 cuando ninguno lo hace. Los try_item se recorren en el orden del fichero, que es el que decide
+// qué catch gana cuando dos rangos se solapan, y dentro de un handler manda el orden de sus filas con
+// el catch-all al final, como en ART.
+func (m *maquinaDalvik) buscaHandler(it *codeItem, ex *excepcionDalvik, pc int) (int, error) {
+	for _, tr := range it.tries {
+		if pc < int(tr.start) || pc >= int(tr.start)+int(tr.count) {
+			continue
+		}
+		unidad, ok, err := m.handlerQueAcepta(it, tr, ex)
+		if err != nil {
+			return -1, err
+		}
+		if ok {
+			return unidad, nil
+		}
+	}
+	return -1, nil
+}
+
+// handlerQueAcepta recorre el encoded_catch_handler de un try_item: su tamaño en sleb (negativo cuando
+// lleva catch-all), los pares (tipo, dirección) en orden y la dirección del catch-all. Devuelve la
+// primera dirección cuyo tipo recibe la excepción.
+func (m *maquinaDalvik) handlerQueAcepta(it *codeItem, tr tryItem, ex *excepcionDalvik) (int, bool, error) {
+	b := it.handlers
+	at := int(tr.handlerOff)
+	if at < 0 || at >= len(b) {
+		return 0, false, malformado("un try_item apunta al handler %d y la lista mide %d bytes",
+			tr.handlerOff, len(b))
+	}
+	n, pos, ok := leeSlebEn(b, at)
+	if !ok {
+		return 0, false, malformado("el handler del try_item en %d no cabe en la lista", tr.start)
+	}
+	pares := n
+	if pares < 0 {
+		pares = -pares
+	}
+	for i := int32(0); i < pares; i++ {
+		tipoIdx, p, ok := leeUlebEn(b, pos)
+		if !ok {
+			return 0, false, malformado("el tipo del handler del try_item en %d no cabe", tr.start)
+		}
+		direccion, p2, ok := leeUlebEn(b, p)
+		if !ok {
+			return 0, false, malformado("la dirección del handler del try_item en %d no cabe", tr.start)
+		}
+		pos = p2
+		if int(tipoIdx) >= len(m.prog.dex.types) {
+			return 0, false, malformado(
+				"el handler del try_item en %d nombra el tipo %d, fuera de type_ids", tr.start, tipoIdx)
+		}
+		if m.tipoAcepta(m.prog.dex.types[tipoIdx], ex.tipo) {
+			return int(direccion), true, nil
+		}
+	}
+	if n <= 0 {
+		direccion, _, ok := leeUlebEn(b, pos)
+		if !ok {
+			return 0, false, malformado("el catch-all del try_item en %d no cabe", tr.start)
+		}
+		return int(direccion), true, nil
+	}
+	return 0, false, nil
+}
+
 // ejecutaCuerpo interpreta el code_item de un método con los argumentos dados. `tipos` dice el tipo
 // de cada argumento, que es lo que decide cuántas palabras ocupa en los registros.
 func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []any, tipos []string) (res any, err error) {
@@ -2401,10 +2618,6 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 		return m.stubSinCuerpo(clase, met, args)
 	}
 	it := met.item
-	if it.triesSize > 0 {
-		return nil, fmt.Errorf("%s.%s lleva tabla de excepciones y el intérprete MVP no la ejecuta",
-			claseCorta(clase), met.nombre)
-	}
 	if m.profundidad >= profundidadMaximaDalvik {
 		return nil, fmt.Errorf("llamadas anidadas por encima de %d en %s.%s",
 			profundidadMaximaDalvik, claseCorta(clase), met.nombre)
@@ -2450,551 +2663,597 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 		}
 	}
 
+	// pendiente es la excepción que acaba de entrar a un handler: `move-exception` la copia a su
+	// registro y la consume. Vive aquí, fuera del bucle, para sobrevivir al salto.
+	var pendiente *excepcionDalvik
+	// corre ejecuta el cuerpo desde `pc`. Devuelve cuando el método retorna o cuando algo falla; si el
+	// fallo es una excepción de la app, el despacho de abajo busca su handler y reanuda en él. Los
+	// fallos duros (bytes que no caben, un opcode sin decodificar) no se atrapan.
+	corre := func() (any, error) {
+		for {
+			if pc < 0 || pc >= len(ins) {
+				return nil, fmt.Errorf("%s.%s se salió del código en la unidad %d",
+					claseCorta(clase), met.nombre, pc)
+			}
+			m.pasos++
+			if m.pasos-m.pasosBase > pasosMaximos {
+				return nil, fmt.Errorf("el intérprete se detuvo a los %d pasos (posible bucle sin salida)",
+					pasosMaximos)
+			}
+			u := ins[pc]
+			op := byte(u)
+			aa := int(u >> 8)
+			pcEnCurso, opEnCurso = pc, op
+			segunda := func() (uint16, error) {
+				if pc+1 >= len(ins) {
+					return 0, fmt.Errorf("%s.%s: el opcode %#02x pide una palabra y el código termina",
+						claseCorta(clase), met.nombre, op)
+				}
+				return ins[pc+1], nil
+			}
+			tercera := func() (uint16, error) {
+				if pc+2 >= len(ins) {
+					return 0, fmt.Errorf("%s.%s: el opcode %#02x pide tres palabras y el código termina",
+						claseCorta(clase), met.nombre, op)
+				}
+				return ins[pc+2], nil
+			}
+
+			switch op {
+			case 0x00: // nop
+				pc++
+
+			// --- movimientos -------------------------------------------------------------------
+			case 0x01, 0x04, 0x07: // move / move-wide / move-object (12x)
+				dst, src := int(u>>8)&0xf, int(u>>12)
+				if op == 0x01 || op == 0x07 {
+					poner(dst, regs[src])
+				} else {
+					ponerAncho(dst, regs[src])
+				}
+				pc++
+			case 0x02, 0x05, 0x08: // move/from16, move-wide/from16, move-object/from16 (22x)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if op == 0x02 || op == 0x08 {
+					poner(aa, regs[int(w)])
+				} else {
+					ponerAncho(aa, regs[int(w)])
+				}
+				pc += 2
+			case 0x03, 0x06, 0x09: // move/16, move-wide/16, move-object/16 (32x)
+				if pc+2 >= len(ins) {
+					return nil, fmt.Errorf("código cortado en un move/16")
+				}
+				src := int(ins[pc+2])
+				if op == 0x03 || op == 0x09 {
+					poner(aa, regs[src])
+				} else {
+					ponerAncho(aa, regs[src])
+				}
+				pc += 3
+			case 0x0a: // move-result
+				if !hayResultado {
+					m.avisa("move-result sin llamada previa en %s.%s", claseCorta(clase), met.nombre)
+				}
+				poner(aa, resultado)
+				pc++
+			case 0x0b: // move-result-wide
+				ponerAncho(aa, resultado)
+				pc++
+			case 0x0c: // move-result-object
+				poner(aa, resultado)
+				pc++
+			case 0x0d: // move-exception: la excepción que entró al handler
+				if pendiente == nil {
+					return nil, fmt.Errorf("%s.%s hace move-exception sin excepción en vuelo",
+						claseCorta(clase), met.nombre)
+				}
+				poner(aa, pendiente.objeto)
+				pendiente = nil
+				pc++
+
+			// --- retornos ----------------------------------------------------------------------
+			case 0x0e:
+				return nil, nil
+			case 0x0f, 0x10, 0x11: // return, return-wide, return-object
+				return regs[aa], nil
+
+			// --- constantes --------------------------------------------------------------------
+			case 0x12: // const/4: el registro es el nibble bajo de AA y el literal el alto, con signo
+				v := aa >> 4
+				if v >= 8 {
+					v -= 16
+				}
+				poner(aa&0xf, int32(v))
+				pc++
+			case 0x13: // const/16
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				poner(aa, int32(int16(w)))
+				pc += 2
+			case 0x14: // const (31i)
+				if pc+2 >= len(ins) {
+					return nil, fmt.Errorf("código cortado en un const")
+				}
+				poner(aa, int32(uint32(ins[pc+1])|uint32(ins[pc+2])<<16))
+				pc += 3
+			case 0x15: // const/high16
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				poner(aa, int32(uint32(w)<<16))
+				pc += 2
+			case 0x16: // const-wide/16
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				ponerAncho(aa, int64(int16(w)))
+				pc += 2
+			case 0x17: // const-wide/32
+				if pc+2 >= len(ins) {
+					return nil, fmt.Errorf("código cortado en un const-wide/32")
+				}
+				ponerAncho(aa, int64(int32(uint32(ins[pc+1])|uint32(ins[pc+2])<<16)))
+				pc += 3
+			case 0x18: // const-wide (51l)
+				if pc+4 >= len(ins) {
+					return nil, fmt.Errorf("código cortado en un const-wide")
+				}
+				v := uint64(ins[pc+1]) | uint64(ins[pc+2])<<16 | uint64(ins[pc+3])<<32 | uint64(ins[pc+4])<<48
+				ponerAncho(aa, int64(v))
+				pc += 5
+			case 0x19: // const-wide/high16
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				ponerAncho(aa, int64(int16(w))<<48)
+				pc += 2
+			case 0x1a: // const-string
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if int(w) >= len(m.prog.dex.strings) {
+					return nil, fmt.Errorf("const-string con la cadena %d fuera del pool", w)
+				}
+				poner(aa, m.prog.dex.strings[w])
+				pc += 2
+			case 0x1b: // const-string/jumbo
+				if pc+2 >= len(ins) {
+					return nil, fmt.Errorf("código cortado en un const-string/jumbo")
+				}
+				idx := uint32(ins[pc+1]) | uint32(ins[pc+2])<<16
+				if int(idx) >= len(m.prog.dex.strings) {
+					return nil, fmt.Errorf("const-string/jumbo con la cadena %d fuera del pool", idx)
+				}
+				poner(aa, m.prog.dex.strings[idx])
+				pc += 3
+			case 0x1c: // const-class
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if int(w) >= len(m.prog.dex.types) {
+					return nil, fmt.Errorf("const-class con el tipo %d fuera de type_ids", w)
+				}
+				poner(aa, &objetoDalvik{clase: "Ljava/lang/Class;", campos: map[string]any{
+					"Ljava/lang/Class;.$tipo": m.prog.dex.types[w],
+				}})
+				pc += 2
+
+			// --- objetos -----------------------------------------------------------------------
+			case 0x1f: // check-cast
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if obj, ok := regs[aa].(*objetoDalvik); ok && int(w) < len(m.prog.dex.types) {
+					obj.clase = m.prog.dex.types[w]
+				}
+				pc += 2
+			case 0x20: // instance-of (22c)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				es := false
+				if obj, ok := regs[int(u>>12)].(*objetoDalvik); ok && int(w) < len(m.prog.dex.types) {
+					es = m.esDe(obj, m.prog.dex.types[w])
+				}
+				poner(aa&0xf, boolAInt(es))
+				pc += 2
+			case 0x21: // array-length
+				arr, ok := regs[int(u>>12)].(*arregloDalvik)
+				if !ok {
+					return nil, fmt.Errorf("array-length sobre un registro que no es arreglo")
+				}
+				poner(int(u>>8)&0xf, int32(len(arr.datos)))
+				pc++
+			case 0x22: // new-instance
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if int(w) >= len(m.prog.dex.types) {
+					return nil, fmt.Errorf("new-instance con el tipo %d fuera de type_ids", w)
+				}
+				poner(aa, &objetoDalvik{clase: m.prog.dex.types[w], campos: map[string]any{}})
+				pc += 2
+			case 0x23: // new-array (22c)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				n, err := aInt32(regs[int(u>>12)])
+				if err != nil {
+					return nil, fmt.Errorf("new-array: %w", err)
+				}
+				if n < 0 || n > 1<<20 {
+					return nil, fmt.Errorf("new-array con longitud %d", n)
+				}
+				tipo := ""
+				if int(w) < len(m.prog.dex.types) {
+					tipo = m.prog.dex.types[w]
+				}
+				poner(int(u>>8)&0xf, &arregloDalvik{tipo: tipo, datos: make([]any, n)})
+				pc += 2
+			case 0x24: // filled-new-array (35c)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				t, err := tercera()
+				if err != nil {
+					return nil, err
+				}
+				tipo := ""
+				if int(w) < len(m.prog.dex.types) {
+					tipo = m.prog.dex.types[w]
+				}
+				regsArg := registros35c(u, t)
+				datos := make([]any, 0, len(regsArg))
+				for _, r := range regsArg {
+					datos = append(datos, regs[r])
+				}
+				resultado = &arregloDalvik{tipo: tipo, datos: datos}
+				hayResultado = true
+				pc += 3
+			case 0x25: // filled-new-array/range (3rc)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				t, err := tercera()
+				if err != nil {
+					return nil, err
+				}
+				tipo := ""
+				if int(w) < len(m.prog.dex.types) {
+					tipo = m.prog.dex.types[w]
+				}
+				primero, cuenta := int(t), int(u>>8)
+				datos := make([]any, 0, cuenta)
+				for i := 0; i < cuenta; i++ {
+					datos = append(datos, regs[primero+i])
+				}
+				resultado = &arregloDalvik{tipo: tipo, datos: datos}
+				hayResultado = true
+				pc += 3
+			case 0x26: // fill-array-data
+				return nil, fmt.Errorf("%s.%s usa fill-array-data y el intérprete MVP no lo ejecuta",
+					claseCorta(clase), met.nombre)
+			case 0x27: // throw
+				obj, ok := regs[aa].(*objetoDalvik)
+				if !ok {
+					if regs[aa] == nil {
+						return nil, nuevaExcepcion("Ljava/lang/NullPointerException;",
+							"throw sobre un objeto nulo en %s.%s", claseCorta(clase), met.nombre)
+					}
+					return nil, fmt.Errorf("%s.%s lanza algo que no es un objeto (tipo %T)",
+						claseCorta(clase), met.nombre, regs[aa])
+				}
+				if !esThrowable(obj.clase) && !m.tipoAcepta("Ljava/lang/Throwable;", obj.clase) {
+					return nil, fmt.Errorf("%s.%s lanza un %s, que no es un Throwable",
+						claseCorta(clase), met.nombre, claseCorta(obj.clase))
+				}
+				return nil, &excepcionDalvik{tipo: obj.clase, objeto: obj}
+
+			// --- saltos ------------------------------------------------------------------------
+			case 0x28: // goto (10t)
+				pc += int(int8(aa))
+			case 0x29: // goto/16 (20t)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				pc += int(int16(w))
+			case 0x2a: // goto/32 (30t)
+				if pc+2 >= len(ins) {
+					return nil, fmt.Errorf("código cortado en un goto/32")
+				}
+				pc += int(int32(uint32(ins[pc+1]) | uint32(ins[pc+2])<<16))
+			case 0x2b, 0x2c: // packed-switch / sparse-switch
+				salto, err := m.saltoDeSwitch(ins, pc, op == 0x2b, regs[aa])
+				if err != nil {
+					return nil, err
+				}
+				pc += salto
+			case 0x2d, 0x2e, 0x2f, 0x30, 0x31: // cmp*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				a, b := regs[int(w)&0xff], regs[int(w)>>8]
+				cmp, err := m.compara(op, a, b)
+				if err != nil {
+					return nil, err
+				}
+				poner(aa, int32(cmp))
+				pc += 2
+			case 0x32, 0x33, 0x34, 0x35, 0x36, 0x37: // if-* (22t)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				cumple, err := m.comparaIf(op, regs[int(u>>8)&0xf], regs[int(u>>12)])
+				if err != nil {
+					return nil, err
+				}
+				if cumple {
+					pc += int(int16(w))
+				} else {
+					pc += 2
+				}
+			case 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d: // if-*z (21t)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				cumple, err := m.comparaIf(op-6, regs[aa], int32(0))
+				if err != nil {
+					return nil, err
+				}
+				if cumple {
+					pc += int(int16(w))
+				} else {
+					pc += 2
+				}
+
+			// --- arreglos ----------------------------------------------------------------------
+			case 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a: // aget*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				arr, ok := regs[int(w)&0xff].(*arregloDalvik)
+				if !ok {
+					return nil, fmt.Errorf("aget sobre un registro que no es arreglo")
+				}
+				idx, err := aInt32(regs[int(w)>>8])
+				if err != nil {
+					return nil, err
+				}
+				if int(idx) < 0 || int(idx) >= len(arr.datos) {
+					return nil, fmt.Errorf("aget con el índice %d fuera del arreglo de %d", idx, len(arr.datos))
+				}
+				v := arr.datos[idx]
+				if op == 0x45 {
+					ponerAncho(aa, v)
+				} else {
+					poner(aa, v)
+				}
+				pc += 2
+			case 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51: // aput*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				arr, ok := regs[int(w)&0xff].(*arregloDalvik)
+				if !ok {
+					return nil, fmt.Errorf("aput sobre un registro que no es arreglo")
+				}
+				idx, err := aInt32(regs[int(w)>>8])
+				if err != nil {
+					return nil, err
+				}
+				if int(idx) < 0 || int(idx) >= len(arr.datos) {
+					return nil, fmt.Errorf("aput con el índice %d fuera del arreglo de %d", idx, len(arr.datos))
+				}
+				arr.datos[idx] = regs[aa]
+				pc += 2
+
+			// --- campos ------------------------------------------------------------------------
+			case 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58: // iget*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				v, err := m.leeCampo(uint32(w), regs[int(u>>12)], false)
+				if err != nil {
+					return nil, err
+				}
+				if op == 0x53 {
+					ponerAncho(int(u>>8)&0xf, v)
+				} else {
+					poner(int(u>>8)&0xf, v)
+				}
+				pc += 2
+			case 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f: // iput*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if err := m.escribeCampo(uint32(w), regs[int(u>>12)], regs[int(u>>8)&0xf], false); err != nil {
+					return nil, err
+				}
+				pc += 2
+			case 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66: // sget*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				v, err := m.leeCampo(uint32(w), nil, true)
+				if err != nil {
+					return nil, err
+				}
+				if op == 0x61 {
+					ponerAncho(aa, v)
+				} else {
+					poner(aa, v)
+				}
+				pc += 2
+			case 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d: // sput*
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				if err := m.escribeCampo(uint32(w), nil, regs[aa], true); err != nil {
+					return nil, err
+				}
+				pc += 2
+
+			// --- llamadas ----------------------------------------------------------------------
+			case 0x6e, 0x6f, 0x70, 0x71, 0x72: // invoke-* (35c)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				t, err := tercera()
+				if err != nil {
+					return nil, err
+				}
+				v, err := m.invoca(op, uint32(w), registros35c(u, t), regs, clase)
+				if err != nil {
+					return nil, err
+				}
+				resultado, hayResultado = v, true
+				pc += 3
+			case 0x74, 0x75, 0x76, 0x77, 0x78: // invoke-*/range (3rc)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				t, err := tercera()
+				if err != nil {
+					return nil, err
+				}
+				primero, cuenta := int(t), int(u>>8)
+				regsArg := make([]int, cuenta)
+				for i := 0; i < cuenta; i++ {
+					regsArg[i] = primero + i
+				}
+				v, err := m.invoca(op-6, uint32(w), regsArg, regs, clase)
+				if err != nil {
+					return nil, err
+				}
+				resultado, hayResultado = v, true
+				pc += 3
+
+			// --- unarios y conversiones --------------------------------------------------------
+			case 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86,
+				0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f:
+				dst, src := int(u>>8)&0xf, int(u>>12)
+				v, ancho, err := unaria(op, regs[src])
+				if err != nil {
+					return nil, err
+				}
+				if ancho == 2 {
+					ponerAncho(dst, v)
+				} else {
+					poner(dst, v)
+				}
+				pc++
+
+			// --- binarias ----------------------------------------------------------------------
+			case 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a,
+				0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5,
+				0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf:
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				v, ancho, err := binaria(op, regs[int(w)&0xff], regs[int(w)>>8])
+				if err != nil {
+					return nil, err
+				}
+				if ancho == 2 {
+					ponerAncho(aa, v)
+				} else {
+					poner(aa, v)
+				}
+				pc += 2
+			case 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba,
+				0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5,
+				0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf: // */2addr (12x)
+				dst, src := int(u>>8)&0xf, int(u>>12)
+				v, ancho, err := binaria(op-0x20, regs[dst], regs[src])
+				if err != nil {
+					return nil, err
+				}
+				if ancho == 2 {
+					ponerAncho(dst, v)
+				} else {
+					poner(dst, v)
+				}
+				pc++
+			case 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7: // lit16 (22s)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				lit := int32(int16(w))
+				v, err := enteraLit(op-0xd0, regs[aa], lit)
+				if err != nil {
+					return nil, err
+				}
+				poner(aa, v)
+				pc += 2
+			case 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf, 0xe0, 0xe1, 0xe2: // lit8 (22b)
+				w, err := segunda()
+				if err != nil {
+					return nil, err
+				}
+				lit := int32(int8(w >> 8))
+				v, err := enteraLit(op-0xd8, regs[int(w)&0xf], lit)
+				if err != nil {
+					return nil, err
+				}
+				poner(aa, v)
+				pc += 2
+			default:
+				return nil, fmt.Errorf("%s.%s usa el opcode %#02x, que el intérprete MVP no decodifica",
+					claseCorta(clase), met.nombre, op)
+			}
+		}
+	}
+
 	for {
-		if pc < 0 || pc >= len(ins) {
-			return nil, fmt.Errorf("%s.%s se salió del código en la unidad %d",
-				claseCorta(clase), met.nombre, pc)
+		v, err := corre()
+		if err == nil {
+			return v, nil
 		}
-		m.pasos++
-		if m.pasos-m.pasosBase > pasosMaximos {
-			return nil, fmt.Errorf("el intérprete se detuvo a los %d pasos (posible bucle sin salida)",
-				pasosMaximos)
+		ex := excepcionDe(err)
+		if ex == nil {
+			return nil, err
 		}
-		u := ins[pc]
-		op := byte(u)
-		aa := int(u >> 8)
-		pcEnCurso, opEnCurso = pc, op
-		segunda := func() (uint16, error) {
-			if pc+1 >= len(ins) {
-				return 0, fmt.Errorf("%s.%s: el opcode %#02x pide una palabra y el código termina",
-					claseCorta(clase), met.nombre, op)
-			}
-			return ins[pc+1], nil
+		unidad, errBusca := m.buscaHandler(it, ex, pc)
+		if errBusca != nil {
+			return nil, errBusca
 		}
-		tercera := func() (uint16, error) {
-			if pc+2 >= len(ins) {
-				return 0, fmt.Errorf("%s.%s: el opcode %#02x pide tres palabras y el código termina",
-					claseCorta(clase), met.nombre, op)
-			}
-			return ins[pc+2], nil
+		if unidad < 0 {
+			// sin handler en este método: se propaga con su tipo y su mensaje, sin fingir éxito
+			return nil, fmt.Errorf("%s.%s: %w", claseCorta(clase), met.nombre, ex)
 		}
-
-		switch op {
-		case 0x00: // nop
-			pc++
-
-		// --- movimientos -------------------------------------------------------------------
-		case 0x01, 0x04, 0x07: // move / move-wide / move-object (12x)
-			dst, src := int(u>>8)&0xf, int(u>>12)
-			if op == 0x01 || op == 0x07 {
-				poner(dst, regs[src])
-			} else {
-				ponerAncho(dst, regs[src])
-			}
-			pc++
-		case 0x02, 0x05, 0x08: // move/from16, move-wide/from16, move-object/from16 (22x)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if op == 0x02 || op == 0x08 {
-				poner(aa, regs[int(w)])
-			} else {
-				ponerAncho(aa, regs[int(w)])
-			}
-			pc += 2
-		case 0x03, 0x06, 0x09: // move/16, move-wide/16, move-object/16 (32x)
-			if pc+2 >= len(ins) {
-				return nil, fmt.Errorf("código cortado en un move/16")
-			}
-			src := int(ins[pc+2])
-			if op == 0x03 || op == 0x09 {
-				poner(aa, regs[src])
-			} else {
-				ponerAncho(aa, regs[src])
-			}
-			pc += 3
-		case 0x0a: // move-result
-			if !hayResultado {
-				m.avisa("move-result sin llamada previa en %s.%s", claseCorta(clase), met.nombre)
-			}
-			poner(aa, resultado)
-			pc++
-		case 0x0b: // move-result-wide
-			ponerAncho(aa, resultado)
-			pc++
-		case 0x0c: // move-result-object
-			poner(aa, resultado)
-			pc++
-		case 0x0d: // move-exception
-			return nil, fmt.Errorf("%s.%s usa move-exception y el MVP no ejecuta excepciones",
-				claseCorta(clase), met.nombre)
-
-		// --- retornos ----------------------------------------------------------------------
-		case 0x0e:
-			return nil, nil
-		case 0x0f, 0x10, 0x11: // return, return-wide, return-object
-			return regs[aa], nil
-
-		// --- constantes --------------------------------------------------------------------
-		case 0x12: // const/4: el registro es el nibble bajo de AA y el literal el alto, con signo
-			v := aa >> 4
-			if v >= 8 {
-				v -= 16
-			}
-			poner(aa&0xf, int32(v))
-			pc++
-		case 0x13: // const/16
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			poner(aa, int32(int16(w)))
-			pc += 2
-		case 0x14: // const (31i)
-			if pc+2 >= len(ins) {
-				return nil, fmt.Errorf("código cortado en un const")
-			}
-			poner(aa, int32(uint32(ins[pc+1])|uint32(ins[pc+2])<<16))
-			pc += 3
-		case 0x15: // const/high16
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			poner(aa, int32(uint32(w)<<16))
-			pc += 2
-		case 0x16: // const-wide/16
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			ponerAncho(aa, int64(int16(w)))
-			pc += 2
-		case 0x17: // const-wide/32
-			if pc+2 >= len(ins) {
-				return nil, fmt.Errorf("código cortado en un const-wide/32")
-			}
-			ponerAncho(aa, int64(int32(uint32(ins[pc+1])|uint32(ins[pc+2])<<16)))
-			pc += 3
-		case 0x18: // const-wide (51l)
-			if pc+4 >= len(ins) {
-				return nil, fmt.Errorf("código cortado en un const-wide")
-			}
-			v := uint64(ins[pc+1]) | uint64(ins[pc+2])<<16 | uint64(ins[pc+3])<<32 | uint64(ins[pc+4])<<48
-			ponerAncho(aa, int64(v))
-			pc += 5
-		case 0x19: // const-wide/high16
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			ponerAncho(aa, int64(int16(w))<<48)
-			pc += 2
-		case 0x1a: // const-string
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if int(w) >= len(m.prog.dex.strings) {
-				return nil, fmt.Errorf("const-string con la cadena %d fuera del pool", w)
-			}
-			poner(aa, m.prog.dex.strings[w])
-			pc += 2
-		case 0x1b: // const-string/jumbo
-			if pc+2 >= len(ins) {
-				return nil, fmt.Errorf("código cortado en un const-string/jumbo")
-			}
-			idx := uint32(ins[pc+1]) | uint32(ins[pc+2])<<16
-			if int(idx) >= len(m.prog.dex.strings) {
-				return nil, fmt.Errorf("const-string/jumbo con la cadena %d fuera del pool", idx)
-			}
-			poner(aa, m.prog.dex.strings[idx])
-			pc += 3
-		case 0x1c: // const-class
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if int(w) >= len(m.prog.dex.types) {
-				return nil, fmt.Errorf("const-class con el tipo %d fuera de type_ids", w)
-			}
-			poner(aa, &objetoDalvik{clase: "Ljava/lang/Class;", campos: map[string]any{
-				"Ljava/lang/Class;.$tipo": m.prog.dex.types[w],
-			}})
-			pc += 2
-
-		// --- objetos -----------------------------------------------------------------------
-		case 0x1f: // check-cast
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if obj, ok := regs[aa].(*objetoDalvik); ok && int(w) < len(m.prog.dex.types) {
-				obj.clase = m.prog.dex.types[w]
-			}
-			pc += 2
-		case 0x20: // instance-of (22c)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			es := false
-			if obj, ok := regs[int(u>>12)].(*objetoDalvik); ok && int(w) < len(m.prog.dex.types) {
-				es = m.esDe(obj, m.prog.dex.types[w])
-			}
-			poner(aa&0xf, boolAInt(es))
-			pc += 2
-		case 0x21: // array-length
-			arr, ok := regs[int(u>>12)].(*arregloDalvik)
-			if !ok {
-				return nil, fmt.Errorf("array-length sobre un registro que no es arreglo")
-			}
-			poner(int(u>>8)&0xf, int32(len(arr.datos)))
-			pc++
-		case 0x22: // new-instance
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if int(w) >= len(m.prog.dex.types) {
-				return nil, fmt.Errorf("new-instance con el tipo %d fuera de type_ids", w)
-			}
-			poner(aa, &objetoDalvik{clase: m.prog.dex.types[w], campos: map[string]any{}})
-			pc += 2
-		case 0x23: // new-array (22c)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			n, err := aInt32(regs[int(u>>12)])
-			if err != nil {
-				return nil, fmt.Errorf("new-array: %w", err)
-			}
-			if n < 0 || n > 1<<20 {
-				return nil, fmt.Errorf("new-array con longitud %d", n)
-			}
-			tipo := ""
-			if int(w) < len(m.prog.dex.types) {
-				tipo = m.prog.dex.types[w]
-			}
-			poner(int(u>>8)&0xf, &arregloDalvik{tipo: tipo, datos: make([]any, n)})
-			pc += 2
-		case 0x24: // filled-new-array (35c)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			t, err := tercera()
-			if err != nil {
-				return nil, err
-			}
-			tipo := ""
-			if int(w) < len(m.prog.dex.types) {
-				tipo = m.prog.dex.types[w]
-			}
-			regsArg := registros35c(u, t)
-			datos := make([]any, 0, len(regsArg))
-			for _, r := range regsArg {
-				datos = append(datos, regs[r])
-			}
-			resultado = &arregloDalvik{tipo: tipo, datos: datos}
-			hayResultado = true
-			pc += 3
-		case 0x25: // filled-new-array/range (3rc)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			t, err := tercera()
-			if err != nil {
-				return nil, err
-			}
-			tipo := ""
-			if int(w) < len(m.prog.dex.types) {
-				tipo = m.prog.dex.types[w]
-			}
-			primero, cuenta := int(t), int(u>>8)
-			datos := make([]any, 0, cuenta)
-			for i := 0; i < cuenta; i++ {
-				datos = append(datos, regs[primero+i])
-			}
-			resultado = &arregloDalvik{tipo: tipo, datos: datos}
-			hayResultado = true
-			pc += 3
-		case 0x26: // fill-array-data
-			return nil, fmt.Errorf("%s.%s usa fill-array-data y el intérprete MVP no lo ejecuta",
-				claseCorta(clase), met.nombre)
-		case 0x27: // throw
-			return nil, fmt.Errorf("%s.%s lanza una excepción y el MVP no las ejecuta",
-				claseCorta(clase), met.nombre)
-
-		// --- saltos ------------------------------------------------------------------------
-		case 0x28: // goto (10t)
-			pc += int(int8(aa))
-		case 0x29: // goto/16 (20t)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			pc += int(int16(w))
-		case 0x2a: // goto/32 (30t)
-			if pc+2 >= len(ins) {
-				return nil, fmt.Errorf("código cortado en un goto/32")
-			}
-			pc += int(int32(uint32(ins[pc+1]) | uint32(ins[pc+2])<<16))
-		case 0x2b, 0x2c: // packed-switch / sparse-switch
-			salto, err := m.saltoDeSwitch(ins, pc, op == 0x2b, regs[aa])
-			if err != nil {
-				return nil, err
-			}
-			pc += salto
-		case 0x2d, 0x2e, 0x2f, 0x30, 0x31: // cmp*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			a, b := regs[int(w)&0xff], regs[int(w)>>8]
-			cmp, err := m.compara(op, a, b)
-			if err != nil {
-				return nil, err
-			}
-			poner(aa, int32(cmp))
-			pc += 2
-		case 0x32, 0x33, 0x34, 0x35, 0x36, 0x37: // if-* (22t)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			cumple, err := m.comparaIf(op, regs[int(u>>8)&0xf], regs[int(u>>12)])
-			if err != nil {
-				return nil, err
-			}
-			if cumple {
-				pc += int(int16(w))
-			} else {
-				pc += 2
-			}
-		case 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d: // if-*z (21t)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			cumple, err := m.comparaIf(op-6, regs[aa], int32(0))
-			if err != nil {
-				return nil, err
-			}
-			if cumple {
-				pc += int(int16(w))
-			} else {
-				pc += 2
-			}
-
-		// --- arreglos ----------------------------------------------------------------------
-		case 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a: // aget*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			arr, ok := regs[int(w)&0xff].(*arregloDalvik)
-			if !ok {
-				return nil, fmt.Errorf("aget sobre un registro que no es arreglo")
-			}
-			idx, err := aInt32(regs[int(w)>>8])
-			if err != nil {
-				return nil, err
-			}
-			if int(idx) < 0 || int(idx) >= len(arr.datos) {
-				return nil, fmt.Errorf("aget con el índice %d fuera del arreglo de %d", idx, len(arr.datos))
-			}
-			v := arr.datos[idx]
-			if op == 0x45 {
-				ponerAncho(aa, v)
-			} else {
-				poner(aa, v)
-			}
-			pc += 2
-		case 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51: // aput*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			arr, ok := regs[int(w)&0xff].(*arregloDalvik)
-			if !ok {
-				return nil, fmt.Errorf("aput sobre un registro que no es arreglo")
-			}
-			idx, err := aInt32(regs[int(w)>>8])
-			if err != nil {
-				return nil, err
-			}
-			if int(idx) < 0 || int(idx) >= len(arr.datos) {
-				return nil, fmt.Errorf("aput con el índice %d fuera del arreglo de %d", idx, len(arr.datos))
-			}
-			arr.datos[idx] = regs[aa]
-			pc += 2
-
-		// --- campos ------------------------------------------------------------------------
-		case 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58: // iget*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			v, err := m.leeCampo(uint32(w), regs[int(u>>12)], false)
-			if err != nil {
-				return nil, err
-			}
-			if op == 0x53 {
-				ponerAncho(int(u>>8)&0xf, v)
-			} else {
-				poner(int(u>>8)&0xf, v)
-			}
-			pc += 2
-		case 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f: // iput*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if err := m.escribeCampo(uint32(w), regs[int(u>>12)], regs[int(u>>8)&0xf], false); err != nil {
-				return nil, err
-			}
-			pc += 2
-		case 0x60, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66: // sget*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			v, err := m.leeCampo(uint32(w), nil, true)
-			if err != nil {
-				return nil, err
-			}
-			if op == 0x61 {
-				ponerAncho(aa, v)
-			} else {
-				poner(aa, v)
-			}
-			pc += 2
-		case 0x67, 0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d: // sput*
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			if err := m.escribeCampo(uint32(w), nil, regs[aa], true); err != nil {
-				return nil, err
-			}
-			pc += 2
-
-		// --- llamadas ----------------------------------------------------------------------
-		case 0x6e, 0x6f, 0x70, 0x71, 0x72: // invoke-* (35c)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			t, err := tercera()
-			if err != nil {
-				return nil, err
-			}
-			v, err := m.invoca(op, uint32(w), registros35c(u, t), regs, clase)
-			if err != nil {
-				return nil, err
-			}
-			resultado, hayResultado = v, true
-			pc += 3
-		case 0x74, 0x75, 0x76, 0x77, 0x78: // invoke-*/range (3rc)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			t, err := tercera()
-			if err != nil {
-				return nil, err
-			}
-			primero, cuenta := int(t), int(u>>8)
-			regsArg := make([]int, cuenta)
-			for i := 0; i < cuenta; i++ {
-				regsArg[i] = primero + i
-			}
-			v, err := m.invoca(op-6, uint32(w), regsArg, regs, clase)
-			if err != nil {
-				return nil, err
-			}
-			resultado, hayResultado = v, true
-			pc += 3
-
-		// --- unarios y conversiones --------------------------------------------------------
-		case 0x7b, 0x7c, 0x7d, 0x7e, 0x7f, 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86,
-			0x87, 0x88, 0x89, 0x8a, 0x8b, 0x8c, 0x8d, 0x8e, 0x8f:
-			dst, src := int(u>>8)&0xf, int(u>>12)
-			v, ancho, err := unaria(op, regs[src])
-			if err != nil {
-				return nil, err
-			}
-			if ancho == 2 {
-				ponerAncho(dst, v)
-			} else {
-				poner(dst, v)
-			}
-			pc++
-
-		// --- binarias ----------------------------------------------------------------------
-		case 0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97, 0x98, 0x99, 0x9a,
-			0x9b, 0x9c, 0x9d, 0x9e, 0x9f, 0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5,
-			0xa6, 0xa7, 0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf:
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			v, ancho, err := binaria(op, regs[int(w)&0xff], regs[int(w)>>8])
-			if err != nil {
-				return nil, err
-			}
-			if ancho == 2 {
-				ponerAncho(aa, v)
-			} else {
-				poner(aa, v)
-			}
-			pc += 2
-		case 0xb0, 0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba,
-			0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5,
-			0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf: // */2addr (12x)
-			dst, src := int(u>>8)&0xf, int(u>>12)
-			v, ancho, err := binaria(op-0x20, regs[dst], regs[src])
-			if err != nil {
-				return nil, err
-			}
-			if ancho == 2 {
-				ponerAncho(dst, v)
-			} else {
-				poner(dst, v)
-			}
-			pc++
-		case 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7: // lit16 (22s)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			lit := int32(int16(w))
-			v, err := enteraLit(op-0xd0, regs[aa], lit)
-			if err != nil {
-				return nil, err
-			}
-			poner(aa, v)
-			pc += 2
-		case 0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf, 0xe0, 0xe1, 0xe2: // lit8 (22b)
-			w, err := segunda()
-			if err != nil {
-				return nil, err
-			}
-			lit := int32(int8(w >> 8))
-			v, err := enteraLit(op-0xd8, regs[int(w)&0xf], lit)
-			if err != nil {
-				return nil, err
-			}
-			poner(aa, v)
-			pc += 2
-		default:
-			return nil, fmt.Errorf("%s.%s usa el opcode %#02x, que el intérprete MVP no decodifica",
-				claseCorta(clase), met.nombre, op)
-		}
+		pendiente = ex
+		pc = unidad
 	}
 }
 
@@ -3407,6 +3666,9 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			"Landroid/widget/CompoundButton;", "Landroid/widget/CheckedTextView;")
 	}
 	obj, _ := receptor.(*objetoDalvik)
+	// esThrowableObj reconoce una excepción ya construida: su mensaje y su texto son lo que un catch
+	// puede leer del objeto que recibió
+	esThrowableObj := func() bool { return obj != nil && esThrowable(obj.clase) }
 
 	switch nombre {
 	case "startActivity":
@@ -3467,6 +3729,12 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if obj != nil && proto == "(Ljava/lang/String;)V" && es("Ljava/lang/StringBuilder;") {
 			obj.cadena = &strings.Builder{}
 			obj.cadena.WriteString(textoDe(vals[0]))
+		}
+		// un Throwable guarda el mensaje que recibe en su constructor: es lo que `getMessage()`
+		// devuelve en el catch y lo que enseña el aviso cuando nadie la captura
+		if esThrowableObj() && len(vals) >= 1 &&
+			(proto == "(Ljava/lang/String;)V" || proto == "(Ljava/lang/String;Ljava/lang/Throwable;)V") {
+			obj.mensajeExcepcion = textoDe(vals[0])
 		}
 		return nil, true, nil
 	case "onCreate", "onStart", "onResume", "onPause", "onStop", "onDestroy", "onRestart",
@@ -3944,7 +4212,22 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			t.campos["toast.texto"] = m.textoDeArgumento(vals[1])
 			return t, true, nil
 		}
+	case "getMessage", "getLocalizedMessage":
+		if len(vals) == 0 && esThrowableObj() {
+			return obj.mensajeExcepcion, true, nil
+		}
+	case "printStackTrace":
+		if len(vals) == 0 && esThrowableObj() {
+			return nil, true, nil
+		}
 	case "toString":
+		// el `toString` de una excepción es su clase con el mensaje: es lo que un catch imprime
+		if len(vals) == 0 && esThrowableObj() {
+			if obj.mensajeExcepcion == "" {
+				return claseCorta(obj.clase), true, nil
+			}
+			return claseCorta(obj.clase) + ": " + obj.mensajeExcepcion, true, nil
+		}
 		if len(vals) == 0 && es("Ljava/lang/StringBuilder;") && obj != nil && obj.cadena != nil {
 			return obj.cadena.String(), true, nil
 		}
@@ -4009,7 +4292,10 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) >= 1 && es("Ljava/lang/Integer;", "Ljava/lang/Long;") {
 			n, err := strconv.ParseInt(strings.TrimSpace(textoDe(vals[0])), 10, 32)
 			if err != nil {
-				return nil, true, fmt.Errorf("parseInt de %q: %w", textoDe(vals[0]), err)
+				// el framework lanza NumberFormatException, que un `try` del proyecto puede
+				// capturar: se lanza con su tipo, no como un fallo del intérprete
+				return nil, true, nuevaExcepcion("Ljava/lang/NumberFormatException;",
+					`For input string: %q`, textoDe(vals[0]))
 			}
 			if proto == "(Ljava/lang/String;)J" {
 				return n, true, nil
@@ -4377,12 +4663,12 @@ func entera(k byte, a, b int32) (int32, error) {
 		return a * b, nil
 	case 3:
 		if b == 0 {
-			return 0, fmt.Errorf("división entera por cero")
+			return 0, nuevaExcepcion("Ljava/lang/ArithmeticException;", "/ by zero")
 		}
 		return a / b, nil
 	case 4:
 		if b == 0 {
-			return 0, fmt.Errorf("resto entero por cero")
+			return 0, nuevaExcepcion("Ljava/lang/ArithmeticException;", "/ by zero")
 		}
 		return a % b, nil
 	case 5:
@@ -4411,12 +4697,12 @@ func larga(k byte, a, b int64) (int64, error) {
 		return a * b, nil
 	case 3:
 		if b == 0 {
-			return 0, fmt.Errorf("división de long por cero")
+			return 0, nuevaExcepcion("Ljava/lang/ArithmeticException;", "/ by zero")
 		}
 		return a / b, nil
 	case 4:
 		if b == 0 {
-			return 0, fmt.Errorf("resto de long por cero")
+			return 0, nuevaExcepcion("Ljava/lang/ArithmeticException;", "/ by zero")
 		}
 		return a % b, nil
 	case 5:
@@ -4483,12 +4769,12 @@ func enteraLit(k byte, valor any, lit int32) (int32, error) {
 		return a * lit, nil
 	case 3:
 		if lit == 0 {
-			return 0, fmt.Errorf("división entera por cero")
+			return 0, nuevaExcepcion("Ljava/lang/ArithmeticException;", "/ by zero")
 		}
 		return a / lit, nil
 	case 4:
 		if lit == 0 {
-			return 0, fmt.Errorf("resto entero por cero")
+			return 0, nuevaExcepcion("Ljava/lang/ArithmeticException;", "/ by zero")
 		}
 		return a % lit, nil
 	case 5:

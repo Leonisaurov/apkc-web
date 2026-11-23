@@ -58,9 +58,11 @@ que se mide cada fase; nada de lo que sigue se da por bueno sin su comando.
 - Lo que no se emula se dice por su nombre y se devuelve el cero del tipo de retorno, sin romper el
   modelo (`rechaza`, `apkc/previewinterprete.go:1659`): `Editable`/`Spannable`, `Html.fromHtml`, la
   reflexión y `getString(id, args)` con formato.
-- Un método con tabla de excepciones (`triesSize > 0`) **no se ejecuta**: el intérprete lo rechaza
-  (`apkc/previewinterprete.go:792`). El subconjunto Java del compilador sí emite `try`/`catch`, pero
-  el intérprete de la vista previa todavía no los corre.
+- Un método con tabla de excepciones (`triesSize > 0`) **sí se ejecuta**: el intérprete lee los
+  `try_item` y la lista de handlers, busca el que cubre la unidad y reanuda en su `handler_pc` con
+  `move-exception` (§213). Lanzan excepción el `throw` del dex, el `parseInt` que no parsea y la
+  división entera por cero; sin handler, el error sale con el tipo y el mensaje. El `finally` y el
+  multi-catch están sin medir y no se dan por hechos.
 - Límites: 200 000 pasos, 64 capturas, 24 avisos y 48 llamadas anidadas
   (`apkc/previewinterprete.go:39-50`).
 
@@ -304,9 +306,9 @@ frontera, no se finge.
 - **Tamaño y tiempo del binario.** Cada fase añade código al `apkc.wasm`. Se medirá con el mismo
   método que §198 antes de publicar y se repetirá la comprobación del host que trunca (§196). Sin
   cifras nuevas hasta medir.
-- **`try`/`catch`.** Hoy el intérprete no ejecuta métodos con tabla de excepciones. Varias apps
-  reales envuelven `parseInt` o las preferencias en `try`; si E3 lo necesita, entra como requisito
-  de esa fase, no como excepción silenciosa.
+- **`try`/`catch`.** Cerrado para el caso que E3 necesitaba: el intérprete ejecuta la tabla de
+  excepciones del dex (§213). Quedan sin medir el `finally` y el multi-catch, que el compilador emite
+  como catch-all y como varias filas del mismo handler.
 - **Adaptadores.** Un `getView` que infla layouts con `LayoutInflater` exige emular el inflado desde
   el dex; si el adaptador construye la fila a mano (que es lo que permiten las plantillas del
   studio), E2 es directo y el inflado se pospone.

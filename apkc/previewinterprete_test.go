@@ -699,9 +699,11 @@ func TestElStubSinCuerpoCapturaPrintInt(t *testing.T) {
 	}
 }
 
-// TestElInterpreteRechazaLasExcepcionesPorSuNombre mide la frontera: un `try`/`catch` no se ejecuta
-// a medias, se dice que no se ejecuta.
-func TestElInterpreteRechazaLasExcepcionesPorSuNombre(t *testing.T) {
+// TestElInterpreteEjecutaElTryYAtrapaLaDivisionPorCero mide el try/catch sin vistas: la primera
+// llamada no lanza nada y devuelve su valor; la segunda divide por cero, que en Dalvik es una
+// ArithmeticException, y el catch del mismo método la recoge y devuelve -1. Antes esta prueba medía
+// la frontera —el intérprete rechazaba la tabla por su nombre—, y esa frontera ya no existe.
+func TestElInterpreteEjecutaElTryYAtrapaLaDivisionPorCero(t *testing.T) {
 	const conTry = `package com.myapp;
 public class Riesgo {
     static int divide(int a, int b) {
@@ -709,6 +711,7 @@ public class Riesgo {
     }
     public static void main(String[] args) {
         System.out.println("resultado " + divide(4, 2));
+        System.out.println("fallo " + divide(4, 0));
     }
 }
 `
@@ -717,11 +720,17 @@ public class Riesgo {
 		t.Fatalf("el fuente no se dexea: %v", err)
 	}
 	res, _ := ejecutaOnCreate(d, nil, "Lcom/myapp/Riesgo;")
-	if !strings.Contains(res.Error, "tabla de excepciones") {
-		t.Fatalf("el try/catch no se rechazó por su nombre: %q", res.Error)
+	if res.Error != "" {
+		t.Fatalf("el try/catch no se ejecutó: %s", res.Error)
 	}
-	if len(res.Capturas) != 0 {
-		t.Errorf("se capturó texto de una ejecución que se detuvo: %+v", res.Capturas)
+	if len(res.Consola) != 2 {
+		t.Fatalf("se esperaban dos líneas de consola y hay %+v", res.Consola)
+	}
+	if res.Consola[0].Texto != "resultado 2" {
+		t.Errorf("la primera llamada imprimió %q y 4/2 es 2", res.Consola[0].Texto)
+	}
+	if res.Consola[1].Texto != "fallo -1" {
+		t.Errorf("la división por cero imprimió %q y el catch devuelve -1", res.Consola[1].Texto)
 	}
 }
 

@@ -326,6 +326,32 @@ func (d *dexFile) uleb(at uint32) (uint32, uint32, error) {
 	}
 }
 
+// sleb es el uleb128 con signo: lo que la lista de handlers usa para decir cuántos tipos lleva un
+// catch y si además termina en catch-all (negativo).
+func (d *dexFile) sleb(at uint32) (int32, uint32, error) {
+	var value int32
+	var shift uint
+	o := at
+	for {
+		if int(o) >= len(d.raw) {
+			return 0, 0, errors.New("sleb128 runs past the end of the file")
+		}
+		b := d.raw[o]
+		o++
+		value |= int32(b&0x7f) << shift
+		shift += 7
+		if b&0x80 == 0 {
+			if shift < 32 && b&0x40 != 0 {
+				value |= -1 << shift
+			}
+			return value, o, nil
+		}
+		if shift > 28 {
+			return 0, 0, errors.New("sleb128 longer than an int32")
+		}
+	}
+}
+
 func (d *dexFile) at(section string, i uint32) (uint32, error) {
 	pair, ok := d.tableOff[section]
 	if !ok {
