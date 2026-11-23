@@ -82,6 +82,10 @@ type tareaReloj struct {
 	instante int64
 	orden    int
 	origen   string
+	// runnable es el objeto que el `post`/`postDelayed` encoló, para que `removeCallbacks` pueda
+	// retirar exactamente esa tarea; las tareas que no vienen de un Runnable (el AsyncTask) lo dejan
+	// nulo y no se cancelan con él.
+	runnable *objetoDalvik
 	ejecuta  func() error
 }
 
@@ -297,6 +301,19 @@ type objetoDalvik struct {
 	// mensajeExcepcion es el texto que un `Throwable` recibió en su constructor: es lo que devuelve
 	// `getMessage()` y lo que el aviso de una excepción sin capturar enseña.
 	mensajeExcepcion string
+	// lista es el contenido de un `java.util.ArrayList` del framework: el estado vive en la
+	// instancia, así que dos listas no comparten sus elementos y `get` respeta su índice. Se
+	// distingue de «sin lista» por no ser nulo: `clear` la deja vacía, no nula.
+	lista []any
+	// conjunto es el `java.util.Set` que devuelve `getBondedDevices`: aquí siempre vacío, porque la
+	// vista previa no tiene radio ni equipos reales. `iterando` e `indice` son el cursor de su
+	// `iterator()`, que recorre esa misma lista.
+	conjunto []any
+	iterando []any
+	indice   int
+	// bluetoothActivo es el estado del adaptador de `getDefaultAdapter`: se modela encendido para
+	// que la UI de la app pueda recorrer su camino completo sin un dispositivo.
+	bluetoothActivo bool
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -618,10 +635,29 @@ func (m *maquinaDalvik) avanza(ms int64) error {
 
 // programa encola una tarea para un instante del reloj lógico. No la ejecuta: la cola se drena en
 // `vence`, cuando el reloj llega a ese instante.
-func (m *maquinaDalvik) programa(instante int64, origen string, ejecuta func() error) {
+func (m *maquinaDalvik) programa(instante int64, origen string, r *objetoDalvik, ejecuta func() error) {
 	m.encoladas++
 	m.cola = append(m.cola, tareaReloj{instante: instante, orden: m.encoladas,
-		origen: origen, ejecuta: ejecuta})
+		origen: origen, runnable: r, ejecuta: ejecuta})
+}
+
+// quitaTareas retira de la cola las tareas que encoló ese Runnable, que es lo que hacen
+// `Handler.removeCallbacks` y su variante con token: no se ejecutan cuando el reloj llega a su
+// instante. Deja intactas las que no vienen de un Runnable —las del AsyncTask— porque no son
+// callbacks de un Handler. Es una aproximación por Runnable sobre la cola de la pantalla: no hay un
+// buzón por Handler, así que también retira un `View.post` del mismo objeto, que la app no mezcla.
+func (m *maquinaDalvik) quitaTareas(r *objetoDalvik) {
+	if r == nil || len(m.cola) == 0 {
+		return
+	}
+	quedan := m.cola[:0]
+	for _, t := range m.cola {
+		if t.runnable == r {
+			continue
+		}
+		quedan = append(quedan, t)
+	}
+	m.cola = quedan
 }
 
 // vence ejecuta, si hay alguna, la tarea que toca de las que vencen hasta `limite`: la de menor
@@ -689,7 +725,7 @@ func (m *maquinaDalvik) difiere(origen string, runnable any, espera int64) any {
 	} else {
 		instante += espera
 	}
-	m.programa(instante, origen, func() error { return m.ejecutaRunnable(r, origen) })
+	m.programa(instante, origen, r, func() error { return m.ejecutaRunnable(r, origen) })
 	return nil
 }
 
@@ -710,7 +746,7 @@ func (m *maquinaDalvik) ejecutaRunnable(r *objetoDalvik, origen string) error {
 // corren en el hilo de la interfaz y la del medio en un hilo de trabajo; aquí no hay hilos y el
 // orden es el único dato que se puede medir.
 func (m *maquinaDalvik) difiereTarea(t *objetoDalvik, params any) {
-	m.programa(m.ahora(), "AsyncTask.execute", func() error { return m.ejecutaAsyncTask(t, params) })
+	m.programa(m.ahora(), "AsyncTask.execute", nil, func() error { return m.ejecutaAsyncTask(t, params) })
 }
 
 // ejecutaAsyncTask corre las fases del AsyncTask sobre la misma instancia, pasando el resultado de
@@ -3675,6 +3711,18 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			"Landroid/widget/CompoundButton;", "Landroid/widget/CheckedTextView;")
 	}
 	obj, _ := receptor.(*objetoDalvik)
+	// esLista reconoce la instancia de `java.util.ArrayList` que creó `new ArrayList()`: el estado
+	// vive en el objeto, así que cada lista lleva sus elementos y `get` respeta su índice. Se mira
+	// la clase del receptor y no la del invoke porque un `List.add` llega declarado en la interfaz.
+	esLista := func() bool {
+		return obj != nil && strings.HasSuffix(obj.clase, "Ljava/util/ArrayList;")
+	}
+	// esConjunto reconoce el conjunto que devolvió `getBondedDevices`: no nulo aunque esté vacío.
+	esConjunto := func() bool { return obj != nil && obj.conjunto != nil }
+	// esIterador reconoce el cursor que devolvió `iterator()`, que recorre esa misma lista.
+	esIterador := func() bool {
+		return obj != nil && strings.HasSuffix(obj.clase, "Ljava/util/Iterator;")
+	}
 	// esThrowableObj reconoce una excepción ya construida: su mensaje y su texto son lo que un catch
 	// puede leer del objeto que recibió. Se decide por la jerarquía real —una excepción del proyecto
 	// como `MiExcepcion` no lleva el sufijo en el descriptor— y no por el nombre de la clase.
@@ -3745,6 +3793,11 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if esThrowableObj() && len(vals) >= 1 &&
 			(proto == "(Ljava/lang/String;)V" || proto == "(Ljava/lang/String;Ljava/lang/Throwable;)V") {
 			obj.mensajeExcepcion = textoDe(vals[0])
+		}
+		// el ArrayList del framework nace con su lista vacía: así `add` puede empezar y `clear`
+		// puede dejarla vacía sin que se confunda con «este objeto no es una lista»
+		if obj != nil && es("Ljava/util/ArrayList;") && obj.lista == nil {
+			obj.lista = []any{}
 		}
 		return nil, true, nil
 	case "onCreate", "onStart", "onResume", "onPause", "onStop", "onDestroy", "onRestart",
@@ -3969,6 +4022,131 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				}
 			}
 			return m.difiere(nombre, vals[0], espera), true, nil
+		}
+	case "removeCallbacks":
+		// retira de la cola las tareas que ese mismo Runnable dejó pendientes: es el «parar» de un
+		// cronómetro. El Runnable tiene que ser el objeto del dex que se posteó.
+		if len(vals) >= 1 && es("Landroid/os/Handler;") {
+			r, ok := vals[0].(*objetoDalvik)
+			if !ok {
+				return nil, true, fmt.Errorf("%s%s con un Runnable que no es un objeto del dex",
+					nombre, proto)
+			}
+			m.quitaTareas(r)
+			return nil, true, nil
+		}
+	case "removeCallbacksAndMessages":
+		// el token nulo vacía la cola, como el framework; un token no nulo no casa con nada porque
+		// aquí no se modelan mensajes con token, y entonces no cancela nada. Un nulo llega al
+		// registro como el entero cero, no como un objeto: cualquier valor que no sea un objeto del
+		// dex es el token nulo.
+		if len(vals) == 1 && es("Landroid/os/Handler;") {
+			if _, esObjeto := vals[0].(*objetoDalvik); !esObjeto {
+				m.cola = nil
+			}
+			return nil, true, nil
+		}
+	case "elapsedRealtime":
+		// el reloj monotónico de `SystemClock` es el reloj lógico de la vista previa: no hay reloj de
+		// pared, así que dos ejecuciones del mismo guion leen los mismos milisegundos
+		if len(vals) == 0 && es("Landroid/os/SystemClock;") {
+			return m.ahora(), true, nil
+		}
+	case "getDefaultAdapter":
+		// el adaptador de Bluetooth se modela presente y encendido, con cero equipos vinculados: es
+		// lo que la UI puede enseñar sin un dispositivo. La radio no existe aquí.
+		if len(vals) == 0 && es("Landroid/bluetooth/BluetoothAdapter;") {
+			return &objetoDalvik{clase: "Landroid/bluetooth/BluetoothAdapter;",
+				campos: map[string]any{}, bluetoothActivo: true}, true, nil
+		}
+	case "isEnabled":
+		if len(vals) == 0 && obj != nil && es("Landroid/bluetooth/BluetoothAdapter;") {
+			return boolAInt(obj.bluetoothActivo), true, nil
+		}
+	case "getBondedDevices":
+		if len(vals) == 0 && obj != nil && es("Landroid/bluetooth/BluetoothAdapter;") {
+			return &objetoDalvik{clase: "Ljava/util/Set;", campos: map[string]any{},
+				conjunto: []any{}}, true, nil
+		}
+	case "startDiscovery":
+		// el descubrimiento se acepta y devuelve true, pero no entrega resultados: no hay receptor
+		// ni radio. Es la frontera documentada de `chatbt`.
+		if len(vals) == 0 && obj != nil && es("Landroid/bluetooth/BluetoothAdapter;") {
+			return boolAInt(true), true, nil
+		}
+	case "createRfcommSocketToServiceRecord", "listenUsingRfcommWithServiceRecord", "getRemoteDevice":
+		if obj != nil && es("Landroid/bluetooth/BluetoothAdapter;") {
+			return m.rechaza(nombre, proto,
+				"los sockets y los dispositivos Bluetooth reales no están en el subconjunto: no hay "+
+					"radio ni red", "Landroid/bluetooth/BluetoothSocket;")
+		}
+	case "iterator":
+		if len(vals) == 0 && esConjunto() {
+			return &objetoDalvik{clase: "Ljava/util/Iterator;", campos: map[string]any{},
+				iterando: obj.conjunto}, true, nil
+		}
+	case "hasNext":
+		if len(vals) == 0 && esIterador() {
+			return boolAInt(obj.indice < len(obj.iterando)), true, nil
+		}
+	case "next":
+		if len(vals) == 0 && esIterador() {
+			if obj.indice >= len(obj.iterando) {
+				return nil, true, nuevaExcepcion("Ljava/util/NoSuchElementException;",
+					"next() sin elementos: el conjunto está vacío")
+			}
+			v := obj.iterando[obj.indice]
+			obj.indice++
+			return v, true, nil
+		}
+	case "add":
+		// `add(E)` y `add(int, E)` del ArrayList: el segundo respeta el índice e inserta delante de
+		// lo que ya estaba, como el framework
+		if esLista() {
+			if len(vals) == 1 {
+				obj.lista = append(obj.lista, vals[0])
+				return boolAInt(true), true, nil
+			}
+			if len(vals) == 2 {
+				i, err := aInt32(vals[0])
+				if err != nil {
+					return nil, true, err
+				}
+				if int(i) < 0 || int(i) > len(obj.lista) {
+					return nil, true, nuevaExcepcion("Ljava/lang/IndexOutOfBoundsException;",
+						"Index: %d, Size: %d", i, len(obj.lista))
+				}
+				obj.lista = append(obj.lista, nil)
+				copy(obj.lista[int(i)+1:], obj.lista[int(i):])
+				obj.lista[int(i)] = vals[1]
+				return nil, true, nil
+			}
+		}
+	case "get":
+		if esLista() && len(vals) == 1 {
+			i, err := aInt32(vals[0])
+			if err != nil {
+				return nil, true, err
+			}
+			if int(i) < 0 || int(i) >= len(obj.lista) {
+				return nil, true, nuevaExcepcion("Ljava/lang/IndexOutOfBoundsException;",
+					"Index %d out of bounds for length %d", i, len(obj.lista))
+			}
+			return obj.lista[int(i)], true, nil
+		}
+	case "size":
+		if len(vals) == 0 {
+			if esLista() {
+				return int32(len(obj.lista)), true, nil
+			}
+			if esConjunto() {
+				return int32(len(obj.conjunto)), true, nil
+			}
+		}
+	case "clear":
+		if len(vals) == 0 && esLista() {
+			obj.lista = []any{}
+			return nil, true, nil
 		}
 	case "runOnUiThread":
 		// `Activity.runOnUiThread` desde el hilo de la interfaz corre en el acto, y aquí no hay otro
@@ -4267,6 +4445,12 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 0 {
 			if s, ok := cadenaDe(receptor); ok {
 				return boolAInt(s == ""), true, nil
+			}
+			if esLista() {
+				return boolAInt(len(obj.lista) == 0), true, nil
+			}
+			if esConjunto() {
+				return boolAInt(len(obj.conjunto) == 0), true, nil
 			}
 		}
 	case "equals":
