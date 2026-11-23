@@ -3327,6 +3327,10 @@ func armaTries(p *traduce, m classMethod) ([]tryItem, []byte, error) {
 		}
 		items = append(items, tryItem{start: uint32(inicio), count: uint16(fin - inicio), handlerOff: uint16(off)})
 	}
+	// la `exception_table` del `.class` no tiene por qué venir ordenada por `start_pc`, y el DEX
+	// exige los try_item en orden ascendente de `start_addr` (y sin solape). Los grupos ya son
+	// disjuntos —los solapes se fueron a `armaTriesSolapados`—, así que basta ordenar.
+	sort.Slice(items, func(i, j int) bool { return items[i].start < items[j].start })
 	return items, lista, nil
 }
 
@@ -3414,6 +3418,9 @@ func armaTriesSolapados(p *traduce, m classMethod) ([]tryItem, []byte, error) {
 		}
 		items = append(items, tryItem{start: uint32(inicio), count: uint16(fin - inicio), handlerOff: uint16(off)})
 	}
+	// por construcción los tramos ya vienen ordenados por `puntos`, pero la garantía del DEX se deja
+	// explícita también aquí
+	sort.Slice(items, func(i, j int) bool { return items[i].start < items[j].start })
 	return items, lista, nil
 }
 
