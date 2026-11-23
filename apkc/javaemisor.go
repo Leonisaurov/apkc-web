@@ -550,6 +550,9 @@ type contextoJava struct {
 	orden   []*jclas // en el orden del fuente, para resolver sin depender del azar de un mapa
 	propias map[string]*jclas
 	archivo string // el SourceFile que anota javac: el nombre del fuente, sin rutas
+	// unidad: el índice del fuente que se está emitiendo, para resolver un nombre simple primero contra
+	// su propio compilation unit (JLS 6.5.5.1).
+	unidad int
 
 	// accesores son los metodos sinteticos `access$NNN` que javac escribe en el exterior cuando una
 	// anonima toca un miembro suyo privado (parrafo 72). Se guardan por dueño y en orden de creacion:
@@ -605,6 +608,7 @@ func (ctx *contextoJava) registrar(c *jclas) {
 	// el alcance (paquete e imports) del fuente donde se declaró la clase viaja con ella: al resolver un
 	// descriptor suyo desde otro fichero se usa éste, no el del llamador
 	c.imports = ctx.imports
+	c.unidad = ctx.unidad
 	ctx.propias[internoDe(c.paquete, c.nombre)] = c
 	antes := ctx.registrando
 	ctx.registrando = c
@@ -869,21 +873,23 @@ func (ctx *contextoJava) hay(internal string) bool {
 	return ctx.busc.hayEnElJar(internal)
 }
 
-// resolverSimple sigue el orden de JLS que usa javac: una clase del propio fuente, el paquete del fuente,
-// un import concreto, los imports con estrella y por ultimo java.lang.
+// resolverSimple sigue el orden de JLS 6.5.5.1, que es el de javac: una clase declarada en el mismo
+// fichero, un import concreto, una clase del mismo paquete, los imports con estrella y por último
+// java.lang. El import explícito gana al homónimo del paquete y, sobre todo, al de otro fichero del
+// proyecto: antes se barrían todas las clases del proyecto primero y un `Helper` de otro paquete se
+// comía al `import com.x.Helper` (medido con javac 17: el import gana incluso al del mismo paquete).
 func (ctx *contextoJava) resolverSimple(nombre string) (string, error) {
+	// 1. el mismo compilation unit: javac lo pone por delante de los imports y, si además hay un import
+	//    del mismo nombre simple, lo rechaza como «already defined in this compilation unit»
 	for _, c := range ctx.orden {
-		simple := sinPaquete(c.nombre)
-		if i := strings.LastIndex(simple, "$"); i >= 0 {
-			simple = simple[i+1:] // `Anidada` dentro de `Exterior$Anidada`
+		if c.unidad != ctx.unidad {
+			continue
 		}
-		if simple == nombre {
+		if simpleDeClase(c) == nombre {
 			return internoDe(c.paquete, c.nombre), nil
 		}
 	}
-	if c := internoDe(ctx.paquete, nombre); ctx.hay(c) {
-		return c, nil
-	}
+	// 2. un import concreto
 	for _, imp := range ctx.imports {
 		if strings.HasSuffix(imp, ".*") || sinPaquete(imp) != nombre {
 			continue
@@ -892,6 +898,19 @@ func (ctx *contextoJava) resolverSimple(nombre string) (string, error) {
 			return c, nil
 		}
 	}
+	// 3. una clase del mismo paquete, del proyecto o del classpath
+	for _, c := range ctx.orden {
+		if c.paquete != ctx.paquete {
+			continue
+		}
+		if simpleDeClase(c) == nombre {
+			return internoDe(c.paquete, c.nombre), nil
+		}
+	}
+	if c := internoDe(ctx.paquete, nombre); ctx.hay(c) {
+		return c, nil
+	}
+	// 4. los imports con estrella
 	for _, imp := range ctx.imports {
 		if !strings.HasSuffix(imp, ".*") {
 			continue
@@ -901,10 +920,21 @@ func (ctx *contextoJava) resolverSimple(nombre string) (string, error) {
 			return c, nil
 		}
 	}
+	// 5. java.lang
 	if ctx.hay("java/lang/" + nombre) {
 		return "java/lang/" + nombre, nil
 	}
 	return "", fmt.Errorf("el tipo %s no se resuelve: ni en el fuente, ni en su paquete, ni en los imports, ni en java.lang, ni en el classpath (android.jar ni jar/)", nombre)
+}
+
+// simpleDeClase: el nombre simple con el que se nombra una clase del proyecto, sin paquete y, si es
+// anidada (`Exterior$Anidada`), sin el prefijo del exterior.
+func simpleDeClase(c *jclas) string {
+	simple := sinPaquete(c.nombre)
+	if i := strings.LastIndex(simple, "$"); i >= 0 {
+		simple = simple[i+1:]
+	}
+	return simple
 }
 
 // tipoAInterno resuelve `MenuItem.OnMenuItemClickListener` contra el jar: la cabeza por resolverSimple y
@@ -1177,10 +1207,10 @@ func (ctx *contextoJava) padreDe(c *jclas) (string, error) {
 // firma de otra clase se resuelven con **su** alcance: `new Lienzo(this)` desde una clase que no
 // importa `Context` tiene que resolver el parámetro de `Lienzo(Context)`, que sí lo importa.
 func (ctx *contextoJava) enAlcanceDe(c *jclas, f func() error) error {
-	paquete, imports := ctx.paquete, ctx.imports
-	ctx.paquete, ctx.imports = c.paquete, c.imports
+	paquete, imports, unidad := ctx.paquete, ctx.imports, ctx.unidad
+	ctx.paquete, ctx.imports, ctx.unidad = c.paquete, c.imports, c.unidad
 	defer func() {
-		ctx.paquete, ctx.imports = paquete, imports
+		ctx.paquete, ctx.imports, ctx.unidad = paquete, imports, unidad
 	}()
 	return f()
 }
@@ -1946,28 +1976,30 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 		accesores: map[string][]accesorSintetico{}, accesorID: map[string]accesorSintetico{},
 		accesorNumero: map[string]int{}, ctorSintetico: map[string]string{}}
 	type parseado struct {
-		a    *archivoJava
-		nomb string
+		a      *archivoJava
+		nomb   string
+		unidad int
 	}
 	var todos []parseado
-	for _, f := range fuentes {
+	for i, f := range fuentes {
 		a, err := parsearJava(f.contenido)
 		if err != nil {
 			return nil, &errorDeFuente{fuente: f.nombre, etapa: "parser", err: err}
 		}
 		// el paquete y los imports se ponen antes de registrar para que cada clase se quede con los de su
 		// fuente: un descriptor suyo se resuelve después con ese alcance aunque lo pida otro fichero
-		ctx.paquete, ctx.imports = a.paquete, a.imports
+		ctx.paquete, ctx.imports, ctx.archivo, ctx.unidad = a.paquete, a.imports, baseDeNombre(f.nombre), i
 		for _, c := range a.clases {
 			ctx.registrar(c)
 		}
-		todos = append(todos, parseado{a, baseDeNombre(f.nombre)})
+		todos = append(todos, parseado{a, baseDeNombre(f.nombre), i})
 	}
 	var salida []claseEmitida
 	for _, p := range todos {
 		ctx.paquete = p.a.paquete
 		ctx.imports = p.a.imports
 		ctx.archivo = p.nomb
+		ctx.unidad = p.unidad
 		for _, c := range p.a.clases {
 			hechas, err := ctx.emmitirArbol(c)
 			if err != nil {

@@ -432,6 +432,11 @@ type jclas struct {
 	linea         int
 	paquete       string
 	imports       []string // los del fuente donde se declaró la clase: su alcance, no el del llamador
+	// unidad es el índice del fichero del que salió la clase. JLS 6.5.5.1 resuelve un nombre simple
+	// primero contra el mismo compilation unit y solo después contra los imports: sin este dato, una
+	// clase de otro fichero del proyecto se colaba por delante del import explícito. El nombre base no
+	// sirve porque dos `Helper.java` de paquetes distintos se llaman igual.
+	unidad        int
 	nombreExterno string
 
 	// anonima: la clase que crea un `new Tipo(args) { ... }`. javac le pone el campo this$0, un constructor
