@@ -551,7 +551,16 @@ func (tr *tablaRecursos) leeBloque(b []byte, off, hs, s int) (bloqueTipo, error)
 			}
 			en.padre = u32re(b, e+8)
 			en.recuentos = u32re(b, e+12)
-			en.crudo = b[e+16 : off+s]
+			// Los registros son los que declara la entrada, no «todo lo que queda del bloque»: una
+			// entrada compleja puede ir seguida de otras en el mismo bloque (un `style` cuyo mapa no
+			// es el último recurso del tipo), y tomar el resto del bloque se comía las siguientes y
+			// rechazaba el arsc con «declares N records and the block holds M». Medido con apks de
+			// terceros: NopeRemote-v2.2 y ppcinees fallaban aquí y ahora se leen.
+			fin := e + 16 + int(en.recuentos)*12
+			if fin > off+s {
+				return bl, fmt.Errorf("entry #%d declares %d records and they run past its type block", i, en.recuentos)
+			}
+			en.crudo = b[e+16 : fin]
 			if len(en.crudo)%12 != 0 {
 				return bl, fmt.Errorf("entry #%d: %d bytes of records is not a whole number of twelve", i, len(en.crudo))
 			}
@@ -559,7 +568,10 @@ func (tr *tablaRecursos) leeBloque(b []byte, off, hs, s int) (bloqueTipo, error)
 				return bl, fmt.Errorf("entry #%d declares %d records and the block holds %d", i, en.recuentos, len(en.crudo)/12)
 			}
 			for k := 0; k < len(en.crudo); k += 12 {
-				if nombre := u32re(en.crudo, k); nombre&0xff000000 != 0x01000000 {
+				// El nombre de un registro es el id del atributo: puede ser del framework (0x01…) o
+				// un `<attr>` del propio paquete (0x7f…), como los de un `style` de una app real.
+				// Lo que no cabe es un nombre sin paquete (cero).
+				if nombre := u32re(en.crudo, k); nombre>>24 == 0 {
 					return bl, fmt.Errorf("entry #%d record at +%d names %#08x, which is not a resource id", i, k, nombre)
 				}
 				if u16re(en.crudo, k+4) != 8 {
