@@ -11,15 +11,21 @@ package main
 //
 // Nada de esto resuelve Maven ni descarga: lo que hay en `jar/` es lo que se compila. El `res/` y el
 // `lib/<abi>/` de un AAR no son entradas del compilador (los recursos y las bibliotecas nativas no
-// resuelven nombres de Java) y quedan fuera de esta pieza; el dex de las dependencias tampoco lo
-// escribe este camino (sigue siendo d8).
+// resuelven nombres de Java) y quedan fuera de esta pieza.
+//
+// Desde que `--compiler go` también dexa las dependencias, este fichero tiene la segunda mitad: los
+// `.class` de cada entrada del classpath leídos en memoria (`clasesDeJar`) y la lista de lo que hay
+// que dexar de `jar/` (`dependenciasDexeables`). Es la misma lista que recibe d8 en el camino javac,
+// para que los dos caminos de `apkc build` dexen exactamente el mismo conjunto.
 
 import (
 	"archive/zip"
+	"crypto/sha1"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -100,10 +106,83 @@ func aarsEn(raiz string) []string {
 	return aars
 }
 
-// dependenciasDelProyecto cuenta lo que hay en `jar/`: jars y aars. Lo lee el portero del compilador
-// para nombrar la frontera del dex de las dependencias donde no hay procesos.
-func dependenciasDelProyecto() []string {
-	return append(append([]string{}, allJars()...), allAars()...)
+// dependenciasDexeables es lo que hay que dexar de `jar/`, con la huella de la que sale cada entrada:
+// cada `.jar` tal cual y, de cada `.aar`, su `classes.jar` extraído. La huella de un AAR es la del
+// AAR entero y no la de su `classes.jar`, para que cambiar un recurso del AAR vuelva a dexar sus
+// clases igual que invalida las del compilador. Es la lista que reciben los dos dexers —d8 en el
+// camino javac y `dexDeClases` en el camino Go—, así que los dos empaquetan el mismo conjunto.
+func dependenciasDexeables() ([]string, []string) {
+	rutas := []string{}
+	digests := []string{}
+	for _, jar := range allJars() {
+		digest, err := fileSHA1(jar)
+		if err != nil {
+			LogF("build", err, jar)
+		}
+		rutas = append(rutas, jar)
+		digests = append(digests, digest)
+	}
+	for _, aar := range allAars() {
+		classes, err := classesJarDelAar(aar)
+		if err != nil {
+			LogF("build", err.Error())
+		}
+		if classes == "" {
+			// un AAR de solo recursos no aporta clases que dexar
+			continue
+		}
+		digest, err := fileSHA1(aar)
+		if err != nil {
+			LogF("build", err, aar)
+		}
+		rutas = append(rutas, classes)
+		digests = append(digests, digest)
+	}
+	return rutas, digests
+}
+
+// clasesDeJar lee los `.class` de un jar o de un `classes.jar` en memoria, en orden de nombre de
+// entrada, que es lo que hace determinista el internado del dex: el mismo jar da el mismo fichero.
+// Se saltan `META-INF/` y los `module-info`/`package-info`, que d8 tampoco dexa. La huella de cada
+// clase es el SHA-1 de sus bytes, que es la clave del dexado por clase (I4, dexreuso.go).
+func clasesDeJar(ruta string) ([]classFull, error) {
+	zr, err := zip.OpenReader(ruta)
+	if err != nil {
+		return nil, fmt.Errorf("%s no abre: %w", ruta, err)
+	}
+	defer zr.Close()
+	nombres := []string{}
+	porNombre := map[string]*zip.File{}
+	for _, f := range zr.File {
+		nombre := f.Name
+		if !strings.HasSuffix(nombre, ".class") || strings.HasPrefix(nombre, "META-INF/") ||
+			strings.HasSuffix(nombre, "/module-info.class") || strings.HasSuffix(nombre, "/package-info.class") ||
+			nombre == "module-info.class" || nombre == "package-info.class" {
+			continue
+		}
+		nombres = append(nombres, nombre)
+		porNombre[nombre] = f
+	}
+	sort.Strings(nombres)
+	out := make([]classFull, 0, len(nombres))
+	for _, nombre := range nombres {
+		rc, err := porNombre[nombre].Open()
+		if err != nil {
+			return nil, err
+		}
+		datos, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return nil, err
+		}
+		cf, err := readClassFull(datos)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %s: %w", ruta, nombre, err)
+		}
+		cf.huella = sha1.Sum(datos)
+		out = append(out, cf)
+	}
+	return out, nil
 }
 
 // classesJarDelAar extrae el `classes.jar` de un AAR a `build/aar/` y devuelve su ruta. Si el AAR no
@@ -132,7 +211,7 @@ func classesJarDelAar(rutaAar string) (string, error) {
 	}
 	// temporal y rename, como el índice del jar: un build que muere a mitad no puede dejar un
 	// classes.jar corto con el nombre que dice ser el de este AAR
-	tmp := fmt.Sprintf("%s.%d.tmp", destino, os.Getpid())
+	tmp := fmt.Sprintf("%s.%s.tmp", destino, sufijoDeTemporal())
 	if err := os.WriteFile(tmp, datos, 0o644); err != nil {
 		return "", err
 	}

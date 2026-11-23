@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -140,23 +139,17 @@ func fuentesJava(raices []string) ([]fuenteJava, error) {
 	return out, nil
 }
 
-// revisarCompilerGo nombra lo que `--compiler go` todavia no mide. Se aislo del cuerpo de `build` para
+// revisarCompilerGo nombra lo que `--compiler go` todavía no mide. Se aisló del cuerpo de `build` para
 // poder probarlo: las negaciones de un portero que solo vive dentro de un LogF no se comprueban.
 //
-// Las dependencias de `jar/` ya no son un tope: el emisor las indexa y resuelve sus clases igual que
-// las del `android.jar` (dependencias.go). Lo que sigue sin existir es su dex: el `classes.dex` de
-// cada dependencia lo escribe d8, y un binario para el navegador no arranca procesos. En el escritorio
-// el build sigue entero (compilador propio + d8 para las dependencias); en wasm la frontera se dice
-// aquí, antes de que el fallo salga del exec de un d8 que no puede correr.
+// Las dependencias de `jar/` ya no son un tope, ni en el escritorio ni en wasm: el emisor las indexa
+// y resuelve sus clases igual que las del `android.jar` (dependencias.go) y el dexer de este fork
+// dexa sus `.class` en su propio `classesN.dex` (dexDeps con enGo, build.go), sin arrancar d8. Una
+// dependencia que el dexer no mide —hoy, un `invokedynamic` cuyo bootstrap no es de los medidos— no
+// se calla aquí: el rechazo sale del dexado, con el jar, la clase y el sitio concretos.
 func revisarCompilerGo(o buildOpts) error {
 	if kt, _ := getFiles("src", ".kt", false); len(kt) > 0 {
 		return fmt.Errorf("--compiler go no compila Kotlin: %d fuentes .kt en src", len(kt))
-	}
-	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
-		if deps := dependenciasDelProyecto(); len(deps) > 0 {
-			return fmt.Errorf("--compiler go compila contra jar/ (hay %d: %s), pero el dex de las dependencias lo escribe d8 y este build no arranca procesos",
-				len(deps), strings.Join(deps, ", "))
-		}
 	}
 	// El bundle ya no depende de d8: aab_go.go convierte el arsc del enlazador y el dex de
 	// este compilador en resources.pb y en el XmlNode del manifiesto (§186).
@@ -267,10 +260,26 @@ func classRosterSHA() string {
 // debug_info_item de las clases cuyo fichero `.class` no cambió, siempre que las tablas del dex
 // sigan siendo las mismas; el fichero que sale es idéntico byte a byte al de un dexado completo.
 func dexarClasesEnGo() {
+	dexarClasesEnGoCon(nil)
+}
+
+// dexarClasesEnGoCon es lo mismo con las dependencias dentro del mismo fichero. Por debajo de API 21
+// el runtime no abre un segundo dex, así que las clases de `jar/` viajan en el `classes.dex` del
+// proyecto, igual que en el merge de d8; por encima llegan en su propio `classesN.dex` (dexDeps) y
+// aquí no se pasa ninguna. Las clases de las dependencias entran después de las del proyecto, en el
+// orden de los jars, para que el mismo proyecto dé el mismo dex.
+func dexarClasesEnGoCon(jars []string) {
 	defer timeIt("dex go")()
 	clases, err := leeClases([]string{filepath.Join("build", "classes")})
 	if err != nil {
 		LogF("build", err.Error())
+	}
+	for _, jar := range jars {
+		delJar, err := clasesDeJar(jar)
+		if err != nil {
+			LogF("build", err.Error())
+		}
+		clases = append(clases, delJar...)
 	}
 	if len(clases) == 0 {
 		return

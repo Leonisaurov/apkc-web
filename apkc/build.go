@@ -121,7 +121,7 @@ func registerBuildFlags(set *flag.FlagSet, withAAB bool) buildFlags {
 	f.v1SHA1 = set.Bool("v1-sha1", false, "write the JAR signature with SHA-1 (for minSdk < 18); a project below API 18 turns it on")
 	f.signer = set.String("signer", signerDefault, "packaging and signing backend: auto (the default: go unless the project builds a bundle, uses a keystore format apkc cannot read, or targets a platform older than 4.3), go (zipalign and apksigner never start), jvm (zipalign and apksigner)")
 	f.linker = set.String("linker", "aapt2", "resource linker backend: aapt2 (the default: compile and link by running the SDK tool) or go (this binary writes the resource table, the binary XML and R.java; it refuses projects whose resources it has not been measured against, and needs android.jar for the framework ids)")
-	f.compiler = set.String("compiler", "javac", "java compiler and dexer: javac (the default: both tools run from the SDK) or go (this binary compiles the measured subset of Java and dexes the result, so no process starts; it refuses kotlin sources, jar dependencies and bundles)")
+	f.compiler = set.String("compiler", "javac", "java compiler and dexer: javac (the default: both tools run from the SDK) or go (this binary compiles the measured subset of Java and dexes the result, dependencies of jar/ included, so no process starts; it refuses kotlin sources)")
 	// the three switches the browser-shaped host needs (§39 and §44): inside the tab there is no SDK to
 	// probe, the jar sits wherever the user mounted it, and a path like /sdk/android.jar says nothing
 	// about which platform it is
@@ -275,16 +275,18 @@ func _build(o buildOpts) {
 	// their order even though they do not keep their clock. One thing does move: the
 	// worker budget reads the memory the compilers have left rather than the whole
 	// device's, which is the answer it should have been giving all along.
-	jars := allJars()
-	digests := jarDigests(jars)
+	jars, digests := dependenciasDexeables()
 	fingerprint := jarsFingerprint(api, digests)
 	// below API 21 the runtime cannot open a second dex file, so there the jars stay
 	// inputs of one merge over everything and every edit pays for all of them
 	splitDeps := api >= 21
+	// el camino Go dexa las dependencias con su propio dexer, que no arranca procesos: es lo
+	// que deja el build entero dentro de la pestaña
+	compiladorGo := o.compiler == compilerGo
 	depAnswer := make(chan depResult, 1)
 	if splitDeps {
 		go func() {
-			dexes, stale := dexDeps(api, o.coreLibrary, jars, digests)
+			dexes, stale := dexDeps(api, o.coreLibrary, compiladorGo, jars, digests)
 			depAnswer <- depResult{dexes: dexes, stale: stale}
 		}()
 	}
@@ -341,7 +343,14 @@ func _build(o buildOpts) {
 		apiChanged || (depChanged && !splitDeps) || dexMissing
 	if appStale {
 		if o.compiler == compilerGo {
-			dexarClasesEnGo()
+			// con las dependencias en su propio dex (api >= 21) basta con las clases del
+			// proyecto; por debajo, el runtime no abre un segundo dex y las clases de jar/
+			// entran en el mismo fichero, como en el merge de d8
+			if splitDeps {
+				dexarClasesEnGo()
+			} else {
+				dexarClasesEnGoCon(jars)
+			}
 		} else {
 			bundleJava(api, o.coreLibrary, jars, splitDeps, classes)
 		}
@@ -990,22 +999,6 @@ func reportD8Drops(out []byte) {
 	}
 }
 
-// jarDigests is the content of jar/ as the build sees it: one sha1 per jar, in the
-// order they are walked. Deciding from these instead of from timestamps is what
-// keeps a rewritten-but-identical dependency from costing a merge, and what keeps a
-// dependency restored with an old timestamp from escaping one.
-func jarDigests(jars []string) []string {
-	digests := []string{}
-	for _, jar := range jars {
-		digest, err := fileSHA1(jar)
-		if err != nil {
-			LogF("build", err, jar)
-		}
-		digests = append(digests, digest)
-	}
-	return digests
-}
-
 // jarsFingerprint names the exact dependency bytes a merge consumed. The api level
 // is part of it, because d8 desugars differently per level and the dexes produced
 // for one level are not valid inputs for another.
@@ -1056,12 +1049,18 @@ func auxRoster(libStored bool) (string, map[string]string) {
 // bucket and not the lot, and the buckets that do have to run go to a pool of workers
 // bounded by the memory of this device rather than one after another. The cache holds
 // several files per bucket because d8 splits by itself above the 64K method limit. It
-// reports whether it had to run d8 for any bucket, which is when the dependencies
-// really changed on disk.
-func dexDeps(api int, coreLibrary bool, jars []string, digests []string) ([]string, bool) {
+// reports whether it had to dex any bucket, which is when the dependencies really
+// changed on disk.
+//
+// enGo elige el dexer: `false` es d8 (el camino javac) y `true` el dexer de este fork
+// (dexDeClases, el camino `--compiler go`), que no arranca ningún proceso y por eso es el
+// único que puede correr dentro de la pestaña. Los dos dexers comparten el reparto en
+// buckets y el pool; cada uno guarda su caché aparte, porque los bytes que produce uno no
+// son los del otro.
+func dexDeps(api int, coreLibrary bool, enGo bool, jars []string, digests []string) ([]string, bool) {
 	// the whole dependency pass, so an idle build that answered every bucket from the
 	// cache stays under the threshold of timeIt and never logs
-	defer timeIt("d8 deps")()
+	defer timeIt("deps")()
 	// two jars with the same bytes define the same classes, and handed both to d8
 	// abort the build on "defined multiple times": the whole set is deduped by digest
 	// first, exactly as the single merge did, so a copy with another name costs nothing
@@ -1115,7 +1114,7 @@ func dexDeps(api int, coreLibrary bool, jars []string, digests []string) ([]stri
 		go func() {
 			defer wg.Done()
 			for bucket := range jobs {
-				results[bucket] = runBucket(api, coreLibrary, members[bucket], memberDigests[bucket], uniqueJars)
+				results[bucket] = runBucket(api, coreLibrary, enGo, members[bucket], memberDigests[bucket], uniqueJars)
 			}
 		}()
 	}
@@ -1129,9 +1128,15 @@ func dexDeps(api int, coreLibrary bool, jars []string, digests []string) ([]stri
 	produced := false
 	for bucket, result := range results {
 		if result.err != nil {
+			if enGo {
+				// la causa concreta: el jar y la clase que el dexer no mide, tal como los
+				// nombran clasesDeJar y el rechazo del traductor
+				LogF("build", "el dexado en Go de las dependencias falló en el bucket", bucket+1,
+					"de", buckets, ":", result.err.Error())
+			}
 			LogF("build", "the d8 of dependency bucket", bucket, "failed:", string(result.out), result.err.Error())
 		}
-		if result.ran {
+		if result.ran && !enGo {
 			reportD8Drops(result.out)
 		}
 		dexes = append(dexes, result.dexes...)
@@ -1170,8 +1175,8 @@ type bucketResult struct {
 // runBucket is the worker's body: dexBucket's answer plus the reason it failed, with no
 // exit in it. A worker that called LogF would take the process down while the rest of
 // the build was still writing, and the parent reports the failure naming the bucket.
-func runBucket(api int, coreLibrary bool, jars, digests, allJars []string) bucketResult {
-	dexes, ran, out, err := dexBucket(api, coreLibrary, jars, digests, allJars)
+func runBucket(api int, coreLibrary, enGo bool, jars, digests, allJars []string) bucketResult {
+	dexes, ran, out, err := dexBucket(api, coreLibrary, enGo, jars, digests, allJars)
 	if err != nil {
 		return bucketResult{err: err, out: out}
 	}
@@ -1276,17 +1281,18 @@ func bucketOf(jar string, buckets int) int {
 
 // dexBucket dexes one bucket of jar/ into a directory named by its content and returns
 // the dex files there, whether they were just written or found in the cache, the output
-// d8 produced and the reason it failed. A bucket the cache already answers contributes
-// its dexes and reports false: the difference between an add that re-dexes one bucket
-// and one that re-dexes the whole set is exactly that bool. A bucket whose jars hold no
-// class is remembered by a marker so d8 is not handed them again to produce nothing.
-// allJars is every jar of the set, of which the ones that are not in this bucket become
-// the classpath: a class desugaring against a type another bucket holds would otherwise
-// be dropped by d8.
+// the external dexer produced and the reason it failed. A bucket the cache already
+// answers contributes its dexes and reports false: the difference between an add that
+// re-dexes one bucket and one that re-dexes the whole set is exactly that bool. A bucket
+// whose jars hold no class is remembered by a marker so it is not dexed again to produce
+// nothing. allJars is every jar of the set, of which the ones that are not in this bucket
+// become the classpath: a class desugaring against a type another bucket holds would
+// otherwise be dropped by d8. That classpath only exists in the d8 path: the dexer of
+// this fork translates one class at a time and does not need the neighbours' types.
 //
 // It fails by returning: the buckets run as workers, and an exit from inside one of
 // them would take the process down while another is still writing its own directory.
-func dexBucket(api int, coreLibrary bool, jars []string, digests []string, allJars []string) ([]string, bool, []byte, error) {
+func dexBucket(api int, coreLibrary, enGo bool, jars []string, digests []string, allJars []string) ([]string, bool, []byte, error) {
 	if len(jars) < 1 {
 		return nil, false, nil, nil
 	}
@@ -1294,19 +1300,28 @@ func dexBucket(api int, coreLibrary bool, jars []string, digests []string, allJa
 	// bucket because an unrelated bucket changed is exactly the whole-set cost the
 	// split exists to avoid. A cross bucket desugaring bridge against a type that
 	// later changes shape is not recomputed here; that is the price of the split and
-	// is called out in the README.
-	dir := filepath.Join("build", "dexcache", "deps-"+sha1Text(strconv.Itoa(api)+"\n"+strings.Join(digests, "\n")))
-	// d8 writes here and the finished bucket is moved under the name above in one
-	// rename: a build that dies with d8 still running would otherwise leave a directory
-	// whose name is the digest of exactly those inputs, and the next one would read half
-	// a bucket as a cache hit and ship it. The pid is part of the name because the
-	// process that died is not the one cleaning up: a build killed by the out of memory
-	// killer leaves its staging behind, and the next build must not dex into it.
-	staging := filepath.Join("build", "dexcache", "writing-"+strconv.Itoa(os.Getpid())+"-"+filepath.Base(dir))
+	// is called out in the README. The dexer is part of the name: the bytes d8 writes
+	// for a bucket are not the bytes this fork writes for the same bucket.
+	prefijo := "deps-"
+	if enGo {
+		prefijo = "deps-go-"
+	}
+	dir := filepath.Join("build", "dexcache", prefijo+sha1Text(strconv.Itoa(api)+"\n"+strings.Join(digests, "\n")))
+	// the dexer writes here and the finished bucket is moved under the name above in one
+	// rename: a build that dies with the dexer still running would otherwise leave a
+	// directory whose name is the digest of exactly those inputs, and the next one would
+	// read half a bucket as a cache hit and ship it. The pid is part of the name because
+	// the process that died is not the one cleaning up: a build killed by the out of
+	// memory killer leaves its staging behind, and the next build must not dex into it.
+	staging := filepath.Join("build", "dexcache", "writing-"+sufijoDeTemporal()+"-"+filepath.Base(dir))
 	// a bucket that the cache answers costs milliseconds and a bucket that has to go
 	// through d8 costs up to a minute and a half, so the stage name carries the
 	// directory: without it the log says only that the build was slow
-	defer timeIt("d8 bucket " + filepath.Base(dir))()
+	etapa := "d8 bucket "
+	if enGo {
+		etapa = "dex go bucket "
+	}
+	defer timeIt(etapa + filepath.Base(dir))()
 	if exists(dir) {
 		// touching the mtime is what keeps the buckets of the roster in use the
 		// newest in the cache, so the prune never throws away one about to be read
@@ -1323,17 +1338,23 @@ func dexBucket(api int, coreLibrary bool, jars []string, digests []string, allJa
 		return nil, false, nil, err
 	}
 
-	skip := map[string]bool{}
-	for _, jar := range jars {
-		skip[jar] = true
-	}
 	LogI("build", "dexing dependencies")
-	args := d8Args(api, coreLibrary)
-	args = append(args, classpathArgs(skip, allJars)...)
-	args = append(args, "--output", staging)
-	args = append(args, jars...)
-	cmd := exec.Command(d8Path, args...)
-	out, err := cmd.CombinedOutput()
+	var out []byte
+	var err error
+	if enGo {
+		out, err = dexarBucketEnGo(jars, staging)
+	} else {
+		skip := map[string]bool{}
+		for _, jar := range jars {
+			skip[jar] = true
+		}
+		args := d8Args(api, coreLibrary)
+		args = append(args, classpathArgs(skip, allJars)...)
+		args = append(args, "--output", staging)
+		args = append(args, jars...)
+		cmd := exec.Command(d8Path, args...)
+		out, err = cmd.CombinedOutput()
+	}
 	if err != nil {
 		// d8 still aborts on a class two jars of the same bucket both define, which
 		// is the merge's guarantee surviving inside a bucket; across buckets the
@@ -1362,9 +1383,48 @@ func dexBucket(api int, coreLibrary bool, jars []string, digests []string, allJa
 	return dexes, true, out, nil
 }
 
-// dexFilesIn lists the dex files of a d8 output dir, ordered by their index: d8
+// dexarBucketEnGo es el cuerpo del bucket cuando el dexer es el de este fork: lee los
+// `.class` de cada jar en memoria y escribe `classes.dex` en el directorio de staging, con
+// la caché de I4 propia del bucket. No arranca ningún proceso, así que es el camino que
+// puede correr dentro de la pestaña.
+func dexarBucketEnGo(jars []string, staging string) ([]byte, error) {
+	clases := []classFull{}
+	for _, jar := range jars {
+		delJar, err := clasesDeJar(jar)
+		if err != nil {
+			return nil, err
+		}
+		clases = append(clases, delJar...)
+	}
+	if len(clases) == 0 {
+		// sin clases no hay dex: el publicador deja el marcador .nodex y la caché contesta
+		return nil, nil
+	}
+	cache := cargaCacheDexDe(ficheroCacheDepsGo(jars))
+	dex, err := dexDeClasesConCache(clases, cache)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(staging, "classes.dex"), dex, 0644); err != nil {
+		return nil, err
+	}
+	cache.guarda()
+	LogI("build", len(clases), "clases de", len(jars), "dependencias ->", len(dex), "bytes")
+	return nil, nil
+}
+
+// ficheroCacheDepsGo es la caché I4 de un bucket: se nombra por las rutas de sus jars, que
+// son estables mientras el bucket tenga los mismos miembros, y no por sus bytes, para que
+// editar un jar conserve los `code_item` de las clases de los demás. El prefijo `deps-` lo
+// deja fuera del prune, que solo cuenta directorios.
+func ficheroCacheDepsGo(jars []string) string {
+	return filepath.Join("build", "dexcache", "deps-gocache-"+sha1Text(strings.Join(jars, "\n"))[:16]+".bin")
+}
+
+// dexFilesIn lists the dex files of a dexed bucket, ordered by their index: d8
 // names them classes.dex, classes2.dex, ... and the bundle has to continue that
-// numbering after the dex of the project.
+// numbering after the dex of the project. El dexer de este fork escribe un solo
+// classes.dex; el nombre y el orden son los mismos para los dos.
 func dexFilesIn(dir string) []string {
 	dexes, err := filepath.Glob(filepath.Join(dir, "classes*.dex"))
 	if err != nil {

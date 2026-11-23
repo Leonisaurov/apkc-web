@@ -43,6 +43,10 @@ const (
 // calcular y los contadores que el informe necesita. `nuevoCodigo` y `nuevoDepuracion` son lo único
 // que se escribe al final, de modo que la caché no crece con las clases que ya no están.
 type cacheDex struct {
+	// fichero es donde vive esta caché. El dex del proyecto usa cacheDexFichero y cada bucket de
+	// dependencias el suyo (build/dexcache/deps-gocache-…), porque una caché se cierra contra las
+	// tablas de un dex concreto y escribir una encima de la otra tiraría el trabajo de la anterior.
+	fichero    string
 	huella     [20]byte
 	codigo     map[[20]byte][]byte
 	depuracion map[[20]byte][]byte
@@ -56,6 +60,7 @@ type cacheDex struct {
 
 func nuevoCacheDex() *cacheDex {
 	return &cacheDex{
+		fichero:         cacheDexFichero,
 		codigo:          map[[20]byte][]byte{},
 		depuracion:      map[[20]byte][]byte{},
 		nuevoCodigo:     map[[20]byte][]byte{},
@@ -71,25 +76,34 @@ func nuevoCacheDex() *cacheDex {
 // —un disco que devuelve otra cosa, una escritura que se cortó— se reutilizaría tal cual y el dex
 // saldría distinto del de un dexado completo, que es justo lo que esta etapa no puede permitirse.
 func cargaCacheDex() *cacheDex {
+	return cargaCacheDexDe(cacheDexFichero)
+}
+
+// cargaCacheDexDe es lo mismo sobre el fichero que se le diga: el dex del proyecto y cada bucket de
+// dependencias tienen el suyo, porque cada uno se cierra contra las tablas de su propio dex.
+func cargaCacheDexDe(fichero string) *cacheDex {
 	c := nuevoCacheDex()
-	b, err := os.ReadFile(cacheDexFichero)
+	c.fichero = fichero
+	b, err := os.ReadFile(fichero)
 	if err != nil {
 		return c
 	}
 	cabecera := len(cacheDexMarca) + 20
 	if len(b) < cabecera+20 || string(b[:len(cacheDexMarca)]) != cacheDexMarca {
-		LogW("build", cacheDexFichero, "no es una caché de esta versión: se dexan las clases enteras")
+		LogW("build", fichero, "no es una caché de esta versión: se dexan las clases enteras")
 		return c
 	}
 	cuerpo := b[cabecera:]
 	resumen := sha1.Sum(cuerpo)
 	if string(resumen[:]) != string(b[len(cacheDexMarca):cabecera]) {
-		LogW("build", cacheDexFichero, "no cuadra con su resumen: se dexan las clases enteras")
+		LogW("build", fichero, "no cuadra con su resumen: se dexan las clases enteras")
 		return c
 	}
 	if !c.leeCuerpo(cuerpo) {
-		LogW("build", cacheDexFichero, "está truncada: se dexan las clases enteras")
-		return nuevoCacheDex()
+		LogW("build", fichero, "está truncada: se dexan las clases enteras")
+		vacia := nuevoCacheDex()
+		vacia.fichero = fichero
+		return vacia
 	}
 	return c
 }

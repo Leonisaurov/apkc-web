@@ -10,8 +10,22 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 )
+
+// sufijoDeTemporal distingue dos escrituras simultáneas del mismo destino sin preguntar por el
+// pid: en wasm `os.Getpid()` llama a `process.pid`, que el hospedador del navegador no tiene, y el
+// build moría con un pánico del runtime justo al dexar el jar de una dependencia. El contador cubre
+// dos llamadas dentro del mismo nanosegundo del reloj.
+var contadorTemporal uint64
+
+func sufijoDeTemporal() string {
+	return strconv.FormatUint(atomic.AddUint64(&contadorTemporal, 1), 10) + "-" +
+		strconv.FormatInt(time.Now().UnixNano(), 36)
+}
 
 // fileSHA1 is the content key of the per jar dex cache: the same bytes always
 // produce the same name, so a dependency that did not change is never dexed
