@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tareas</string>
+    <string name="titulo">Lista de tareas</string>
+    <string name="pista">Nueva tarea</string>
+    <string name="casa">Casa</string>
+    <string name="trabajo">Trabajo</string>
+    <string name="estudio">Estudio</string>
+    <string name="agregar">Agregar</string>
+    <string name="completar">Completar la primera</string>
+    <string name="categoria">Categoría: </string>
+</resources>

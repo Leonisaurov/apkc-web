@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lienzo</string>
+    <string name="siguiente">Siguiente fotograma</string>
+    <string name="toques">Toques: </string>
+</resources>

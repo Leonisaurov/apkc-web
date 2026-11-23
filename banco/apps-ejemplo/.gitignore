@@ -1,0 +1,6 @@
+# Los apks y el estado incremental se construyen; no se versionan (regla 2 del AGENTS.md).
+*/build/
+*.apk
+*.idsig
+# R.java lo escribe el enlazador en cada build (aapt2 hace lo mismo): no es fuente.
+*/src/**/R.java

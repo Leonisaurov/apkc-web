@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Chat Bluetooth</string>
+    <string name="pista">Mensaje para el equipo</string>
+    <string name="enviar">Enviar</string>
+    <string name="buscar">Buscar equipos</string>
+    <string name="sin_bt">Este aparato no tiene Bluetooth</string>
+    <string name="apagado">Bluetooth apagado</string>
+    <string name="listo">Bluetooth listo</string>
+    <string name="buscando">Buscando equipos...</string>
+    <string name="sin_permiso">Falta el permiso de Bluetooth</string>
+    <string name="sin_conexion">Sin conexión: el mensaje queda en la lista</string>
+</resources>

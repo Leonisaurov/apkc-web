@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/titulo"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/titulo" />
+
+    <TextView
+        android:id="@+id/categoria"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/categoria" />
+
+    <TextView
+        android:id="@+id/nueva"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="@string/pista" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/casa"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/casa" />
+
+        <Button
+            android:id="@+id/trabajo"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/trabajo" />
+
+        <Button
+            android:id="@+id/estudio"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/estudio" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/agregar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/agregar" />
+
+        <Button
+            android:id="@+id/completar"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/completar" />
+    </LinearLayout>
+
+    <ListView
+        android:id="@+id/lista"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+</LinearLayout>
