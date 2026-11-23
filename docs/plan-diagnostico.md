@@ -4,10 +4,12 @@ Orden acordado con el usuario el **2026-11-22**, a raíz de un falso error del d
 al escribir `setContentView(R.layout.main);` en `MainActivity.java`, la pestaña decía *el tipo de
 este argumento no esta medido*. La causa y su cierre están en `docs/evidencia.md` §200.
 
-La cola es **D1 → D2 → D3** y se cierra en ese orden: primero que el diagnóstico diga la verdad y
-señale el sitio, después que llegue antes, y por último que proponga. Igual que en
-`docs/plan-mejoras.md`, esto es un **plan**, no un registro: aquí no entran hallazgos, y cada ítem
-se cierra con su sonda, su `§` en `docs/evidencia.md` con el comando que lo reproduce y su commit.
+La cola acordada fue **D1 → D2 → D3** (verdad, velocidad, propuesta). El usuario amplió el alcance
+el 2026-11-22 con **D4 → D5 → D6**: corregir el diagnóstico de asignaciones cualificadas, llevar la
+velocidad y el overhead al mínimo con cifras, y maximizar cobertura y comprensión del autocompletado
+en Java y XML. Igual que en `docs/plan-mejoras.md`, esto es un **plan**, no un registro: aquí no
+entran hallazgos, y cada ítem se cierra con su sonda, su `§` en `docs/evidencia.md` con el comando
+que lo reproduce y su commit.
 Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (regla 10 de
 `AGENTS.md`).
 
@@ -16,6 +18,9 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
 | **D1** | **Diagnóstico correcto y accionable** | (a) `setContentView(R.layout.main)` en la plantilla del studio da **cero errores**; (b) todo error lleva `archivo:línea` y, cuando nació en un token, también `columna`; (c) el mensaje dice qué no se resuelve o qué no está medido, en español y sin repetir la posición; (d) el subrayado de `#diagnostico-marcas` cae sobre el token, no sobre la línea | `apkc check --android-jar … --proyecto … MainActivity.java`; `apkc/check_test.go`; `APKC_WASM=… node studio/prueba-pestana.js` |
 | **D2** | **Más rápido** | medir el coste real de un `check` en vivo (hoy: debounce de 350 ms en `studio/diagnostico-vivo.js`; el trabajo del worker va aparte) y bajar la latencia sin saturar el worker, **solo con cifras**: reutilizar la instancia de wasm, cachear el marco del `android.jar`, cancelar los `check` obsoletos | la sonda de D2, por escribir: tiempos de `apkc check` nativo con y sin `--proyecto`, y del mismo comando en la pestaña |
 | **D3** | **Autocompletado** | identificar de dónde saldrían los ids de recursos (`R.layout.*`, `R.id.*`) y los métodos del jar, y diseñar la fuente de datos **sin red**: qué se lee del `android.jar` del propio origen y qué del árbol del proyecto | la sonda de D3, por escribir: tamaño y tiempo de leer los nombres del jar y del `R.java` del proyecto |
+| **D4** | **Asignación cualificada** | `this.filePath = filePath;` en `Apk.java:14` da **cero errores**; el receptor `this` y el campo se resuelven contra la clase y desaparece «una asignacion con mas de un nombre en el destino no esta medida». El dex emitido sigue byte a byte el de javac 17 | `apkc check --android-jar … --proyecto … Apk.java`; `apkc/check_test.go` |
+| **D5** | **Velocidad y overhead mínimo** | cerrar D2 con cifras reales en escritorio y pestaña: debounce, cancelación de `check` obsoletos, reutilización del índice I5 del `android.jar`, sin arrancar una instancia nueva de wasm por tecla y sin saturar el worker. Objetivo: `check` nativo <30 ms y respuesta en pestaña medible, no estimada | sonda de D5: tiempos de `apkc check` con y sin `--proyecto`, y del mismo comando en la pestaña |
+| **D6** | **Cobertura y comprensión máximas (Java y XML)** | matriz de construcciones Java y de etiquetas/atributos/valores XML con estado medido; autocompletado para `R.`, miembros del jar, `@`, `<` y atributos; cada error nombra qué falta y dónde; cero red | `apkc/check_test.go`, `studio/prueba.js` y `studio/prueba-pestana.js`; la matriz vive en este plan |
 
 ## Estado
 
@@ -37,6 +42,22 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
   `XML`. El gate final dio `pestaña: 170 comprobaciones` (§202, la cifra de entonces; con el árbol
   de hoy son 192). Fronteras: sin completado tras `v.`, bloques `/* … */` de varias
   líneas no detectados y recursos cacheados hasta `refrescar()`.
+
+### Cola D4-D6 (ampliación del usuario, 2026-11-22)
+
+- **D4, en cola.** El usuario golpeó el error concreto `Apk.java:14`: `this.filePath = filePath;`
+  produce «una asignacion con mas de un nombre en el destino no esta medida». El builder del frente
+  `jar/` (`deps-check`) está haciendo que `apkc check` vea el classpath completo, pero esa es una
+  causa distinta: aquí hay que resolver el receptor `this` y el campo contra la clase en el
+  analizador/emisor, sin mover la `LineNumberTable` (los dex se comparan byte a byte).
+- **D5, en cola y sin medir.** D2 sigue con solo las cifras de D1 como línea base (~15 ms nativo,
+  ~30 ms con `--proyecto`, ~200 ms si hay que enlazar `res/`). La ampliación pide además overhead
+  mínimo: no crear una instancia de wasm por tecla, cancelar checks obsoletos y reutilizar I5.
+- **D6, en cola.** D3 cubre `R.*` y APIs del jar, y el linter de XML es local; faltan la matriz de
+  cobertura, el autocompletado tras `.` y el de atributos XML con su contexto, y mensajes que
+  expliquen qué no está medido sin repetir la posición.
+- Orden: **D4 → D5 → D6**, un agente por paso en cuanto se libere un hueco de los cuatro actuales.
+  Ninguno se marca hecho sin su sonda, su `§` y su commit (regla 10 de `AGENTS.md`).
 
 ### Deuda conocida dentro de D1
 
