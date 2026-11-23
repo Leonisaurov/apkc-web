@@ -98,6 +98,33 @@ const (
 	opRetornaObjeto     = 0x11 // 11x return-object vAA
 	opIput              = 0x59 // 22c iput vAA, vBB, field@CCCC (visto en el <init> de la sonda)
 
+	// los accesos a campos estrechos, medidos con `d8` y `dexdump` sobre `Ang` (los cuatro tipos de
+	// una palabra que no son `int` ni `float`). En la 22c de instancia: `iget-boolean` 0x55,
+	// `iget-byte` 0x56, `iget-char` 0x57 y `iget-short` 0x58, con sus `iput-*` 0x5c-0x5f. En la 21c
+	// estática: `sget-boolean` 0x63, `sget-byte` 0x64, `sget-char` 0x65 y `sget-short` 0x66, con sus
+	// `sput-*` 0x6a-0x6d. El `int` y el `float` siguen por la forma genérica 0x52/0x59 y 0x60/0x67.
+	opIgetBoolean = 0x55 // 22c iget-boolean vAA, vBB, field@CCCC (`5510 0600`)
+	opIgetByte    = 0x56 // 22c iget-byte (`5610 0000`)
+	opIgetChar    = 0x57 // 22c iget-char (`5710 0200`)
+	opIgetShort   = 0x58 // 22c iget-short (`5810 0400`)
+	opIputBoolean = 0x5c // 22c iput-boolean (`5c01 0600`)
+	opIputByte    = 0x5d // 22c iput-byte (`5d01 0000`)
+	opIputChar    = 0x5e // 22c iput-char (`5e01 0200`)
+	opIputShort   = 0x5f // 22c iput-short (`5f01 0400`)
+	opSgetBoolean = 0x63 // 21c sget-boolean (`6300 0700`)
+	opSgetByte    = 0x64 // 21c sget-byte (`6400 0100`)
+	opSgetChar    = 0x65 // 21c sget-char (`6500 0300`)
+	opSgetShort   = 0x66 // 21c sget-short (`6600 0500`)
+	opSputBoolean = 0x6a // 21c sput-boolean (`6a00 0700`)
+	opSputByte    = 0x6b // 21c sput-byte (`6b00 0100`)
+	opSputChar    = 0x6c // 21c sput-char (`6c00 0300`)
+	opSputShort   = 0x6d // 21c sput-short (`6d00 0500`)
+
+	// los monitores, medidos con `d8`/`dexdump` sobre `Moni`: `monitor-enter` 0x1d y `monitor-exit`
+	// 0x1e, los dos 11x con la referencia del candado en vAA (`1d01`, `1e01`).
+	opMonitorEntra = 0x1d // 11x monitor-enter vAA
+	opMonitorSale  = 0x1e // 11x monitor-exit vAA
+
 	// las comparaciones anchas, medidas en el párrafo 81 sobre dos sondas de `d8 --debug` leídas con
 	// `readDex`: bloque contiguo 0x2d..0x31, formato 23x (`op|AA` y después `BB|CC<<8`), con el
 	// destino en un registro suelto y las dos parejas de operandos detrás. El 0x32 (`if-eq`) estaba
@@ -500,6 +527,23 @@ func (p *traduce) negacion(in jvmInstr) {
 			p.suelta(a)
 		}
 	}
+}
+
+// monitor: `monitorenter` 0xc2 y `monitorexit` 0xc3 del JVMS salen como `monitor-enter` 0x1d y
+// `monitor-exit` 0x1e de DEX (11x con la referencia del candado en vAA). Medido con `d8`/`dexdump`
+// sobre `Moni`: `synchronized` deja `1d01` al entrar y `1e01` al salir, y en el cuerpo nace un
+// `monitorexit` de más en la salida normal que comparte la referencia guardada en un local. Las dos
+// formas consumen la referencia y no dejan valor; solo cambia el opcode.
+func (p *traduce) monitor(in jvmInstr, op byte) {
+	r := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	if !p.octeto(r, in) {
+		return
+	}
+	p.palabra(unidad11x(op, r))
+	p.suelta(r)
 }
 
 // comparaAncha: `lcmp`, `fcmpl`, `fcmpg`, `dcmpl` y `dcmpg` (párrafo 81). Consume las dos parejas
@@ -1004,8 +1048,9 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 	if len(desc) > 0 {
 		tipo = desc[0]
 	}
-	if desc != "I" && desc != "F" && desc != "C" && !esObjeto(desc) && !esAncho(desc) {
-		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, la referencia, el flotante, el char y los anchos; lo demas no")
+	estrecho, esEstrecho := opcodesDeCampoEstatico[tipo]
+	if !esEstrecho && !esObjeto(desc) && !esAncho(desc) {
+		p.falla(in, "a static access of type "+string(tipo)+": se midieron el entero, el flotante, la referencia, el char, el boolean, el byte, el short y los anchos; lo demas no")
 		return
 	}
 	campo, ok := p.t.fieldIdx[fieldKey{owner: owner, typeOf: desc, name: nombre}]
@@ -1033,15 +1078,14 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 			op = opSGetWide
 		}
 	}
-	if desc == "C" {
-		// el `char` tiene formas propias de acceso estático, medidas sobre el fichero que escribe
-		// `d8 --debug` y leidas con el `dexdump -d` del aparato (parrafo 87): `6500 0100` es
-		// `sget-char v0, LLetras;.fijo:C` y `6c00 0100` es `sput-char v0, …`. El `int` y el `float`
-		// siguen por la genérica 0x60/0x67; el `boolean`, el `byte` y el `short` no los midió sonda.
+	if esEstrecho {
+		// cada tipo de una palabra tiene su opcode estático (medidos en `Ang`): el `char` ya salía
+		// `6500`/`6c00` en `Letras.fijo` (parrafo 87), y el `boolean`, el `byte` y el `short` son
+		// 0x63/0x6a, 0x64/0x6b y 0x66/0x6d. El `int` y el `float` comparten 0x60/0x67.
 		if escribe {
-			op = 0x6c
+			op = estrecho[1]
 		} else {
-			op = 0x65
+			op = estrecho[0]
 		}
 	}
 	// al escribir el registro sale de la pila, y **no** se pide uno nuevo: pedirlo antes de sacarlo
@@ -1706,6 +1750,10 @@ func (p *traduce) recorre() error {
 			p.cuentaAncha(in)
 		case "ineg", "lneg", "fneg", "dneg":
 			p.negacion(in)
+		case "monitorenter":
+			p.monitor(in, opMonitorEntra)
+		case "monitorexit":
+			p.monitor(in, opMonitorSale)
 		case "lcmp", "fcmpl", "fcmpg", "dcmpl", "dcmpg":
 			p.comparaAncha(in)
 		case "lconst_0", "lconst_1":
@@ -2072,6 +2120,22 @@ func (p *traduce) entero(r int, v int, in jvmInstr) bool {
 	return true
 }
 
+// opcodesDeCampoInstancia y opcodesDeCampoEstatico: el par [lee, escribe] del descriptor de una
+// palabra que no es referencia ni ancho. Comparten la forma 22c/21c y solo cambia el opcode; el
+// `int` y el `float` van por la genérica, y el `boolean`, el `byte`, el `char` y el `short` por su
+// forma propia. Medidos en `Ang` con `d8` y `dexdump`.
+var opcodesDeCampoInstancia = map[byte][2]byte{
+	'I': {opIget, opIput}, 'F': {opIget, opIput},
+	'Z': {opIgetBoolean, opIputBoolean}, 'B': {opIgetByte, opIputByte},
+	'C': {opIgetChar, opIputChar}, 'S': {opIgetShort, opIputShort},
+}
+
+var opcodesDeCampoEstatico = map[byte][2]byte{
+	'I': {opSget, opSput}, 'F': {opSget, opSput},
+	'Z': {opSgetBoolean, opSputBoolean}, 'B': {opSgetByte, opSputByte},
+	'C': {opSgetChar, opSputChar}, 'S': {opSgetShort, opSputShort},
+}
+
 func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 	owner, nombre, desc, _ := p.x.refOf(dexU16(in.ops))
 	if desc == "" {
@@ -2093,17 +2157,21 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		op = opIputObject
 	case !escribe && esObjeto(desc):
 		op = opIgetObject
-	case !escribe && (desc[0] == 'I' || desc[0] == 'F'):
-		op = opIget
-	case escribe && (desc[0] == 'I' || desc[0] == 'F'):
+	default:
+		variantes, medida := opcodesDeCampoInstancia[desc[0]]
+		if !medida {
+			p.falla(in, "a field access of type "+string(desc[0])+": only int, float, object, wide and the narrow boolean, byte, char and short were measured")
+			return
+		}
 		// medido en el <init> de la sonda (parrafo 50): seis putfields salen como iput 0x59,
 		// `iput v0, v1, field@1`, con el valor en el primer registro y el objeto en el segundo. El
-		// `float` comparte forma: vale una palabra, como `sget v2, field@1` que `d8` escribe para el
-		// campo `ff` de `FyD.campoEstatico` (parrafo 80)
-		op = opIput
-	default:
-		p.falla(in, "a field access of type "+string(desc[0])+": only int, float, object and wide fields were measured")
-		return
+		// `float` comparte forma con el `int`, y el `boolean`, el `byte`, el `char` y el `short`
+		// cambian solo el opcode (parrafo medido en `Ang`).
+		if escribe {
+			op = variantes[1]
+		} else {
+			op = variantes[0]
+		}
 	}
 	if escribe {
 		// orden JVM: objeto, valor; el 22c escribe primero el valor y después el objeto, que es

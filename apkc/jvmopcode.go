@@ -209,6 +209,10 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0xbb: {"new", 2},
 	0xc0: {"checkcast", 2},
 	0xc1: {"instanceof", 2}, // medido en `Ins.esCadena` (parrafo 79): indice de dos bytes con la clase
+	// los monitores, medidos con `javac` y `javap` sobre `Moni`: `monitorenter` 0xc2 y `monitorexit`
+	// 0xc3, un byte cada uno y ningun operando (el `synchronized` de la sonda deja uno de cada)
+	0xc2: {"monitorenter", 0},
+	0xc3: {"monitorexit", 0},
 	// las branquias, con el ancho de dos bytes que mide `javap -c` en el parrafo 52: el numero que
 	// imprime detras del mnemonic es el desplazamiento, y el siguiente desplazamiento de la lista
 	// esta tres bytes mas adelante que el de la branquia
