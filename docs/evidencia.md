@@ -9903,3 +9903,37 @@ retirada de la ventana de Droidloom tampoco tiene `§`; es pregunta abierta.
 
 **Fronteras de este `§`.** No se corrió gate, chromium ni publicación; la comprobación es la del
 crítico sobre el árbol de `30c2afc`.
+
+## 222. El colector de la tabla sigue el operando de `ldc_w`
+
+Medido el 2026-11-23 sobre `c129657` (`fix(dex): el colector sigue el operando de ldc_w`), con la
+cita del test corregida en `45621e8` (`fix(test): corrige la cita del test de ldc_w`). El crítico
+`ses_df8b1e8dcffeNIm0O0VSmlcvGk` aprobó el arreglo y señaló que la medición no tenía `§`: este lo es.
+
+**Qué mide.** El colector de referencias de `dextabla.go` solo seguía `ldc`, de un byte. javac cambia
+a `ldc_w` (0x13) cuando el índice del pool pasa de 255, y el tipo de una `CONSTANT_Class` quedaba sin
+internar; ART exige su `type_id` en el `const-class` que sale de esa instrucción
+(`apkc/dextabla.go:219-228`). La sonda genera 200 métodos con cadenas distintas para forzar un
+`ldc_w #407` con un pool de 617 entradas (`apkc/javaemisor_ldcw_test.go:51`).
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run TestElLdcWInternaElTipoYCoincideConD8 -v .
+```
+
+**Resultado**: `--- PASS: TestElLdcWInternaElTipoYCoincideConD8 (2.07s)` y `ok … 2.078s` en la
+raíz; tras integrar la corrección de cita (`45621e8`), `ok … 2.172s`.
+
+**Falsificación.** En una copia temporal (`~/.cache/apkc-web/ldcw-copia/`), sin tocar el árbol,
+quitar `case "ldc_w"` de `dextabla.go` da `the type_id Ljava/util/HashMap; was never interned (the
+collector does not follow this operand)` y `FAIL`; restaurarlo da `PASS`.
+
+**Oráculo `d8`.** El `d8` de build-tools 36.0.0 sobre el mismo `.class` escribe las palabras
+idénticas, `1c00 0400  |0000: const-class v0, Ljava/util/HashMap; // type@0004`, en nuestro dex y en
+el suyo; el `javap` del `.class` de javac 17 dice `ldc_w #407 // class java/util/HashMap`.
+
+**Inventario.** Con el dexer de ese árbol: 520 clases, 20 rechazadas y 3 tipos de límite;
+desaparecen las 2 clases de «tipo no internado por el colector».
+
+**Fronteras de este `§`.** No se corrió gate, chromium ni publicación; el cambio se limitó a
+`dextabla.go` y su test.
