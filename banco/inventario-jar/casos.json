@@ -1,0 +1,355 @@
+{
+  "tipo no internado por el colector": [
+    {
+      "clase": "Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;",
+      "metodo": "<init>",
+      "pc": 5,
+      "opcode": "ldc_w",
+      "motivo": "the type_id Landroid/app/ActionBar; was never interned (the collector does not follow this operand)"
+    }
+  ],
+  "salto goto fuera de alcance": [
+    {
+      "clase": "Landroid/support/v4/app/BackStackRecord;",
+      "metodo": "dump",
+      "pc": 0,
+      "opcode": "dump",
+      "motivo": "a goto of -259 code units: the 10t form reaches +-127 and goto/16 is not measured here"
+    },
+    {
+      "clase": "Landroid/support/v4/app/FragmentActivity;",
+      "metodo": "onCreateView",
+      "pc": 0,
+      "opcode": "onCreateView",
+      "motivo": "a goto of 129 code units: the 10t form reaches +-127 and goto/16 is not measured here"
+    },
+    {
+      "clase": "Landroid/support/v4/app/LoaderManagerImpl;",
+      "metodo": "restartLoader",
+      "pc": 0,
+      "opcode": "restartLoader",
+      "motivo": "a goto of 130 code units: the 10t form reaches +-127 and goto/16 is not measured here"
+    },
+    {
+      "clase": "Landroid/support/v4/util/LongSparseArray;",
+      "metodo": "put",
+      "pc": 0,
+      "opcode": "put",
+      "motivo": "a goto of 135 code units: the 10t form reaches +-127 and goto/16 is not measured here"
+    },
+    {
+      "clase": "Landroid/support/v4/util/SparseArrayCompat;",
+      "metodo": "put",
+      "pc": 0,
+      "opcode": "put",
+      "motivo": "a goto of 135 code units: the 10t form reaches +-127 and goto/16 is not measured here"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/SwipeRefreshLayout;",
+      "metodo": "onTouchEvent",
+      "pc": 0,
+      "opcode": "onTouchEvent",
+      "motivo": "a goto of 138 code units: the 10t form reaches +-127 and goto/16 is not measured here"
+    }
+  ],
+  "registro fuera de formato": [
+    {
+      "clase": "Landroid/support/v4/app/BackStackState;",
+      "metodo": "<init>",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/FragmentManagerImpl;",
+      "metodo": "dump",
+      "pc": 7,
+      "opcode": "aload_1",
+      "motivo": "register v67 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/FragmentStatePagerAdapter;",
+      "metodo": "restoreState",
+      "pc": 0,
+      "opcode": "aload_1",
+      "motivo": "register v18 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/FragmentTabHost;",
+      "metodo": "ensureHierarchy",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v17 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/ListFragment;",
+      "metodo": "onCreateView",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v17 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/NavUtils;",
+      "metodo": "getParentActivityIntent",
+      "pc": 6,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/NotificationCompat$NotificationCompatImplJellybean;",
+      "metodo": "build",
+      "pc": 4,
+      "opcode": "aload_1",
+      "motivo": "register v28 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/NotificationCompatHoneycomb;",
+      "metodo": "add",
+      "pc": 8,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/NotificationCompatIceCreamSandwich;",
+      "metodo": "add",
+      "pc": 4,
+      "opcode": "aload_0",
+      "motivo": "register v18 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/app/ShareCompat$IntentBuilder;",
+      "metodo": "combineArrayExtra",
+      "pc": 6,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/content/FileProvider$SimplePathStrategy;",
+      "metodo": "getFileForUri",
+      "pc": 0,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/content/FileProvider;",
+      "metodo": "query",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v19 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/content/LocalBroadcastManager;",
+      "metodo": "registerReceiver",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v18 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/content/WakefulBroadcastReceiver;",
+      "metodo": "startWakefulService",
+      "pc": 28,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/media/TransportPerformer;",
+      "metodo": "onAudioFocusChange",
+      "pc": 31,
+      "opcode": "aload_0",
+      "motivo": "register v35 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/print/PrintHelperKitkat$1;",
+      "metodo": "onWrite",
+      "pc": 4,
+      "opcode": "aload_0",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/print/PrintHelperKitkat$2;",
+      "metodo": "onLayout",
+      "pc": 50,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/print/PrintHelperKitkat;",
+      "metodo": "printBitmap",
+      "pc": 5,
+      "opcode": "aload_0",
+      "motivo": "register v19 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/util/LruCache;",
+      "metodo": "get",
+      "pc": 0,
+      "opcode": "aload_1",
+      "motivo": "register v27 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/util/SimpleArrayMap;",
+      "metodo": "indexOf",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/util/TimeUtils;",
+      "metodo": "formatDurationLocked",
+      "pc": 340,
+      "opcode": "iconst_0",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/view/PagerTabStrip;",
+      "metodo": "onDraw",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v25 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/view/PagerTitleStrip;",
+      "metodo": "<init>",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v44 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/view/ViewPager;",
+      "metodo": "scrollToItem",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v23 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/AutoScrollHelper$ClampedScroller;",
+      "metodo": "computeScrollDelta",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/AutoScrollHelper;",
+      "metodo": "computeTargetVelocity",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v19 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/DrawerLayout$AccessibilityDelegate;",
+      "metodo": "addChildrenForAccessibility",
+      "pc": 88,
+      "opcode": "aload_1",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/DrawerLayout;",
+      "metodo": "moveDrawerToOffset",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v17 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/ListViewAutoScrollHelper;",
+      "metodo": "canTargetScrollVertically",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v16 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/ScrollerCompat$ScrollerCompatImplBase;",
+      "metodo": "fling",
+      "pc": 0,
+      "opcode": "aload_1",
+      "motivo": "register v18 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/ScrollerCompat$ScrollerCompatImplGingerbread;",
+      "metodo": "fling",
+      "pc": 0,
+      "opcode": "aload_1",
+      "motivo": "register v18 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/ScrollerCompatGingerbread;",
+      "metodo": "fling",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v17 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/SimpleCursorAdapter;",
+      "metodo": "bindView",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v24 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/SlidingPaneLayout$AccessibilityDelegate;",
+      "metodo": "onInitializeAccessibilityNodeInfo",
+      "pc": 5,
+      "opcode": "aload_0",
+      "motivo": "register v17 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/SlidingPaneLayout;",
+      "metodo": "<init>",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v25 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/SwipeProgressBar;",
+      "metodo": "draw",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v89 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/ViewDragHelper;",
+      "metodo": "abort",
+      "pc": 0,
+      "opcode": "aload_0",
+      "motivo": "register v20 does not fit a four-bit format (the /range or /from16 form is not measured here)"
+    }
+  ],
+  "registro bajo ocupado": [
+    {
+      "clase": "Landroid/support/v4/app/NotificationCompatJellybean;",
+      "metodo": "<init>",
+      "pc": 207,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
+    },
+    {
+      "clase": "Landroid/support/v4/view/GestureDetectorCompat$GestureDetectorCompatImplBase;",
+      "metodo": "onTouchEvent",
+      "pc": 336,
+      "opcode": "iload",
+      "motivo": "no low register is free to carry a high slot down"
+    }
+  ],
+  "presupuesto de temporales": [
+    {
+      "clase": "Landroid/support/v4/view/GravityCompat$GravityCompatImplJellybeanMr1;",
+      "metodo": "apply",
+      "pc": 13,
+      "opcode": "invokestatic",
+      "motivo": "the /range block needs more temporaries than the max stack javap measured"
+    },
+    {
+      "clase": "Landroid/support/v4/view/GravityCompat;",
+      "metodo": "apply",
+      "pc": 15,
+      "opcode": "invokeinterface",
+      "motivo": "the /range block needs more temporaries than the max stack javap measured"
+    },
+    {
+      "clase": "Landroid/support/v4/widget/ScrollerCompat;",
+      "metodo": "fling",
+      "pc": 20,
+      "opcode": "invokeinterface",
+      "motivo": "the /range block needs more temporaries than the max stack javap measured"
+    }
+  ]
+}
