@@ -9781,3 +9781,65 @@ resistió.
 XML/vectorial, `anim`, `font` y algunos `values`. (2) Dos AAR con la misma clave `values` no se
 detectan: solo se rechazan ficheros duplicados. (3) El `AndroidManifest.xml` y el `R.txt` del AAR
 quedan fuera del enlace. (4) No se corrió gate, chromium ni wasm: la medición es nativa.
+
+## 217. Dependencias: importador local sin red
+
+Medido el 2026-11-22 sobre `be7b417` y `studio/` en `66c35ab`. El crítico
+`ses_df91c58e7ffeuwOqrjEwncRX3Z` dio **APROBAR** sin hallazgos confirmados.
+
+**Qué hace.** La vía local no usa `fetch`, ni Maven, ni proxy: ingiere desde disco u OPFS y deja
+`jar/`, `lib/<abi>/`, `res/__deps/<hash>/…` y `deps.importado.json`. El traversal `../` en zip y
+AAR se rechaza; los ids y el orden se comprueban bajo `conBloqueo`.
+
+```sh
+cd studio && node --check deps.js && node prueba.js
+```
+
+**Resultado**: `prueba: todo en orden`. La falsificación del builder invirtió `ficheros.reverse()` y
+produjo 4 fallos; restaurado, volvió a verde.
+
+**Notas abiertas, no bloqueantes.** (1) TOCTOU del `confirm`. (2) Atomicidad ante cuota agotada.
+(3) El hash de isla FNV no coincide con el `sha1(coord)[:12]` de `apkc-deps`. La fusión de
+`res/__deps/` ya quedó cerrada por la Fase K (§216).
+
+**Fronteras de este `§`.** No se corrió gate, chromium, red ni publicación; la verificación es la
+suite de `prueba.js` en Node.
+
+## 218. Dependencias: clases de `jar/` en el compilador Go
+
+Medido el 2026-11-22 sobre `5bc1e8c`, con las condiciones cerradas en `8d6ee67`. El crítico
+`ses_df91c8423ffeRBUEJpqWc5sSv5` dio **APROBAR CON CONDICIONES**.
+
+**Qué hace.** `apkc compile/build --compiler go` resuelve clases de `jar/*.jar` y del
+`classes.jar` de un `.aar`; el dex sale idéntico al de javac 17, el índice es por jar y un cambio de
+dependencia invalida el reuso de I3.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestCompilarEnGoResuelveUnaClaseDeJar|TestCompilarEnGoDexaIgualQueJavacConUnaDependencia|TestCompilarEnGoLeeElClassesJarDeUnAar|TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia|TestHuellaDelClasspathCubreCadaDependencia|TestIndiceDelJarPorJar|TestPorteroDelCompilerNombraLoQueNoMide' -v .
+```
+
+**Resultado**: 7/7 `PASS` y `ok github.com/ajinasokan/apkc 1.772s`. Las tres condiciones quedaron
+cerradas por `8d6ee67`: `check` resuelve el classpath del jar (crítico
+`ses_df90d3cfaffeThh7Mx1cOC9IVn`, que seguía en curso al medir), el test de cadena A→B→
+`android.jar` y el arnés sin `SKIP` silencioso, con `APKC_ANDROID_JAR` fijado.
+
+**Fronteras de este `§`.** El dex de las dependencias con `d8` sigue fuera: es el trabajo de
+`deps-dexgo`. No se corrió gate, chromium ni wasm.
+
+## 219. Dependencias: fixture nativo y su rechazo clasificado
+
+Medido el 2026-11-22 sobre `8d99e52` y su corrección `aee59d4`. El crítico
+`ses_df911247affeIZ83mX0fq3TTsR` dio **APROBAR**.
+
+```sh
+sh banco/deps-ejemplo/construir.sh
+```
+
+**Resultado**: el camino nativo compila y dexa la app (1136 bytes) y la dependencia (728 bytes); el
+camino Go falla con el error literal `the d8 of dependency bucket 0 failed: exec: no command`, sale
+con `rc 3` y escribe `OBJETIVO PENDIENTE: el dex de las dependencias todavía lo escribe d8; esta
+sonda es su aceptación`. No hay binarios versionados.
+
+**Fronteras de este `§`.** El camino Go en verde exige `deps-dexgo`; el fixture solo clasifica el
+rechazo. Sin gate, chromium ni red.

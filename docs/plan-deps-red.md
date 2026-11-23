@@ -184,13 +184,26 @@ de este repo mientras la regla siga en pie.
 
 Fase J — `jar/` en el compilador Go (**en curso**). El usuario quiere que
 `apkc compile/build --compiler go` consuma `jar/*.jar` y `classes.jar` de los
-`.aar`, sin red y sin `apkc-deps` en runtime. El builder
-`ses_df92b1504ffea11oCtRmc2rxAK` trabaja en el worktree `deps-compiler`. Criterio
-de aceptación: un proyecto con un jar en `jar/` compila con el compilador Go y
-las clases del jar resuelven en el dex; se mide con un test enfocado y se
-verifica en la pestaña con cero peticiones fuera del origen. Frontera: no se
-resuelven versiones ni se descargan artefactos; el catálogo y la red siguen
-fuera.
+`.aar`, sin red y sin `apkc-deps` en runtime. Criterio de aceptación: un proyecto
+con un jar en `jar/` compila con el compilador Go y las clases del jar resuelven
+en el dex; se mide con un test enfocado y se verifica en la pestaña con cero
+peticiones fuera del origen. Frontera: no se resuelven versiones ni se descargan
+artefactos; el catálogo y la red siguen fuera. Subestados:
+
+- **Clases aprobadas en nativo** (`5bc1e8c`, condiciones cerradas en `8d6ee67`;
+  crítico `ses_df91c8423ffeRBUEJpqWc5sSv5`). 7/7 tests, dex idéntico a javac 17,
+  `classes.jar` de AAR, índice por jar e invalidación de I3. Frontera que sigue:
+  el dex de las dependencias con `d8`.
+- **Importador aprobado** (`be7b417`, `studio/` en `66c35ab`; crítico
+  `ses_df91c58e7ffeuwOqrjEwncRX3Z`): sin `fetch`, Maven ni proxy; rutas OPFS
+  `jar/`, `lib/<abi>/`, `res/__deps/<hash>/…` y `deps.importado.json`; traversal
+  `../` rechazado. Notas no bloqueantes: TOCTOU del `confirm`, atomicidad ante
+  cuota y hash de isla FNV frente al `sha1(coord)[:12]` de `apkc-deps`.
+- **Fixture aprobado** (`8d99e52` y `aee59d4`; crítico
+  `ses_df911247affeIZ83mX0fq3TTsR`): camino nativo de 1136/728 bytes y camino Go
+  con `rc 3` y `OBJETIVO PENDIENTE`.
+- **Dex en Go en curso**: trabajo de `deps-dexgo`, el único tramo que falta para
+  que el fixture pase en verde.
 
 Fase K — recursos `res/__deps/` y `lib/<abi>/` (**aprobada en nativo**). `976b02e`
 (`feat(apkc): enlaza recursos y lib/ de dependencias`) lee la isla `res/__deps/`, valida una carpeta
@@ -219,7 +232,9 @@ Proxy y Wisp siguen descartados.
 
 ## 6. Registro de estado
 
-- Fase J **en curso**: builder `ses_df92b1504ffea11oCtRmc2rxAK`, worktree `deps-compiler`.
+- Fase J **en curso**: clases aprobadas en nativo (`5bc1e8c`/`8d6ee67`), importador aprobado
+  (`be7b417`/`66c35ab`) y fixture aprobado (`8d99e52`/`aee59d4`); el dex en Go queda en
+  `deps-dexgo`.
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
   fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
