@@ -12,8 +12,10 @@ package main
 //     sobre el nombre. Sin `classes.dex`, el criterio sigue siendo el nombre.
 //   - El rectángulo es una colocación declarada, no una medida del framework: se aplican las reglas
 //     de LinearLayout (orientación, gravity, layout_gravity, layout_weight, padding y márgenes) y el
-//     apilado de FrameLayout, con el tamaño del texto estimado (el dinámico si lo hay). Estilos
-//     fieles, imágenes, líneas de texto partidas, RelativeLayout y el tema del sistema quedan fuera.
+//     apilado de FrameLayout, con el tamaño del texto estimado (el dinámico si lo hay) y escalado por
+//     su `textSize`. La Fase E4 añade visibilidad (`gone` no ocupa), color de texto y de fondo,
+//     estilos propios de la tabla, `ImageView` con un PNG del apk decodificado en Go y `gravity` fino;
+//     RelativeLayout con reglas, líneas de texto partidas y el tema del sistema siguen fuera.
 //   - Un dex cuya ejecución se sale de sus propios bytes (un payload de switch que no cabe, un
 //     registro fuera del marco) no se ejecuta a medias: el comando lo rechaza con error y código 2.
 //     Lo que sí sigue saliendo es el modelo de un apk cuya app llama a una API fuera del subconjunto:
@@ -31,6 +33,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image/png"
 	"math"
 	"os"
 	"sort"
@@ -60,7 +63,46 @@ const (
 	// tipos de Res_value que la colocación necesita y que axmlwriter.go no nombra
 	tipoFlotante  byte = 0x04
 	tipoDimension byte = 0x05
+	// TYPE_INT_COLOR_ARGB8: un `#aarrggbb` del layout o de un `@color/x` de la tabla
+	tipoColor byte = 0x1c
 )
+
+// Valores de View.VISIBLE, View.INVISIBLE y View.GONE, que son los que el enlazador escribe como
+// entero en android:visibility. `invisible` ocupa su sitio y no se pinta; `gone` no ocupa nada.
+const (
+	vistaVisible   = 0
+	vistaInvisible = 4
+	vistaGone      = 8
+)
+
+// Ids de los atributos del framework que esta fase entiende. Se necesitan para leerlos también de un
+// `style="@style/x"`, donde el registro del estilo nombra el atributo por id y no por nombre.
+const (
+	idVistaGravity    = 0x010100af
+	idVistaTextSize   = 0x01010095
+	idVistaTextStyle  = 0x01010097
+	idVistaTextColor  = 0x01010098
+	idVistaBackground = 0x010100d4
+	idVistaVisibility = 0x010100dc
+	idVistaSrc        = 0x01010119
+	idVistaPadding    = 0x010100d5
+	// los lados del relleno, para leerlos también de un estilo propio por su id
+	idVistaPaddingH = 0x0101012c
+	idVistaPaddingV = 0x0101012d
+	idVistaPaddingS = 0x0101010e
+	idVistaPaddingE = 0x0101010f
+	idVistaPaddingL = 0x010100d6
+	idVistaPaddingR = 0x010100d8
+	idVistaPaddingT = 0x010100d7
+	idVistaPaddingB = 0x010100d9
+	// dpTextoReferencia es el textSize al que corresponde dpPorCaracter: el ancho por carácter y el
+	// alto de la línea se escalan en proporción al textSize declarado.
+	dpTextoReferencia = 16
+)
+
+// pixelesDeImagenMaximos es el máximo que se vuelca de un PNG: una imagen mayor se recorta para que
+// el JSON no crezca sin límite; el tamaño intrínseco se conserva siempre.
+const pixelesDeImagenMaximos = 64 * 64
 
 // Los trozos de android:gravity que se aplican, con los valores de Gravity del framework: los tres
 // bits bajos son la gravedad horizontal y los del medio la vertical (CENTER es 0x11, medido en el
@@ -98,6 +140,16 @@ type ladosVista struct {
 func (l ladosVista) horizontal() int { return l.Izq + l.Der }
 func (l ladosVista) vertical() int   { return l.Arr + l.Aba }
 
+// imagenVista es lo que el pintor necesita de un `ImageView`: el tamaño intrínseco del PNG y sus
+// píxeles como `#rrggbbaa`. Se decodifica en Go con image/png (biblioteca estándar, sin dependencias)
+// para que la pestaña no tenga que entender el PNG ni pedir nada fuera del origen.
+type imagenVista struct {
+	Ancho     int      `json:"ancho"`
+	Alto      int      `json:"alto"`
+	Pixeles   []string `json:"pixeles,omitempty"`
+	Recortada bool     `json:"recortada,omitempty"`
+}
+
 // nodoVista es una view del modelo: su tipo, su identificador resuelto, el texto resuelto, lo que
 // declara de tamaño y de colocación, el rectángulo y sus hijos. Los campos sin namespace no se
 // serializan. `textoDinamico` es la Fase 2: lo que el intérprete vio escribir a la app en esa view,
@@ -113,16 +165,24 @@ type nodoVista struct {
 	TextoDinamico string `json:"textoDinamico,omitempty"`
 	// Oyente marca la vista que registró un OnClickListener: es la que responde a un clic en el
 	// render y la única a la que se le puede pedir `--pulsar`.
-	Oyente  bool         `json:"oyente,omitempty"`
-	Estilo  string       `json:"estilo,omitempty"`
-	Ancho   string       `json:"ancho,omitempty"`
-	Alto    string       `json:"alto,omitempty"`
-	Gravity string       `json:"gravity,omitempty"`
-	Peso    float64      `json:"peso,omitempty"`
-	Padding *ladosVista  `json:"padding,omitempty"`
-	Margen  *ladosVista  `json:"margen,omitempty"`
-	Rect    rectVista    `json:"rect"`
-	Hijos   []*nodoVista `json:"hijos,omitempty"`
+	Oyente  bool        `json:"oyente,omitempty"`
+	Estilo  string      `json:"estilo,omitempty"`
+	Ancho   string      `json:"ancho,omitempty"`
+	Alto    string      `json:"alto,omitempty"`
+	Gravity string      `json:"gravity,omitempty"`
+	Peso    float64     `json:"peso,omitempty"`
+	Padding *ladosVista `json:"padding,omitempty"`
+	Margen  *ladosVista `json:"margen,omitempty"`
+	// Visibilidad es `invisible` o `gone` cuando el layout lo declara; vacío es visible. Un `gone` se
+	// queda en el árbol (para que su id siga resolviéndose) con el rectángulo a cero.
+	Visibilidad string       `json:"visibilidad,omitempty"`
+	TamTexto    string       `json:"tamTexto,omitempty"`
+	Color       string       `json:"color,omitempty"`
+	EstiloTexto string       `json:"estiloTexto,omitempty"`
+	Fondo       string       `json:"fondo,omitempty"`
+	Imagen      *imagenVista `json:"imagen,omitempty"`
+	Rect        rectVista    `json:"rect"`
+	Hijos       []*nodoVista `json:"hijos,omitempty"`
 
 	orientacion string // "vertical", "horizontal" o "" (se apilan en el origen)
 
@@ -135,7 +195,15 @@ type nodoVista struct {
 	margen        ladosVista // el margen efectivo, en dp
 	medAncho      int        // el tamaño medido, que es el que ocupa en la colocación
 	medAlto       int
+	visibilidad   int    // vistaVisible, vistaInvisible o vistaGone
+	tamTextoDp    int    // android:textSize ya en dp, o 0 cuando no se declara
+	srcRef        uint32 // el id de `android:src` si es una referencia, o 0
+	imagenAncho   int    // el tamaño intrínseco del PNG ya en dp
+	imagenAlto    int
 }
+
+// estaOculta: `gone` no se mide ni se coloca; `invisible` sí ocupa su sitio.
+func (n *nodoVista) estaGone() bool { return n.visibilidad == vistaGone }
 
 // modeloVista es el JSON que sale por stdout. `aproximado` viaja en verdadero siempre: los
 // rectángulos son una estimación y el consumidor no tiene que adivinarlo.
@@ -354,6 +422,8 @@ func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulso
 	if raiz == nil {
 		return nil, fmt.Errorf("el layout %s no tiene raíz", rutaLayout)
 	}
+	// las imágenes se decodifican antes de medir: el tamaño del PNG es el contenido del ImageView
+	cargaImagenes(raiz, zr, tabla)
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
 	anotaTextoDinamico(raiz, modelo.Ejecucion)
 	anotaOyentes(raiz, modelo.Ejecucion)
@@ -809,6 +879,15 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 		return nil
 	}
 	n := &nodoVista{Tipo: e.nombre, declAncho: medidaWrap, declAlto: medidaWrap, layoutGravity: -1}
+	// El estilo propio se lee antes que los atributos: sus valores son los defectos y lo que el
+	// elemento declara encima manda, como en el inflado del framework.
+	estilo := map[uint32]valor{}
+	if ref, ok := e.atributo("", "style"); ok {
+		n.Estilo = c.texto(ref)
+		if ref.tipo == tipoReferencia {
+			estilo = c.valoresDeEstilo(ref.datos, 0)
+		}
+	}
 	if id, ok := e.atributo(uriDeRecursos, "id"); ok {
 		n.ID = c.texto(id)
 		n.IDRef = fmt.Sprintf("%#08x", id.datos)
@@ -816,27 +895,62 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	if texto, ok := e.atributo(uriDeRecursos, "text"); ok {
 		n.Texto = c.texto(texto)
 	}
-	if estilo, ok := e.atributo("", "style"); ok {
-		n.Estilo = c.texto(estilo)
-	}
 	if ancho, ok := e.atributo(uriDeRecursos, "layout_width"); ok {
 		n.Ancho, n.declAncho = c.valorDeMedida(ancho)
 	}
 	if alto, ok := e.atributo(uriDeRecursos, "layout_height"); ok {
 		n.Alto, n.declAlto = c.valorDeMedida(alto)
 	}
-	if gravity, ok := e.atributo(uriDeRecursos, "gravity"); ok {
+	if gravity, ok := valorDeVista(e, estilo, "gravity", idVistaGravity); ok {
 		if bits, ok := enteroDeValor(gravity); ok {
 			n.gravityBits = bits
 			n.Gravity = nombreDeGravity(bits)
-		} else {
-			n.Gravity = c.texto(gravity)
+		} else if texto := c.texto(gravity); texto != "" {
+			// un `gravity="center_vertical|end"` escrito como texto no lo compila aapt2, pero el
+			// enlazador en Go puede dejarlo así: se lee con la misma tabla de bits
+			if bits, ok := bitsDeGravityDeTexto(texto); ok {
+				n.gravityBits = bits
+				n.Gravity = nombreDeGravity(bits)
+			} else {
+				n.Gravity = texto
+			}
 		}
 	}
 	if gravity, ok := e.atributo(uriDeRecursos, "layout_gravity"); ok {
 		if bits, ok := enteroDeValor(gravity); ok {
 			n.layoutGravity = bits
+		} else if texto := c.texto(gravity); texto != "" {
+			if bits, ok := bitsDeGravityDeTexto(texto); ok {
+				n.layoutGravity = bits
+			}
 		}
+	}
+	if visibilidad, ok := valorDeVista(e, estilo, "visibility", idVistaVisibility); ok {
+		if bits, ok := enteroDeValor(visibilidad); ok {
+			n.visibilidad = int(bits)
+		} else {
+			n.visibilidad = visibilidadDeTexto(c.texto(visibilidad))
+		}
+		if nombre := nombreDeVisibilidad(n.visibilidad); nombre != "" {
+			n.Visibilidad = nombre
+		}
+	}
+	if tam, ok := valorDeVista(e, estilo, "textSize", idVistaTextSize); ok {
+		n.TamTexto, n.tamTextoDp = c.tamanoDeTexto(tam)
+	}
+	if color, ok := valorDeVista(e, estilo, "textColor", idVistaTextColor); ok {
+		n.Color = c.colorDe(color)
+	}
+	if estiloTexto, ok := valorDeVista(e, estilo, "textStyle", idVistaTextStyle); ok {
+		if bits, ok := enteroDeValor(estiloTexto); ok {
+			n.EstiloTexto = nombreDeEstiloTexto(bits)
+		}
+	}
+	if fondo, ok := valorDeVista(e, estilo, "background", idVistaBackground); ok {
+		n.Fondo = c.colorDe(fondo)
+	}
+	if src, ok := valorDeVista(e, estilo, "src", idVistaSrc); ok && src.tipo == tipoReferencia {
+		n.srcRef = src.datos
 	}
 	if peso, ok := e.atributo(uriDeRecursos, "layout_weight"); ok {
 		n.Peso = c.numeroDe(peso)
@@ -844,12 +958,12 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	if suma, ok := e.atributo(uriDeRecursos, "weightSum"); ok {
 		n.pesoSuma = c.numeroDe(suma)
 	}
-	if pad, ok := c.ladosDe(e, "padding"); ok {
+	if pad, ok := c.ladosDe(e, estilo, "padding"); ok {
 		n.pad = pad
 		copia := pad
 		n.Padding = &copia
 	}
-	if margen, ok := c.ladosDe(e, "layout_margin"); ok {
+	if margen, ok := c.ladosDe(e, nil, "layout_margin"); ok {
 		n.margen = margen
 		copia := margen
 		n.Margen = &copia
@@ -889,12 +1003,16 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 
 // ladosDe lee un relleno o un margen completo: la forma corta (padding, layout_margin) y las de un
 // lado, que se aplican encima. La dirección se toma como izquierda-a-derecha, que es la del modelo:
-// `start` es el lado izquierdo y `end` el derecho.
-func (c *contextoVista) ladosDe(e *elementoLeido, prefijo string) (ladosVista, bool) {
+// `start` es el lado izquierdo y `end` el derecho. Un `estilo` no nulo aporta los defectos del
+// `style="@style/x"`; lo que el elemento declara gana.
+func (c *contextoVista) ladosDe(e *elementoLeido, estilo map[uint32]valor, prefijo string) (ladosVista, bool) {
 	l := ladosVista{}
 	declarado := false
-	pon := func(nombre string, aplica func(int)) {
+	pon := func(nombre string, idEstilo uint32, aplica func(int)) {
 		v, ok := e.atributo(uriDeRecursos, nombre)
+		if !ok && estilo != nil && idEstilo != 0 {
+			v, ok = estilo[idEstilo]
+		}
 		if !ok {
 			return
 		}
@@ -903,19 +1021,343 @@ func (c *contextoVista) ladosDe(e *elementoLeido, prefijo string) (ladosVista, b
 			declarado = true
 		}
 	}
-	pon(prefijo, func(dp int) { l = ladosVista{Izq: dp, Arr: dp, Der: dp, Aba: dp} })
-	pon(prefijo+"Horizontal", func(dp int) { l.Izq, l.Der = dp, dp })
-	pon(prefijo+"Vertical", func(dp int) { l.Arr, l.Aba = dp, dp })
-	pon(prefijo+"Start", func(dp int) { l.Izq = dp })
-	pon(prefijo+"End", func(dp int) { l.Der = dp })
-	pon(prefijo+"Left", func(dp int) { l.Izq = dp })
-	pon(prefijo+"Right", func(dp int) { l.Der = dp })
-	pon(prefijo+"Top", func(dp int) { l.Arr = dp })
-	pon(prefijo+"Bottom", func(dp int) { l.Aba = dp })
+	pon(prefijo, idVistaPadding, func(dp int) { l = ladosVista{Izq: dp, Arr: dp, Der: dp, Aba: dp} })
+	pon(prefijo+"Horizontal", idVistaPaddingH, func(dp int) { l.Izq, l.Der = dp, dp })
+	pon(prefijo+"Vertical", idVistaPaddingV, func(dp int) { l.Arr, l.Aba = dp, dp })
+	pon(prefijo+"Start", idVistaPaddingS, func(dp int) { l.Izq = dp })
+	pon(prefijo+"End", idVistaPaddingE, func(dp int) { l.Der = dp })
+	pon(prefijo+"Left", idVistaPaddingL, func(dp int) { l.Izq = dp })
+	pon(prefijo+"Right", idVistaPaddingR, func(dp int) { l.Der = dp })
+	pon(prefijo+"Top", idVistaPaddingT, func(dp int) { l.Arr = dp })
+	pon(prefijo+"Bottom", idVistaPaddingB, func(dp int) { l.Aba = dp })
 	if !declarado {
 		return ladosVista{}, false
 	}
 	return l, true
+}
+
+// valorDeVista busca una propiedad visual en el elemento y, si no la declara, en el estilo propio:
+// lo que el elemento escribe encima gana, como el inflado del framework.
+func valorDeVista(e *elementoLeido, estilo map[uint32]valor, nombre string, idEstilo uint32) (valor, bool) {
+	if v, ok := e.atributo(uriDeRecursos, nombre); ok {
+		return v, true
+	}
+	if estilo != nil {
+		if v, ok := estilo[idEstilo]; ok {
+			return v, true
+		}
+	}
+	return valor{}, false
+}
+
+// valoresDeEstilo aplana un `style="@style/x"` de la tabla: primero su padre (si es del mismo
+// paquete) y después sus propios registros. Un padre del framework se deja estar: los temas del
+// sistema quedan fuera de esta fase. La profundidad acota un linaje que se refiera a sí mismo.
+func (c *contextoVista) valoresDeEstilo(id uint32, profundidad int) map[uint32]valor {
+	valores := map[uint32]valor{}
+	if c.tabla == nil || profundidad >= profundidadMaxima {
+		return valores
+	}
+	_, e, ok := c.tabla.entradaDeId(id)
+	if !ok || e.ausente || !e.compleja {
+		return valores
+	}
+	if e.padre != 0 && e.padre>>24 == c.tabla.idPaquete&0xff {
+		valores = c.valoresDeEstilo(e.padre, profundidad+1)
+	}
+	for k := 0; k+12 <= len(e.crudo); k += 12 {
+		nombre := u32re(e.crudo, k)
+		valores[nombre] = valor{
+			tam:   int(u16re(e.crudo, k+4)),
+			res0:  e.crudo[k+6],
+			tipo:  e.crudo[k+7],
+			datos: u32re(e.crudo, k+8),
+		}
+	}
+	return valores
+}
+
+// colorDe lleva un color a `#rrggbb` (o `#aarrggbb` si tiene alfa) venga como entero ARGB8, como
+// referencia a un `@color/x` de la tabla o como cadena `"#rrggbb"` del enlazador en Go.
+func (c *contextoVista) colorDe(v valor) string { return c.colorDeCon(v, false, 0) }
+
+func (c *contextoVista) colorDeCon(v valor, enTabla bool, profundidad int) string {
+	switch v.tipo {
+	case tipoColor, tipoEnteroHex, tipoEnteroDec:
+		return formatoColor(v.datos)
+	case tipoCadena:
+		texto := ""
+		if enTabla {
+			if c.tabla != nil && int(v.datos) < len(c.tabla.global.cadenas) {
+				texto = c.tabla.global.cadenas[v.datos]
+			}
+		} else {
+			texto = c.texto(v)
+		}
+		if col, ok := colorDeCadena(texto); ok {
+			return col
+		}
+	case tipoReferencia:
+		if c.tabla == nil || profundidad >= profundidadMaxima {
+			return ""
+		}
+		enlace, ok := c.tabla.valorDeId(v.datos)
+		if !ok {
+			return ""
+		}
+		return c.colorDeCon(enlace, true, profundidad+1)
+	}
+	return ""
+}
+
+// formatoColor imprime un ARGB de 32 bits como el `#rrggbb` del fuente; con alfa distinto de ff se
+// dice también, para no perder transparencia.
+func formatoColor(argb uint32) string {
+	alfa := argb >> 24
+	if alfa == 0xff {
+		return fmt.Sprintf("#%06x", argb&0xffffff)
+	}
+	return fmt.Sprintf("#%08x", argb)
+}
+
+// colorDeCadena lee la forma escrita `#rgb`, `#rrggbb` o `#aarrggbb`.
+func colorDeCadena(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "#") {
+		return "", false
+	}
+	digitos := s[1:]
+	for _, r := range digitos {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", r) {
+			return "", false
+		}
+	}
+	switch len(digitos) {
+	case 3:
+		r, g, b := digitos[0:1], digitos[1:2], digitos[2:3]
+		return "#" + strings.ToLower(r+r+g+g+b+b), true
+	case 6:
+		return "#" + strings.ToLower(digitos), true
+	case 8:
+		color := strings.ToLower(digitos)
+		if strings.HasPrefix(color, "ff") {
+			return "#" + color[2:], true
+		}
+		return "#" + color, true
+	}
+	return "", false
+}
+
+// nombreDeVisibilidad traduce el entero de View.VISIBLE/INVISIBLE/GONE; `visible` no se escribe en
+// el JSON (el campo vacío ya lo dice) y un valor desconocido se queda sin nombre.
+func nombreDeVisibilidad(bits int) string {
+	switch bits {
+	case vistaInvisible:
+		return "invisible"
+	case vistaGone:
+		return "gone"
+	}
+	return ""
+}
+
+// visibilidadDeTexto entiende la forma escrita, que no compila aapt2 pero puede dejar el enlazador.
+func visibilidadDeTexto(s string) int {
+	switch strings.TrimSpace(s) {
+	case "invisible":
+		return vistaInvisible
+	case "gone":
+		return vistaGone
+	}
+	return vistaVisible
+}
+
+// nombreDeEstiloTexto: TYPE_INT con las constantes de Typeface (0 normal, 1 bold, 2 italic, 3 las dos).
+func nombreDeEstiloTexto(bits int32) string {
+	switch bits {
+	case 1:
+		return "bold"
+	case 2:
+		return "italic"
+	case 3:
+		return "bold|italic"
+	}
+	return ""
+}
+
+// tamanoDeTexto devuelve lo que el modelo enseña (`24sp`) y el tamaño en dp que usa la medición.
+// dpDeComplejo ya lleva `sp` con fontScale 1 y `px` a la densidad del modelo (160 dpi).
+func (c *contextoVista) tamanoDeTexto(v valor) (string, int) {
+	if v.tipo == tipoDimension {
+		if dp, ok := dpDeComplejo(v.datos); ok {
+			return strconv.Itoa(dp) + unidadDeDimension(v.datos), dp
+		}
+	}
+	if v.tipo == tipoCadena {
+		if dp, ok := c.dpDe(v); ok {
+			if texto := strings.TrimSpace(c.texto(v)); texto != "" {
+				return texto, dp
+			}
+		}
+	}
+	if dp, ok := c.dpDe(v); ok {
+		return strconv.Itoa(dp) + "dp", dp
+	}
+	return "", 0
+}
+
+// unidadDeDimension nombra el sufijo de un TYPE_DIMENSION por su byte bajo.
+func unidadDeDimension(datos uint32) string {
+	switch datos & 0xf {
+	case 0:
+		return "px"
+	case 2:
+		return "sp"
+	case 3:
+		return "pt"
+	case 4:
+		return "in"
+	case 5:
+		return "mm"
+	}
+	return "dp"
+}
+
+// bitsDeGravityDeTexto lee `center`, `center_vertical|end`, `top|start`… con la misma tabla de bits
+// que usa la colocación. `start` y `end` llevan la bandera de dirección relativa, como el framework.
+func bitsDeGravityDeTexto(s string) (int32, bool) {
+	var bits int32
+	encontrado := false
+	for _, trozo := range strings.Split(s, "|") {
+		switch strings.TrimSpace(trozo) {
+		case "left":
+			bits |= gravityIzquierda
+		case "start":
+			bits |= gravityIzquierda | gravityBanderaDireccion
+		case "right":
+			bits |= gravityDerecha
+		case "end":
+			bits |= gravityDerecha | gravityBanderaDireccion
+		case "center_horizontal":
+			bits |= gravityCentroHorizontal
+		case "fill_horizontal":
+			bits |= gravityRellenoHorizontal
+		case "center_vertical":
+			bits |= gravityCentroVertical
+		case "top":
+			bits |= gravityArriba
+		case "bottom":
+			bits |= gravityAbajo
+		case "fill_vertical":
+			bits |= gravityRellenoVertical
+		case "center":
+			bits |= gravityCentroHorizontal | gravityCentroVertical
+		case "fill":
+			bits |= gravityRellenoHorizontal | gravityRellenoVertical
+		default:
+			continue
+		}
+		encontrado = true
+	}
+	return bits, encontrado
+}
+
+// cargaImagenes decodifica el PNG de cada `android:src`/`@drawable/x`. Se llama antes de medir: el
+// tamaño intrínseco de la imagen es el contenido de un ImageView con wrap_content.
+func cargaImagenes(n *nodoVista, zr *zip.Reader, tabla *tablaRecursos) {
+	if n == nil {
+		return
+	}
+	if n.srcRef != 0 {
+		if img, ancho, alto := imagenDeRecurso(zr, tabla, n.srcRef); img != nil {
+			n.Imagen = img
+			n.imagenAncho, n.imagenAlto = ancho, alto
+		}
+	}
+	for _, h := range n.Hijos {
+		cargaImagenes(h, zr, tabla)
+	}
+}
+
+// imagenDeRecurso resuelve el id de un `@drawable/x`, lee sus bytes del zip y decodifica el PNG con
+// image/png. Devuelve también el tamaño en dp con la densidad del modelo (160 dpi), que es el que
+// ocupa un ImageView sin medidas declaradas.
+func imagenDeRecurso(zr *zip.Reader, tabla *tablaRecursos, id uint32) (*imagenVista, int, int) {
+	if tabla == nil {
+		return nil, 0, 0
+	}
+	bl, e, ok := tabla.entradaDeId(id)
+	if !ok || e.ausente || e.compleja || e.valor.tipo != tipoCadena {
+		return nil, 0, 0
+	}
+	if bl.nombre != "drawable" && bl.nombre != "mipmap" {
+		return nil, 0, 0
+	}
+	if int(e.valor.datos) >= len(tabla.global.cadenas) {
+		return nil, 0, 0
+	}
+	ruta := tabla.global.cadenas[e.valor.datos]
+	datos, err := entradaDeZip(zr, ruta)
+	if err != nil {
+		return nil, 0, 0
+	}
+	decodificada, err := png.Decode(bytes.NewReader(datos))
+	if err != nil {
+		return nil, 0, 0
+	}
+	limites := decodificada.Bounds()
+	ancho, alto := limites.Dx(), limites.Dy()
+	if ancho <= 0 || alto <= 0 {
+		return nil, 0, 0
+	}
+	img := &imagenVista{Ancho: ancho, Alto: alto}
+	volcados := 0
+	for y := limites.Min.Y; y < limites.Max.Y && volcados < pixelesDeImagenMaximos; y++ {
+		for x := limites.Min.X; x < limites.Max.X && volcados < pixelesDeImagenMaximos; x++ {
+			r, g, b, a := decodificada.At(x, y).RGBA()
+			img.Pixeles = append(img.Pixeles, fmt.Sprintf("#%02x%02x%02x%02x", r>>8, g>>8, b>>8, a>>8))
+			volcados++
+		}
+	}
+	img.Recortada = volcados < ancho*alto
+	// el tamaño intrínseco se lleva a dp con la densidad del modelo y la del calificador de la ruta
+	densidad := densidadDeRuta(ruta)
+	anchoDp := int(math.Round(float64(ancho) * dpiPantalla / float64(densidad)))
+	altoDp := int(math.Round(float64(alto) * dpiPantalla / float64(densidad)))
+	if anchoDp < 1 {
+		anchoDp = 1
+	}
+	if altoDp < 1 {
+		altoDp = 1
+	}
+	return img, anchoDp, altoDp
+}
+
+// densidadDeRuta lee el calificador de densidad de `res/drawable-xhdpi/x.png`; sin calificador (o
+// con `nodpi`/`anydpi`, que no escalan) se queda en mdpi, la densidad que declara el modelo.
+func densidadDeRuta(ruta string) int {
+	carpeta := ruta
+	if i := strings.LastIndex(carpeta, "/"); i >= 0 {
+		carpeta = carpeta[:i]
+	}
+	for _, parte := range strings.Split(carpeta, "-") {
+		switch parte {
+		case "ldpi":
+			return 120
+		case "mdpi":
+			return 160
+		case "tvdpi":
+			return 213
+		case "hdpi":
+			return 240
+		case "xhdpi":
+			return 320
+		case "xxhdpi":
+			return 480
+		case "xxxhdpi":
+			return 640
+		}
+	}
+	return dpiPantalla
 }
 
 // enteroDeValor: los enum del framework (gravity, orientation) llegan como entero. El aapt2 del SDK
@@ -1171,14 +1613,31 @@ func tamanoPropio(decl int, esp espec, contenido int) int {
 }
 
 // contenidoHoja estima lo que mide una view sin hijos: el ancho por el texto que se va a ver y el
-// alto por su tipo. Es la parte declarada como aproximada del modelo.
+// alto por su tipo, escalados por el `android:textSize` si lo declara. Un ImageView con PNG mide lo
+// que mide la imagen (ya en dp con la densidad del modelo). Es la parte declarada como aproximada.
 func contenidoHoja(n *nodoVista) (int, int) {
+	if n.imagenAncho > 0 && n.imagenAlto > 0 {
+		return n.imagenAncho + n.pad.horizontal(), n.imagenAlto + n.pad.vertical()
+	}
 	visible := n.Texto
 	if n.TextoDinamico != "" {
 		visible = n.TextoDinamico
 	}
 	alto := dpAltoTexto
-	if n.Tipo == "Button" {
+	porCaracter := dpPorCaracter
+	if n.tamTextoDp > 0 {
+		// el ancho de un carácter y el alto de la línea crecen con el tamaño del texto: la
+		// referencia es 16 sp para el ancho por carácter y una línea de vez y media el tamaño
+		porCaracter = int(math.Round(float64(dpPorCaracter) * float64(n.tamTextoDp) / dpTextoReferencia))
+		if porCaracter < 1 {
+			porCaracter = 1
+		}
+		alto = int(math.Round(float64(n.tamTextoDp) * 1.5))
+		if alto < 1 {
+			alto = 1
+		}
+	}
+	if n.Tipo == "Button" && alto < dpAltoBoton {
 		alto = dpAltoBoton
 	}
 	// el relleno del texto: el declarado o, sin él, el que trae el tema
@@ -1186,7 +1645,7 @@ func contenidoHoja(n *nodoVista) (int, int) {
 	if relleno == 0 {
 		relleno = dpRellenoTexto
 	}
-	ancho := len([]rune(visible))*dpPorCaracter + relleno
+	ancho := len([]rune(visible))*porCaracter + relleno
 	if ancho < 2*dpRellenoTexto {
 		ancho = 2 * dpRellenoTexto
 	}
@@ -1211,6 +1670,11 @@ func tipoDeContenedor(tipo string) string {
 // medir calcula el tamaño de un nodo y deja medidos sus hijos, como el `onMeasure` del framework:
 // un contenedor mide a sus hijos con SU espec y después decide cuánto ocupa él.
 func (n *nodoVista) medir(espAncho, espAlto espec) {
+	if n.estaGone() {
+		// GONE no se mide: ni su tamaño ni sus hijos ocupan sitio
+		n.medAncho, n.medAlto = 0, 0
+		return
+	}
 	if tipoDeContenedor(n.Tipo) == "" && len(n.Hijos) == 0 {
 		contenidoAncho, contenidoAlto := contenidoHoja(n)
 		n.medAncho = tamanoPropio(n.declAncho, espAncho, contenidoAncho)
@@ -1242,6 +1706,9 @@ func (n *nodoVista) medirLineal(vertical bool, espAncho, espAlto espec) {
 	}
 	conPeso := []hijoConPeso{}
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			continue
+		}
 		espHijoAncho := especDeHijo(espAncho, padAncho, h.margen.horizontal(), h.declAncho)
 		espHijoAlto := especDeHijo(espAlto, padAlto, h.margen.vertical(), h.declAlto)
 		h.medir(espHijoAncho, espHijoAlto)
@@ -1322,6 +1789,9 @@ func (n *nodoVista) medirApilado(espAncho, espAlto espec) {
 	padAncho, padAlto := n.pad.horizontal(), n.pad.vertical()
 	maxAncho, maxAlto := 0, 0
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			continue
+		}
 		h.medir(especDeHijo(espAncho, padAncho, h.margen.horizontal(), h.declAncho),
 			especDeHijo(espAlto, padAlto, h.margen.vertical(), h.declAlto))
 		if h.medAncho+h.margen.horizontal() > maxAncho {
@@ -1334,7 +1804,7 @@ func (n *nodoVista) medirApilado(espAncho, espAlto espec) {
 	n.medAncho = tamanoPropio(n.declAncho, espAncho, maxAncho+padAncho)
 	n.medAlto = tamanoPropio(n.declAlto, espAlto, maxAlto+padAlto)
 	for _, h := range n.Hijos {
-		if h.declAncho != medidaMatch && h.declAlto != medidaMatch {
+		if h.estaGone() || (h.declAncho != medidaMatch && h.declAlto != medidaMatch) {
 			continue
 		}
 		espA := especDeHijo(espec{tam: n.medAncho, limita: true, exacto: true}, padAncho, h.margen.horizontal(), h.declAncho)
@@ -1353,6 +1823,10 @@ func coloca(n *nodoVista, x, y, disponibleAncho, disponibleAlto int) {
 
 // colocar deja el rectángulo del nodo y coloca a sus hijos según el contenedor que sea.
 func (n *nodoVista) colocar(x, y int) {
+	if n.estaGone() {
+		n.Rect = rectVista{X: x, Y: y}
+		return
+	}
 	n.Rect = rectVista{X: x, Y: y, Ancho: n.medAncho, Alto: n.medAlto}
 	if len(n.Hijos) == 0 {
 		return
@@ -1369,6 +1843,10 @@ func (n *nodoVista) colocar(x, y int) {
 	default:
 		// RelativeLayout y el resto: sin resolver las relaciones, se apilan en el origen
 		for _, h := range n.Hijos {
+			if h.estaGone() {
+				h.Rect = rectVista{}
+				continue
+			}
 			h.colocar(x+n.pad.Izq+h.margen.Izq, y+n.pad.Arr+h.margen.Arr)
 		}
 	}
@@ -1383,6 +1861,9 @@ func (n *nodoVista) colocarVertical() {
 	interiorAlto := n.medAlto - n.pad.vertical()
 	total := 0
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			continue
+		}
 		total += h.medAlto + h.margen.vertical()
 	}
 	cursor := n.Rect.Y + n.pad.Arr
@@ -1394,6 +1875,10 @@ func (n *nodoVista) colocarVertical() {
 	}
 	menor := horizontalDeGravity(n.gravityBits)
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			h.Rect = rectVista{}
+			continue
+		}
 		cursor += h.margen.Arr
 		g := h.layoutGravity
 		if g < 0 {
@@ -1417,6 +1902,9 @@ func (n *nodoVista) colocarHorizontal() {
 	interiorAlto := n.medAlto - n.pad.vertical()
 	total := 0
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			continue
+		}
 		total += h.medAncho + h.margen.horizontal()
 	}
 	cursor := n.Rect.X + n.pad.Izq
@@ -1428,6 +1916,10 @@ func (n *nodoVista) colocarHorizontal() {
 	}
 	menor := verticalDeGravity(n.gravityBits)
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			h.Rect = rectVista{}
+			continue
+		}
 		cursor += h.margen.Izq
 		g := h.layoutGravity
 		if g < 0 {
@@ -1451,6 +1943,10 @@ func (n *nodoVista) colocarFrame() {
 	interiorAncho := n.medAncho - n.pad.horizontal()
 	interiorAlto := n.medAlto - n.pad.vertical()
 	for _, h := range n.Hijos {
+		if h.estaGone() {
+			h.Rect = rectVista{}
+			continue
+		}
 		izq := n.Rect.X + n.pad.Izq + h.margen.Izq
 		arr := n.Rect.Y + n.pad.Arr + h.margen.Arr
 		switch horizontalDeGravity(h.layoutGravity) {

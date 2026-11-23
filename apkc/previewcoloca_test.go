@@ -9,7 +9,8 @@ package main
 //     atributos que el fuente declara. No hay aparato en esta máquina, así que la geometría no tiene
 //     oráculo del framework: lo que se fija aquí es la cuenta documentada (medir y después colocar,
 //     como `measureVertical`/`layoutVertical`), no una medida del dispositivo. Siguen fuera
-//     `RelativeLayout`, `visibility="gone"`, `textSize` y los estilos del framework (`@android:style/…`).
+//     `RelativeLayout` y los estilos del framework (`@android:style/…`); `visibility="gone"`,
+//     `textSize`, los colores y la imagen de recurso los cubre previewvisual_test.go (Fase E4).
 //
 // Los apk de las pruebas se arman en memoria con los escritores del fork (regla 2: sin binarios
 // versionados) y los dos caminos del enlace se prueban por separado: la dimensión como
