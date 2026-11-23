@@ -264,7 +264,7 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--menu]… [--menu-item menu/N]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
@@ -278,7 +278,11 @@ as if the user typed it (the project's TextWatchers run), and --marcar/--desmarc
 a CheckBox, RadioButton or Switch (its OnCheckedChangeListener runs; a RadioGroup keeps one option
 checked); an AlertDialog that the app shows is published as a layer (dialogo and ejecucion.dialogos)
 and its buttons are pressed with --pulsar dialogo/positivo|negativo|neutro, which runs their
-OnClickListener and closes the dialog; a Toast leaves a line in ejecucion.consola and the last one in
+OnClickListener and closes the dialog; --menu runs the activity's onCreateOptionsMenu (and
+onPrepareOptionsMenu) and publishes the resulting menu in ejecucion.menu with its items visible, and
+--menu-item menu/N presses item N in the same run, running its OnMenuItemClickListener first and
+onOptionsItemSelected after, so a programmatic options menu can be opened and used from the tab; a
+Toast leaves a line in ejecucion.consola and the last one in
 ejecucion.toast. The text the app writes (TextView.setText) comes back in ejecucion.capturas and in
 each node's textoDinamico, the check state in each node's marcado and in ejecucion.marcas, and the
 app's own output (print, println, Log.*) in ejecucion.consola. Each --recrear destroys and recreates
@@ -313,6 +317,11 @@ process is started and nothing is written, so it runs inside the tab.
 		"id de la vista que se desmarca (repetible)")
 	set.Var(ordenDeRecrear{eventos: &guion}, "recrear",
 		"recrea la actividad actual con su Bundle, como una rotación (repetible, en orden)")
+	set.Var(ordenDeMenu{eventos: &guion}, "menu",
+		"abre el menú de opciones: ejecuta onCreateOptionsMenu y publica sus ítems (repetible, en orden)")
+	set.Var(guionDeEntrada{tipo: ordenMenuItemTipo, eventos: &guion}, "menu-item",
+		"menu/N: pulsa el ítem N del menú, por su OnMenuItemClickListener o onOptionsItemSelected "+
+			"(repetible, en orden)")
 	set.Var(guionDeEntrada{tipo: "avanzar", eventos: &guion}, "avanzar",
 		"milisegundos que avanza el reloj lógico y ejecuta las tareas vencidas (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
@@ -355,9 +364,11 @@ type ordenEjecucion struct {
 }
 
 const (
-	ordenPulsarTipo  = "pulsar"
-	ordenRecrearTipo = "recrear"
-	ordenAvanzarTipo = "avanzar"
+	ordenPulsarTipo   = "pulsar"
+	ordenRecrearTipo  = "recrear"
+	ordenAvanzarTipo  = "avanzar"
+	ordenMenuTipo     = "menu"
+	ordenMenuItemTipo = "menu-item"
 )
 
 // guionDeEntrada es el flag de una orden de entrada. Todas las órdenes van a la misma lista, en el
@@ -418,6 +429,22 @@ func (o ordenDeRecrear) Set(v string) error {
 
 // IsBoolFlag deja que `--recrear` se escriba sin valor, como una bandera.
 func (o ordenDeRecrear) IsBoolFlag() bool { return true }
+
+// ordenDeMenu es la bandera sin valor de `--menu`: desplegar el menú de opciones entra en el mismo
+// guion que las demás órdenes, así que puede ir entre dos clics y cada ítem ve el estado anterior.
+type ordenDeMenu struct{ eventos *[]eventoUsuario }
+
+func (o ordenDeMenu) String() string { return "false" }
+
+func (o ordenDeMenu) Set(v string) error {
+	if v == "true" {
+		*o.eventos = append(*o.eventos, eventoUsuario{Tipo: ordenMenuTipo})
+	}
+	return nil
+}
+
+// IsBoolFlag deja que `--menu` se escriba sin valor, como una bandera.
+func (o ordenDeMenu) IsBoolFlag() bool { return true }
 
 // modeloVistaDeAPK es el cuerpo del comando con el intérprete de la Fase 2 activo. Se queda como
 // envoltorio para que las pruebas de la Fase 1 no cambien de forma de llamada.

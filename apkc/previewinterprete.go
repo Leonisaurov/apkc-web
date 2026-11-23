@@ -138,6 +138,29 @@ type botonDialogo struct {
 	Texto string `json:"texto"`
 }
 
+// menuVista es el menú de opciones que `onCreateOptionsMenu` construyó, tal como se ve al
+// desplegarlo: si está abierto, sus ítems visibles y el último que se pulsó. Es un dato PROPIO del
+// modelo (el framework no deja rastro del menú en el layout), y por eso viaja aquí y no en el árbol.
+type menuVista struct {
+	Abierto bool `json:"abierto,omitempty"`
+	// Items son los ítems visibles, en el orden en que la app los añadió. Su `id` es `menu/N`, donde
+	// N es la posición en el menú completo: la pestaña manda ese id a `--menu-item` y el índice no se
+	// corre cuando un ítem oculto se salta.
+	Items []itemMenuVista `json:"items,omitempty"`
+	// Seleccionado es el `id` del último ítem que el guion pulsó, ya cerrado el menú.
+	Seleccionado string `json:"seleccionado,omitempty"`
+}
+
+// itemMenuVista es un ítem de ese menú: lo que se ve y el id con el que la app lo reconoce en
+// `onOptionsItemSelected`.
+type itemMenuVista struct {
+	ID      string `json:"id"`
+	Titulo  string `json:"titulo"`
+	ItemID  int32  `json:"itemId,omitempty"`
+	Orden   int32  `json:"orden,omitempty"`
+	Marcado bool   `json:"marcado,omitempty"`
+}
+
 // oyenteVista es una vista que registró un `OnClickListener`: su id de recurso y su nombre, que es
 // lo que la pestaña necesita para pintar el botón de pulsar y para mandar `--pulsar id/pulsar`.
 type oyenteVista struct {
@@ -196,6 +219,9 @@ type resultadoEjecucion struct {
 	// Dialogos es la pila de diálogos propios que quedaron abiertos sobre la pantalla actual, del
 	// más antiguo al que está delante: es la capa que el modelo pinta encima de la actividad.
 	Dialogos []dialogoVista `json:"dialogos,omitempty"`
+	// Menu es el menú de opciones de la actividad tal como quedó: los ítems que la app añadió y si
+	// el guion lo dejó abierto. Sin `onCreateOptionsMenu` que ejecutar se queda nulo.
+	Menu *menuVista `json:"menu,omitempty"`
 	// Toast es el último aviso efímero que la app mostró (`Toast.show`): no deja vista, pero sí el
 	// texto que se ve y la línea de consola que se anota al mostrarlo.
 	Toast string `json:"toast,omitempty"`
@@ -277,6 +303,18 @@ type objetoDalvik struct {
 	oyenteMarca any
 	// pista es el `setHint` de un EditText: no es su texto y no se mezcla con él
 	pista string
+	// menuItems es lo que `Menu.add` dejó en un menú del framework, en orden: el estado vive en la
+	// instancia, así que dos pantallas no comparten menú. Los campos `item*` son el estado de un
+	// MenuItem: su id de aplicación, su texto, si se ve y si está habilitado.
+	menuItems      []*objetoDalvik
+	itemID         int32
+	itemGrupo      int32
+	itemOrden      int32
+	itemTitulo     string
+	itemVisible    bool
+	itemHabilitado bool
+	itemMarcado    bool
+	itemOyente     any
 	// intentClase es el destino de un `Intent(Context, Class)` de una actividad propia: es lo que
 	// `startActivity` lee para abrir la pantalla siguiente
 	intentClase string
@@ -525,6 +563,12 @@ type maquinaDalvik struct {
 	// dialogos es la pila de `AlertDialog` propios abiertos en esta pantalla, del más antiguo al
 	// que está delante; pulsar un botón cierra el de arriba, como el framework
 	dialogos []*objetoDalvik
+	// menu es el menú de opciones que `onCreateOptionsMenu` construyó para esta pantalla; nil hasta
+	// que el guion pide abrirlo. `menuAbierto` es si quedó desplegado y `menuSeleccionado`, el id del
+	// último ítem que se pulsó (ya cerrado).
+	menu             *objetoDalvik
+	menuAbierto      bool
+	menuSeleccionado string
 	// toast es el último texto que la app mostró con `Toast.show`, el aviso efímero del modelo
 	toast string
 	// estadoGuardado es lo que la última `onSaveInstanceState` dejó en el Bundle, para publicarlo
@@ -1590,6 +1634,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 	res.maquina = m
 	// la capa de diálogos y el último aviso efímero son los de la pantalla que quedó delante
 	res.Dialogos = m.dialogosDeVista()
+	res.Menu = m.menuVista()
 	res.Toast = m.toast
 	// la consola se renumera al unir las pantallas: `secuencia` es el orden real de emisión
 	for i := range res.Consola {
@@ -1638,6 +1683,16 @@ func (m *maquinaDalvik) entregaEvento(tabla *tablaRecursos, e eventoUsuario, res
 		}
 		m.interaccion++
 		m.marcaVista(m.vista(id), e.Tipo == "marcar")
+	case ordenMenuTipo:
+		// desplegar el menú de opciones: construye lo que la app añada con `menu.add` y deja los
+		// ítems en el modelo; el clic de cada uno llega después con `--menu-item`
+		if err := m.abreMenuDeOpciones(); err != nil {
+			return err
+		}
+	case ordenMenuItemTipo:
+		if err := m.pulsaItemDeMenu(e.Dato); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -2337,6 +2392,176 @@ func (m *maquinaDalvik) pulsaBotonDeDialogo(pedido string) error {
 		m.avisa("el onClick de %s falló: %v", claseCorta(oyente.clase), err)
 	}
 	return nil
+}
+
+// Las dos firmas que el framework llama para el menú de opciones: una para construirlo y otra para
+// entregar el ítem pulsado. `onCreateOptionsMenu` y `onOptionsItemSelected` viven en la actividad;
+// `onMenuItemClick` es el oyente que un ítem puede llevar puesto.
+const (
+	protoOpcionesMenu = "(Landroid/view/Menu;)Z"
+	protoItemDeMenu   = "(Landroid/view/MenuItem;)Z"
+)
+
+// itemDeMenu arma el objeto de un `Menu.add`, con el estado por instancia: su título, su id si lo
+// trae y los valores por defecto del framework (visible y habilitado). Las dos formas que usa una app
+// son `add(CharSequence)` y `add(int grupo, int id, int orden, CharSequence | int)`.
+func (m *maquinaDalvik) itemDeMenu(vals []any) (*objetoDalvik, error) {
+	it := &objetoDalvik{clase: "Landroid/view/MenuItem;", campos: map[string]any{},
+		itemVisible: true, itemHabilitado: true}
+	switch len(vals) {
+	case 1:
+		it.itemTitulo = m.textoDeArgumento(vals[0])
+	case 4:
+		grupo, err := aInt32(vals[0])
+		if err != nil {
+			return nil, err
+		}
+		id, err := aInt32(vals[1])
+		if err != nil {
+			return nil, err
+		}
+		orden, err := aInt32(vals[2])
+		if err != nil {
+			return nil, err
+		}
+		it.itemGrupo = grupo
+		it.itemID = id
+		it.itemOrden = orden
+		it.itemTitulo = m.textoDeArgumento(vals[3])
+	default:
+		return nil, fmt.Errorf("Menu.add con %d argumentos: el framework solo tiene "+
+			"add(CharSequence) y add(int, int, int, CharSequence|int)", len(vals))
+	}
+	return it, nil
+}
+
+// abreMenuDeOpciones construye el menú de opciones como el framework al desplegar el
+// desbordamiento: llama a `onCreateOptionsMenu` con un menú nuevo y, si existe, a
+// `onPrepareOptionsMenu`. El menú queda en la máquina y `--menu-item` entrega sus ítems.
+func (m *maquinaDalvik) abreMenuDeOpciones() error {
+	if m.actividad == nil || m.actividad.clase == "" {
+		return fmt.Errorf("--menu sin actividad sobre la que abrir el menú")
+	}
+	clase := m.actividad.clase
+	crea := m.buscaMetodo(clase, "onCreateOptionsMenu", protoOpcionesMenu)
+	if crea == nil {
+		return fmt.Errorf("%s no tiene onCreateOptionsMenu(Menu): no hay menú de opciones que abrir",
+			claseCorta(clase))
+	}
+	menu := &objetoDalvik{clase: "Landroid/view/Menu;", campos: map[string]any{}}
+	m.menu = menu
+	m.menuAbierto = false
+	m.menuSeleccionado = ""
+	res, err := m.ejecutaCuerpo(clase, crea, []any{m.actividad, menu},
+		[]string{clase, "Landroid/view/Menu;"})
+	if err != nil {
+		return fmt.Errorf("onCreateOptionsMenu de %s falló: %w", claseCorta(clase), err)
+	}
+	m.menuAbierto = boolDe(res)
+	// el framework llama a `onPrepareOptionsMenu` cada vez que el menú se va a mostrar, después de
+	// crearlo; si la app lo usa para retocar ítems, la vista previa ve el mismo menú que el aparato
+	if prepara := m.buscaMetodo(clase, "onPrepareOptionsMenu", protoOpcionesMenu); prepara != nil {
+		if _, err := m.ejecutaCuerpo(clase, prepara, []any{m.actividad, menu},
+			[]string{clase, "Landroid/view/Menu;"}); err != nil {
+			m.avisa("onPrepareOptionsMenu de %s falló: %v", claseCorta(clase), err)
+		}
+	}
+	if !m.menuAbierto && len(menu.menuItems) == 0 {
+		m.avisa("onCreateOptionsMenu de %s devolvió false: el menú no se muestra",
+			claseCorta(clase))
+	}
+	return nil
+}
+
+// indiceDeItemDeMenu lee la forma `menu/N` (o el entero N) que publica el modelo y que la pestaña
+// manda en `--menu-item`.
+func indiceDeItemDeMenu(pedido string) (int, error) {
+	s := strings.TrimSpace(pedido)
+	s = strings.TrimPrefix(s, "menu/")
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("--menu-item %q: se espera menu/N con N entero no negativo", pedido)
+	}
+	return n, nil
+}
+
+// pulsaItemDeMenu entrega el clic de un ítem del menú, en el orden del framework: primero el
+// `OnMenuItemClickListener` del propio ítem y, si no lo consume, `onOptionsItemSelected` de la
+// actividad. Elegir un ítem cierra el menú, como en el aparato.
+func (m *maquinaDalvik) pulsaItemDeMenu(pedido string) error {
+	indice, err := indiceDeItemDeMenu(pedido)
+	if err != nil {
+		return err
+	}
+	if m.menu == nil {
+		if err := m.abreMenuDeOpciones(); err != nil {
+			return err
+		}
+	}
+	if indice >= len(m.menu.menuItems) {
+		return fmt.Errorf("no se puede pulsar %q: el menú tiene %d ítems",
+			pedido, len(m.menu.menuItems))
+	}
+	item := m.menu.menuItems[indice]
+	if !item.itemVisible {
+		return fmt.Errorf("no se puede pulsar %q: el ítem %d no es visible", pedido, indice)
+	}
+	if !item.itemHabilitado {
+		return fmt.Errorf("no se puede pulsar %q: el ítem %d está deshabilitado", pedido, indice)
+	}
+	m.interaccion++
+	consumido := false
+	// 1) el oyente del ítem, que es lo que registra `setOnMenuItemClickListener`
+	if oyente, ok := item.itemOyente.(*objetoDalvik); ok {
+		met := m.buscaMetodo(oyente.clase, "onMenuItemClick", protoItemDeMenu)
+		if met == nil {
+			return fmt.Errorf("%s se registró como OnMenuItemClickListener y no tiene "+
+				"onMenuItemClick(MenuItem)", claseCorta(oyente.clase))
+		}
+		res, err := m.ejecutaCuerpo(oyente.clase, met, []any{oyente, item},
+			[]string{oyente.clase, "Landroid/view/MenuItem;"})
+		if err != nil {
+			return fmt.Errorf("onMenuItemClick de %s falló: %w", claseCorta(oyente.clase), err)
+		}
+		consumido = boolDe(res)
+	}
+	// 2) `onOptionsItemSelected`, si el ítem no lo consumió
+	if !consumido {
+		if met := m.buscaMetodo(m.actividad.clase, "onOptionsItemSelected", protoItemDeMenu); met != nil {
+			res, err := m.ejecutaCuerpo(m.actividad.clase, met, []any{m.actividad, item},
+				[]string{m.actividad.clase, "Landroid/view/MenuItem;"})
+			if err != nil {
+				return fmt.Errorf("onOptionsItemSelected de %s falló: %w",
+					claseCorta(m.actividad.clase), err)
+			}
+			consumido = boolDe(res)
+		}
+	}
+	if !consumido {
+		m.avisa("el ítem %d del menú (%q) no lo atendió ni su OnMenuItemClickListener ni "+
+			"onOptionsItemSelected", indice, item.itemTitulo)
+	}
+	m.menuSeleccionado = fmt.Sprintf("menu/%d", indice)
+	m.menuAbierto = false
+	return nil
+}
+
+// menuVista publica el menú que quedó: solo los ítems visibles, con su posición real como id.
+func (m *maquinaDalvik) menuVista() *menuVista {
+	if m.menu == nil {
+		return nil
+	}
+	vista := &menuVista{Abierto: m.menuAbierto, Seleccionado: m.menuSeleccionado}
+	for i, item := range m.menu.menuItems {
+		if item == nil || !item.itemVisible {
+			continue
+		}
+		vista.Items = append(vista.Items, itemMenuVista{
+			ID: fmt.Sprintf("menu/%d", i), Titulo: item.itemTitulo, ItemID: item.itemID,
+			Orden: item.itemOrden, Marcado: item.itemMarcado,
+		})
+	}
+	return vista
 }
 
 // registraOnClickDeclarativo enlaza el `android:onClick="sumar"` del layout, como hace el inflado
@@ -3943,6 +4168,17 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return int32(len(obj.elementos)), true, nil
 		}
 	case "getItem":
+		if len(vals) == 1 && obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+			i, err := aInt32(vals[0])
+			if err != nil {
+				return nil, true, err
+			}
+			if i < 0 || int(i) >= len(obj.menuItems) {
+				return nil, true, fmt.Errorf("Menu.getItem(%d) fuera de los %d ítems",
+					i, len(obj.menuItems))
+			}
+			return obj.menuItems[int(i)], true, nil
+		}
 		if len(vals) == 1 && obj != nil && obj.elementos != nil {
 			i, err := aInt32(vals[0])
 			if err != nil {
@@ -3955,6 +4191,9 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return obj.elementos[i], true, nil
 		}
 	case "getItemId":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/MenuItem;") {
+			return obj.itemID, true, nil
+		}
 		if len(vals) == 1 && obj != nil && obj.elementos != nil {
 			i, err := aInt32(vals[0])
 			if err != nil {
@@ -4000,6 +4239,14 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{},
 				layoutID: uint32(id), vistas: map[uint32]*objetoDalvik{}}, true, nil
 		}
+		// `MenuInflater.inflate`: los menús XML de `res/menu` no están en el subconjunto del
+		// intérprete; se dice al llamarlos en vez de devolver un menú vacío que parecería que no hay
+		// ítems en la app
+		if len(vals) == 2 && obj != nil && es("Landroid/view/MenuInflater;") {
+			return m.rechaza(nombre, proto,
+				"los menús XML (`res/menu`) no se inflan en la vista previa: añade los ítems con "+
+					"`menu.add` en onCreateOptionsMenu", "Landroid/view/Menu;")
+		}
 	case "from":
 		if len(vals) == 1 && es("Landroid/view/LayoutInflater;") {
 			return &objetoDalvik{clase: "Landroid/view/LayoutInflater;", campos: map[string]any{}}, true, nil
@@ -4016,6 +4263,112 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				o.oyente = vals[0]
 				m.oyentes = append(m.oyentes, oyenteRegistrado{oyente: vals[0], vista: o})
 			}
+			return nil, true, nil
+		}
+	case "setOnMenuItemClickListener":
+		// el oyente del ítem; el último gana, como en el framework, y se devuelve el ítem para no
+		// romper la cadena de `menu.add(...).setOnMenuItemClickListener(...)`
+		if len(vals) == 1 && obj != nil && es("Landroid/view/MenuItem;") {
+			obj.itemOyente = vals[0]
+			return obj, true, nil
+		}
+	case "getTitle", "getTitleCondensed":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/MenuItem;") {
+			return cadenaObjeto(obj.itemTitulo), true, nil
+		}
+	case "getOrder":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/MenuItem;") {
+			return obj.itemOrden, true, nil
+		}
+	case "setVisible":
+		if len(vals) == 1 && obj != nil && es("Landroid/view/MenuItem;") {
+			obj.itemVisible = boolDe(vals[0])
+			return obj, true, nil
+		}
+	case "isVisible":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/MenuItem;") {
+			return boolAInt(obj.itemVisible), true, nil
+		}
+	case "setEnabled":
+		if len(vals) == 1 && obj != nil && es("Landroid/view/MenuItem;") {
+			obj.itemHabilitado = boolDe(vals[0])
+			return obj, true, nil
+		}
+	case "setCheckable":
+		if len(vals) == 1 && obj != nil && es("Landroid/view/MenuItem;") {
+			// el marco del check se modela con `itemMarcado`; `setCheckable(false)` lo apaga
+			if !boolDe(vals[0]) {
+				obj.itemMarcado = false
+			}
+			return obj, true, nil
+		}
+	case "setIcon", "setShowAsAction", "setShowAsActionFlags", "setAlphabeticShortcut",
+		"setNumericShortcut", "setShortcut", "setIntent":
+		// el icono, la acción en la barra y los atajos no cambian lo que se ve en el desplegable de la
+		// vista previa; se aceptan y se devuelve el ítem para conservar la cadena
+		if obj != nil && es("Landroid/view/MenuItem;") {
+			return obj, true, nil
+		}
+	case "findItem":
+		if len(vals) == 1 && obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+			id, err := aInt32(vals[0])
+			if err != nil {
+				return nil, true, err
+			}
+			for _, item := range obj.menuItems {
+				if item.itemID == id {
+					return item, true, nil
+				}
+			}
+			return nil, true, nil
+		}
+	case "removeItem", "removeGroup":
+		if len(vals) == 1 && obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+			if nombre == "removeItem" {
+				id, err := aInt32(vals[0])
+				if err != nil {
+					return nil, true, err
+				}
+				for i, item := range obj.menuItems {
+					if item.itemID == id {
+						obj.menuItems = append(obj.menuItems[:i], obj.menuItems[i+1:]...)
+						break
+					}
+				}
+			} else {
+				grupo, err := aInt32(vals[0])
+				if err != nil {
+					return nil, true, err
+				}
+				quedan := obj.menuItems[:0]
+				for _, item := range obj.menuItems {
+					if item.itemGrupo != grupo {
+						quedan = append(quedan, item)
+					}
+				}
+				obj.menuItems = quedan
+			}
+			return nil, true, nil
+		}
+	case "hasVisibleItems":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+			for _, item := range obj.menuItems {
+				if item.itemVisible {
+					return boolAInt(true), true, nil
+				}
+			}
+			return boolAInt(false), true, nil
+		}
+	case "getMenuInflater":
+		// el inflador existe para que una app que lo pida no reciba nulo; `inflate` de un menú XML no
+		// está en el subconjunto y lo dice al llamarlo
+		if len(vals) == 0 && obj != nil && obj == m.actividad {
+			return &objetoDalvik{clase: "Landroid/view/MenuInflater;", campos: map[string]any{}}, true, nil
+		}
+	case "invalidateOptionsMenu", "openOptionsMenu", "closeOptionsMenu", "setQwertyMode":
+		// el guion reconstruye el menú en cada `--menu` y `--menu-item` cierra solo: lo que la app
+		// pide con estas llamadas no tiene nada más que hacer aquí
+		if obj != nil && obj == m.actividad {
 			return nil, true, nil
 		}
 	case "post", "postDelayed":
@@ -4073,6 +4426,9 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				campos: map[string]any{}, bluetoothActivo: true}, true, nil
 		}
 	case "isEnabled":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/MenuItem;") {
+			return boolAInt(obj.itemHabilitado), true, nil
+		}
 		if len(vals) == 0 && obj != nil && es("Landroid/bluetooth/BluetoothAdapter;") {
 			return boolAInt(obj.bluetoothActivo), true, nil
 		}
@@ -4121,6 +4477,16 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return v, true, nil
 		}
 	case "add":
+		// `Menu.add`: el ítem nace con su título (o su id de cadena) y se publica en el menú de la
+		// pantalla; devuelve el propio ítem para la cadena `menu.add(...).setOnMenuItemClickListener(...)`
+		if obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+			item, err := m.itemDeMenu(vals)
+			if err != nil {
+				return nil, true, err
+			}
+			obj.menuItems = append(obj.menuItems, item)
+			return item, true, nil
+		}
 		// `add(E)` y `add(int, E)` del ArrayList: el segundo respeta el índice e inserta delante de
 		// lo que ya estaba, como el framework
 		if esLista() {
@@ -4157,6 +4523,9 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		}
 	case "size":
 		if len(vals) == 0 {
+			if obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+				return int32(len(obj.menuItems)), true, nil
+			}
 			if esLista() {
 				return int32(len(obj.lista)), true, nil
 			}
@@ -4165,6 +4534,10 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			}
 		}
 	case "clear":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/Menu;", "Landroid/view/SubMenu;") {
+			obj.menuItems = nil
+			return nil, true, nil
+		}
 		if len(vals) == 0 && esLista() {
 			obj.lista = []any{}
 			return nil, true, nil
@@ -4206,12 +4579,19 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return nil, true, nil
 		}
 	case "isChecked":
+		if len(vals) == 0 && obj != nil && es("Landroid/view/MenuItem;") {
+			return boolAInt(obj.itemMarcado), true, nil
+		}
 		if len(vals) == 0 && obj != nil && esMarcable() {
 			return boolAInt(obj.marcado), true, nil
 		}
 	case "setChecked":
 		// `setChecked` cambia el estado y avisa al oyente si el valor cambió; `toggle` es su
 		// inverso. En los dos el receptor tiene que ser una vista marcable.
+		if len(vals) == 1 && obj != nil && es("Landroid/view/MenuItem;") {
+			obj.itemMarcado = boolDe(vals[0])
+			return obj, true, nil
+		}
 		if len(vals) == 1 && obj != nil && esMarcable() {
 			n, err := aInt32(vals[0])
 			if err != nil {
@@ -4358,6 +4738,12 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	case "setTitle", "setMessage":
 		// el título y el mensaje de un `AlertDialog.Builder`: se guardan para publicarlos como capa.
 		// El `setTitle` de la actividad sigue siendo otro: lo distingue la clase del receptor.
+		if nombre == "setTitle" && len(vals) == 1 && obj != nil && es("Landroid/view/MenuItem;") {
+			// `MenuItem.setTitle(CharSequence | int res)`: el texto del ítem, que es lo que se ve en
+			// el desplegable y lo que publica el modelo
+			obj.itemTitulo = m.textoDeArgumento(vals[0])
+			return obj, true, nil
+		}
 		if len(vals) == 1 && obj != nil && es("Landroid/app/AlertDialog$Builder;") {
 			clave := campoDialogoTitulo
 			if nombre == "setMessage" {
