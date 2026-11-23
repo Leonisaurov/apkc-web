@@ -261,7 +261,8 @@ func classRosterSHA() string {
 // debug_info_item de las clases cuyo fichero `.class` no cambió, siempre que las tablas del dex
 // sigan siendo las mismas; el fichero que sale es idéntico byte a byte al de un dexado completo.
 func dexarClasesEnGo() {
-	dexarClasesEnGoCon(nil)
+	// es el camino de API >= 21 (las dependencias van en sus buckets): el reparto de la app cabe
+	dexarClasesEnGoCon(nil, apiMinimaMultiDex)
 }
 
 // dexarClasesEnGoCon es lo mismo con las dependencias dentro del mismo fichero. Por debajo de API 21
@@ -269,7 +270,12 @@ func dexarClasesEnGo() {
 // proyecto, igual que en el merge de d8; por encima llegan en su propio `classesN.dex` (dexDeps) y
 // aquí no se pasa ninguna. Las clases de las dependencias entran después de las del proyecto, en el
 // orden de los jars, para que el mismo proyecto dé el mismo dex.
-func dexarClasesEnGoCon(jars []string) {
+//
+// `api` es la del proyecto: por debajo de 21 este camino no admite reparto (dexarAppEnGo aborta si
+// las clases no caben en un fichero). Antes ese caso moría con el error del índice de 16 bits;
+// ahora muere con un mensaje que dice por qué no se puede repartir, en vez de empaquetar un
+// `classes2.dex` que ese runtime no abriría.
+func dexarClasesEnGoCon(jars []string, api int) {
 	defer timeIt("dex go")()
 	clases, err := leeClases([]string{filepath.Join("build", "classes")})
 	if err != nil {
@@ -285,7 +291,7 @@ func dexarClasesEnGoCon(jars []string) {
 	if len(clases) == 0 {
 		return
 	}
-	if _, err := dexarAppEnGo(clases); err != nil {
+	if _, err := dexarAppEnGo(clases, api); err != nil {
 		LogF("build", err.Error())
 	}
 }
@@ -301,22 +307,43 @@ func ficheroCacheAppGoDeGrupo(grupo int) string {
 	return strings.TrimSuffix(cacheDexFichero, ".bin") + "-g" + strconv.Itoa(grupo+1) + ".bin"
 }
 
+// apiMinimaMultiDex es la primera API cuyo runtime abre un segundo dex. Por debajo, un
+// `classes2.dex` en el apk no se lee, y la app muere al pedir una clase que solo está ahí.
+const apiMinimaMultiDex = 21
+
 // dexarAppEnGo escribe el dex de las clases del proyecto (y, por debajo de API 21, las de `jar/`)
 // en `build/`: `classes.dex`, `classes2.dex`, … Es el mismo reparto que un bucket de dependencias
-// (`dexDeClasesRepartidas`, reparto.go), con una caché I4 por grupo, porque una caché se cierra
-// contra las tablas de un dex concreto. Un proyecto que cabe en un dex deja exactamente el mismo
-// `classes.dex` y la misma `build/dexcache.bin` que antes del reparto: hay un solo grupo y se mide
-// en las mismas tablas.
+// (`gruposDeClasesRepartidas` y `armaGrupos`, dex.go), con una caché I4 por grupo, porque una
+// caché se cierra contra las tablas de un dex concreto. Un proyecto que cabe en un dex deja
+// exactamente el mismo `classes.dex` y la misma `build/dexcache.bin` que antes del reparto: hay un
+// solo grupo y se mide en las mismas tablas.
+//
+// `api` es la del proyecto. Con `api` por debajo de 21 un reparto de más de un fichero no es una
+// optimización: es un paquete que ese runtime no sabe abrir, así que se rechaza **antes** de
+// escribir ningún dex, con el techo de referencias y la API en el mensaje. Antes de esta frontera
+// ese caso moría igual, pero con el error del índice de 16 bits del traductor; el paquete nunca
+// llegaba a existir. `api` a cero es «no hay proyecto» (las pruebas de la etapa): reparte siempre.
 //
 // Los ficheros se escriben de atrás adelante —`classesN.dex` primero y `classes.dex` al final—:
 // un build que muere a mitad deja la app sin su primer dex, así que la vuelta siguiente lo ve
 // faltar (`dexMissing`, build.go) y repite la etapa, en vez de encontrar un `classes.dex` y dar
 // por buenos los grupos que no llegaron a escribirse.
-func dexarAppEnGo(clases []classFull) ([][]byte, error) {
+func dexarAppEnGo(clases []classFull, api int) ([][]byte, error) {
+	grupos, err := gruposDeClasesRepartidas(clases)
+	if err != nil {
+		return nil, err
+	}
+	if api > 0 && api < apiMinimaMultiDex && len(grupos) > 1 {
+		return nil, fmt.Errorf("el dex de la app no cabe en un fichero: %d clases piden %d dex "+
+			"(el techo de los índices de 16 bits son %d referencias por fichero) y el proyecto "+
+			"compila para API %d; por debajo de API %d el runtime no abre classes2.dex. "+
+			"Sube minSdkVersion a %d o reduce las clases del proyecto",
+			len(clases), len(grupos), refsPorDex, api, apiMinimaMultiDex, apiMinimaMultiDex)
+	}
 	caches := []*cacheDex{}
-	dexes, err := dexDeClasesRepartidas(clases, func(grupo, total int) *cacheDex {
-		// dexDeClasesRepartidas guarda cada caché en su fichero y cuenta lo reutilizado; aquí
-		// solo se recogen para sumar el resumen que mira la prueba del dexado por clase
+	dexes, err := armaGrupos(grupos, func(grupo, total int) *cacheDex {
+		// armaGrupos guarda cada caché en su fichero y cuenta lo reutilizado; aquí solo se
+		// recogen para sumar el resumen que mira la prueba del dexado por clase
 		c := cargaCacheDexDe(ficheroCacheAppGoDeGrupo(grupo))
 		caches = append(caches, c)
 		return c

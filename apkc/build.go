@@ -349,7 +349,7 @@ func _build(o buildOpts) {
 			if splitDeps {
 				dexarClasesEnGo()
 			} else {
-				dexarClasesEnGoCon(jars)
+				dexarClasesEnGoCon(jars, api)
 			}
 		} else {
 			bundleJava(api, o.coreLibrary, jars, splitDeps, classes)

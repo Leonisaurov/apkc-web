@@ -111,12 +111,11 @@ func dexDeClasesExpandidas(clases []classFull, c *cacheDex) ([]byte, error) {
 	return td.armaDex(clases)
 }
 
-// dexDeClasesRepartidas es la etapa de un bucket de dependencias: expande las lambdas una sola vez
-// y parte las clases en tantos dex como haga falta para que ninguno pase del techo de los índices
-// de 16 bits (reparto.go). cacheDe da la caché I4 de cada grupo —nil sin caché—, porque una caché
-// se cierra contra las tablas de un dex concreto y un bucket repartido tiene una por fichero.
-// Devuelve los dex en el orden en que el apk los numera: classes.dex, classes2.dex, …
-func dexDeClasesRepartidas(clases []classFull, cacheDe func(grupo, total int) *cacheDex) ([][]byte, error) {
+// gruposDeClasesRepartidas expande las lambdas una sola vez y parte las clases en tantos grupos
+// como haga falta para que ninguno pase del techo de los índices de 16 bits (reparto.go). Es la
+// mitad de `dexDeClasesRepartidas` que también necesita quien tiene que decidir si el reparto es
+// admisible **antes** de escribir ningún fichero (dexarAppEnGo, compilar.go).
+func gruposDeClasesRepartidas(clases []classFull) ([]grupoDex, error) {
 	clases, err := expandirLambdas(clases)
 	if err != nil {
 		return nil, err
@@ -128,6 +127,13 @@ func dexDeClasesRepartidas(clases []classFull, cacheDe func(grupo, total int) *c
 	if len(grupos) == 0 {
 		return nil, fmt.Errorf("there are no classes to dex")
 	}
+	return grupos, nil
+}
+
+// armaGrupos ensambla los grupos en orden, con la caché I4 que `cacheDe` dé para cada uno —nil sin
+// caché—, porque una caché se cierra contra las tablas de un dex concreto y un reparto tiene una
+// por fichero. Devuelve los dex en el orden en que el apk los numera: classes.dex, classes2.dex, …
+func armaGrupos(grupos []grupoDex, cacheDe func(grupo, total int) *cacheDex) ([][]byte, error) {
 	dexes := make([][]byte, 0, len(grupos))
 	for i, g := range grupos {
 		var c *cacheDex
@@ -152,6 +158,17 @@ func dexDeClasesRepartidas(clases []classFull, cacheDe func(grupo, total int) *c
 		dexes = append(dexes, b)
 	}
 	return dexes, nil
+}
+
+// dexDeClasesRepartidas es la etapa de un bucket de dependencias: los grupos de
+// `gruposDeClasesRepartidas` ensamblados con la caché de cada uno. Devuelve los dex en el orden en
+// que el apk los numera: classes.dex, classes2.dex, …
+func dexDeClasesRepartidas(clases []classFull, cacheDe func(grupo, total int) *cacheDex) ([][]byte, error) {
+	grupos, err := gruposDeClasesRepartidas(clases)
+	if err != nil {
+		return nil, err
+	}
+	return armaGrupos(grupos, cacheDe)
 }
 
 // leeClases baja todos los .class de los árboles dados, en un orden fijo: el internado depende del

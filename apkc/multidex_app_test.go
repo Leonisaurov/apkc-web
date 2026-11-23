@@ -82,7 +82,7 @@ func TestDexDeLaAppSeReparteYElViejoCaminoFalla(t *testing.T) {
 	// y con el reparto del proyecto sale en varios ficheros en build/
 	setupProject(t)
 	ultimoDexReuso = resumenCacheDex{}
-	dexes, err := dexarAppEnGo(clases)
+	dexes, err := dexarAppEnGo(clases, 34)
 	if err != nil {
 		t.Fatalf("repartiendo el dex de la app: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestDexDeLaAppSeReparteYElViejoCaminoFalla(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dexando la app pequeña sin reparto: %v", err)
 	}
-	if _, err := dexarAppEnGo(pequena); err != nil {
+	if _, err := dexarAppEnGo(pequena, 34); err != nil {
 		t.Fatalf("dexando la app pequeña repartida: %v", err)
 	}
 	obtenido, err := os.ReadFile(filepath.Join("build", "classes.dex"))
@@ -324,6 +324,87 @@ func TestCompilaAppConVariosDexEnElApk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("zipalign no da el apk por alineado: %v\n%s", err, salida)
 	}
+}
+
+// TestCompilaAppPre21ConDemasiadasClasesAborta es la guarda del otro lado de la frontera: con
+// `minSdkVersion` 19 el runtime no abre `classes2.dex`, así que un proyecto que no cabe en un
+// fichero no se reparte; el build tiene que abortar con el techo de 65 536 referencias y la API
+// en el mensaje, y no dejar ningún apk. `LogF` termina el proceso, así que la etapa se conduce en
+// un hijo de la propia prueba (el mismo patrón que
+// TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase): la falsificación —quitar la
+// guarda— se nota en el código de salida y en el `app.apk` que entonces sí aparece.
+func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
+	const (
+		envDir = "APKC_PRE21_DIR"
+		envJar = "APKC_PRE21_JAR"
+		envKS  = "APKC_PRE21_KS"
+	)
+	if dir := os.Getenv(envDir); dir != "" {
+		if err := os.Chdir(dir); err != nil {
+			t.Fatal(err)
+		}
+		androidJar = os.Getenv(envJar)
+		if androidJar == "" {
+			t.Fatalf("el hijo no recibió %s", envJar)
+		}
+		_build(buildOpts{
+			incremental: true,
+			linker:      linkerGo,
+			compiler:    compilerGo,
+			signer:      signerGo,
+			keyStore:    os.Getenv(envKS),
+			storePass:   "android",
+			keyAlias:    "androiddebugkey",
+			jar:         androidJar,
+			sdkVersion:  34,
+			codename:    "14",
+			v4:          true,
+		})
+		return
+	}
+
+	const clases, metodos = 70, 1000
+	androidJar = jarDelSDK(t)
+	setupProject(t)
+	raiz, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	keystore := filepath.Join(raiz, "debug.keystore")
+	if err := escribirDebugKeystore(keystore, "android", "androiddebugkey", 10000); err != nil {
+		t.Fatalf("escribirDebugKeystore: %v", err)
+	}
+	writeManifest(t, `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
+	<uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34"/>
+	<application android:label="@string/app_name"/>
+</manifest>`)
+	pon(t, raiz, "res/values/strings.xml", `<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Grande</string>
+</resources>`)
+	for i := 0; i < clases; i++ {
+		pon(t, raiz, fmt.Sprintf("src/grande/C%d.java", i), fuenteDeMetodos(fmt.Sprintf("C%d", i), metodos))
+	}
+	pon(t, raiz, "src/grande/Uso.java", fuenteLlamadora(clases, metodos))
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestCompilaAppPre21ConDemasiadasClasesAborta$")
+	cmd.Env = append(os.Environ(), envDir+"="+raiz, envJar+"="+androidJar, envKS+"="+keystore)
+	salida, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("el build con minSdk 19 y 70 000 referencias no abortó; salida:\n%s", salida)
+	}
+	for _, quiero := range []string{"no cabe en un fichero", "65536", "API 19", "classes2.dex"} {
+		if !bytes.Contains(salida, []byte(quiero)) {
+			t.Errorf("el aborto no nombra %q; salida:\n%s", quiero, salida)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(raiz, "build", "app.apk")); err == nil {
+		t.Fatal("el build abortado dejó build/app.apk: el paquete no puede existir")
+	}
+	if _, err := os.Stat(filepath.Join(raiz, "build", "classes2.dex")); err == nil {
+		t.Fatal("el build abortado dejó build/classes2.dex: no se escribe un dex que ese runtime no abre")
+	}
+	t.Logf("aborto con rc != 0; salida del build:\n%s", salida)
 }
 
 func leerArchivo(t *testing.T, ruta string) []byte {
