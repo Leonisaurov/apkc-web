@@ -393,10 +393,11 @@ func construirAppGrandeEnHijo(t *testing.T, nombreTest, manifiesto string) (raiz
 }
 
 // TestCompilaAppPre21ConDemasiadasClasesAborta es la guarda del otro lado de la frontera: con
-// `minSdkVersion` 19 el runtime no abre `classes2.dex`, así que un proyecto que no cabe en un
-// fichero no se reparte; el build tiene que abortar con el techo de 65 536 referencias y la API
-// en el mensaje, y no dejar ningún apk. La falsificación —quitar la guarda— se nota en el código
-// de salida y en el `app.apk` que entonces sí aparece.
+// `minSdkVersion` 19 las clases del proyecto son fijas al dex primario y aquí no caben —70 clases y
+// su llamadora piden más de 65 536 referencias—, así que el reparto no puede existir: el build
+// tiene que abortar con el motivo de main-dex, el techo y la API en el mensaje, y no dejar ningún
+// apk. La falsificación —quitar la fijación— se nota en el código de salida y en el `app.apk` que
+// entonces sí aparece con las clases del proyecto repartidas.
 func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 	raiz, salida, esHijo := construirAppGrandeEnHijo(t, "TestCompilaAppPre21ConDemasiadasClasesAborta",
 		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
@@ -406,7 +407,7 @@ func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 	if esHijo {
 		return
 	}
-	for _, quiero := range []string{"no cabe en un fichero", "65536", "API 19", "classes2.dex"} {
+	for _, quiero := range []string{"main-dex", "65536", "API 19", "classes2.dex"} {
 		if !bytes.Contains(salida, []byte(quiero)) {
 			t.Errorf("el aborto no nombra %q; salida:\n%s", quiero, salida)
 		}
@@ -422,8 +423,9 @@ func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
 
 // TestCompilaAppSinUsesSdkConDemasiadasClasesAborta cubre el hueco de la guarda: sin `<uses-sdk>`
 // `manifestMinAPI` devuelve 0, y el build trata ese 0 como API 1 (`manifest.go`: d8 asume API 1
-// cuando no está declarada). Por eso el cero tampoco admite reparto, ni en el build ni en la
-// llamada directa `dexarAppEnGo(…, 0)` con la que el crítico destapó que la guarda se eludía.
+// cuando no está declarada). Por eso el cero también fija todas las clases del proyecto, y como no
+// caben aborta, igual que en la llamada directa `dexarAppEnGo(…, 0)` con la que el crítico destapó
+// que la guarda se eludía.
 func TestCompilaAppSinUsesSdkConDemasiadasClasesAborta(t *testing.T) {
 	raiz, salida, esHijo := construirAppGrandeEnHijo(t, "TestCompilaAppSinUsesSdkConDemasiadasClasesAborta",
 		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
@@ -432,7 +434,7 @@ func TestCompilaAppSinUsesSdkConDemasiadasClasesAborta(t *testing.T) {
 	if esHijo {
 		return
 	}
-	for _, quiero := range []string{"no cabe en un fichero", "65536", "API 1", "classes2.dex"} {
+	for _, quiero := range []string{"main-dex", "65536", "API 1", "classes2.dex"} {
 		if !bytes.Contains(salida, []byte(quiero)) {
 			t.Errorf("el aborto no nombra %q; salida:\n%s", quiero, salida)
 		}

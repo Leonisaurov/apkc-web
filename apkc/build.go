@@ -973,6 +973,15 @@ func bundleJava(api int, coreLibrary bool, jars []string, depsSplit bool, classe
 		// a jar has to be dexed seeing the others as input, or d8 loses the
 		// interfaces it needs to desugar default and static methods
 		inputs = append(inputs, jars...)
+		// por debajo de API 21 d8 no parte solo: sin lista de main-dex aborta con «Cannot fit
+		// requested classes in a single dex file». El reparto que ese runtime necesita es el
+		// mismo que hace el dexer de Go (compilar.go): las clases del proyecto y el soporte de
+		// multidex en classes.dex, el resto en classes2.dex.
+		if api < apiMinimaMultiDex {
+			if reglas := reglasMainDex(classes, jars); reglas != "" {
+				args = append(args, "--main-dex-rules", reglas)
+			}
+		}
 	}
 
 	LogI("build", "bundling classes")
@@ -984,6 +993,68 @@ func bundleJava(api int, coreLibrary bool, jars []string, depsSplit bool, classe
 		LogF("build", toolFailure("d8", out, err), d8Path, args)
 	}
 	reportD8Drops(out)
+}
+
+// reglasMainDex escribe la lista de clases fijas al dex primario en el formato de
+// `--main-dex-rules`, que d8 exige como fichero, y devuelve su ruta. Son las mismas que fija el
+// dexer de Go (fijasParaApi, compilar.go): las del proyecto y las del soporte de multidex que viaje
+// como dependencia. Devuelve "" cuando no hay nada que fijar, y entonces d8 va sin la bandera.
+func reglasMainDex(classes []string, jars []string) string {
+	reglas := []string{}
+	vistas := map[string]bool{}
+	add := func(nombre string) {
+		if nombre == "" || vistas[nombre] {
+			return
+		}
+		vistas[nombre] = true
+		reglas = append(reglas, "-keep class "+nombre+" { *; }")
+	}
+	for _, ruta := range classes {
+		if nombre, ok := nombreDeClaseEnElProyecto(ruta); ok {
+			add(nombre)
+		}
+	}
+	// el cargador de multidex viaja como dependencia: si está en el classpath, sus clases tienen
+	// que quedar en el dex primario con las del proyecto
+	for _, jar := range jars {
+		enJar, err := jarClasses(jar)
+		if err != nil {
+			// un jar ilegible ya lo reporta el dexer; aquí no puede tapar las reglas del resto
+			LogW("build", "could not read", jar, err.Error())
+			continue
+		}
+		for _, interno := range enJar {
+			if esClaseDeMultidex(interno) {
+				add(strings.ReplaceAll(interno, "/", "."))
+			}
+		}
+	}
+	if len(reglas) == 0 {
+		return ""
+	}
+	ruta := filepath.Join("build", "maindex.pro")
+	if err := os.WriteFile(ruta, []byte(strings.Join(reglas, "\n")+"\n"), 0644); err != nil {
+		LogF("build", err, ruta)
+	}
+	return ruta
+}
+
+// nombreDeClaseEnElProyecto pasa un `.class` de build/classes al nombre con puntos que espera una
+// regla de ProGuard. Una clase fuera de ese árbol no entra en la lista.
+func nombreDeClaseEnElProyecto(ruta string) (string, bool) {
+	interno, err := filepath.Rel(filepath.Join("build", "classes"), ruta)
+	if err != nil || interno == ".." || strings.HasPrefix(interno, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	if !strings.HasSuffix(interno, ".class") {
+		return "", false
+	}
+	interno = strings.TrimSuffix(interno, ".class")
+	if base := filepath.Base(interno); base == "package-info" || base == "module-info" {
+		// d8 tampoco los dexa, y una regla sobre ellos no fijaría nada
+		return "", false
+	}
+	return strings.ReplaceAll(interno, string(filepath.Separator), "."), true
 }
 
 // reportD8Drops prints what d8 said while succeeding. A class it could not resolve is

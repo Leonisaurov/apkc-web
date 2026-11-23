@@ -261,26 +261,30 @@ func classRosterSHA() string {
 // debug_info_item de las clases cuyo fichero `.class` no cambió, siempre que las tablas del dex
 // sigan siendo las mismas; el fichero que sale es idéntico byte a byte al de un dexado completo.
 func dexarClasesEnGo() {
-	// es el camino de API >= 21 (las dependencias van en sus buckets): el reparto de la app cabe
+	// es el camino de API >= 21 (las dependencias van en sus buckets), donde el runtime abre
+	// cada dex del reparto y no hay clases que fijar
 	dexarClasesEnGoCon(nil, apiMinimaMultiDex)
 }
 
 // dexarClasesEnGoCon es lo mismo con las dependencias dentro del mismo fichero. Por debajo de API 21
-// el runtime no abre un segundo dex, así que las clases de `jar/` viajan en el `classes.dex` del
-// proyecto, igual que en el merge de d8; por encima llegan en su propio `classesN.dex` (dexDeps) y
-// aquí no se pasa ninguna. Las clases de las dependencias entran después de las del proyecto, en el
-// orden de los jars, para que el mismo proyecto dé el mismo dex.
+// no hay dex de dependencias aparte, así que las clases de `jar/` viajan con las del proyecto, igual
+// que en el merge de d8; por encima llegan en su propio `classesN.dex` (dexDeps) y aquí no se pasa
+// ninguna. Las clases de las dependencias entran después de las del proyecto, en el orden de los
+// jars, para que el mismo proyecto dé el mismo dex.
 //
-// `api` es la del proyecto: por debajo de 21 este camino no admite reparto (dexarAppEnGo aborta si
-// las clases no caben en un fichero). Antes ese caso moría con el error del índice de 16 bits;
-// ahora muere con un mensaje que dice por qué no se puede repartir, en vez de empaquetar un
-// `classes2.dex` que ese runtime no abriría.
+// Por debajo de API 21, además, las clases del proyecto y las del soporte de multidex que viajen en
+// `jar/` son fijas: tienen que quedar en `classes.dex` y el resto detrás, en `classes2.dex`, que es
+// el fichero que carga el soporte de multidex (su AAR y el gancho de `Application` son el paso
+// siguiente). Si las fijas no caben en un dex, dexarAppEnGoCon lo rechaza con el motivo de
+// main-dex en vez de empaquetar un dex que ese runtime no podría arrancar.
 func dexarClasesEnGoCon(jars []string, api int) {
 	defer timeIt("dex go")()
 	clases, err := leeClases([]string{filepath.Join("build", "classes")})
 	if err != nil {
 		LogF("build", err.Error())
 	}
+	// las clases del proyecto son las que se leyeron antes de abrir ningún jar
+	delProyecto := len(clases)
 	for _, jar := range jars {
 		delJar, err := clasesDeJar(jar)
 		if err != nil {
@@ -291,9 +295,46 @@ func dexarClasesEnGoCon(jars []string, api int) {
 	if len(clases) == 0 {
 		return
 	}
-	if _, err := dexarAppEnGo(clases, api); err != nil {
+	fijas := fijasParaApi(api, clases[:delProyecto], clases[delProyecto:])
+	if _, err := dexarAppEnGoCon(clases, fijas, api); err != nil {
 		LogF("build", err.Error())
 	}
+}
+
+// prefijosDelSoporteMultidex son los paquetes del cargador de multidex: el de androidx y el de la
+// biblioteca de soporte anterior, en nombre interno (sin descriptor). Sus clases tienen que estar
+// en el dex primario para que el cargador exista antes de abrir classes2.dex.
+var prefijosDelSoporteMultidex = []string{"androidx/multidex/", "android/support/multidex/"}
+
+// esClaseDeMultidex dice si un nombre interno (sin `L` ni `;`) es del cargador de multidex. La usan
+// las dos rutas —el dexer de Go y la lista de main-dex de d8— para fijar las mismas clases.
+func esClaseDeMultidex(nombreInterno string) bool {
+	for _, prefijo := range prefijosDelSoporteMultidex {
+		if strings.HasPrefix(nombreInterno, prefijo) {
+			return true
+		}
+	}
+	return false
+}
+
+// fijasParaApi nombra las clases que no pueden quedar fuera del dex primario. Por encima de API 21 el
+// runtime abre cada dex del reparto por su cuenta y no hay nada que fijar; por debajo, el
+// `classes.dex` tiene que llevar todas las clases del proyecto, más las del soporte de multidex que
+// aporte `jar/`, porque son las que arrancan la app y abren el resto.
+func fijasParaApi(api int, proyecto, dependencias []classFull) []string {
+	if api >= apiMinimaMultiDex {
+		return nil
+	}
+	fijas := make([]string, 0, len(proyecto))
+	for _, cf := range proyecto {
+		fijas = append(fijas, cf.Name)
+	}
+	for _, cf := range dependencias {
+		if interno := strings.TrimSuffix(strings.TrimPrefix(cf.Name, "L"), ";"); esClaseDeMultidex(interno) {
+			fijas = append(fijas, cf.Name)
+		}
+	}
+	return fijas
 }
 
 // ficheroCacheAppGoDeGrupo es la caché I4 del grupo i del dex de la app: el primero conserva
@@ -307,8 +348,9 @@ func ficheroCacheAppGoDeGrupo(grupo int) string {
 	return strings.TrimSuffix(cacheDexFichero, ".bin") + "-g" + strconv.Itoa(grupo+1) + ".bin"
 }
 
-// apiMinimaMultiDex es la primera API cuyo runtime abre un segundo dex. Por debajo, un
-// `classes2.dex` en el apk no se lee, y la app muere al pedir una clase que solo está ahí.
+// apiMinimaMultiDex es la primera API cuyo runtime abre un segundo dex por su cuenta. Por debajo,
+// un `classes2.dex` solo se lee si lo abre antes el soporte de multidex: por eso el dex primario
+// lleva fijas las clases del proyecto y su cargador (reparto.go), y el resto espera en el segundo.
 const apiMinimaMultiDex = 21
 
 // dexarAppEnGo escribe el dex de las clases del proyecto (y, por debajo de API 21, las de `jar/`)
@@ -318,34 +360,49 @@ const apiMinimaMultiDex = 21
 // exactamente el mismo `classes.dex` y la misma `build/dexcache.bin` que antes del reparto: hay un
 // solo grupo y se mide en las mismas tablas.
 //
-// `api` es la del proyecto. Con `api` por debajo de 21 un reparto de más de un fichero no es una
-// optimización: es un paquete que ese runtime no sabe abrir, así que se rechaza **antes** de
-// escribir ningún dex, con el techo de referencias y la API en el mensaje. Antes de esta frontera
-// ese caso moría igual, pero con el error del índice de 16 bits del traductor; el paquete nunca
-// llegaba a existir. Un cero no es «no hay proyecto»: `manifestMinAPI` devuelve 0 cuando el
-// manifiesto no declara `<uses-sdk>` y el resto del build lo trata como API 1, así que aquí
-// también se normaliza a 1 antes de decidir (si no, la guarda se eludiría con ese proyecto).
+// Sin lista explícita de fijas —es la llamada de las pruebas del reparto— se toman todas las clases
+// recibidas como clases del proyecto, que es la lectura conservadora: ninguna queda fuera del dex
+// primario sin decirlo.
 //
 // Los ficheros se escriben de atrás adelante —`classesN.dex` primero y `classes.dex` al final—:
 // un build que muere a mitad deja la app sin su primer dex, así que la vuelta siguiente lo ve
 // faltar (`dexMissing`, build.go) y repite la etapa, en vez de encontrar un `classes.dex` y dar
 // por buenos los grupos que no llegaron a escribirse.
 func dexarAppEnGo(clases []classFull, api int) ([][]byte, error) {
-	// la API cero del manifiesto sin `<uses-sdk>` es la API 1 para todo el build (manifest.go):
-	// se normaliza aquí, antes de la guarda, y no se deja un camino por el que no se note
+	var fijas []string
+	if api < apiMinimaMultiDex {
+		fijas = make([]string, 0, len(clases))
+		for _, cf := range clases {
+			fijas = append(fijas, cf.Name)
+		}
+	}
+	return dexarAppEnGoCon(clases, fijas, api)
+}
+
+// dexarAppEnGoCon es el reparto del dex de la app con la lista de clases que tienen que caer en el
+// dex primario (`fijas`, reparto.go). Por debajo de API 21 el reparto sí se escribe —`classes.dex`
+// con las fijas y `classes2.dex` con el resto, que es el contrato de bytes que carga el soporte de
+// multidex—, pero solo si las fijas caben; si no, el error lo dice con el motivo de main-dex y con
+// la API, y no se escribe ningún dex.
+//
+// Un cero no es «no hay proyecto»: `manifestMinAPI` devuelve 0 cuando el manifiesto no declara
+// `<uses-sdk>` y el resto del build lo trata como API 1, así que aquí también se normaliza a 1
+// antes de decidir (si no, el reparto pre-21 se eludiría con ese proyecto).
+func dexarAppEnGoCon(clases []classFull, fijas []string, api int) ([][]byte, error) {
+	// la API cero del manifiesto sin `<uses-sdk>` es la API 1 para todo el build (manifest.go)
 	if api <= 0 {
 		api = 1
 	}
-	grupos, err := gruposDeClasesRepartidas(clases)
-	if err != nil {
-		return nil, err
+	conjunto := make(map[string]bool, len(fijas))
+	for _, nombre := range fijas {
+		conjunto[nombre] = true
 	}
-	if api < apiMinimaMultiDex && len(grupos) > 1 {
-		return nil, fmt.Errorf("el dex de la app no cabe en un fichero: %d clases piden %d dex "+
-			"(el techo de los índices de 16 bits son %d referencias por fichero) y el proyecto "+
-			"compila para API %d; por debajo de API %d el runtime no abre classes2.dex. "+
-			"Sube minSdkVersion a %d o reduce las clases del proyecto",
-			len(clases), len(grupos), refsPorDex, api, apiMinimaMultiDex, apiMinimaMultiDex)
+	grupos, err := gruposDeClasesRepartidas(clases, conjunto)
+	if err != nil {
+		if api < apiMinimaMultiDex {
+			return nil, fmt.Errorf("el dex de la app para API %d: %w", api, err)
+		}
+		return nil, err
 	}
 	caches := []*cacheDex{}
 	dexes, err := armaGrupos(grupos, func(grupo, total int) *cacheDex {

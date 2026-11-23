@@ -115,12 +115,15 @@ func dexDeClasesExpandidas(clases []classFull, c *cacheDex) ([]byte, error) {
 // como haga falta para que ninguno pase del techo de los índices de 16 bits (reparto.go). Es la
 // mitad de `dexDeClasesRepartidas` que también necesita quien tiene que decidir si el reparto es
 // admisible **antes** de escribir ningún fichero (dexarAppEnGo, compilar.go).
-func gruposDeClasesRepartidas(clases []classFull) ([]grupoDex, error) {
+func gruposDeClasesRepartidas(clases []classFull, fijas map[string]bool) ([]grupoDex, error) {
 	clases, err := expandirLambdas(clases)
 	if err != nil {
 		return nil, err
 	}
-	grupos, err := reparteEnDexes(clases, refsPorDex)
+	// las fijas se nombran antes de expandir las lambdas, que solo pueden añadir clases sintéticas
+	// detrás de su clase dueña: una lambda de una clase del proyecto no se queda fuera del dex
+	// primario por no estar en la lista de nombres originales
+	grupos, err := reparteEnDexesConFijas(clases, fijas, refsPorDex)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +167,7 @@ func armaGrupos(grupos []grupoDex, cacheDe func(grupo, total int) *cacheDex) ([]
 // `gruposDeClasesRepartidas` ensamblados con la caché de cada uno. Devuelve los dex en el orden en
 // que el apk los numera: classes.dex, classes2.dex, …
 func dexDeClasesRepartidas(clases []classFull, cacheDe func(grupo, total int) *cacheDex) ([][]byte, error) {
-	grupos, err := gruposDeClasesRepartidas(clases)
+	grupos, err := gruposDeClasesRepartidas(clases, nil)
 	if err != nil {
 		return nil, err
 	}
