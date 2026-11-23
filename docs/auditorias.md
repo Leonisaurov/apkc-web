@@ -29,8 +29,7 @@ hecho por analogía (regla 11).
 - **F5 (INCIERTO).** Teclear durante la ventana de carga marca sucio el doc nuevo con `texto=null`
   y la lectura posterior descarta lo tecleado. No se cerró con `e121270`; sigue `INCIERTO`.
 - **Frontera de gate.** La carrera real con DOM y worker (F1 y F5) no se puede reproducir en
-  `prueba.js`; queda para el gate con navegador, igual que los dos puntos `INCIERTO` de la
-  interfaz.
+  `prueba.js`; queda para el gate con navegador.
 
 ### 1.2 Compilación y panel de resultado
 
@@ -143,9 +142,14 @@ en su worktree con tres casos nuevos en `prueba.js`.
   puntero `6243d9d` en la raíz. `node --check` de `pestana.js`, `ajustes.js` y `prueba.js` sin
   salida; `node prueba.js` → `prueba: todo en orden`, rc=0. Falsificación de F1: romper
   `if (cargandoDocumento)` hizo fallar la prueba y restaurarlo la devolvió a verde.
-- **Interfaz del emulador:** el crítico aprobó `fe4771e`/`0b6dc83` sin hallazgos confirmados; dos
-  puntos quedan `INCIERTO` para el gate con navegador: que `apkc preview /sdk/ultimo.apk` acepte la
-  ruta OPFS y que el arrastre del inspector no desalinee clics tras apagar y encender.
+- **Interfaz del emulador:** el crítico aprobó `fe4771e`/`0b6dc83` sin hallazgos confirmados. Sus
+  dos puntos `INCIERTO` quedaron **cerrados por CDP** en la pestaña real
+  (`http://127.0.0.1:8801/`, `crossOriginIsolated=true`, cero excepciones): «Usar última APK» pintó
+  53 nodos sin compilar, con `/sdk/ultimo.apk` de 10.286 B y su ficha con origen, tipo debug y
+  SHA-256 `3d4b4382…`; y el inspector ya no redimensiona el canvas (314×561 en (690,303) en los
+  cuatro estados), con el clic de `#vista-oyentes button` pasando de «sin clics» a «1 clic». El
+  brinco lo causaba `.marco-previa { position: relative }`; se corrigió en `studio/style.css`
+  (`786e195`, puntero `23a827f`).
 - Red de seguridad del manifiesto integrada: submódulo `70433f1`, puntero `7f2fae6`; gate sobre el
   árbol integrado con `PREFIX`/`GOTMPDIR` en disco: `pestaña: 223 comprobaciones`, `e2e: todo en orden`.
 - Reglas de tmpfs y limpieza: commits `7b61cf7`, `6a24066`, `6ad5aac`, todos sobre el `AGENTS.md`

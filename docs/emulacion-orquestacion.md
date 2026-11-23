@@ -95,17 +95,26 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   `2dd70c8` y `which` verificado en `969b045` por el QA `ses_df9c1482fffeKi6lTSOz6CBbk0`.
   Evidencia: §211.
 - La vista previa actual se reconstruyó con E6, E5 e I3 (`sha256 3d7be562…`), verificada contra el
-  `/apkc.wasm` servido con `curl`.
+  `/apkc.wasm` servido con `curl`. El fix del inspector fue solo CSS: el wasm no cambió.
 - I3 **cerrada** como `d3803bb` tras el **APROBAR** de `ses_df9baefaeffemtyU4YC0gXywOR`; la pregunta
   abierta del classpath queda adscrita a I5, que sigue pendiente con I4. Detalle en
   `docs/plan-incremental-web.md`.
-- La interfaz del emulador está **integrada** como `0b6dc83` (puntero del submódulo) y verificada
-  en la pestaña con CDP: los ids nuevos están presentes y no hay excepciones.
+- **Interfaz del emulador:** integrada como `0b6dc83` y verificada en la pestaña real con CDP
+  (`http://127.0.0.1:8801/`, `crossOriginIsolated=true`, cero excepciones). Los dos puntos
+  `INCIERTO` del crítico quedan cerrados:
+  - **Última APK:** compilé debug desde la pestaña; `#ultimo-codigo` quedó en `0`, `/sdk/ultimo.apk`
+    mide 10.286 B y `/sdk/ultimo.json` registra origen `/proyecto/build/app.apk`, tipo debug y
+    SHA-256 `3d4b4382…`. «Usar última APK» pintó 53 nodos **sin compilar**.
+  - **Inspector sin brincos:** antes de abrirlo el canvas medía 304×543 en (496,303) y al abrirlo
+    296×528; la regla posterior `.marco-previa { position: relative }` anulaba la capa absoluta
+    `.marco-vista-lado`. Corregido en `studio/style.css` con una regla más específica (`786e195`,
+    puntero `23a827f`). Tras el fix el canvas mide 314×561 en (690,303) antes, apagado, encendido y
+    con el inspector abierto: idéntico en los cuatro estados. El botón `#vista-oyentes button`
+    pasa de «sin clics» a «1 clic» tras el ciclo apagado/encendido.
 - **Editor auditado:** `e121270` en el submódulo (cherry-pick de `e600a66`), puntero `6243d9d`;
   F1, C1-C4 y F2 cerrados, F5 sigue `INCIERTO`. `node --check` sin salida y `prueba.js` en
   `todo en orden`.
-- **Pendiente de gate:** la carrera real con DOM y worker (F1/F5) y los dos puntos `INCIERTO` de la
-  interfaz (ruta OPFS de `/sdk/ultimo.apk` y arrastre del inspector tras apagar y encender).
-- **Activas:** ninguna de emulación; queda el gate final, **no ejecutado**, con `PREFIX` y puertos
-  únicos.
+- **Pendiente de gate:** la carrera real con DOM y worker (F1/F5); F5 sigue `INCIERTO`.
+- **Activas:** ninguna de emulación; el gate final está **en curso** por otro agente, con `PREFIX`
+  y puertos únicos.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
