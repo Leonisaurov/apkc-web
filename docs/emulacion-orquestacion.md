@@ -14,7 +14,7 @@ esté terminado.
 
 ## Entorno común
 
-- Repositorio raíz: `/home/leonisauro/Develop/Go/apkc-web` (rama `web`, 27 commits por delante de
+- Repositorio raíz: `/home/leonisauro/Develop/Go/apkc-web` (rama `web`, por delante de
   `origin/web`; no se reconcilia hacia atrás ni se sube nada).
 - `HOME_APKC_WEB=/home/leonisauro`, `ANDROID_HOME=/home/leonisauro/opt/android-sdk`.
 - `APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar`
@@ -72,12 +72,13 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 ## Estado
 
 - Preparación: worktrees creados, `PREFIX` en disco, prueba base en verde.
-- E1.1 **integrada** en la raíz como `def0b85` y con sus siete tests enfocados en verde. Crítico en
-  curso (`ses_df9f4b884ffepDlg2y2VQsIBYZ`). La vista previa se reconstruyó con ella
+- E1.1 **integrada** en la raíz como `def0b85` (cherry-pick de `1e3b277`), con sus siete tests
+  enfocados en verde y el crítico `ses_df9f4b884ffepDlg2y2VQsIBYZ` en **APROBAR**, sin defectos
+  `CONFIRMADO`. Evidencia: §206 de `docs/evidencia.md`. La vista previa se reconstruyó con ella
   (`sha256 95f8eb36…`).
-- Ola 1 activa: E2 (`ses_df9faaecaffeJpx6NiHwB2xnD6`), E3 (`ses_df9fa7681ffeSncJk5w47iIaHS`) y
-  E4 (`ses_df9fa481dffetVrg53DFv1Beom`). Sus worktrees se crearon antes de `def0b85`: si el
-  cherry-pick a la raíz conflictúa, se resuelve conservando ambos cambios.
-- Ola 2: E5 lanzada (`ses_df9f49694ffeE3qK56KapEVMkJ`, con `def0b85` cherry-pickeado). E6 y E7
-  entran al liberarse un hueco.
+- **Activos:** E2 (`ses_df9faaecaffeJpx6NiHwB2xnD6`), E3 (`ses_df9fa7681ffeSncJk5w47iIaHS`), E4
+  (`ses_df9fa481dffetVrg53DFv1Beom`) y E5 (`ses_df9f49694ffeE3qK56KapEVMkJ`, con `def0b85`
+  cherry-pickeado). **E6 entrando** al liberarse un hueco; **E7 en cola**.
+- Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`: si el cherry-pick a la raíz
+  conflictúa, se resuelve conservando ambos cambios.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.

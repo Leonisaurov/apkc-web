@@ -1,9 +1,10 @@
 # Plan de emulación de apps propias en la vista previa
 
 **Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
-medida en §205; E2…E7 están **pendientes** hasta que su comando de aceptación pase en verde sobre el
-árbol final. Este fichero es un plan, no evidencia: lo que aquí se afirme sobre coste, compatibilidad
-o formato es una hipótesis y lleva el comando con el que se comprobará. Las mediciones reales van a
+medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E2…E7 están
+**pendientes** hasta que su comando de aceptación pase en verde sobre el árbol final. Este fichero
+es un plan, no evidencia: lo que aquí se afirme sobre coste, compatibilidad o formato es una
+hipótesis y lleva el comando con el que se comprobará. Las mediciones reales van a
 `docs/evidencia.md`; el estado de las fases, a la tabla de `docs/plan.md` cuando la fase se cierre.
 
 Fecha: 2026-11-22. Origen de la petición: el usuario quiere **que emule mucho más**, con prioridad
@@ -148,6 +149,23 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
     `pestaña: N` ≥ 204.
 - **Abandona.** `Intent` implícito, `startActivityForResult`, tareas, `singleTop`/`launchMode`,
   back stack del sistema y transiciones animadas entre actividades.
+
+### E1.1. Correcciones de la auditoría del emulador — **CERRADA**
+
+- **Estado: cerrada** el 2026-11-22 como `def0b85` (cherry-pick de `1e3b277` del worktree
+  `emu-e1-audit`), con los siete tests enfocados en verde, `go vet` y `gofmt -l` sin salida, y el
+  crítico `ses_df9f4b884ffepDlg2y2VQsIBYZ` en **APROBAR** sin defectos `CONFIRMADO`. Evidencia:
+  §206 de `docs/evidencia.md`.
+- **Qué corrigió.** 3.1: una actividad abierta sin `setContentView` da error y aviso, y no cae al
+  layout `main` de la lanzadora. 3.2: el `setOnClickListener` programático gana al `android:onClick`
+  del XML sin invertir el contrato «último registrado gana» de `pulsa`. 3.4: tope de 32 clics y tope
+  simétrico de 32 pantallas, que corta una navegación circular que antes colgaba. 3.3 ya estaba
+  cerrado por `81d6acf`.
+- **Queda abierto.** La pregunta `INCIERTA` del crítico (redirect sin layout que vuelve por
+  `finish()` del destino; `previewinterprete.go:777`, `preview.go:314,336`) no se ejecutó como probe
+  de tres actividades, y la prueba de pestaña que ejerza `startActivity` (D7) sigue pendiente en
+  `docs/auditorias.md`. Matiz del crítico: los tests del tope aseveran contra `pulsacionesMaximas`,
+  no contra el literal 32, así que cambiar el valor no los rompería.
 
 ### E2. Listas y adaptadores propios
 

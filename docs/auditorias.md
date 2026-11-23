@@ -51,18 +51,24 @@ hecho por analogía (regla 11).
 
 ### 1.3 Emulador / vista previa
 
-- **3.1.** Una actividad abierta con `startActivity` que no llama a `setContentView` cae al layout
-  `main` de la lanzadora sin aviso (`previewinterprete.go:763`; `preview.go:491-496,601-606`). El
-  crítico validó el arreglo de 4 líneas: devolver error tras `:763`; `estabiliza` (`:649-651`) ya
-  avisa y reanuda la actividad anterior.
-- **3.2.** El `android:onClick` del XML gana al `setOnClickListener` del `onCreate`, al revés que
-  Android (`:757`, `:763-765`, `:929`, `:971`). **No arreglar invirtiendo `pulsa`**: rompe el
-  contrato «último sustituye al anterior» de `:925-927`.
-- **3.3.** `getText()` dentro de `onCreate` devuelve `""` (`preview.go:383-390`; siembra en `:763`).
-  **No mover `preparaVistasDelLayout` antes de `onCreate`**: depende de `m.layoutID`, que solo fija
-  `setContentView` dentro de él.
-- **3.4 (corregido).** La pestaña no topa la lista de clics (`previa-panel.js:969`), pero el clic 33
-  **no congela**: Go avisa y hace `break` (`previewinterprete.go:684-687`). Falta un tope simétrico.
+- **3.1. CORREGIDO en `def0b85` (§206).** Una actividad abierta con `startActivity` que no llama a
+  `setContentView` devuelve error y `estabiliza` avisa y reanuda la anterior, en vez de caer al
+  layout `main` de la lanzadora (`previewinterprete.go:777`; antes `:763`;
+  `preview.go:314,336`). El crítico validó el arreglo y dio **APROBAR**; queda una pregunta
+  `INCIERTA` (abajo).
+- **3.2. CORREGIDO en `def0b85` (§206).** El `setOnClickListener` del `onCreate` gana al
+  `android:onClick` del XML, como en Android: el enlace declarativo se salta si ya hay un oyente
+  programático (`previewinterprete.go:990`). `pulsa` no se invirtió: sigue valiendo el contrato
+  «último registrado gana» de `:925-927`.
+- **3.3. CORREGIDO por `81d6acf`.** `getText()` dentro de `onCreate` devuelve el texto actual. No se
+  movió `preparaVistasDelLayout` antes de `onCreate`, porque depende de `m.layoutID`. No se repitió
+  en E1.1.
+- **3.4. CORREGIDO en `def0b85` (§206).** El clic 33 no congela (Go avisa y hace `break`,
+  `previewinterprete.go:695-696`) y ahora tiene prueba
+  (`TestElPreviewClicNumeroTreintaYTresNoSeEntrega`). Se añadió el tope simétrico de 32 pantallas
+  (`pantallasMaximas`, `:47-50`, corte en `:639`): una navegación circular que antes encadenaba
+  pantallas sin fin ahora avisa y deja delante la última que arrancó. Matiz del crítico: los tests
+  aseveran contra las constantes, no contra el literal 32.
 - **3.5.** `try`/`catch` en `onCreate` mata la ejecución entera (`:1044-1046`, `:614-622`).
   Limitación del MVP, sin arreglo trivial.
 - **3.6.** `RelativeLayout` y los `*Layout` no lineales se apilan en el origen
@@ -71,8 +77,13 @@ hecho por analogía (regla 11).
   `prueba-pestana.js:1644-1648` es una sola actividad. La prueba de navegación en pestaña que E1
   invoca **no existe**.
 - **Veredicto E1:** correcta en intérprete y CLI (determinista, estado conservado), incompleta como
-  afirmación. Prioridad del crítico: **E1.1 antes que E4**.
+  afirmación de la pestaña. La prioridad del crítico **E1.1 antes que E4** se atendió: `def0b85`
+  cerró 3.1, 3.2 y 3.4 y el crítico dio **APROBAR** (§206). D7 sigue sin prueba en la pestaña.
 - **INCIERTO:** el orden de ciclo de vida de `previewinterprete.go:643` no se ha medido en aparato.
+- **INCIERTA (pregunta abierta de E1.1, no bloqueante):** en un redirect sin layout que vuelve al
+  frente porque el destino llama a `finish()`, `layoutID==0` podría caer al layout `main`
+  (`previewinterprete.go:777`; `preview.go:314,336`). No se ejecutó el probe de tres actividades que
+  lo decidiría, así que no se escribe como cierre.
 
 ### 1.4 Entrega
 
@@ -114,8 +125,11 @@ en su worktree con tres casos nuevos en `prueba.js`.
    sucios (C3). Limpiar `--storepass` de `ULTIMO.argv` (C4).
 4. Regenerar el sitio servido con `tools/entorno.sh sitio` y subir la versión del SW para que el
    navegador del usuario vea el código actual; publicar solo si el usuario lo pide.
-5. E1.1: arreglo 3.1, precedencia de oyentes (3.2), siembra de textos (3.3), tope de clics (3.4) y
-   prueba de navegación en pestaña (D7). Después E4.
+5. E1.1 **cerrada** en `def0b85`: arreglo 3.1, precedencia de oyentes (3.2), siembra de textos
+   (3.3, ya hecha por `81d6acf`) y topes de clics y pantallas (3.4). Evidencia y comandos en §206;
+   crítico `ses_df9f4b884ffepDlg2y2VQsIBYZ` en **APROBAR**. Queda de ella la prueba de navegación
+   en pestaña (D7), que sigue pendiente, y la pregunta `INCIERTA` del redirect sin layout, sin probe.
+   Después, E4.
 6. F4: abortar el import si `borradoDelDisco === false`. Decidir `deps-index.json` y corregir
    `docs/plan.md:69`.
 

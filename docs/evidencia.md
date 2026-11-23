@@ -9306,3 +9306,44 @@ no se emulan. (2) `finish()` desde la única actividad deja un aviso y conserva 
 simula el cierre del proceso. (3) Sigue fuera ejecutar métodos con tabla de excepciones
 (`triesSize > 0`), porque el intérprete no la corre. (4) El sitio publicado no se ha empaquetado con
 este cambio: `tools/entorno.sh sitio` y `surge . publish` siguen pendientes.
+
+## 206. E1.1: correcciones de la auditoría del emulador, con su crítica
+
+Medido el 2026-11-22 sobre la raíz de `web` con `def0b85` integrado (cherry-pick de `1e3b277` del
+worktree `emu-e1-audit`). Es la fase E1.1 de `docs/plan-emulacion.md`: cierra los hallazgos 3.1, 3.2
+y 3.4 de `docs/auditorias.md`; 3.3 (`getText` dentro de `onCreate`) ya estaba cerrado por `81d6acf`
+y no se repitió aquí.
+
+**Qué cambió, con su línea.** (1) Una actividad abierta por `startActivity` que no llama a
+`setContentView` devuelve error y `estabiliza` avisa y reanuda la anterior, en vez de pintar el
+layout `main` de la lanzadora (`apkc/previewinterprete.go:777`; el resultado se recibe en
+`apkc/preview.go:314` y el layout se elige después en `:336`). (2) Un `setOnClickListener`
+registrado en `onCreate` gana al `android:onClick` del XML sobre la misma vista, como en Android: el
+enlace declarativo se salta si ya hay un oyente programático (`previewinterprete.go:990`). `pulsa` no
+cambia de contrato: sigue valiendo el último oyente registrado, y el programático es el último. (3) El tope de 32 clics se
+queda con su prueba y se añade el tope simétrico de 32 pantallas (`pantallasMaximas`,
+`previewinterprete.go:47-50`, con el corte en `:639`): antes, dos actividades que se abren la una a
+la otra en `onCreate` encadenaban pantallas sin fin; ahora se avisa y queda delante la última que
+arrancó.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElInterpreteGetTextDevuelveElTextoActual|TestElPreviewOnClickProgramaticoGanaAlDelLayout|TestElPreviewClicNumeroTreintaYTresNoSeEntrega|TestElPreviewNavegaEntreActividadesPropias|TestElPreviewNoAbreUnaActividadNoDeclarada|TestElPreviewRechazaUnaActividadSinSetContentView|TestElPreviewTopeDeNavegacionCircular' -v .
+```
+
+**Resultado**: los siete `PASS` y `ok github.com/ajinasokan/apkc 0.149s`. La capa completa de la
+vista previa da `ok github.com/ajinasokan/apkc 0.435s`; `go vet` y `gofmt -l` no imprimen nada. El
+crítico (`ses_df9f4b884ffepDlg2y2VQsIBYZ`) dio **APROBAR**, con los siete comandos enfocados
+ejecutados y ningún defecto `CONFIRMADO`.
+
+**Pregunta abierta del crítico (INCIERTA, no bloqueante)**: en un redirect sin layout que vuelve al
+frente porque el destino llama a `finish()`, `layoutID==0` podría caer al layout `main`
+(`previewinterprete.go:777`; `preview.go:314,336`). El probe de tres actividades que lo decidiría no
+se ejecutó. **Matiz del crítico**: las pruebas del tope aseveran contra la constante
+`pulsacionesMaximas`, no contra el literal 32; cambiar el valor de la constante no las rompería.
+
+**Fronteras de este `§`.** (1) El gate y chromium no se volvieron a correr para este cierre: la
+evidencia son los tests enfocados y la suite de la capa de vista previa. (2) La prueba de pestaña
+que ejerza `startActivity` (D7 de `docs/auditorias.md`) sigue pendiente: aquí no hay ninguna nueva.
+(3) El sitio publicado no se ha empaquetado con `def0b85`. (4) No hay medición en aparato ni del
+orden de ciclo de vida ni del redirect sin layout del párrafo anterior.
