@@ -56,6 +56,19 @@ Orden de integración: E1.1, E2, E3, E4, E5, E6, E7. Cada frente se integra en l
 commit, pasa por `critico` y solo entonces se marca cerrado y se lanza el siguiente de la cola.
 El documentador es una sola sesión que se reanuda por `sessionID` para no duplicar trabajo.
 
+## Vista previa local
+
+- Servidor: `APKC_WASM=$HOME/.cache/apkc-web/preview/apkc.wasm ANDROID_JAR=/tmp/androidjar-propio/artifact3/android-stub-34-full.jar STUDIO_SERVIDOR_PORT=8801 node studio/servidor.js`
+  → **http://127.0.0.1:8801/**. Da COOP/COEP, sirve el jar generado de AOSP
+  (`e2ddfb55…c8827`, el artifact del run `45062792689`) y no publica nada.
+- Reconstruir el wasm con los cambios que ya estén en la raíz (o en un worktree concreto):
+  `tcr -c 2 -m 2G -r 256M -- sh tools/preview-local.sh [raiz]`. El servidor lee el fichero en cada
+  petición, así que no hace falta reiniciarlo; el navegador sí puede servir una copia del service
+  worker, así que tras cada reconstrucción hay que recargar con `Ctrl+Mayús+R` y, si sigue saliendo
+  código viejo, desregistrar el service worker desde las herramientas del navegador.
+- El jar de AOSP es el que eligió el usuario; el de la SDK (`/home/leonisauro/opt/android-sdk/…`)
+  sigue siendo solo el oráculo de javac en los tests enfocados.
+
 ## Estado
 
 - Preparación: worktrees creados, `PREFIX` en disco, prueba base en verde.
