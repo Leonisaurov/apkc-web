@@ -42,6 +42,8 @@ En las dos pasadas el guion exige:
 - `apksigner verify --verbose` con la v1, la v2 y la v3 en `true`;
 - `zipalign -c -p 4`;
 - los nombres de los dex, exactos y seguidos desde `classes.dex`;
+- que el dex que define la clase **no** sea el que la invoca: si el método del jar cayera en
+  `classes.dex`, el APK no probaría el reparto en `classesN.dex` y el guion fallaría;
 - `dexdump -f` de cada dex (qué clases define cada uno) y `dexdump -d` del dex de la app (la
   invocación del método del jar).
 

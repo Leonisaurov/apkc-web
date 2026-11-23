@@ -160,7 +160,9 @@ verifica() {
 	done
 }
 
-# comprueba que un método se invoca en el dex de la app y que la clase se define en algún dex
+# comprueba que un método se invoca en el dex de la app y que la clase se define en OTRO dex del apk:
+# si el dex que invoca fuera también el que define, el apk no probaría el reparto en clasesN.dex y la
+# comprobación pasaría por cualquier cosa.
 verifica_metodo() {
 	metodo=$1      # la forma que imprime dexdump -d: Lsaludo/Saludo;.saludo
 	clase=$2       # el descriptor que imprime dexdump -f: Lsaludo/Saludo;
@@ -176,7 +178,10 @@ verifica_metodo() {
 		fi
 	done
 	[ "$definida" != no ] || falla "ningún dex del apk define $clase"
-	echo "   $(basename "$definida") define $clase"
+	if [ "$(basename "$definida")" = "$(basename "$invoca_en")" ]; then
+		falla "$(basename "$definida") invoca y define $clase: el método del jar tiene que vivir en otro dex del apk, y el dex de la app no prueba el reparto"
+	fi
+	echo "   $(basename "$definida") define $clase, y es distinto de $(basename "$invoca_en")"
 }
 
 # ---------------------------------------------------------------- pasada 1: un jar
