@@ -10,6 +10,7 @@ package main
 import (
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -233,4 +234,76 @@ func TestArregloComparadoConNullContraJavac17(t *testing.T) {
 
 	nuestras := nuestrasClases(t, jar, []fuenteJava{{nombre: "Nulo.java", contenido: fuenteArregloNulo}})
 	compararDex(t, nuestras, clasesDeJavac17(t, jar, javac, raiz, "Nulo.java"))
+}
+
+// TestCampoDeLocalFalsificacion: la falsificación de la rama del `App.java:28`. Con el interruptor
+// apagado, el argumento `info.applicationInfo` vuelve a rechazarse con el mensaje literal que leyó el
+// usuario; encendido, el mismo fuente compila.
+func TestCampoDeLocalFalsificacion(t *testing.T) {
+	const literal = "al estimar el tipo de info.applicationInfo, el tipo info.applicationInfo no se resuelve"
+	jar := jarDelSDK(t)
+	fuentes := []fuenteJava{{nombre: "Argumento.java", contenido: fuenteCampoDeLocal}}
+
+	if _, err := compilarProyectoJava(fuentes, jar); err != nil {
+		t.Fatalf("con la rama encendida el fuente no compila: %v", err)
+	}
+
+	anterior := resuelveCampoDeLocal
+	resuelveCampoDeLocal = false
+	t.Cleanup(func() { resuelveCampoDeLocal = anterior })
+
+	_, err := compilarProyectoJava(fuentes, jar)
+	if err == nil {
+		t.Fatal("con la rama apagada el fuente fue aceptado: la falsificación no falsifica")
+	}
+	if !strings.Contains(err.Error(), literal) {
+		t.Fatalf("con la rama apagada el rechazo es %q, y el del usuario contiene %q", err, literal)
+	}
+	if !strings.Contains(err.Error(), "Argumento.java:") {
+		t.Fatalf("el rechazo no nombra el fichero: %v", err)
+	}
+	t.Logf("sin la rama: %v", err)
+
+	// se restaura aquí, no solo en el Cleanup: el caso verde corre con el interruptor como llega el
+	// árbol, y la falsificación no deja el paquete apagado para el test siguiente
+	resuelveCampoDeLocal = anterior
+	if _, err := compilarProyectoJava(fuentes, jar); err != nil {
+		t.Fatalf("con el interruptor restaurado el fuente no compila: %v", err)
+	}
+}
+
+// TestArregloNuloFalsificacion: la falsificación de la rama del `App.java:34`. Con el interruptor
+// apagado, `info.splitSourceDirs == null` vuelve a rechazarse con el mensaje literal que leyó el
+// usuario; encendido, el mismo fuente compila.
+func TestArregloNuloFalsificacion(t *testing.T) {
+	const literal = "comparar con null algo que no es una referencia ([Ljava/lang/String;) no esta medido"
+	jar := jarDelSDK(t)
+	fuentes := []fuenteJava{{nombre: "Nulo.java", contenido: fuenteArregloNulo}}
+
+	if _, err := compilarProyectoJava(fuentes, jar); err != nil {
+		t.Fatalf("con la rama encendida el fuente no compila: %v", err)
+	}
+
+	anterior := comparaArregloConNulo
+	comparaArregloConNulo = false
+	t.Cleanup(func() { comparaArregloConNulo = anterior })
+
+	_, err := compilarProyectoJava(fuentes, jar)
+	if err == nil {
+		t.Fatal("con la rama apagada el fuente fue aceptado: la falsificación no falsifica")
+	}
+	if !strings.Contains(err.Error(), literal) {
+		t.Fatalf("con la rama apagada el rechazo es %q, y el del usuario contiene %q", err, literal)
+	}
+	if !strings.Contains(err.Error(), "Nulo.java:") {
+		t.Fatalf("el rechazo no nombra el fichero: %v", err)
+	}
+	t.Logf("sin la rama: %v", err)
+
+	// se restaura aquí, no solo en el Cleanup: el caso verde corre con el interruptor como llega el
+	// árbol, y la falsificación no deja el paquete apagado para el test siguiente
+	comparaArregloConNulo = anterior
+	if _, err := compilarProyectoJava(fuentes, jar); err != nil {
+		t.Fatalf("con el interruptor restaurado el fuente no compila: %v", err)
+	}
 }
