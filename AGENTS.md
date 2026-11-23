@@ -97,7 +97,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      `$HOME/.cache/apkc-web/…` para binarios, `PREFIX`, `TMP`, `GOTMPDIR`, perfiles de chromium y
      sondas, y fíjalos en disco antes de `tcr … tools/entorno.sh gate`. Un `starship init fish` que
      no define `enable_transience` es síntoma de esa cuota, no un fallo de fish. Si ya hay artefactos
-     viejos en `/tmp/opencode`, muévelos a disco en lugar de borrarlos; no los dejes ahí.
+     viejos en `/tmp/opencode`, muévelos a disco en lugar de borrarlos; no los dejes ahí. Al cerrar
+     cada frente, y conforme se desocupa cada gate, limpia también los temporales en disco que ya no
+     sirven (`PREFIX`, directorios de gate, perfiles de chromium, copias viejas): no los acumules
+     hasta el final de la sesión, pero conserva la evidencia y pregunta antes de borrar algo que otra
+     fase pueda necesitar.
 
 ## Entorno (Termux/Android aarch64)
 
