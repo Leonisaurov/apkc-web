@@ -298,6 +298,7 @@ func (p *traduce) concat(in jvmInstr) {
 	}
 	p.suelta(b)
 	p.push(r)
+	p.ponMoveCima(opMueveObjeto)
 }
 
 // appendConstante carga una constante del bootstrap y la añade. Las anchas dejan el par en la

@@ -374,7 +374,8 @@ func (p *traduce) sueltaPar(r int) {
 // d8, según el tamaño del valor: `const-wide/16` (`1600 0200`), `const-wide/32` (`1700 7011 0100`) o
 // `const-wide` con los ocho bytes en little-endian (`1800 cb04 fb71 1f01` para 1234567890123L).
 func (p *traduce) cargaLargo(in jvmInstr, v int64) {
-	r := p.tomaPar(in)
+	// las constantes anchas nombran el registro en ocho bits: se pide un par que quepa
+	r := p.tomaParBajo(in, 0xfe)
 	if p.err != nil {
 		return
 	}
@@ -624,14 +625,20 @@ func (p *traduce) conviertePalabra(in jvmInstr, op byte) {
 	if p.err != nil {
 		return
 	}
-	d := p.toma(in)
+	// la 12x nombra los dos registros en cuatro bits: la fuente se copia si no cabe y el destino
+	// se pide bajo. En el caso normal los dos ya caben y sale el mismo `unidad12x` de siempre.
+	fuente, copia := p.aseguraRegistro(in, r, 15, opMueve, false)
 	if p.err != nil {
 		return
 	}
-	if !p.nibble(r, in) || !p.nibble(d, in) {
+	d := p.tomaBajo(in, 15)
+	if p.err != nil {
 		return
 	}
-	p.palabra(unidad12x(op, d, r))
+	p.palabra(unidad12x(op, d, fuente))
+	if copia {
+		p.suelta(fuente)
+	}
 	p.suelta(r)
 	p.push(d)
 }
@@ -640,22 +647,26 @@ func (p *traduce) conviertePalabra(in jvmInstr, op byte) {
 // numero: `0.0f` sale `const/4 v0, #0` —asi lo escribe `d8` en `FyD.constanteCorta`— y `1.0f` es
 // `const v0, #+0x3F800000` (parrafo 80).
 func (p *traduce) cargaFlotante(in jvmInstr, v float64) {
-	r := p.toma(in)
+	// `const/4` (11n) nombra el registro en cuatro bits; las otras formas de constante, en ocho.
+	// Si se pide uno bajo, el caso normal devuelve el mismo y el `const/4` sale igual.
+	r := p.tomaBajo(in, 15)
 	if p.err != nil {
-		return
-	}
-	if !p.nibble(r, in) {
 		return
 	}
 	p.palabraFlotante(r, v, in)
 	p.push(r)
+	p.ponMoveCima(opMueve)
 }
 
 // palabraFlotante: la instruccion de constante que cabe, con el destino ya elegido.
 func (p *traduce) palabraFlotante(r int, v float64, in jvmInstr) {
+	if !p.cabeOcteto(r) {
+		p.falla(in, "a float constant register that does not fit eight bits")
+		return
+	}
 	bits := uint32(math.Float32bits(float32(v)))
 	switch {
-	case bits == uint32(uint32(int8(bits))):
+	case p.cabeNibble(r) && bits == uint32(uint32(int8(bits))):
 		p.palabra(unidad11n(opConst4, r, int(int8(bits))))
 	case bits == uint32(uint32(int16(bits))):
 		p.palabra(uint16(opConst16) | uint16(r&0xff)<<8)
@@ -672,7 +683,7 @@ func (p *traduce) palabraFlotante(r int, v float64, in jvmInstr) {
 // `const-wide/high16 v2, #+0x3FF0` (dos unidades) y `3.14159` como `const-wide` de cinco (parrafo 80);
 // la eleccion es del emisor, no del formato, así que basta con que la forma sea valida.
 func (p *traduce) cargaDoble(in jvmInstr, v float64) {
-	r := p.tomaPar(in)
+	r := p.tomaParBajo(in, 0xfe)
 	if p.err != nil {
 		return
 	}
@@ -709,15 +720,54 @@ func (p *traduce) convierteEnAncho(in jvmInstr, op byte) {
 	if p.err != nil {
 		return
 	}
-	d := p.tomaPar(in)
+	// la fuente es ancha solo en `l2d`/`d2l`; en el resto es un `int`/`float` suelto
+	if in.name[0] == 'l' || in.name[0] == 'd' {
+		fuente, copia := p.aseguraRegistro(in, r, 14, opMueveWide, true)
+		if p.err != nil {
+			return
+		}
+		d := p.tomaParBajo(in, 14)
+		if p.err != nil {
+			return
+		}
+		p.palabra(unidad12x(op, d, fuente))
+		if copia {
+			p.sueltaPar(fuente)
+		}
+		p.sueltaPar(r)
+		p.pushAncho(d)
+		return
+	}
+	fuente, copia := p.aseguraRegistro(in, r, 15, opMueve, false)
 	if p.err != nil {
 		return
 	}
-	if !p.nibble(r, in) || !p.nibble(d, in) {
-		return
+	// `int-to-long vA, vA`: el destino puede reutilizar el registro del int si su vecino está libre,
+	// que es lo que hace d8 y evita pedir un par cuando solo quedan sueltos bajos.
+	enSitio := fuente >= 0 && fuente <= 14 && !p.ocupado(fuente+1)
+	if !enSitio && fuente >= 0 && fuente <= 14 {
+		// el vecino del par lo ocupa un valor que se puede mover (pila o local atado): se libera
+		if p.liberaRegistro(in, fuente+1) {
+			enSitio = !p.ocupado(fuente + 1)
+		}
 	}
-	p.palabra(unidad12x(op, d, r))
-	p.suelta(r)
+	var d int
+	if enSitio {
+		d = fuente
+	} else {
+		d = p.tomaParBajo(in, 14)
+		if p.err != nil {
+			return
+		}
+	}
+	p.palabra(unidad12x(op, d, fuente))
+	if copia && !enSitio {
+		p.suelta(fuente)
+	}
+	// el int original muere; si es el propio destino (en el sitio, sin copia) no se suelta
+	if !enSitio || copia {
+		p.suelta(r)
+	}
 	p.pushAncho(d)
 }
 
@@ -727,15 +777,20 @@ func (p *traduce) convierteDeAncho(in jvmInstr, op byte) {
 	if p.err != nil {
 		return
 	}
-	p.sueltaPar(r)
-	d := p.toma(in)
+	// la fuente es un par ancho; el destino, una palabra. Los dos van en cuatro bits en la 12x.
+	fuente, copia := p.aseguraRegistro(in, r, 14, opMueveWide, true)
 	if p.err != nil {
 		return
 	}
-	if !p.nibble(r, in) || !p.nibble(d, in) {
+	p.sueltaPar(r)
+	d := p.tomaBajo(in, 15)
+	if p.err != nil {
 		return
 	}
-	p.palabra(unidad12x(op, d, r))
+	p.palabra(unidad12x(op, d, fuente))
+	if copia {
+		p.sueltaPar(fuente)
+	}
 	p.push(d)
 }
 
@@ -815,7 +870,9 @@ func (p *traduce) pushValor(r int, tipo byte, ancho bool) {
 	p.enPila = append(p.enPila, r)
 	p.pilaTipo = append(p.pilaTipo, tipo)
 	p.pilaAncho = append(p.pilaAncho, ancho)
-	p.pilaMove = append(p.pilaMove, 0)
+	// por defecto, el valor es de una palabra y se copia con `move` (entero o flotante); las
+	// referencias y los anchos lo cambian con `ponMoveCima`
+	p.pilaMove = append(p.pilaMove, opMueve)
 }
 
 // ponMoveCima fija cómo se copia la entrada de arriba si hay que desalojarla: `move-object/from16`
@@ -1190,83 +1247,91 @@ func (p *traduce) canonico(n int) int {
 	return p.base + n - p.m.ArgCount
 }
 
-// desalojaBajo: un local quedó atado a un registro bajo (`fijos`) y su valor no está además en la
-// pila; se devuelve a su hueco canónico con el `move*/from16` que corresponde y se libera el bajo.
-// d8 hace lo mismo cuando necesita un registro de cuatro bits y todos los bajos están ocupados. Solo
-// desaloja huecos de una palabra: un par ancho necesita sus dos mitades y se deja para otro paso.
-func (p *traduce) desalojaBajo(in jvmInstr, techo int) int {
-	for t := 0; t <= techo; t++ {
-		if !p.fijos[t] {
-			continue
+// liberaRegistro: libera un registro bajo concreto para que otro lo use. Si es un local atado
+// (`fijos`) y su valor no está además en la pila, lo devuelve a su hueco canónico con el
+// `move*/from16` de su tipo. Si es un valor de la pila que no es local y tiene move anotado
+// (referencia o ancho), lo mueve a un temporal alto. d8 hace lo mismo cuando necesita un bajo.
+func (p *traduce) liberaRegistro(in jvmInstr, r int) bool {
+	nVeces, pos := 0, -1
+	for i, v := range p.enPila {
+		if v == r {
+			nVeces++
+			pos = i
 		}
-		kind, ok := p.kindFijo[t]
+	}
+	if p.fijos[r] {
+		// el valor del local también está en la pila: mover una copia no libera el registro
+		if nVeces > 0 || p.altos[r] {
+			return false
+		}
+		kind, ok := p.kindFijo[r]
 		if !ok || kind == opMueveWide {
-			continue
+			return false
 		}
-		if p.estaEnPila(t) || p.altos[t] {
-			continue
-		}
-		n, ok := p.localDeFijo(t)
+		n, ok := p.localDeFijo(r)
 		if !ok {
-			continue
+			return false
 		}
 		destino := p.canonico(n)
-		if destino < 0 || destino > 0xff || destino == t {
-			continue
-		}
-		if p.ocupado(destino) || p.estaEnPila(destino) {
-			continue
+		if destino < 0 || destino > 0xff || destino == r || p.ocupado(destino) {
+			return false
 		}
 		p.palabra(unidad22v(mueveFrom16(kind), destino))
-		p.palabra(uint16(t))
+		p.palabra(uint16(r))
 		p.renom[n] = destino
-		delete(p.fijos, t)
-		delete(p.kindFijo, t)
+		delete(p.fijos, r)
+		delete(p.kindFijo, r)
+		p.libres = append(p.libres, r)
+		return true
+	}
+	if nVeces == 0 {
+		return false
+	}
+	mv := p.pilaMove[pos]
+	if p.pilaAncho[pos] {
+		// un par ancho duplicado necesita mover las dos mitades; se deja para otro paso
+		return false
+	}
+	if mv != opMueve && mv != opMueveObjeto && mv != opMueveWide {
+		return false
+	}
+	t := p.toma(in)
+	if p.err != nil {
+		return false
+	}
+	if t <= 15 {
 		p.libres = append(p.libres, t)
-		return t
+		return false
+	}
+	p.palabra(unidad22v(mueveFrom16(mv), t))
+	p.palabra(uint16(r))
+	// todas las entradas que comparten el registro (un `dup`) pasan al temporal
+	for i, v := range p.enPila {
+		if v == r {
+			p.enPila[i] = t
+			p.pilaMove[i] = mv
+		}
+	}
+	p.libres = append(p.libres, r)
+	return true
+}
+
+// desalojaBajo: el primer local atado de la banda que se pueda liberar, o -1.
+func (p *traduce) desalojaBajo(in jvmInstr, techo int) int {
+	for t := 0; t <= techo; t++ {
+		if p.fijos[t] && p.liberaRegistro(in, t) {
+			return t
+		}
 	}
 	return -1
 }
 
-// desalojaPila: mueve a un temporal alto un valor de la pila que ocupa un registro bajo, con el move
-// que le corresponde, y libera el bajo. Solo desaloja referencias y anchos (los únicos cuyo move está
-// anotado): un entero o un flotante no se toca para no emitir un move de otro tipo.
+// desalojaPila: libera el primer valor de la pila (en un bajo) que tenga move anotado.
 func (p *traduce) desalojaPila(in jvmInstr) bool {
-	for i, r := range p.enPila {
-		if r < 0 || r > 15 {
-			continue
+	for _, r := range p.enPila {
+		if r >= 0 && r <= 15 && p.liberaRegistro(in, r) {
+			return true
 		}
-		mv := p.pilaMove[i]
-		if p.pilaAncho[i] {
-			mv = opMueveWide
-		}
-		if mv != opMueveObjeto && mv != opMueveWide {
-			continue
-		}
-		// si el mismo registro aparece en otra entrada (un dup), mover una afectaría a la otra
-		duplicado := false
-		for j, v := range p.enPila {
-			if j != i && v == r {
-				duplicado = true
-				break
-			}
-		}
-		if duplicado {
-			continue
-		}
-		t := p.toma(in)
-		if p.err != nil {
-			return false
-		}
-		if t <= 15 {
-			p.libres = append(p.libres, t)
-			continue
-		}
-		p.palabra(unidad22v(mueveFrom16(mv), t))
-		p.palabra(uint16(r))
-		p.enPila[i] = t
-		p.libres = append(p.libres, r)
-		return true
 	}
 	return false
 }
@@ -1466,6 +1531,12 @@ func (p *traduce) octeto(r int, in jvmInstr) bool {
 	return true
 }
 
+// cabeNibble y cabeOcteto preguntan si el registro cabe en el formato SIN fallar: la pasada de
+// medida los acepta todos (sus números son provisionales) y solo la final decide. Sirven para elegir
+// entre dos formas (12x o 23x) sin dejar un error puesto.
+func (p *traduce) cabeNibble(r int) bool { return !p.techo || (r >= 0 && r <= 15) }
+func (p *traduce) cabeOcteto(r int) bool { return !p.techo || (r >= 0 && r <= 0xff) }
+
 // unidad11x: op en la mitad baja, registro en la alta. Medido con 0x030f (return v3) y 0x020c
 // (move-result-object v2) de d8.
 func unidad11x(op byte, a int) uint16 {
@@ -1662,16 +1733,35 @@ func (p *traduce) salto16(op byte, destino int, in jvmInstr) {
 }
 
 func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
-	desde := len(p.w)
+	var desde int
 	switch consume {
 	case 2:
 		b := p.pop(in)
 		a := p.pop(in)
-		if !p.nibble(a, in) || !p.nibble(b, in) {
+		// la comparación de dos registros es 22t: los dos van en cuatro bits. Si uno no cabe, se
+		// copia a un temporal bajo antes de la comparación (`if_icmp*` con `move`, `if_acmp*` con
+		// `move-object`); el desplazamiento se mide desde la comparación, no desde las copias.
+		mv := byte(opMueve)
+		if strings.HasPrefix(in.name, "if_acmp") {
+			mv = opMueveObjeto
+		}
+		ua, copiaA := p.aseguraRegistro(in, a, 15, mv, false)
+		if p.err != nil {
 			return
 		}
-		p.palabra(unidad12x(op, a, b))
+		ub, copiaB := p.aseguraRegistro(in, b, 15, mv, false)
+		if p.err != nil {
+			return
+		}
+		desde = len(p.w)
+		p.palabra(unidad12x(op, ua, ub))
 		p.palabra(0)
+		if copiaA {
+			p.suelta(ua)
+		}
+		if copiaB {
+			p.suelta(ub)
+		}
 		p.suelta(a)
 		p.suelta(b)
 	case 1:
@@ -1680,10 +1770,12 @@ func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
 		if !p.octeto(a, in) {
 			return
 		}
+		desde = len(p.w)
 		p.palabra(unidad11x(op, a))
 		p.palabra(0)
 		p.suelta(a)
 	default:
+		desde = len(p.w)
 		p.palabra(uint16(op)) // el goto 10t: la mitad alta queda en blanco hasta el parche
 	}
 	p.abreSalto(desde, len(p.w)-1, destino, consume == 0, in)
@@ -1753,6 +1845,9 @@ func (p *traduce) cuentaEntera(in jvmInstr) {
 		"iand": 0xb5, "ior": 0xb6, "ixor": 0xb7,
 		"ishl": 0xb8, "ishr": 0xb9, "iushr": 0xba}
 	tres := map[string]byte{"iadd": 0x90, "isub": 0x91, "imul": 0x92, "idiv": 0x93, "irem": 0x94,
+		// la forma de tres registros de and/or/xor (0x95-0x97), medidos con `d8`/`dexdump` sobre
+		// `Bits2` con los argumentos altos: `9500 0102`, `9600 090a`, `9700 1112`
+		"iand": 0x95, "ior": 0x96, "ixor": 0x97,
 		// la forma de tres registros para un desplazamiento no conmutativo con el izquierdo vivo
 		"ishl": 0x98, "ishr": 0x99, "iushr": 0x9a}
 	op, ok := dos[in.name]
@@ -1773,29 +1868,46 @@ func (p *traduce) cuentaEntera(in jvmInstr) {
 		return false
 	}
 	switch {
-	case !vivo(a):
-		if !p.nibble(a, in) || !p.nibble(b, in) {
-			return
-		}
+	case !vivo(a) && p.cabeNibble(a) && p.cabeNibble(b):
 		p.palabra(unidad12x(op, a, b))
 		p.push(a)
 		p.suelta(b)
-	case conmuta && !vivo(b):
-		if !p.nibble(b, in) || !p.nibble(a, in) {
-			return
-		}
+	case conmuta && !vivo(b) && p.cabeNibble(b) && p.cabeNibble(a):
 		p.palabra(unidad12x(op, b, a))
 		p.push(b)
 		p.suelta(a)
 	default:
-		r := p.toma(in)
-		if !p.octeto(r, in) || !p.octeto(a, in) || !p.octeto(b, in) {
+		// 23x: tres registros de ocho bits. El destino puede ser el operando muerto (la forma
+		// de tres registros conserva el orden a op b), así que no hace falta un temporal.
+		tresOp, hayTres := tres[in.name]
+		if !hayTres {
+			p.falla(in, "an arithmetic opcode with a high operand and no measured three-register form")
 			return
 		}
-		u1, u2 := unidad23x(tres[in.name], r, a, b)
+		// solo se reutiliza un operando si es un temporal MUERTO: un local que no está en la pila
+		// puede leerse más tarde y pisarlo cambiaría el programa (y las palabras de d8).
+		temporalMuerto := func(r int) bool {
+			return r >= 0 && r < p.base && !p.fijos[r] && !vivo(r)
+		}
+		destino := -1
+		switch {
+		case temporalMuerto(a):
+			destino = a
+		case temporalMuerto(b):
+			destino = b
+		default:
+			destino = p.toma(in)
+			if p.err != nil {
+				return
+			}
+		}
+		if !p.octeto(destino, in) || !p.octeto(a, in) || !p.octeto(b, in) {
+			return
+		}
+		u1, u2 := unidad23x(tresOp, destino, a, b)
 		p.palabra(u1)
 		p.palabra(u2)
-		p.push(r)
+		p.push(destino)
 		p.suelta(a)
 		p.suelta(b)
 	}
@@ -2640,15 +2752,24 @@ func (p *traduce) ldc(in jvmInstr) {
 	if len(in.ops) == 2 {
 		i = int(dexU16(in.ops))
 	}
-	r := p.toma(in)
+	// `const-string`/`const-class` y las constantes grandes nombran el registro en ocho bits; la
+	// forma `const/4` solo se usa si el valor es pequeño y el registro cabe en cuatro (lo decide
+	// `entero`/`palabraFlotante`)
+	r := p.tomaBajo(in, 0xff)
+	if p.err != nil {
+		return
+	}
+	mv := byte(opMueve)
 	switch p.x.tagOf(i) {
 	case cpString:
+		mv = opMueveObjeto
 		s := p.x.stringValue(i)
 		p.palabra(uint16(opConstString) | uint16(r&0xff)<<8)
 		if !p.indice(p.t.stringIdx[s], in, "the string_id of ldc") {
 			return
 		}
 	case cpClass:
+		mv = opMueveObjeto
 		// `String.class` es `ldc` de una CONSTANT_Class y en el dex es `const-class` 0x1c (21c),
 		// medido en `Clase.deCadena` del parrafo 89: `1c00 0700` con el type_id en la segunda unidad.
 		desc := p.x.classDescriptor(i)
@@ -2668,6 +2789,7 @@ func (p *traduce) ldc(in jvmInstr) {
 		return
 	}
 	p.push(r)
+	p.ponMoveCima(mv)
 }
 
 // entero: la misma elección de formato que d8 tomó sobre la sonda — const/4 para el valor chico
@@ -2675,11 +2797,12 @@ func (p *traduce) ldc(in jvmInstr) {
 // con `const/16 v0, 12`) y const/high16 cuando los bits bajos son cero (medido con la id de
 // recurso 0x7f010000 del onCreate). Lo que no cabe en ninguno de los tres se rechaza por nombre.
 func (p *traduce) entero(r int, v int, in jvmInstr) bool {
+	if !p.cabeOcteto(r) {
+		p.falla(in, "a constant register that does not fit eight bits")
+		return false
+	}
 	switch {
-	case v >= -8 && v <= 7:
-		if !p.nibble(r, in) {
-			return false
-		}
+	case v >= -8 && v <= 7 && p.cabeNibble(r):
 		p.palabra(unidad11n(opConst4, r, v))
 	case v >= -32768 && v <= 32767:
 		p.palabra(uint16(opConst16) | uint16(r&0xff)<<8)
@@ -2887,6 +3010,7 @@ func (p *traduce) lambda(in jvmInstr) {
 		p.outs = len(regs)
 	}
 	p.push(r)
+	p.ponMoveCima(opMueveObjeto)
 }
 
 func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
