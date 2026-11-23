@@ -543,8 +543,8 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[3]string]uint32) (
 		prev = p.idx
 		out = putUleb(out, accesoDex(p.f.Access))
 		if len(estaticos) > 0 {
-			vf, bytes := td.valorEstatico(p.f)
-			if vf == 0 {
+			vf, crudo, hay := td.valorEstatico(p.f)
+			if !hay {
 				// El array tiene que traer un elemento por campo estatico, o la cuenta del lector no
 				// cuadra. Que el elemento sea del TIPO del campo lo exige ART: medido en el aparato
 				// (Android 15, `dexdump`, 2026-11-01) con `Lcom/myapp/MainActivity;` y su
@@ -553,12 +553,14 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[3]string]uint32) (
 				// `unexpected static field initial value type: 'L' vs 'I'`. `d8` si escribe la
 				// constante (`01 04 05`: un valor de un byte con el tipo del entero, y el 5), porque
 				// propaga el `<clinit>`; nosotros todavia no, asi que se anuncia un cero del mismo
-				// tipo — el `4` de siempre con los cuatro bytes de siempre, que es la cabecera que
-				// `d8` usa para las `R$id` — y el `<clinit>` lo sobrescribe al correr, que es lo que
-				// habria hecho de todas formas.
+				// tipo y el `<clinit>` lo sobrescribe al correr, que es lo que habria hecho de todas
+				// formas. El cero tambien tiene que ser del tipo del campo: un `static boolean` sin
+				// `ConstantValue` anunciado como `int` es el mismo rechazo ('I' vs 'Z').
 				switch p.f.Desc[0] {
 				case 'I', 'B', 'C', 'S', 'Z':
-					valores = append(valores, byte(valueInt|3<<5), 0, 0, 0, 0)
+					vf, cero := valorEnteroEstatico(p.f.Desc, 0)
+					valores = append(valores, vf)
+					valores = append(valores, cero...)
 				case 'J':
 					// un `static long total = 5L` sin `ConstantValue` es el mismo caso del parrafo 55
 					// con un entero: el elemento tiene que ser del tipo del campo, o ART corta con
@@ -581,7 +583,7 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[3]string]uint32) (
 				continue
 			}
 			valores = append(valores, vf)
-			valores = append(valores, bytes...)
+			valores = append(valores, crudo...)
 		}
 	}
 	prev = 0
@@ -605,44 +607,90 @@ func (td *dexTables) classDataDe(cf classFull, absCodigo map[[3]string]uint32) (
 	return out, valores
 }
 
-// valorEstatico: el encoded_value de una constante de campo, o tipo cero si no la lleva. El byte
-// pone el tipo en los bits 0..4 y el tamaño menos uno en los 5..7; después van los bytes del valor,
-// poco a poco y truncados. Es el inverso de lo que lee anchoValor.
-func (td *dexTables) valorEstatico(f classField) (byte, []byte) {
+// valorEstatico: el encoded_value de una constante de campo. El byte pone el tipo en los bits 0..4
+// y el tamaño menos uno en los 5..7; después van los bytes del valor, poco a poco y truncados. Es
+// el inverso de lo que lee anchoValor. El tercer valor dice si el campo lleva constante: no se
+// puede usar el byte de tipo como centinela porque `VALUE_BYTE` vale 0x00, que es un tipo válido.
+func (td *dexTables) valorEstatico(f classField) (vf byte, crudo []byte, hay bool) {
 	switch f.ConstTag {
 	case cpInteger:
-		n := uint32(uint32(f.ConstInt))
-		return byte(valueInt | 3<<5), []byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)}
+		// javac da la constante de un `boolean`, `char`, `byte` o `short` como un entero; el
+		// `encoded_value` tiene que llevar el tipo del descriptor del campo, no `int`.
+		vf, crudo = valorEnteroEstatico(f.Desc, f.ConstInt)
+		return vf, crudo, true
 	case cpLong:
 		n := uint64(f.ConstLong)
 		b := make([]byte, 0, 8)
 		for k := 0; k < 8; k++ {
 			b = append(b, byte(n>>(8*k)))
 		}
-		return byte(valueLong | 7<<5), b
+		return byte(valueLong | 7<<5), b, true
 	case cpString:
 		idx, ok := td.stringIdx[f.ConstStr]
 		if !ok {
-			return 0, nil
+			return 0, nil, false
 		}
 		// el índice va en los `ancho+1` bytes little-endian que dice la cabecera, como el resto de
 		// `encoded_value` (no es un uleb: con un índice de más de 127 el uleb se leía como un número
 		// distinto —`Bad index for encoded_value string`—). Es la misma codificación que usan las
 		// anotaciones (`codificaBytes`).
 		b := codificaBytes(nil, valueString, anchuraIndice(uint32(idx)), int64(idx))
-		return b[0], b[1:]
+		return b[0], b[1:], true
 	case cpFloat:
 		n := uint32(f.ConstInt)
-		return byte(valueFloat | 3<<5), []byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)}
+		return byte(valueFloat | 3<<5), []byte{byte(n), byte(n >> 8), byte(n >> 16), byte(n >> 24)}, true
 	case cpDouble:
 		n := uint64(f.ConstLong)
 		b := make([]byte, 0, 8)
 		for k := 0; k < 8; k++ {
 			b = append(b, byte(n>>(8*k)))
 		}
-		return byte(valueDouble | 7<<5), b
+		return byte(valueDouble | 7<<5), b, true
 	}
-	return 0, nil
+	return 0, nil, false
+}
+
+// valorEnteroEstatico: el encoded_value de una constante entera con el tipo que pide el descriptor
+// del campo. ART comprueba `class_defs.static_values_off` al cargar el fichero y rechaza el dex
+// entero si el valor no tiene el tipo del campo (`unexpected static field initial value type`),
+// y `dexdump` no lo comprueba. Las formas están medidas con `d8` sobre una clase con un
+// `static final` de cada tipo y leídas con el mismo lector que abre `static_values_off`:
+//
+//	Z  valor 0 o 1 en los bits 5..7, sin bytes: `1f` falso y `3f` verdadero
+//	C  `03` con el ancho mínimo sin signo: 0 → `03 00`, 57 → `03 39`, 65535 → `23 ff ff`
+//	B  `00` con un byte: 0 → `00 00`, -128 → `00 80`
+//	S  `02` con el ancho mínimo con signo: -1 → `02 ff`, 32767 → `22 ff 7f`
+//	I  `04` con el ancho mínimo con signo: 0 → `04 00`, -1 → `04 ff`, 0x80000000 → `64 00 00 00 80`
+//
+// `d8` escribe el ancho mínimo también en el caso sin `ConstantValue` (propaga el `<clinit>`); el
+// cero de esa rama lo emite esta misma función.
+func valorEnteroEstatico(desc string, n int32) (byte, []byte) {
+	tipo := byte('I')
+	if desc != "" {
+		tipo = desc[0]
+	}
+	switch tipo {
+	case 'Z':
+		// VALUE_BOOLEAN no lleva bytes: el valor vive en el campo del tamaño.
+		bit := uint32(0)
+		if n != 0 {
+			bit = 1
+		}
+		return byte(valueBool | bit<<5), nil
+	case 'B':
+		// VALUE_BYTE siempre ocupa un byte y el campo del tamaño va a cero.
+		return byte(valueByte), []byte{byte(n)}
+	case 'S':
+		b := codificaBytes(nil, valueShort, anchuraEntero(int64(int16(n))), int64(int16(n)))
+		return b[0], b[1:]
+	case 'C':
+		// `char` es un entero de 16 bits sin signo: el ancho no se signa.
+		v := uint32(n) & 0xffff
+		b := codificaBytes(nil, valueChar, anchuraIndice(v), int64(v))
+		return b[0], b[1:]
+	}
+	b := codificaBytes(nil, valueInt, anchuraEntero(int64(n)), int64(n))
+	return b[0], b[1:]
 }
 
 // accesoDex pasa los flags del .class a los del dex. Los once primeros valores coinciden en las dos

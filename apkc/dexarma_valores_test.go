@@ -14,7 +14,10 @@ import (
 // o `2c 81 02`…), que es lo que dexdump leía como otro índice.
 func TestDexLaCadenaEstaticaVaEnBytesLittleEndian(t *testing.T) {
 	td := &dexTables{stringIdx: map[string]int{"hola": 300}, strings: make([]string, 301)}
-	vf, b := td.valorEstatico(classField{ConstTag: cpString, ConstStr: "hola"})
+	vf, b, hay := td.valorEstatico(classField{ConstTag: cpString, ConstStr: "hola"})
+	if !hay {
+		t.Fatal("la cadena estática no se escribió")
+	}
 	if vf != byte(valueString|1<<5) {
 		t.Errorf("cabecera %#02x, esperaba %#02x", vf, byte(valueString|1<<5))
 	}

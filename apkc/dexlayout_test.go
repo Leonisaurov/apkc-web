@@ -176,6 +176,9 @@ func verificaLayout(t *testing.T, b []byte, deDonde string) {
 	// 4. el encoded_value de cada campo estático tiene que ser del tipo del campo:
 	// `unexpected static field initial value type: 'L' vs 'I'`, medido en el aparato sobre
 	// `static int total = 5`, que en el .class no lleva ConstantValue y anunciábamos con 0x1e.
+	// El array se recorre con su propio cursor desde `static_values_off`; los índices, con el del
+	// class_data. Mezclarlos (leer el valor en la posición del class_data) dejaba la comprobación
+	// ciega: leía el byte de tipo como delta y el valor como tipo.
 	nClases, fila := int(a.u32(96)), int(a.u32(100))
 	for i := 0; i < nClases; i++ {
 		cdo, sv := int(a.u32(fila+i*32+24)), int(a.u32(fila+i*32+28))
@@ -186,8 +189,7 @@ func verificaLayout(t *testing.T, b []byte, deDonde string) {
 		_, at = a.uleb(at) // ins
 		_, at = a.uleb(at) // dir
 		_, at = a.uleb(at) // vir
-		nArray, desdeArray := a.uleb(sv)
-		at = desdeArray
+		nArray, valor := a.uleb(sv)
 		prev := uint32(0)
 		leídos := uint32(0)
 		for k := uint32(0); k < est; k++ {
@@ -200,13 +202,18 @@ func verificaLayout(t *testing.T, b []byte, deDonde string) {
 					i, est-leídos))
 				break
 			}
-			vt, siguiente := a.uleb(at)
-			ancho := anchoValor(byte(vt))
+			if int(valor) >= len(a.b) {
+				fallas = append(fallas, fmt.Sprintf("clase %d: el array de estáticos se sale del fichero", i))
+				break
+			}
+			// el byte de tipo va sin uleb: un ancho de siete (`e6`) se leería como dos bytes
+			vt := a.b[valor]
+			ancho := anchoValor(vt)
 			if ancho < 0 {
 				fallas = append(fallas, fmt.Sprintf("clase %d: encoded_value de tipo %d que nadie midió", i, vt&0x1f))
 				break
 			}
-			at = siguiente + ancho
+			valor += 1 + ancho
 			leídos++
 			desc := "?"
 			if int(prev) < int(a.u32(80)) {
