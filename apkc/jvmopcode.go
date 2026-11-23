@@ -77,6 +77,15 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x7e: {"iand", 0},
 	0x80: {"ior", 0},
 	0x82: {"ixor", 0},
+	// las negaciones unarias, medidas con `javac` y `javap` sobre una sonda con las cuatro: `javap -c` las pone
+	// en el pc 1 de `ni`, `nl`, `nf` y `nd`, y el byte del `.class` es 0x74 `ineg`, 0x75 `lneg`,
+	// 0x76 `fneg` y 0x77 `dneg`, un byte y ningun operando. El 0x76 que destapo el
+	// `android-support-v4.jar` es este `fneg` del JVMS; el `invoke-direct/range` de DEX lleva el
+	// mismo numero en OTRA tabla y no se camina aqui.
+	0x74: {"ineg", 0},
+	0x75: {"lneg", 0},
+	0x76: {"fneg", 0},
+	0x77: {"dneg", 0},
 	// `iinc` (parrafo 67): index de local y constante de un byte con signo, medido en `Inc`
 	// (`iinc 1, 1` y `iinc 1, -1`)
 	0x84: {"iinc", 2},

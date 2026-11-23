@@ -445,6 +445,63 @@ func (p *traduce) cuentaAncha(in jvmInstr) {
 	}
 }
 
+// negacion: `ineg`, `lneg`, `fneg` y `dneg` (0x74-0x77 del JVMS; medidos con `javac`, `d8` y
+// `dexdump` sobre una sonda de los cuatro anchos, sin tocar `docs/`). Cada uno es un
+// solo operando y sale en la forma 12x de DEX —`neg-int` 0x7b, `neg-long` 0x7d, `neg-float` 0x7f y
+// `neg-double` 0x80, con el destino en el nibble bajo y la fuente en el alto—. Medido con `d8` y
+// `dexdump` sobre `Neg.ni/nl/nf/nd`: los cuatro salen `7b00`, `7d00`, `7f00` y `8000`, o sea
+// `neg-* v0, v0`, negando en el sitio del operando porque muere aquí. Si la fuente sigue viva por un
+// `dup` se escribe en un temporal; un valor ancho viaja como par consecutivo y se suelta con
+// `sueltaPar`, igual que en las cuentas.
+func (p *traduce) negacion(in jvmInstr) {
+	especificacion, ok := map[string]struct {
+		op    byte
+		ancho bool
+	}{
+		"ineg": {0x7b, false}, "lneg": {0x7d, true},
+		"fneg": {0x7f, false}, "dneg": {0x80, true},
+	}[in.name]
+	if !ok {
+		p.falla(in, "a negation this translator does not know")
+		return
+	}
+	a := p.pop(in)
+	if p.err != nil {
+		return
+	}
+	vivo := func(r int) bool {
+		for _, v := range p.enPila {
+			if v == r || (especificacion.ancho && v+1 == r) {
+				return true
+			}
+		}
+		return false
+	}
+	destino := a // en su sitio: pop ya lo sacó de la pila y nadie más lo nombra
+	if vivo(a) {
+		if especificacion.ancho {
+			destino = p.tomaPar(in)
+		} else {
+			destino = p.toma(in)
+		}
+		if p.err != nil {
+			return
+		}
+	}
+	if !p.nibble(destino, in) || !p.nibble(a, in) {
+		return
+	}
+	p.palabra(unidad12x(especificacion.op, destino, a))
+	p.push(destino)
+	if destino != a {
+		if especificacion.ancho {
+			p.sueltaPar(a)
+		} else {
+			p.suelta(a)
+		}
+	}
+}
+
 // comparaAncha: `lcmp`, `fcmpl`, `fcmpg`, `dcmpl` y `dcmpg` (párrafo 81). Consume las dos parejas
 // —el largo o el flotante de cada lado— y deja el entero -1/0/1 en un temporal suelto, porque los
 // dos operandos pueden seguir vivos por un `dup`. La rama que lo consume es la `if-*z` de siempre.
@@ -1647,6 +1704,8 @@ func (p *traduce) recorre() error {
 			"fadd", "fsub", "fmul", "fdiv", "frem",
 			"dadd", "dsub", "dmul", "ddiv", "drem":
 			p.cuentaAncha(in)
+		case "ineg", "lneg", "fneg", "dneg":
+			p.negacion(in)
 		case "lcmp", "fcmpl", "fcmpg", "dcmpl", "dcmpg":
 			p.comparaAncha(in)
 		case "lconst_0", "lconst_1":
