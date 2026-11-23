@@ -9580,3 +9580,42 @@ el botón neutro la hace fallar.
 **Fronteras de este `§`.** (1) Diálogos del sistema, `DialogFragment` con `FragmentManager`, menús
 contextuales y notificaciones del sistema quedan fuera. (2) No se corrió el gate ni chromium, y el
 sitio publicado no se ha empaquetado con `969b045`.
+
+## 212. E6: reloj lógico, cerrado con la aprobación de la ronda 3
+
+Medido el 2026-11-22 sobre `35d5f79` (`fix(preview): desbordamiento en difiere y reloj coherente
+con los pasos`); `apkc/` no cambió entre ese commit y `6243d9d`, que solo mueve el puntero de
+`studio/`. El crítico `ses_df9bd547cffefBHTZrtCZdEv1i` dio **APROBAR** en la ronda 3.
+
+**Causa raíz.** Los defectos de E6 eran aritmética y estado derivado sin función total: dos sumas
+de reloj sin guardia y un presupuesto de pasos global que cortaba la cola y publicaba un destino
+que no se había ejecutado. Se corrigió con la guardia de desbordamiento en `difiere`
+(`apkc/previewinterprete.go:674-684`), el presupuesto por tarea (`pasosBase`, `:654`, con el
+límite en `:2458-2461`) y el corte solo cuando hay una tarea vencida (`vence:648`). Las dos únicas
+sumas de reloj (`avanza:604-607` y `difiere:678`) tienen guardia; las demás son asignaciones.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElRelojNoDesbordaEnDifiere|TestElRelojNoMienteAlAgotarPasos|TestElRelojNoDesborda|TestElRelojAvanzaSinTruncar|TestElRetrasoNegativoNoRetrocedeElReloj|TestElTextoNoSeCongelaAlLlegarAlTopeDeCapturas|TestElPreviewEntregaElWhichDeCadaBotonDelDialogo|TestElPreviewMuestraUnDialogoPropio|TestElGuionDeEntradaNoTieneTope|TestElPreviewConservaElEstadoAlRecrear|TestElInterpreteDecodificaCuentasRamasArreglosYAnchos|TestElPreviewNoTieneTopeDeClics|TestElPreviewPintaUnaListaConSuAdaptador|TestElPreviewAvanzaElRelojLogico|TestElGuionDelPreviewConservaElOrden|TestElColorRGB8DeAapt2SeLeeComoColor' -v .
+```
+
+**Resultado**: las 16 pruebas `PASS`, `ok github.com/ajinasokan/apkc 1.174s`. Las tres sondas de la
+ronda 3, ejecutadas como pruebas temporales y borradas después, dieron:
+
+| sonda | entrada | salida |
+| --- | --- | --- |
+| desbordamiento en `difiere` | `postDelayed(MaxInt64)` desde un clic con `reloj=100` | total vacío, `reloj=100`, `tareas=0` y aviso «no cabe» |
+| avance largo sin truncar | 100 000 tics, `--avanzar 100000000` | `Tic: 100000`, `reloj=100000000`, `tareas=100000`, sin aviso |
+| variante con `AsyncTask` de arranque | `apkDelReloj`, `--avanzar 100000000` | `Tic: 99999`, `reloj=99999000`, aviso de corte: el reloj coincide con el último tic ejecutado y no miente |
+
+Los dos hallazgos de la ronda 2 quedan **CERRADOS** con esas salidas. El crítico enumeró las dos
+sumas de reloj y revisó `pasosBase` y el estado compartido por navegación y recreación: **no hay un
+tercer defecto `CONFIRMADO`**. Dejó dos observaciones no bloqueantes: tras un corte, un `--avanzar`
+posterior mueve el reloj al destino aunque la cola no se drene (con el aviso ya presente), y el
+código que corre fuera de tareas conserva un `pasosBase` antiguo, comportamiento previo a este
+commit.
+
+**Fronteras de este `§`.** (1) No se corrió el gate, chromium ni la suite completa. (2) Las tres
+sondas eran pruebas temporales y no viven en el árbol; lo permanente son las pruebas de reloj del
+bloque. (3) No hay medición en aparato: el reloj es lógico. (4) El sitio publicado no se ha
+empaquetado con `35d5f79`.

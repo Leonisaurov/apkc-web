@@ -88,18 +88,24 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - E5 **cerrada** como `2dd70c8` (cherry-pick de `993d51b`, 21 conflictos resueltos): crítico
   `ses_df9c6f81effeRKtmnqwkLjBU4s` en **APROBAR CON CONDICIONES**, cumplida por el builder de E6 en
   `88d9b38` (diez tests juntos y paquete completo en verde). Evidencia: §210.
-- E6 **integrado** como `88d9b38`, con diez tests enfocados y el paquete completo en verde, **en
-  verificación**: su crítico `ses_df9bd547cffefBHTZrtCZdEv1i` aún no ha dictaminado.
+- E6 **cerrada** como `35d5f79`: 16 pruebas de regresión en verde (`ok … 1.174s`) y crítico
+  `ses_df9bd547cffefBHTZrtCZdEv1i` en **APROBAR** en la ronda 3, sin defectos `CONFIRMADO`.
+  Evidencia: §212.
 - E7 **cerrada**: lógica aprobada por `ses_df9d13306ffehyseNhLIqoaYfh`, `usage` corregido en
   `2dd70c8` y `which` verificado en `969b045` por el QA `ses_df9c1482fffeKi6lTSOz6CBbk0`.
   Evidencia: §211.
-- La vista previa se reconstruyó con E6, E5 e I3 (`sha256 e9a85261…`), verificada contra el
+- La vista previa actual se reconstruyó con E6, E5 e I3 (`sha256 3d7be562…`), verificada contra el
   `/apkc.wasm` servido con `curl`.
-- I3 **integrada** como `d3803bb` (cherry-pick de `3b7f4e3` del worktree `inc-i3`), **en
-  verificación**: el crítico `ses_df9baefaeffemtyU4YC0gXywOR` está en curso. I4 e I5 siguen
-  pendientes. Detalle en `docs/plan-incremental-web.md`.
+- I3 **cerrada** como `d3803bb` tras el **APROBAR** de `ses_df9baefaeffemtyU4YC0gXywOR`; la pregunta
+  abierta del classpath queda adscrita a I5, que sigue pendiente con I4. Detalle en
+  `docs/plan-incremental-web.md`.
 - La interfaz del emulador está **integrada** como `0b6dc83` (puntero del submódulo) y verificada
   en la pestaña con CDP: los ids nuevos están presentes y no hay excepciones.
-- **Activas:** E6, pendiente del crítico.
+- **Editor auditado:** `e121270` en el submódulo (cherry-pick de `e600a66`), puntero `6243d9d`;
+  F1, C1-C4 y F2 cerrados, F5 sigue `INCIERTO`. `node --check` sin salida y `prueba.js` en
+  `todo en orden`.
+- **Pendiente de gate:** la carrera real con DOM y worker (F1/F5) y los dos puntos `INCIERTO` de la
+  interfaz (ruta OPFS de `/sdk/ultimo.apk` y arrastre del inspector tras apagar y encender).
+- **Activas:** ninguna de emulación; queda el gate final, **no ejecutado**, con `PREFIX` y puertos
+  únicos.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
-- Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.

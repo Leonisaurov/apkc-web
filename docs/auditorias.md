@@ -11,36 +11,37 @@ hecho por analogía (regla 11).
 
 ### 1.1 Integridad de datos del editor
 
-- **F1, carrera de pestañas.** `activarDocumento()` fija `DOCUMENTOS.activa` y `estadoPestana.ruta`
-  en `pestana.js:1108-1109`, antes de leer OPFS (`:1121`) y antes de `EDITOR.poner()` (`:1144`).
-  `guardar()` toma la ruta de `documentoActivo()` y el contenido de `EDITOR.texto()` (`:1706`,
-  `:1716`). El velo de `conCarga` es solo un `<div hidden>` (`consola.js:85-94`) y el `Ctrl+S` global
-  no tiene guardia de carga (`pestana.js:3089-3092`); `hospedador.js:264-269` mete `leer` en `enCola`,
-  así que la ventana dura todo un build. Un usuario normal puede escribir el buffer del fichero
-  anterior en el fichero nuevo. **El veto de manifiesto no cierra esta carrera**: solo cubre
-  layout→manifiesto; si el buffer pegado es otro manifiesto válido, pasa.
-- **F2.** `guardarAjustes` (`ajustes.js:38-55`) lee el manifiesto de OPFS, lo reescribe y marca
-  `doc.sucio=false`, pisando cambios sin guardar del buffer.
+- **F1, carrera de pestañas. CERRADA en `e121270` (submódulo; puntero `6243d9d`).** La causa era
+  que `activarDocumento()` fijaba `DOCUMENTOS.activa` y `estadoPestana.ruta` antes de leer OPFS y
+  de `EDITOR.poner()`, y `guardar()` no tenía guardia de carga. Ahora `cargandoDocumento` se activa
+  con `try/finally` y `guardar()` se bloquea antes del primer `await`, así que no puede escribir el
+  buffer del fichero anterior en el nuevo. La prueba F1 de `prueba.js` lo cubre; romper el
+  `if (cargandoDocumento)` la hizo fallar y restaurarlo la devolvió a verde. La carrera real con
+  DOM y worker queda para el gate con navegador.
+- **F2. CERRADO en `e121270`.** `guardarAjustes` aplica sobre el buffer del manifiesto, no sobre una
+  lectura de OPFS que pisaba los cambios sin guardar.
 - **F4.** `importarProyecto` (`pestana.js:509`) ignora `borradoDelDisco` (`fs-fragmento.js:546`):
   si otra pestaña tiene un handle abierto, el borrado falla y el zip se mezcla con el árbol viejo.
   Tampoco hay rollback si se agota la cuota a mitad de la escritura.
 - **TOCTOU.** La revisión se lee y se confirma fuera de `conBloqueo` (`pestana.js:1707-1719`).
 - **Escrituras sin `conBloqueo`:** jar (`:2476`, `:2535`), deps (`deps.js:130,139`) e imagen del
   drawable (`previa-panel.js:2096`). La generación de clave sí pasa por lock (`:2237`).
-- **F5 (INCIERTO):** teclear durante la ventana de carga marca sucio el doc nuevo con `texto=null`
-  y la lectura posterior descarta lo tecleado.
+- **F5 (INCIERTO).** Teclear durante la ventana de carga marca sucio el doc nuevo con `texto=null`
+  y la lectura posterior descarta lo tecleado. No se cerró con `e121270`; sigue `INCIERTO`.
+- **Frontera de gate.** La carrera real con DOM y worker (F1 y F5) no se puede reproducir en
+  `prueba.js`; queda para el gate con navegador, igual que los dos puntos `INCIERTO` de la
+  interfaz.
 
 ### 1.2 Compilación y panel de resultado
 
-- **C1.** Si `guardarParaCompilar` falla o fallan jar/keystore, `compilarCon` (`pestana.js:2651-2652`)
-  sale sin tocar `#ultimo-codigo`: queda el `0` anterior y no hay línea en consola.
-- **C2.** Tras build bueno, `#ultimo-codigo` muestra el código de `verify` (`:2674`, `:2731`). El
-  botón `#verificar-apk` (`:3038`) puede dejar un `0` en pantalla sobre un apk viejo.
-  `prueba-pestana.js:4994` compara contra el verify, no contra el build.
-- **C3.** `Ctrl+Enter` (`:3101`) → `ejecutarUltimo` (`:1902`) → `correr(ULTIMO.argv)` se salta
-  `guardarParaCompilar` cuando el último argv es un `build` fallido.
-- **C4.** La contraseña de release queda en `ULTIMO.argv` (`:1920`); `redactarArgv` (`:1908`) solo
-  cubre lo pintado.
+- **C1. CERRADO en `e121270`.** Cuando falla `guardarParaCompilar`, el jar o el keystore, el panel
+  muestra `no compilé` y deja la línea en consola, en vez de conservar el `0` anterior.
+- **C2. CERRADO en `e121270`.** El `verify` interno ya no pisa `#ultimo-codigo`
+  (`{recordar:false}`); el panel distingue el código del build del de la verificación.
+- **C3. CERRADO en `e121270`.** `Ctrl+Enter` guarda los sucios y repite el build por
+  `compilarDebug`/`compilarDelTodo`, sin reutilizar un argv de un build fallido.
+- **C4. CERRADO en `e121270`.** `ULTIMO.argv = redactarArgv(argv)` y `ULTIMO.secreto`, con redacción
+  también de los valores que empiezan por `-`; la contraseña de release no queda en el argv crudo.
 - **C5.** **I3 no existe en el código de este árbol.** `grep -rn 'clasesAlDia\|classRosterSHA' apkc/`
   no da resultados; solo aparecen en `docs/plan-incremental-web.md:248,250,256`.
   `apkc/compilar.go:152` dice «No hay incremental aqui…»; `escribirClases` (`compilar.go:87-98`)
@@ -120,10 +121,12 @@ en su worktree con tres casos nuevos en `prueba.js`.
 
 1. El builder: corregir el falso positivo de `pareceManifiesto` y aceptar zips de GitHub con una
    carpeta raíz única; después integrar + gate + `critico`.
-2. Cerrar F1: mover `DOCUMENTOS.activa`/`estadoPestana.ruta` a después de `EDITOR.poner`, o impedir
-   `guardar()` mientras la pestaña esté cargando; probar la carrera en `prueba-pestana.js`.
-3. Que `#ultimo-codigo` distinga build / verify / «no compilé» (C1, C2) y que Ctrl+Enter guarde
-   sucios (C3). Limpiar `--storepass` de `ULTIMO.argv` (C4).
+2. **F1 cerrada** en `e121270`: `cargandoDocumento` con `try/finally` y `guardar()` bloqueado antes
+   del primer `await`; la prueba de F1 en `prueba.js` se falsificó y quedó verde. La carrera real
+   con DOM y worker queda para el gate con navegador.
+3. **C1-C4 cerrados** en `e121270`: `no compilé` cuando falla guardado/jar/keystore, `verify` sin
+   pisar `#ultimo-codigo`, `Ctrl+Enter` que guarda sucios y repite build, y `ULTIMO.argv` redactado
+   con `ULTIMO.secreto`.
 4. Regenerar el sitio servido con `tools/entorno.sh sitio` y subir la versión del SW para que el
    navegador del usuario vea el código actual; publicar solo si el usuario lo pide.
 5. E1.1 **cerrada** en `def0b85`: arreglo 3.1, precedencia de oyentes (3.2), siembra de textos
@@ -136,6 +139,13 @@ en su worktree con tres casos nuevos en `prueba.js`.
 
 ## 4. Estado verificado
 
+- **Editor:** `e121270` en el submódulo (cherry-pick de `e600a66` del worktree `editor-auditoria`),
+  puntero `6243d9d` en la raíz. `node --check` de `pestana.js`, `ajustes.js` y `prueba.js` sin
+  salida; `node prueba.js` → `prueba: todo en orden`, rc=0. Falsificación de F1: romper
+  `if (cargandoDocumento)` hizo fallar la prueba y restaurarlo la devolvió a verde.
+- **Interfaz del emulador:** el crítico aprobó `fe4771e`/`0b6dc83` sin hallazgos confirmados; dos
+  puntos quedan `INCIERTO` para el gate con navegador: que `apkc preview /sdk/ultimo.apk` acepte la
+  ruta OPFS y que el arrastre del inspector no desalinee clics tras apagar y encender.
 - Red de seguridad del manifiesto integrada: submódulo `70433f1`, puntero `7f2fae6`; gate sobre el
   árbol integrado con `PREFIX`/`GOTMPDIR` en disco: `pestaña: 223 comprobaciones`, `e2e: todo en orden`.
 - Reglas de tmpfs y limpieza: commits `7b61cf7`, `6a24066`, `6ad5aac`, todos sobre el `AGENTS.md`

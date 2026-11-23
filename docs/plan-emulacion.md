@@ -3,9 +3,9 @@
 **Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
 medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E3 y E4 están
 **cerradas** en §207 y §208; E2 está **cerrada** en §209; E5 y E7 están **cerradas** en §210 y
-§211; E6 está **integrada y en verificación**. Este fichero es un plan, no evidencia: lo que aquí
-se afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que se
-comprobará.
+§211; E6 está **cerrada** en §212: todas las fases del plan están cerradas. Este fichero es un
+plan, no evidencia: lo que aquí se afirme sobre coste, compatibilidad o formato es una hipótesis y
+lleva el comando con el que se comprobará.
 Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla de `docs/plan.md`
 cuando la fase se cierre.
 
@@ -259,11 +259,11 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
   `cd apkc && APKC_ANDROID_JAR=<jar> go test -run TestElPreviewEscribeYMarcaLoQueSeLePide -v .`.
 - **Abandona.** Teclado en pantalla, IME, selección, autocompletado, arrastrar texto y portapapeles.
 
-### E6. Hilos y temporizadores controlados — **EN VERIFICACIÓN**
+### E6. Hilos y temporizadores controlados — **CERRADA**
 
-- **Estado: integrado en `88d9b38`, en verificación.** Diez tests enfocados en verde y el paquete
-  completo en verde, pero el crítico `ses_df9bd547cffefBHTZrtCZdEv1i` aún no ha dictaminado. Su
-  evidencia se escribirá cuando lo haga; aquí no hay `§` todavía.
+- **Estado: cerrada** el 2026-11-22 como `35d5f79`, con las 16 pruebas de regresión en verde
+  (`ok … 1.174s`) y el crítico `ses_df9bd547cffefBHTZrtCZdEv1i` en **APROBAR** en la ronda 3, sin
+  defectos `CONFIRMADO`. Evidencia, causa raíz y sondas: §212 de `docs/evidencia.md`.
 - **Objetivo.** Ver un contador o una animación simple sin depender del reloj real: el mismo
   resultado en cada ejecución.
 - **Qué se emula.** `Handler.post`/`postDelayed`, `View.post`/`postDelayed`, `runOnUiThread` y
