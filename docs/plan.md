@@ -789,6 +789,8 @@ publicado, que pasó a 10/10 por HTTP/2 (§196 y §198), aunque la causa del tru
 del entorno. Siguen abiertos: jobs `art` y `safari` informativos en CI; el hash de `wasm_exec.js` sin
 fijar (el nombre de la política de Trusted Types se fijó en `d5efe3d`: la CSP del sitio la nombra y
 `sitio.sh` falla si falta, documentado en §237); dos advisories del detector de interfaz
-(0 warnings); la UI del hot swap del intérprete (§238); los puntos de unión y `"" + x` de §236; y el
-SourceStamp truncado y `verify` con `ReadAll` de §237. La firma con linaje y SourceStamp de
-§181/§185 está cerrada.
+(0 warnings); la UI del hot swap del intérprete (§238), con sus condiciones de nuclearidad, JSON y pools
+cerradas en `028bd0e`; y las Actions por tag de los workflows, pendientes de red
+(`.github/workflows/ENDURECER.md`). Cerrados después: los puntos de unión y `"" + x`
+(`eb680b3`/`2940e86`, §240), y el SourceStamp truncado, `verify` con `ReadAll` y los `ruta+".tmp"`
+restantes (`a9043db`, sin `§` propio). La firma con linaje y SourceStamp de §181/§185 está cerrada.

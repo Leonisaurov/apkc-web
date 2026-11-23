@@ -10427,6 +10427,9 @@ ausencia de log. La suite completa dio `ok … 83.959s`.
 **Fronteras de este `§`.** Los puntos de unión —el ternario y el booleano de comparación— y `"" + x`
 siguen sin medirse. No se tocó red ni publicación.
 
+**Actualizado en §240**: los puntos de unión y la hipótesis de `"" + x` quedaron cerrados por
+`eb680b3`/`2940e86`.
+
 ## 237. Inyección de shell y «zip bombs»: los dos arreglos de seguridad
 
 Medido el 2026-11-23 sobre `18af2ae` (`fix(apkc): valida package y actividad antes de adb shell`). El
@@ -10490,9 +10493,9 @@ predecible**: `apkc/paquetetemporal.go:20` lo crea con `os.CreateTemp` junto al 
 `os.Create(ruta+".tmp")` deja el enlace plantado y escribe en la víctima; y volver a `pass:` devuelve la
 contraseña a la línea de órdenes.
 
-**Sigue abierto.** El SourceStamp truncado, `verify` con `ReadAll`, las Actions por tag y los otros
-`ruta+".tmp"` que quedan en `gopackage.go`, `aab.go`, `aab_go.go` y `build.go`; si otro agente cierra esa
-última cola, se anotará aquí con su medición.
+**Sigue abierto.** Las Actions por tag, pendientes de red (`.github/workflows/ENDURECER.md`). Lo demás de
+esta lista se cerró después en `a9043db`: el SourceStamp truncado, `verify` con `ReadAll` y los otros
+`ruta+".tmp"` de `gopackage.go`, `aab.go`, `aab_go.go` y `build.go`, con sus tests.
 
 ## 238. Hot swap en el intérprete: identidad, estado y despacho
 
@@ -10594,9 +10597,12 @@ y sus unidades.
 de HEAD en cuatro tipos: el síntoma era el mismo valor equivocado del punto de unión, y lo cerró esta
 misma primitiva.
 
-**Fronteras de este `§`.** Una cabecera de bucle sin borde conocido y con la pila no vacía queda como
-estaba (javac no la emite) y ahora es autoconsistente. No se corrió gate, chromium, red ni publicación;
-**el gate de `§230` es anterior a este arreglo y no lo cubre**.
+**Fronteras de este `§`.** Un borde de vuelta que llega a la cabecera de un bucle con **otra altura de
+pila** no cambia el plan de registros —no hay registro que inventar ni que tirar sin una instrucción—:
+`2940e86` deja de abortar con «stacks of different height» y lo anota como `fronteraUnion` con su
+mensaje, en las dos direcciones; el `istore` de la cabecera se funde con el registro del `const/4` y el
+bucle sale bien en ART (`new Punto(1,2).hashCode()` da 33). No se corrió gate, chromium, red ni
+publicación; **el gate de `§230` es anterior a este arreglo y no lo cubre**.
 
 ## 241. ApkShare desde el zip: diamante, `for` con dos puntos y comodines
 
