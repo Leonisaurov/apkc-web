@@ -243,6 +243,12 @@ Proxy y Wisp siguen descartados.
 - Fase J **cerrada**: clases aprobadas en nativo (`5bc1e8c`/`8d6ee67`), importador aprobado
   (`be7b417`/`66c35ab`), fixture aprobado (`8d99e52`/`aee59d4`) y dex en Go aprobado
   (`3bc6c52`/`e84a64f`).
+- **J-bis, reabierta el 2026-11-23 por evidencia real**: con `jar/android-support-v4.jar`, la pestaña
+  dexea el bucket y falla en `ActionBarDrawerToggle$SlideDrawable` con `byte 0x76: opcode outside the
+  table this fork measured`. `0x76` es `invoke-direct/range`, no medido por el traductor. El cierre con
+  fixtures era válido para lo medido, pero no para ese jar real; queda en curso con un agente
+  específico (`dex-opcode76`) que añadirá la familia `/range` que falte y su prueba. Hasta que pase,
+  la Fase J no se da por terminada frente a dependencias reales.
 - No medido / trabajo aparte: un `classes.dex` por bucket, sin partir a las 65 536 referencias de
   método; `invokedynamic` no medido.
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
