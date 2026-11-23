@@ -76,9 +76,17 @@ hecho por analogía (regla 11).
   encadenaba pantallas sin fin ahora avisa y deja delante la última que arrancó. Matiz del crítico:
   los tests aseveran contra las constantes, no contra el literal 32. Las citas de línea son las de
   `def0b85`.
-- **3.5. SUPERADO por §213.** La limitación era que `try`/`catch` en `onCreate` mataba la ejecución
-  entera (`:1044-1046`, `:614-622`). El intérprete ya ejecuta la tabla de excepciones del dex
-  (§213), así que esta limitación histórica no describe el árbol actual.
+- **3.5. CERRADO en `3bbd313` (APROBAR de `ses_df93095c5ffeyRt8kl6K1MhO3T`).** La limitación era
+  que `try`/`catch` en `onCreate` mataba la ejecución entera (`:1044-1046`, `:614-622`). El
+  intérprete ya ejecuta la tabla de excepciones del dex (§213), y las excepciones propias
+  conservan su mensaje: `esThrowableDe` usa `m.tipoAcepta("Ljava/lang/Throwable;", descriptor)` y
+  sube por superclases del dex y `padresDeExcepcion`; el sufijo es solo respaldo. Los dos
+  `CONFIRMADO` del crítico quedaron falsificados por ejecución: `MiExcepcion("esp")` → `S:esp` sin
+  avisos, `FalloApp("llano")` → `L:llano`, `toString()` →
+  `com.hola.contador.FalloApp: ts`, sin captura `Error="…FalloApp: boomcustom"` y
+  `MiAppException` sin regresión. 11 sondas `ok … 0.123s`, 4 tests del builder `ok … 0.070s` y
+  suite completa `ok … 53.576s`. El cruce entre actividades sigue como aproximación declarada
+  (aviso, no propagación), ya corregido en §213.
 - **3.6.** `RelativeLayout` y los `*Layout` no lineales se apilan en el origen
   (`preview.go:1369-1373`), ignorando `layout_gravity` que `colocarFrame` sí aplica (`:1448-1476`).
 - **D7. CERRADO en `385f1ed`/`db16376`.** La pestaña tiene seis comprobaciones de navegación entre

@@ -94,8 +94,8 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - E7 **cerrada**: lógica aprobada por `ses_df9d13306ffehyseNhLIqoaYfh`, `usage` corregido en
   `2dd70c8` y `which` verificado en `969b045` por el QA `ses_df9c1482fffeKi6lTSOz6CBbk0`.
   Evidencia: §211.
-- La vista previa actual se reconstruyó con E6, E5 e I3 (`sha256 3d7be562…`), verificada contra el
-  `/apkc.wasm` servido con `curl`. El fix del inspector fue solo CSS: el wasm no cambió.
+- La vista previa actual se reconstruyó con el fix de excepciones (`sha256 48cff1be…`), verificada
+  contra el `/apkc.wasm` servido. El fix del inspector fue solo CSS: el wasm no cambió.
 - I3 **cerrada** como `d3803bb` tras el **APROBAR** de `ses_df9baefaeffemtyU4YC0gXywOR`; la pregunta
   abierta del classpath queda adscrita a I5, que sigue pendiente con I4. Detalle en
   `docs/plan-incremental-web.md`.
@@ -144,9 +144,23 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   `ses_df947ea53ffedqhgTYwg0HERax` en **APROBAR** estático; la ejecución real queda para gate.
 - **I4** (`67e5f21` y `2dd06f7`): crítico `ses_df9491794ffePi1NK1rABUt0cZ` en **APROBAR** tras
   cerrar los dos `INCIERTO` (cuerpo que crece y caché corrupta); evidencia en §214 y §215.
-- **I5** (`03b6ac5`): integrado, **en verificación**; su crítico
-  `ses_df93c3f9fffefvTzhHzPYyU5lF` **rechazó** el cierre con dos `CONFIRMADO` (mtime sintético, ya
-  corregido en cliente; classpath demasiado estrecho, en corrección) y pide medición en pestaña.
+- **Try/catch y excepciones propias** (`3bbd313`): crítico
+  `ses_df93095c5ffeyRt8kl6K1MhO3T` en **APROBAR**. Sus dos `CONFIRMADO` quedaron falsificados por
+  ejecución: `MiExcepcion("esp")` → `S:esp` sin avisos, `FalloApp("llano")` → `L:llano`,
+  `toString()` → `com.hola.contador.FalloApp: ts`, sin captura
+  `Error="…FalloApp: boomcustom"` y `MiAppException` sin regresión. `esThrowableDe` usa
+  `m.tipoAcepta("Ljava/lang/Throwable;", descriptor)` y sube por superclases del dex y
+  `padresDeExcepcion`; el sufijo es solo respaldo. 11 sondas `ok … 0.123s`, 4 tests del builder
+  `ok … 0.070s` y suite completa `ok … 53.576s`.
+- **I5 aprobado como medida, no cerrada** (`a1367a1`): el crítico
+  `ses_df93c3f9fffefvTzhHzPYyU5lF` cerró los dos `CONFIRMADO` (huella sin fecha y CRC-32 del
+  directorio central), con 8 tests en verde. No alcanza los 100 ms, así que no se cierra; la
+  medición en pestaña sigue pendiente. La única reparación fue el comentario `SHA-1 → CRC-32`, en
+  `c391518`.
+- **Apps de ejemplo cerradas** (`6cf7ae2`): crítico `ses_df93069edffes9uiHHQLGh3e2c` en
+  **APROBAR**; 5 builds y 5 instalaciones reproducidas en Droidloom, sin `FATAL` y sin binarios
+  versionados. «Emulador fiel: no medido» queda como frontera, y los síntomas del compilador están
+  marcados como hipótesis desde `bb8be96`.
 - **Gate final VERDE** sobre `web` @ `89fc27f` (studio `0fce105`), ejecutado por
   `ses_df9a20cc2ffeLm5MRdXzqCsIwR` con `PREFIX=~/.cache/apkc-web-gate-final3`, puertos
   9081/9581/9082/9083/9582 y `ANDROID_HOME=/home/leonisauro/opt/android-sdk`. `LD_LIBRARY_PATH`
@@ -163,6 +177,6 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   (`ahead 66`, submódulo limpio).
 - **Pendiente de gate:** la comprobación visual de F5, la ejecución real de D7, la carrera de dos
   pestañas y la medición de I5 en la pestaña. El gate verde registrado es de `89fc27f`, un árbol
-  anterior a estos cierres.
-- **Activas:** I5 en verificación; el resto de frentes queda cerrado.
+  anterior a estos cierres; el definitivo sigue pendiente.
+- **Activas:** ninguna; I5 queda medida y no cerrada. El resto de frentes está cerrado.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
