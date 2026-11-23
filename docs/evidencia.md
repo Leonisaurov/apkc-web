@@ -10401,3 +10401,87 @@ red ni publicación.
 frentes —la caché del marco, los recursos de AAR y el APK arrastrado, los límites de `check`, `goto_w`
 y el rechazo de `invokedynamic`/`condy`—, así que no se puede leer como su verificación. Repetir
 `tools/entorno.sh gate` tras integrarlos sigue pendiente y lo ejecuta el usuario cuando lo autorice.
+
+## 236. La verificación de ART, ampliada a ocho casos
+
+Medido el 2026-11-23 sobre `e1110df` (`fix(dex): escribe las anotaciones del usuario y respeta el marco
+del catch`) y `d6e7e99` (`test(banco): verifica la estructura del dex en ART`).
+
+```sh
+APKC=<binario del HEAD> CASOS="zchar estaticos tries anota arreglos disper cadenas ifaces" \
+  sh banco/art-verificador/art-verificador.sh
+```
+
+**Salida**: `OK: zchar estaticos tries anota arreglos disper cadenas ifaces en verde, sin rechazo de
+verificación`. Los ocho casos pasan `dexdump -a` igual al de `d8`, `install` con `Success`, `am start`
+con `Status: ok`, cinco filtros de `logcat` limpios y `Log.d` idéntico al de `d8` y al `esperado.txt`.
+
+**Los seis defectos que cerró.** (1) las anotaciones de usuario, `RuntimeVisible`/`RuntimeInvisible` y
+`AnnotationDefault`; (2) el `VerifyError` dentro de `try` (`protegido` y `bajaAltoGuardar`); (3) el
+`wide iinc` (0xc4), que pasa a `add-int/lit16`; (4) el `new-array` con el índice alto; (5) el MUTF-8 con
+NUL y subrogados; y (6) los sitios `invokedynamic`, indexados por (método, pc) en vez de por método.
+
+**Falsificación.** Un dex cortado da `FALLO: no aparece el RESULTADO`: la corrida no puede pasar por
+ausencia de log. La suite completa dio `ok … 83.959s`.
+
+**Fronteras de este `§`.** Los puntos de unión —el ternario y el booleano de comparación— y `"" + x`
+siguen sin medirse. No se tocó red ni publicación.
+
+## 237. Inyección de shell y «zip bombs»: los dos arreglos de seguridad
+
+Medido el 2026-11-23 sobre `18af2ae` (`fix(apkc): valida package y actividad antes de adb shell`), con
+el puntero de `studio/` en `6d5c6aa` (`chore(studio): topes de descompresión en el importador`,
+submódulo `e5c6dbf`) y en `30d66ea` (`fix(studio): topa la lectura de clases para autocompletar`).
+
+```sh
+# en apkc/
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestValidaPaqueteYActividad|TestRunRechazaManifiestoInyectadoAntesDeLaShell' -v .
+# en studio/
+node prueba.js
+```
+
+→ `ok … 0.028s` y `prueba: todo en orden`.
+
+**Inyección de shell.** El `package` y la actividad del manifiesto se validan **antes** de construir
+cualquier guion, en `adb` y en `rish` (`apkc/manifest.go`; la llamada, en `apkc/device.go:328`), así que
+un `x; reboot` escrito en el manifiesto ya no llega a la shell.
+
+**«Zip bombs».** Las tres lecturas se cortan por **bytes producidos**, no por bytes comprimidos, y
+cancelan en cuanto se pasan del tope: `leerZip` (`studio/proyecto.js:119-131`), `extraerJarDeZip`
+(`studio/pestana.js:2727`) y el autocompletado, con 8 MiB por `.class` (`studio/autocompletado.js:37`).
+
+**Falsificaciones.** Quitar la validación deja que `x; reboot` llegue a la shell; y con
+`if (false && producido > tope)` la bomba pasa entera y la corrida se va a 159 MB de RSS.
+
+**Fronteras de este `§`.** Siguen abiertas, algunas en curso: el SourceStamp truncado, `verify` con
+`ReadAll`, el `storepass` en `argv`, el temporal predecible, la CSP con Trusted Types y las Actions por
+tag. No se tocó red ni publicación.
+
+## 238. Hot swap en el intérprete: identidad, estado y despacho
+
+Medido el 2026-11-23 sobre `e5af669` (`feat(preview): primitiva de hot swap con identidad conservada`).
+
+```sh
+# en apkc/
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestElHotSwapConservaIdentidadYEstadoYCambiaElDespacho|TestElFlagDeHotSwapParteClaseYMetodo|TestSinElEngancheDeHotSwapElMetodoViejoSigueRespondiendo|TestElHotSwapEsAditivoYNoTocaOtrosMetodos' -v .
+```
+
+→ `ok … 0.050s`.
+
+**Qué garantiza.** En una sesión viva, la identidad del objeto y su estado se conservan y el despacho
+pasa al método nuevo; el reemplazo es **aditivo**, sin tocar otros métodos; y los estáticos se siembran
+solo si faltaban. Cada `metodoDalvik` lleva su propio dex para no mezclar los índices de dos ficheros.
+
+**Falsificación.** Sin el enganche, `suma()` devuelve `204` en vez de `404`.
+
+**Suite y wasm.** La suite completa dio `ok … 82.019s` y el wasm compila.
+
+**Fronteras de este `§`.** No se puede cambiar la forma de los campos, y la UI queda pendiente: pasar
+los bytes del dex y pintar `ejecucion.intercambios`. No se tocó red ni publicación.
+
+**Pendiente: el gate no cubre estos tres `§`.** El gate de `§230` se corrió **antes** de estos tres
+frentes —la verificación ampliada de ART, los arreglos de seguridad y el hot swap—, así que no se puede
+leer como su verificación. Repetir `tools/entorno.sh gate` tras integrarlos queda pendiente de
+autorización del usuario.
