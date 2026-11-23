@@ -127,7 +127,20 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
 - **Editor auditado:** `e121270` en el submódulo (cherry-pick de `e600a66`), puntero `6243d9d`;
   F1, C1-C4 y F2 cerrados, F5 sigue `INCIERTO`. `node --check` sin salida y `prueba.js` en
   `todo en orden`.
-- **Pendiente de gate:** F5, la carrera de tecleo durante la carga; sigue `INCIERTO`.
-- **Activas:** ninguna de emulación; el gate final está **en curso** por otro agente sobre
-  `89fc27f`, con `PREFIX` y puertos únicos.
+- **Gate final VERDE** sobre `web` @ `89fc27f` (studio `0fce105`), ejecutado por
+  `ses_df9a20cc2ffeLm5MRdXzqCsIwR` con `PREFIX=~/.cache/apkc-web-gate-final3`, puertos
+  9081/9581/9082/9083/9582 y `ANDROID_HOME=/home/leonisauro/opt/android-sdk`. `LD_LIBRARY_PATH`
+  apuntó a una copia privada de `libsimdutf.so.36`: el chromium 156 del escritorio está enlazado
+  contra esa soname; es un parche de entorno ajeno al repo. Salida literal:
+  `crear: todo en orden (36 comprobaciones)`, `pestaña: 223 comprobaciones, apk firmada dentro de
+  chromium de 10285 bytes y verificada`, `e2e: todo en orden`; `rc=0`. `studio-pestana.log` da
+  `223 comprobaciones bien, 0 mal`, cero `FALLA`, sin `sin chromium` ni `sin APKC_WASM`; el único
+  aviso no bloqueante es `kotlin: sin kotlin-stdlib por ningun sitio, se omite`. Tres
+  comprobaciones que antes fallaban ahora están verdes: el punto del clic cae sobre
+  `previa-lateral-canvas`, un clic real sobre `id/pulsar` deja «Pulsos: 1» y `vista-previa.js` se
+  sirve sin red desde la caché del service worker. Oráculos externos ejecutados: `apksigner`,
+  `zipalign`, `aapt2`, `d8`, `bundletool`, `jarsigner` y `zipcheck.py`. `git status -sb` limpio
+  (`ahead 66`, submódulo limpio).
+- **Pendiente:** solo F5, la carrera de tecleo durante la carga; sigue `INCIERTO`.
+- **Activas:** ninguna; la emulación queda cerrada y el gate final está **en verde**.
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.

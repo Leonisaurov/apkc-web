@@ -29,8 +29,9 @@ hecho por analogía (regla 11).
 - **F5 (INCIERTO).** Teclear durante la ventana de carga marca sucio el doc nuevo con `texto=null`
   y la lectura posterior descarta lo tecleado. No se cerró con `e121270`; sigue `INCIERTO`.
 - **Frontera de gate.** La carrera real con DOM y worker queda reducida a F5; el hit-test y la
-  geometría del emulador ya están verificados en navegador real. Lo que no se puede reproducir en
-  `prueba.js` es el tecleo durante la carga, y eso sigue para el gate con navegador.
+  geometría del emulador ya están verificados en navegador real. El gate final ejerce además el
+  hit-test y el clic real en el canvas; lo que sigue sin cubrir es el tecleo durante la carga
+  (F5).
 
 ### 1.2 Compilación y panel de resultado
 
@@ -139,6 +140,12 @@ en su worktree con tres casos nuevos en `prueba.js`.
 
 ## 4. Estado verificado
 
+- **Gate final VERDE** sobre `web` @ `89fc27f` (studio `0fce105`), con `PREFIX` propio y puertos
+  9081/9581/9082/9083/9582: `crear: todo en orden (36 comprobaciones)`, `pestaña: 223
+  comprobaciones, apk firmada dentro de chromium de 10285 bytes y verificada` y `e2e: todo en
+  orden`; `rc=0`, 223/223 y cero `FALLA`. El único aviso no bloqueante fue `kotlin: sin
+  kotlin-stdlib por ningun sitio, se omite`. Para chromium 156 hizo falta una copia privada de
+  `libsimdutf.so.36` en `LD_LIBRARY_PATH`: parche de entorno ajeno al repo.
 - **Editor:** `e121270` en el submódulo (cherry-pick de `e600a66` del worktree `editor-auditoria`),
   puntero `6243d9d` en la raíz. `node --check` de `pestana.js`, `ajustes.js` y `prueba.js` sin
   salida; `node prueba.js` → `prueba: todo en orden`, rc=0. Falsificación de F1: romper
