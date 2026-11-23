@@ -512,6 +512,9 @@ type maquinaDalvik struct {
 	// cortada recuerda que la cola se detuvo por la salvaguarda: el reloj no puede publicar un
 	// destino que no se ejecutó
 	cortada bool
+	// pasosBase es el valor de `pasos` al arrancar la tarea en curso: el límite de pasos se mide
+	// desde ahí, así que cada tarea de la cola tiene su propio presupuesto
+	pasosBase int
 }
 
 type oyenteRegistrado struct {
@@ -619,11 +622,6 @@ func (m *maquinaDalvik) programa(instante int64, origen string, ejecuta func() e
 // instante de la tarea —no el destino del avance—, porque es la hora que la app lee si vuelve a
 // postear. Devuelve falso cuando no queda ninguna tarea vencida.
 func (m *maquinaDalvik) vence(limite int64) bool {
-	if m.tareas >= tareasMaximas {
-		m.cortada = true
-		m.avisa("la cola del reloj lógico se detuvo a las %d tareas ejecutadas", tareasMaximas)
-		return false
-	}
 	i := -1
 	for j := range m.cola {
 		if m.cola[j].instante > limite {
@@ -637,12 +635,23 @@ func (m *maquinaDalvik) vence(limite int64) bool {
 	if i < 0 {
 		return false
 	}
+	// la salvaguarda solo corta si hay una tarea que ejecutar: con la cola vacía hasta el límite, el
+	// reloj puede llegar al destino sin mentir
+	if m.tareas >= tareasMaximas {
+		m.cortada = true
+		m.avisa("la cola del reloj lógico se detuvo a las %d tareas ejecutadas", tareasMaximas)
+		return false
+	}
 	t := m.cola[i]
 	m.cola = append(m.cola[:i], m.cola[i+1:]...)
 	if m.reloj != nil {
 		*m.reloj = t.instante
 	}
 	m.tareas++
+	// cada tarea tiene su propio presupuesto de pasos: el contador es acumulado para publicarlo, pero
+	// el límite se mide desde el arranque de esta tarea, así que una cola larga no agota el
+	// presupuesto de las siguientes ni deja tics sin ejecutar
+	m.pasosBase = m.pasos
 	if t.ejecuta != nil {
 		if err := t.ejecuta(); err != nil {
 			m.avisa("la tarea de %s falló: %v", t.origen, err)
@@ -654,7 +663,8 @@ func (m *maquinaDalvik) vence(limite int64) bool {
 // difiere encola el `run()` de un Runnable, que es lo que hacen `Handler.post`/`postDelayed` y
 // `View.post`/`postDelayed`: la tarea corre cuando el guion llega a su instante, no antes. Un
 // retraso negativo se trata como cero, como hace Android: no puede adelantar el reloj ni dejar una
-// tarea antes del arranque.
+// tarea antes del arranque. Un retraso que no cabe en el reloj se avisa y deja la tarea en el último
+// instante representable, en vez de envolver a un tiempo pasado que la ejecutaría de inmediato.
 func (m *maquinaDalvik) difiere(origen string, runnable any, espera int64) any {
 	r, ok := runnable.(*objetoDalvik)
 	if !ok {
@@ -664,7 +674,15 @@ func (m *maquinaDalvik) difiere(origen string, runnable any, espera int64) any {
 	if espera < 0 {
 		espera = 0
 	}
-	m.programa(m.ahora()+espera, origen, func() error { return m.ejecutaRunnable(r, origen) })
+	instante := m.ahora()
+	if espera > math.MaxInt64-instante {
+		m.avisa("%s con un retraso que no cabe en el reloj lógico: la tarea queda en %d ms",
+			origen, int64(math.MaxInt64))
+		instante = math.MaxInt64
+	} else {
+		instante += espera
+	}
+	m.programa(instante, origen, func() error { return m.ejecutaRunnable(r, origen) })
 	return nil
 }
 
@@ -2438,7 +2456,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 				claseCorta(clase), met.nombre, pc)
 		}
 		m.pasos++
-		if m.pasos > pasosMaximos {
+		if m.pasos-m.pasosBase > pasosMaximos {
 			return nil, fmt.Errorf("el intérprete se detuvo a los %d pasos (posible bucle sin salida)",
 				pasosMaximos)
 		}

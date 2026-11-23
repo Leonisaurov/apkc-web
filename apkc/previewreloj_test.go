@@ -280,6 +280,89 @@ public class Hija implements Runnable {
 }
 `
 
+// fuenteLejana es la actividad de la sonda del retraso desbordado: el botón postea una tarea con el
+// retraso máximo, que solo cabe si el reloj está en cero.
+const fuenteLejana = `package com.hola.reloj;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class Casos extends Activity {
+    TextView total;
+    Handler reloj;
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        reloj = new Handler();
+        findViewById(R.id.pulsar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                postLejana();
+            }
+        });
+    }
+
+    private void postLejana() {
+        reloj.postDelayed(new Lejana(total), 9223372036854775807L);
+    }
+}
+`
+
+// fuenteTareaLejana es la tarea del retraso máximo: si el reloj envolviera, correría de inmediato y
+// dejaría su marca en la pantalla.
+const fuenteTareaLejana = `package com.hola.reloj;
+
+import android.widget.*;
+
+public class Lejana implements Runnable {
+    TextView total;
+
+    public Lejana(TextView t) {
+        total = t;
+    }
+
+    public void run() {
+        total.setText("M");
+    }
+}
+`
+
+// fuenteTics es el tic de un segundo sin nada más: el AsyncTask del arranque de fuenteReloj contaría
+// como tarea y dejaría el avance largo justo en el borde de la salvaguarda.
+const fuenteTics = `package com.hola.reloj;
+
+import android.app.*;
+import android.os.*;
+import android.widget.*;
+
+public class Casos extends Activity {
+    int tics = 0;
+    TextView total;
+    Handler reloj;
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        reloj = new Handler();
+        programa();
+    }
+
+    private void programa() {
+        reloj.postDelayed(new Runnable() {
+            public void run() {
+                tics = tics + 1;
+                total.setText("Tic: " + tics);
+                programa();
+            }
+        }, 1000L);
+    }
+}
+`
+
 // apkDelReloj arma en memoria el apk de la prueba: manifiesto, tabla, layout y el dex de las dos
 // fuentes.
 func apkDelReloj(t *testing.T) []byte {
@@ -492,6 +575,58 @@ func TestElGuionDelPreviewConservaElOrden(t *testing.T) {
 	}
 	if err := set.Parse([]string{"--avanzar", "medio"}); err == nil {
 		t.Error("--avanzar medio se aceptó y no son milisegundos")
+	}
+}
+
+// TestElRelojNoDesbordaEnDifiere es la sonda del retraso que no cabe: con el reloj en 100 ms, un
+// `postDelayed(MaxInt64)` no puede envolver a un instante pasado. La tarea queda en el último
+// instante representable, se avisa, y ni corre ni deja su marca en la pantalla.
+func TestElRelojNoDesbordaEnDifiere(t *testing.T) {
+	apk := apkConFuentes(t,
+		fuenteJava{nombre: "Casos.java", contenido: fuenteLejana},
+		fuenteJava{nombre: "Lejana.java", contenido: fuenteTareaLejana},
+	)
+	m, err := modeloVistaDeAPKConEventos(apk, "", true, []eventoUsuario{
+		{Tipo: "avanzar", Dato: "100"},
+		{Tipo: "pulsar", Dato: "id/pulsar"},
+	})
+	if err != nil {
+		t.Fatalf("el guion falló: %v", err)
+	}
+	if got := textoDeNodo(t, m, idTotal); got == "M" {
+		t.Errorf("la tarea del retraso desbordado corrió en el pasado y dejó %q", got)
+	}
+	if m.Ejecucion.Reloj != 100 {
+		t.Errorf("el reloj es %d y se esperaba 100: la tarea no puede estar antes del arranque",
+			m.Ejecucion.Reloj)
+	}
+	if m.Ejecucion.Tareas != 0 {
+		t.Errorf("la cola ejecutó %d tareas y se esperaba ninguna", m.Ejecucion.Tareas)
+	}
+	if !strings.Contains(strings.Join(m.Ejecucion.Avisos, " "), "no cabe") {
+		t.Errorf("falta el aviso del retraso que no cabe: %v", m.Ejecucion.Avisos)
+	}
+}
+
+// TestElRelojNoMienteAlAgotarPasos comprueba que el presupuesto de pasos es por tarea: un avance de
+// 100000000 ms con un tic por segundo ejecuta los 100000 tics, el reloj llega al destino y no hay
+// aviso. Con el presupuesto global, la cola se cortaba en 5880 tics y el reloj publicado mentía.
+func TestElRelojNoMienteAlAgotarPasos(t *testing.T) {
+	apk := apkConFuentes(t, fuenteJava{nombre: "Casos.java", contenido: fuenteTics})
+	m, err := modeloVistaDeAPKConEventos(apk, "", true,
+		[]eventoUsuario{{Tipo: "avanzar", Dato: "100000000"}})
+	if err != nil {
+		t.Fatalf("--avanzar 100000000 falló: %v", err)
+	}
+	if got := textoDeNodo(t, m, idTotal); got != "Tic: 100000" {
+		t.Errorf("el contador vale %q y se esperaba «Tic: 100000»: el reloj no puede publicar un "+
+			"destino con tics sin ejecutar", got)
+	}
+	if m.Ejecucion.Reloj != 100000000 {
+		t.Errorf("el reloj es %d y se esperaba 100000000", m.Ejecucion.Reloj)
+	}
+	if a := avisoDeTruncamiento(m.Ejecucion); a != "" {
+		t.Errorf("el avance se truncó: %s", a)
 	}
 }
 
