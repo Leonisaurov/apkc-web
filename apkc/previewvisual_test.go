@@ -258,3 +258,14 @@ func TestElPreviewRespetaVisibilidadTextoColorEImagen(t *testing.T) {
 		t.Errorf("la imagen del JSON mide %vx%v", imagenJSON["ancho"], imagenJSON["alto"])
 	}
 }
+
+// TestElColorRGB8DeAapt2SeLeeComoColor cierra la condición H4 del crítico de E4: aapt2 escribe
+// TYPE_INT_COLOR_RGB8 (0x1d) para un `#rrggbb` de res/values/colors.xml, no ARGB8 (0x1c).
+// Medido con `aapt2 dump resources` sobre un proyecto con `<color name="probe">#336699</color>`.
+func TestElColorRGB8DeAapt2SeLeeComoColor(t *testing.T) {
+	c := &contextoVista{}
+	valor := valor{tipo: 0x1d, datos: 0xff336699}
+	if obtenido := c.colorDe(valor); obtenido != "#336699" {
+		t.Fatalf("colorDe con tipo 0x1d dio %q: se esperaba %q", obtenido, "#336699")
+	}
+}

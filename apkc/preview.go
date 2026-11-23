@@ -65,6 +65,9 @@ const (
 	tipoDimension byte = 0x05
 	// TYPE_INT_COLOR_ARGB8: un `#aarrggbb` del layout o de un `@color/x` de la tabla
 	tipoColor byte = 0x1c
+	// TYPE_INT_COLOR_RGB8: lo que aapt2 escribe para un `#rrggbb` de res/values/colors.xml
+	// (medido con aapt2 dump resources sobre `<color name="probe">#336699</color>`)
+	tipoColorRGB8 byte = 0x1d
 )
 
 // Valores de View.VISIBLE, View.INVISIBLE y View.GONE, que son los que el enlazador escribe como
@@ -1221,7 +1224,7 @@ func (c *contextoVista) colorDe(v valor) string { return c.colorDeCon(v, false, 
 
 func (c *contextoVista) colorDeCon(v valor, enTabla bool, profundidad int) string {
 	switch v.tipo {
-	case tipoColor, tipoEnteroHex, tipoEnteroDec:
+	case tipoColor, tipoColorRGB8, tipoEnteroHex, tipoEnteroDec:
 		return formatoColor(v.datos)
 	case tipoCadena:
 		texto := ""
