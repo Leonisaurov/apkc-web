@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -284,21 +285,79 @@ func dexarClasesEnGoCon(jars []string) {
 	if len(clases) == 0 {
 		return
 	}
-	cache := cargaCacheDex()
-	dex, err := dexDeClasesConCache(clases, cache)
+	if _, err := dexarAppEnGo(clases); err != nil {
+		LogF("build", err.Error())
+	}
+}
+
+// ficheroCacheAppGoDeGrupo es la caché I4 del grupo i del dex de la app: el primero conserva
+// `build/dexcache.bin`, el fichero de siempre, y los demás llevan su índice detrás. Van fuera de
+// `build/dexcache/` a propósito: `pruneDepsCache` borra lo que no empieza por `deps-` en ese
+// directorio, y la caché del proyecto no es un bucket de dependencias.
+func ficheroCacheAppGoDeGrupo(grupo int) string {
+	if grupo == 0 {
+		return cacheDexFichero
+	}
+	return strings.TrimSuffix(cacheDexFichero, ".bin") + "-g" + strconv.Itoa(grupo+1) + ".bin"
+}
+
+// dexarAppEnGo escribe el dex de las clases del proyecto (y, por debajo de API 21, las de `jar/`)
+// en `build/`: `classes.dex`, `classes2.dex`, … Es el mismo reparto que un bucket de dependencias
+// (`dexDeClasesRepartidas`, reparto.go), con una caché I4 por grupo, porque una caché se cierra
+// contra las tablas de un dex concreto. Un proyecto que cabe en un dex deja exactamente el mismo
+// `classes.dex` y la misma `build/dexcache.bin` que antes del reparto: hay un solo grupo y se mide
+// en las mismas tablas.
+//
+// Los ficheros se escriben de atrás adelante —`classesN.dex` primero y `classes.dex` al final—:
+// un build que muere a mitad deja la app sin su primer dex, así que la vuelta siguiente lo ve
+// faltar (`dexMissing`, build.go) y repite la etapa, en vez de encontrar un `classes.dex` y dar
+// por buenos los grupos que no llegaron a escribirse.
+func dexarAppEnGo(clases []classFull) ([][]byte, error) {
+	caches := []*cacheDex{}
+	dexes, err := dexDeClasesRepartidas(clases, func(grupo, total int) *cacheDex {
+		// dexDeClasesRepartidas guarda cada caché en su fichero y cuenta lo reutilizado; aquí
+		// solo se recogen para sumar el resumen que mira la prueba del dexado por clase
+		c := cargaCacheDexDe(ficheroCacheAppGoDeGrupo(grupo))
+		caches = append(caches, c)
+		return c
+	})
 	if err != nil {
-		LogF("build", err.Error())
+		return nil, err
 	}
-	ruta := filepath.Join("build", "classes.dex")
-	if err := os.WriteFile(ruta, dex, 0644); err != nil {
-		LogF("build", err.Error())
+	for n := len(dexes) - 1; n >= 0; n-- {
+		ruta := filepath.Join("build", dexEntryName(n+1))
+		if err := os.WriteFile(ruta, dexes[n], 0644); err != nil {
+			return nil, err
+		}
 	}
-	cache.guarda()
-	ultimoDexReuso = cache.resumen()
-	if r := ultimoDexReuso; r.total > 0 {
-		LogI("build", r.reutilizados, "de", r.total, "code_item reutilizados de", cacheDexFichero)
+	// un dex de una vuelta anterior que hoy no toca: sin esto el paquete seguiría metiendo
+	// clases que ya no están en el proyecto
+	for n := len(dexes) + 1; ; n++ {
+		ruta := filepath.Join("build", dexEntryName(n))
+		if !exists(ruta) {
+			break
+		}
+		if err := os.Remove(ruta); err != nil {
+			return nil, err
+		}
 	}
-	LogI("build", len(clases), "clases ->", len(dex), "bytes en", ruta)
+	total := 0
+	for _, dex := range dexes {
+		total += len(dex)
+	}
+	if len(dexes) == 1 {
+		LogI("build", len(clases), "clases ->", total, "bytes en", filepath.Join("build", dexEntryName(1)))
+	} else {
+		LogI("build", len(clases), "clases ->", total, "bytes en", len(dexes), "dex")
+	}
+	resumen := resumenCacheDex{}
+	for _, c := range caches {
+		r := c.resumen()
+		resumen.reutilizados += r.reutilizados
+		resumen.total += r.total
+	}
+	ultimoDexReuso = resumen
+	return dexes, nil
 }
 
 // ultimoDexReuso es lo que la última llamada a dexarClasesEnGo reutilizó: la prueba del dexado por

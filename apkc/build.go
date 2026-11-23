@@ -1711,6 +1711,18 @@ func packagePlan(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	if exists(appDex) {
 		add(appDex, filepath.Join(dexDir, dexEntryName(next)), true)
 		next++
+		// el reparto del dex de la app (reparto.go) deja `classes2.dex`, `classes3.dex`, … en
+		// build/; el paquete los numera seguidos del primero, antes de los de las dependencias.
+		// El bucle para en el primer hueco: dexarAppEnGo los escribe contiguos y borra los que
+		// no tocan, así que un hueco no es un dex que falte sino el final del reparto.
+		for {
+			extra := filepath.Join("build", dexEntryName(next))
+			if !exists(extra) {
+				break
+			}
+			add(extra, filepath.Join(dexDir, dexEntryName(next)), true)
+			next++
+		}
 	}
 	for _, dex := range depDexes {
 		add(dex, filepath.Join(dexDir, dexEntryName(next)), true)
