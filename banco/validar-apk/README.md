@@ -13,7 +13,7 @@ sh banco/validar-apk/validar.sh
 # el techo de 16 bits, con 700 clases de 100 métodos (tarda y pide memoria: es opt-in)
 PROBAR_LIMITE=1 sh banco/validar-apk/validar.sh
 
-# la pasada con un jar de verdad; con el dexer actual sale con 3 y nombra la forma que falta
+# la pasada con un jar de verdad (520 clases; valida su APK, §225)
 JAR_REAL=/ruta/android-support-v4.jar sh banco/validar-apk/validar.sh
 
 # y, si hay aparato, instalar y arrancar el caso multi-dex
@@ -71,6 +71,12 @@ verde y deja `classes.dex` 1432 B (la app, 9 `method_id`), `classes2.dex` 2 772 
 `true`, `zipalign ok`, las 700 clases `grande.C0…C699` entre los dos dex de dependencias sin huecos
 ni repetidas, y `classes2.dex` invoca `Lgrande/C680;.m0`, que define `classes3.dex`.
 
+Pasada del jar real (`JAR_REAL=…`, binario del árbol `a376330`): `520 clases de 1 dependencias ->
+526856 bytes`; `classes.dex` 1668 B (la app) y `classes2.dex` 526 856 B con las 520 clases del jar;
+`Verifies`, v1/v2/v3 `true`, `zipalign ok`; `dexdump -d` no da `Failure to verify` en ninguna de
+los dos; `classes.dex` invoca `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode` y `classes2.dex`
+la define. La corrida con `PROBAR_LIMITE=1` termina con las dos líneas `OK`.
+
 ## El techo de 65 536 referencias
 
 Un dex referencia sus métodos, campos, tipos y cadenas con índices de 16 bits: la segunda unidad de
@@ -90,17 +96,23 @@ método invocado en un dex de dependencias y definido en el otro. Sin el reparto
 con `Lgrande/C0;<init>: at pc 1, invokespecial: the method index does not fit a 16-bit index` y no
 deja APK.
 
-## Fronteras
+## El jar real (medido)
 
-- **El jar real todavía no dexa, pero ya no por `goto/16`.** `android-support-v4.jar` (648 327 B,
-  520 clases) se paraba en `a goto of -259 code units: the 10t form reaches +-127 and goto/16 is not
-  measured here`, y esa frontera se cerró en `295ac58`. Con el árbol de `d4da31c` el mismo pase se
-  para más adelante, en
-  `Landroid/support/v4/view/GestureDetectorCompat$GestureDetectorCompatImplBase;.onTouchEvent`: `at
-  pc 505, i2l: register v17 does not fit a four-bit format (the /range or /from16 form is not
-  measured here)`. Es una frontera de formas de registro y se arregla en `dexinstr.go`, no aquí:
-  `JAR_REAL=… sh banco/validar-apk/validar.sh` imprime ese rechazo y sale con 3; cuando el dexer la
-  acepte, el mismo comando valida el APK del jar real y comprueba que `classes.dex` invoca
-  `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode`.
+- **El jar real dexa.** `android-support-v4.jar` (648 327 B, 520 clases) entra y sale verificado: el
+  dexado da `520 clases de 1 dependencias -> 526856 bytes`, el APK lleva `classes.dex` (la app) y
+  `classes2.dex` (el jar), `apksigner` da la v1, la v2 y la v3 en `true`, `zipalign` pasa y
+  `classes.dex` invoca `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode`, que define
+  `classes2.dex`. El comando es
+
+  ```sh
+  JAR_REAL=/ruta/android-support-v4.jar sh banco/validar-apk/validar.sh
+  ```
+
+  La evidencia está en `docs/evidencia.md` §225 y el inventario del jar
+  (`python3 banco/inventario-jar/inventario.py`) da 520 clases y 0 rechazadas. Historial: este pase
+  salía con 3 en `goto/16` (cerrado en `295ac58`) y después en un `i2l` con el registro v17 de
+  `GestureDetectorCompat$GestureDetectorCompatImplBase.onTouchEvent` (cerrado en `6a23468`); los
+  tres síntomas que tapaba el desorden de `try`, en `dd50e71`, `c106f6a` y `64a7da9`. Nada de eso
+  es el estado vigente: hoy el pase valida el APK en vez de nombrar un rechazo.
 
 Este guion no corre gate, chromium, red ni publicación.

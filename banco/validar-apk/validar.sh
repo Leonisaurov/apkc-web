@@ -225,12 +225,12 @@ done
 echo "   las tres dependencias definen las 21 clases dep.D0…D20"
 
 # ---------------------------------------------------------------- opt-in: el jar real
-# La pasada con un jar de verdad (android-support-v4.jar, 520 clases). La frontera de `goto/16` que
-# este pase citaba se cerró en `295ac58`, pero el dexer todavía se para más adelante, en una forma
-# de registro de cuatro bits (medido: `i2l` con v17 en GestureDetectorCompat; el README lleva el
-# mensaje literal). Es una frontera de opcodes y se arregla en dexinstr.go, no aquí: por eso este
-# pase sale con 3 en vez de validar. Cuando el binario en uso la acepte, el mismo comando pasa a los
-# tres oráculos y comprueba que la app invoca un método del jar real.
+# La pasada con un jar de verdad (android-support-v4.jar, 520 clases). Hoy el dexer lo acepta y el
+# pase valida su APK con los tres oráculos: `classes2.dex` lleva las 520 clases y `classes.dex`
+# invoca `Landroid/support/v4/text/TextUtilsCompat;.htmlEncode`, que aquel define (§225). El exit 3
+# de abajo queda solo para un binario cuyo dexer todavía rechace alguna forma (historial: `goto/16`,
+# cerrado en `295ac58`, y un `i2l` con registro alto, cerrado en `6a23468`); en ese caso se imprime
+# el rechazo y no se valida nada.
 #
 #   JAR_REAL=/ruta/android-support-v4.jar sh banco/validar-apk/validar.sh
 if [ -n "${JAR_REAL:-}" ]; then
