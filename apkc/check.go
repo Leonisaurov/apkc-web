@@ -273,12 +273,17 @@ func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rut
 	}
 	fuentes := []fuenteJava{{nombre: nombreFuente, contenido: contenido}}
 	if proyecto != "" {
-		// el índice del android.jar que dejó el build vive en <proyecto>/build/jarindice, no en el
-		// cwd: la pestaña lanza `check` con el cwd que quedó del último comando y no hay ninguna
-		// razón para que sea la raíz del proyecto. Fijarlo aquí hace que el marco del framework
-		// salga de la caché de I5 en vez de recorrer el zip en cada pasada.
+		// el índice del android.jar y el marco de recursos ya parseado que dejó el build viven en
+		// <proyecto>/build/…, no en el cwd: la pestaña lanza `check` con el cwd que quedó del último
+		// comando y no hay ninguna razón para que sea la raíz del proyecto. Fijarlos aquí hace que
+		// el marco del framework salga de la caché en vez de recorrer el zip y parsear
+		// resources.arsc en cada pasada.
 		directorioDeIndicesDelJar = filepath.Join(proyecto, dirIndiceDelJar)
-		defer func() { directorioDeIndicesDelJar = "" }()
+		directorioDeMarcoCacheado = filepath.Join(proyecto, dirMarcoCacheado)
+		defer func() {
+			directorioDeIndicesDelJar = ""
+			directorioDeMarcoCacheado = ""
+		}()
 		extras, nota := fuentesDeRecursos(proyecto, rutaJar, version, codename)
 		fuentes = append(fuentes, extras...)
 		r.Recursos = nota

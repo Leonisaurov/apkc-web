@@ -159,9 +159,10 @@ func TestRaizDelProyectoSubeHastaElManifiesto(t *testing.T) {
 
 // TestCheckAprovechaElIndiceDelJar fija la parte de I5 que `check` usa: cuando el proyecto tiene
 // build/ —el estado tras un `apkc build`— la tabla del framework sale del índice que dejó el build
-// en build/jarindice, sin que archive/zip recorra el jar otra vez. El contador es lo único que
-// distingue los dos caminos. Y sin build/ el check no lo crea: el diagnóstico no escribe en el
-// árbol del proyecto, que es el contrato de esta fase.
+// en build/jarindice y su parseo se reutiliza de build/marco, sin que archive/zip recorra el jar ni
+// se inflen los 16 MB de resources.arsc otra vez. Los contadores son lo único que distingue los dos
+// caminos. Y sin build/ el check no lo crea: el diagnóstico no escribe en el árbol del proyecto, que
+// es el contrato de esta fase.
 func TestCheckAprovechaElIndiceDelJar(t *testing.T) {
 	jar := jarDelSDK(t)
 	raiz, fuente := proyectoDeCheck(t)
@@ -175,19 +176,24 @@ func TestCheckAprovechaElIndiceDelJar(t *testing.T) {
 		t.Fatal("el check creó build/: no puede dejar directorios en el proyecto")
 	}
 
-	// con build/ (lo que deja un build), la primera pasada escribe el índice y la segunda lo usa
+	// con build/ (lo que deja un build), la primera pasada escribe el índice y el marco del
+	// framework; la segunda sirve el marco de la caché y no vuelve a extraer ni a parsear nada
 	if err := os.MkdirAll(filepath.Join(raiz, "build"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	extracciones := extraccionesDelIndice
 	if r := revisarFuenteJava(fuente, "MainActivity.java", jar, raiz); len(r.Errores) != 0 {
 		t.Fatalf("con build/ el check da errores: %+v", r.Errores)
 	}
-	extracciones, parseos := extraccionesDelIndice, parseosDelDirectorio
+	if extraccionesDelIndice == extracciones {
+		t.Fatal("la primera pasada con build/ no sacó resources.arsc del índice: lo abrió con archive/zip")
+	}
+	marcos, parseos := marcosDeCache, parseosDelDirectorio
 	if r := revisarFuenteJava(fuente, "MainActivity.java", jar, raiz); len(r.Errores) != 0 || !r.Emisor {
 		t.Fatalf("la segunda pasada con el índice no compiló: %+v", r)
 	}
-	if extraccionesDelIndice == extracciones {
-		t.Fatal("la segunda pasada no sacó resources.arsc del índice: volvió a abrir el jar con archive/zip")
+	if marcosDeCache == marcos {
+		t.Fatal("la segunda pasada volvió a parsear resources.arsc teniendo el marco cacheado")
 	}
 	if parseosDelDirectorio != parseos {
 		t.Fatal("la segunda pasada volvió a parsear el directorio central teniendo el índice")

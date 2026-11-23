@@ -19,6 +19,7 @@ package main
 import (
 	"archive/zip"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"sort"
 	"strings"
@@ -364,13 +365,27 @@ func marcoDeJar(abrir func(nombre string) (io.ReadCloser, error), nombre string)
 	return leeMarco(arsc)
 }
 
-// marcoDelAndroidJar es la puerta normal: busca resources.arsc dentro del jar. Primero por el
-// índice de I5 (jarindice.go), que evita que archive/zip recorra y materialice el directorio central
-// entero —el coste fijo que `check` pagaba en cada pasada con `--proyecto` sin una R escrita—; si la
-// caché no está o no sirve para esta entrada, se cae al archive/zip de siempre.
+// marcoDelAndroidJar es la puerta normal. En orden: el marco ya parseado en build/marco/ (marcocache.go),
+// la entrada del índice de I5 (jarindice.go) —que evita que archive/zip recorra y materialice el
+// directorio central entero— y, si ninguna de las dos sirve, el archive/zip de siempre.
+//
+// La caché del marco se consulta con la huella del jar, que es la misma que valida el índice: por eso
+// el directorio central se lee una sola vez y se pasa a los dos. Como la caché no es fuente de verdad,
+// un fichero inválido solo cuesta un parseo y además se reescribe sano al final del camino.
 func marcoDelAndroidJar(ruta string) (*marcoRecursos, error) {
-	if datos, ok := leerEntradaDelJarIndizada(ruta, entradaMarcoDelJar); ok {
-		return leeMarco(datos)
+	if directorio, tamano, cuenta, err := leeDirectorioCentral(ruta); err == nil {
+		huella := crc32.ChecksumIEEE(directorio)
+		if m, ok := leerMarcoCacheado(ruta, tamano, huella); ok {
+			return m, nil
+		}
+		if datos, ok := leerEntradaDelJarConDirectorio(ruta, entradaMarcoDelJar, directorio, tamano, cuenta); ok {
+			m, err := leeMarco(datos)
+			if err != nil {
+				return nil, err
+			}
+			escribirMarcoCacheado(ruta, tamano, huella, m)
+			return m, nil
+		}
 	}
 	zr, err := zip.OpenReader(ruta)
 	if err != nil {

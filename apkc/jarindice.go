@@ -386,6 +386,14 @@ func leerEntradaDelJarIndizada(rutaJar, nombre string) ([]byte, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return leerEntradaDelJarConDirectorio(rutaJar, nombre, directorio, tamano, cuenta)
+}
+
+// leerEntradaDelJarConDirectorio es la misma lectura cuando quien llama ya tiene el directorio
+// central en la mano. `marcoDelAndroidJar` lo necesita así: su huella decide a la vez el marco
+// cacheado y el índice, y volver a leer el directorio solo para eso era pagar dos veces el mismo
+// coste fijo en el camino frío.
+func leerEntradaDelJarConDirectorio(rutaJar, nombre string, directorio []byte, tamano int64, cuenta int) ([]byte, bool) {
 	huella := crc32.ChecksumIEEE(directorio)
 	indice, cacheado := leerIndiceDelJar(rutaJar, tamano, huella)
 	if !cacheado {
