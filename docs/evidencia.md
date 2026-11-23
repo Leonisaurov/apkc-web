@@ -9333,9 +9333,9 @@ cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-3
 ```
 
 **Resultado**: los siete `PASS` y `ok github.com/ajinasokan/apkc 0.149s`. La capa completa de la
-vista previa da `ok github.com/ajinasokan/apkc 0.435s`; `go vet` y `gofmt -l` no imprimen nada. El
-crítico (`ses_df9f4b884ffepDlg2y2VQsIBYZ`) dio **APROBAR**, con los siete comandos enfocados
-ejecutados y ningún defecto `CONFIRMADO`.
+vista previa, tal como la corrió el crítico, da `ok github.com/ajinasokan/apkc 0.435s`; `go vet` y
+`gofmt -l` no imprimen nada. El crítico (`ses_df9f4b884ffepDlg2y2VQsIBYZ`) dio **APROBAR**, con los
+siete comandos enfocados ejecutados y ningún defecto `CONFIRMADO`.
 
 **Pregunta abierta del crítico (INCIERTA, no bloqueante)**: en un redirect sin layout que vuelve al
 frente porque el destino llama a `finish()`, `layoutID==0` podría caer al layout `main`
