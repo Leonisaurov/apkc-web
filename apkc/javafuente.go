@@ -209,6 +209,19 @@ type jasign struct {
 
 func (jasign) jstmtPuede() {}
 
+// jasignExp: la asignacion simple (`=`) **como expresion** (JLS 15.26.1), la forma que pide una
+// condicion como `while ((length = in.read(buffer)) > 0)` de la linea 187 de `MainActivity.java` del
+// zip de ApkShare. El arbol es el de javac —destino y valor, y la expresion vale lo asignado— y el
+// emisor escribe el valor, lo duplica y lo guarda (`dup`/`dup2` antes del `istore`/`lstore`). El
+// `jasign` de siempre es solo sentencia: no deja nada en la pila.
+type jasignExp struct {
+	destino jexpr
+	valor   jexpr
+	donde   pos
+}
+
+func (jasignExp) jexprPuede() {}
+
 type jbloque struct {
 	sentencias []jstmt
 	donde      pos
@@ -2061,7 +2074,11 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 			if err != nil {
 				return nil, false, err
 			}
-			if op, esAsig := operadorDeAsignacion(a.actual()); esAsig {
+			// `for (;; i = i + 1)` llega aqui como `jasignExp`: es el paso, una sentencia, y no deja
+			// el valor en la pila
+			if asig, esAsig := dst.(jasignExp); esAsig {
+				piezas = append(piezas, jasign{destino: asig.destino, valor: asig.valor, donde: pos{linea: linea}})
+			} else if op, esAsig := operadorDeAsignacion(a.actual()); esAsig {
 				a.avanzar()
 				valor, err := a.expresion()
 				if err != nil {
@@ -2290,6 +2307,15 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	// una asignacion simple llega ya armada como **expresion** (`jasignExp`), porque tambien vale
+	// dentro de parentesis; como sentencia no deja el valor en la pila, asi que se baja al `jasign` de
+	// siempre con la linea de la sentencia, que es la que marca javac.
+	if asig, esAsig := e.(jasignExp); esAsig {
+		if err := a.comerSimbolo(";"); err != nil {
+			return nil, false, err
+		}
+		return jasign{destino: asig.destino, valor: asig.valor, donde: pos{linea: linea}}, true, nil
+	}
 	if op, esAsig := operadorDeAsignacion(a.actual()); esAsig {
 		a.avanzar()
 		valor, err := a.expresion()
@@ -2403,6 +2429,24 @@ func (a *analizadorJava) expresion() (jexpr, error) {
 	e, err := a.expresionBinaria(0)
 	if err != nil {
 		return nil, err
+	}
+	// `=` como expresion (JLS 15.26.1), la forma de `while ((length = in.read(buffer)) > 0)`: es el
+	// operador de menor precedencia y asocia a la derecha, asi que el lado izquierdo ya esta leido y el
+	// derecho se lee entero por esta misma ruta (`a = b = c` se anida igual que en javac). Solo el `=`
+	// simple: `+=` y los demas compuestos siguen siendo sentencia y el llamador los arma alli. El lado
+	// izquierdo tiene que ser una variable —un acceso o un indice—, no una llamada ni un literal.
+	if t := a.actual(); t.kind == 'p' && t.valor == "=" {
+		switch e.(type) {
+		case jacceso, jindice:
+		default:
+			return nil, fmt.Errorf("linea %d: el lado izquierdo de `=` tiene que ser una variable", t.donde.linea)
+		}
+		a.avanzar()
+		valor, err := a.expresion()
+		if err != nil {
+			return nil, err
+		}
+		return jasignExp{destino: e, valor: valor, donde: t.donde}, nil
 	}
 	// el `?` que sigue a una expresión es el del ternario, que no es de este subconjunto. El de los
 	// argumentos de tipo no llega aquí: lo consume `argumentoDeTipo` dentro de los `<>` (§241).

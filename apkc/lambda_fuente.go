@@ -583,6 +583,10 @@ func (e *emisor) localCapturada(l jlambda) (string, bool) {
 			mirar(v.dentro)
 		case jincr:
 			mirar(v.destino)
+		case jasignExp:
+			// `x = y` como valor: los dos lados se miran igual que en una sentencia
+			mirar(v.destino)
+			mirar(v.valor)
 		case jlambda:
 			// una lambda dentro de otra: su parametro tapa al de fuera y el cuerpo se mira igual
 			for _, a := range []jexpr{v.cuerpo} {

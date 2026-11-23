@@ -765,6 +765,10 @@ func (ctx *contextoJava) registrarExpresion(x jexpr) {
 		ctx.registrarExpresion(v.indice)
 	case jincr:
 		ctx.registrarExpresion(v.destino)
+	case jasignExp:
+		// la asignacion como valor del frente de la linea 187: sus dos lados son expresiones mas
+		ctx.registrarExpresion(v.destino)
+		ctx.registrarExpresion(v.valor)
 	case jllamada:
 		if v.base != nil {
 			ctx.registrarExpresion(v.base)
@@ -894,6 +898,9 @@ func anonimasDe(c *jclas) []*jclas {
 			expr(v.indice)
 		case jincr:
 			expr(v.destino)
+		case jasignExp:
+			expr(v.destino)
+			expr(v.valor)
 		}
 	}
 	for _, m := range c.metodos {
@@ -2738,6 +2745,8 @@ func posDeExpr(x jexpr) pos {
 		return v.donde
 	case jincr:
 		return v.donde
+	case jasignExp:
+		return v.donde
 	case joperador:
 		return v.donde
 	case jnegacion:
@@ -2921,6 +2930,8 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		return e.leeIndice(v)
 	case jincr:
 		return e.incrementoValor(v)
+	case jasignExp:
+		return e.asignacionValor(v)
 	case joperador:
 		// aritmetica entera, leida de `javap -c` sobre `a*b`, `a/b`, `a%b`, `a+b`, `a-b` (parrafo 49):
 		// dos palabras dentro, una fuera. Antes de emitir se prueba el plegado de constantes, que javac
@@ -5869,6 +5880,47 @@ func (e *emisor) incrementoValor(v jincr) (string, error) {
 	return "I", nil
 }
 
+// asignacionValor: `x = valor` usado como **valor** (JLS 15.26.1), la forma de
+// `while ((length = in.read(buffer)) > 0)`. La expresion vale lo asignado, asi que javac escribe el
+// valor y lo deja duplicado antes de guardarlo: medido con javac 17 sobre la linea 187 de
+// `MainActivity.java` del zip de ApkShare, `aload_1; aload_2; invokevirtual read([B)I; dup; istore 4;
+// iconst_0; if_icmple`. En un `long` el duplicado es `dup2` y el guardado ocupa dos palabras.
+// Solo se mide sobre una variable local: en un campo el duplicado es `dup_x1`/`dup2_x1` con el receptor
+// debajo y en un elemento de arreglo `dup_x2`, formas que nadie ha medido todavia y que se rechazan por
+// su nombre. El valor va por `expA` contra el descriptor del local, igual que la asignacion sentencia.
+func (e *emisor) asignacionValor(v jasignExp) (string, error) {
+	e.marcaLinea(v.donde.linea)
+	acc, esAcceso := v.destino.(jacceso)
+	if !esAcceso {
+		return "", fmt.Errorf("linea %d: una asignacion como valor solo esta medida sobre una variable local", v.donde.linea)
+	}
+	segs, base := aplanar(acc)
+	if base != nil || len(segs) != 1 {
+		return "", fmt.Errorf("linea %d: una asignacion como valor solo esta medida sobre una variable local, y el destino es %s",
+			v.donde.linea, strings.Join(segs, "."))
+	}
+	lv, ok := e.locales[segs[0]]
+	if !ok {
+		return "", fmt.Errorf("linea %d: una asignacion como valor solo esta medida sobre una variable local, y %s no lo es",
+			v.donde.linea, segs[0])
+	}
+	dv, err := e.expA(v.valor, lv.desc)
+	if err != nil {
+		return "", err
+	}
+	if dv[0] != lv.desc[0] {
+		return "", fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, segs[0], lv.desc, dv)
+	}
+	if esAncho(lv.desc) {
+		e.emite(opDup2)
+	} else {
+		e.emite(opDup)
+	}
+	e.subePor(lv.desc)
+	e.guardaDe(lv.indice, lv.desc)
+	return lv.desc, nil
+}
+
 // entradaTry: una fila de la exception_table del Code (JVMS 4.7.3). `fin` es exclusivo y `tipo` es el
 // descriptor de la clase atrapada; vacio es el `any` que escribe javac para el `finally` (parrafo 75).
 type entradaTry struct {
@@ -6574,10 +6626,10 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		return nil
 	case jdecl:
-		e.marcaLinea(v.donde.linea)
 		if v.tipo == "var" {
 			// Java 10 infiere el tipo del inicializador; aquí se emite primero y se reserva el local
 			// con el descriptor que dejó en la pila (medido en §179).
+			e.marcaLinea(v.donde.linea)
 			if v.valor == nil {
 				return fmt.Errorf("linea %d: `var` necesita inicializador", v.donde.linea)
 			}
@@ -6595,8 +6647,14 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		indice := e.reserva(v.nombre, d)
 		if v.valor == nil {
+			// una declaracion sin inicializador no escribe ni un byte, y javac no le pone fila en la
+			// LineNumberTable: medido contra javac 17 en la copia de la linea 187 de ApkShare, donde
+			// `int length;` no deja entrada y la primera fila del bucle es la del `while` (`pc 26,
+			// linea 18`). Antes se marcaba la linea de la declaracion y quedaba una fila de mas con el
+			// mismo `pc` que la sentencia siguiente.
 			return nil
 		}
+		e.marcaLinea(v.donde.linea)
 		dv, err := e.expA(v.valor, d)
 		if err != nil {
 			return err
