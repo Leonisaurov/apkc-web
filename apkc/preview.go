@@ -261,8 +261,10 @@ textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.con
 destroys and recreates the current activity with its Bundle, as a rotation does, so onSaveInstanceState
 feeds savedInstanceState in the new onCreate and SharedPreferences survives the run; both stores come
 back in ejecucion.bundle and ejecucion.preferencias. --pulsar and --recrear are delivered in the order
-they are written. Repeating the same list reproduces the same screen. No process is started and nothing
-is written, so it runs inside the tab.
+they are written. A ListView whose adapter is the project's own is painted with one child per row,
+texts included: --pulsar id/lista:1 delivers onItemClick for row 1 of that list. Repeating the same
+list reproduces the same screen. No process is started and nothing is written, so it runs inside the
+tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
@@ -469,6 +471,9 @@ func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, orde
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
 	anotaTextoDinamico(raiz, modelo.Ejecucion)
 	anotaOyentes(raiz, modelo.Ejecucion)
+	// las listas se expanden después de los clics: el adaptador ya está armado y es su getView el
+	// que decide qué filas y qué textos se ven
+	expandeListas(raiz, modelo.Ejecucion, tabla, zr)
 	// el rectángulo se calcula con el texto que se va a ver: si la app lo cambió, la medida del
 	// layout declarado ya no es la de la pantalla que el modelo describe
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
@@ -593,6 +598,97 @@ func anotaOyentes(n *nodoVista, ejecucion *resultadoEjecucion) {
 	}
 	for _, h := range n.Hijos {
 		anotaOyentes(h, ejecucion)
+	}
+}
+
+// expandeListas sustituye cada nodo de lista por las filas que devolvió el adaptador del proyecto.
+// El nodo conserva su rectángulo, sus atributos y su id; lo que cambia son sus hijos, que pasan de
+// ninguno a una fila por elemento visible. Solo toca los nodos que la ejecución registró como lista
+// con `setAdapter`: un `ListView` sin adaptador se pinta vacío, como en el aparato.
+func expandeListas(raiz *nodoVista, ejecucion *resultadoEjecucion, tabla *tablaRecursos, zr *zip.Reader) {
+	if raiz == nil || ejecucion == nil || ejecucion.maquina == nil {
+		return
+	}
+	listas := ejecucion.maquina.listasPintadas()
+	if len(listas) == 0 {
+		return
+	}
+	porID := map[string]*nodoVista{}
+	var recorre func(*nodoVista)
+	recorre = func(n *nodoVista) {
+		if n == nil {
+			return
+		}
+		if n.IDRef != "" {
+			porID[n.IDRef] = n
+		}
+		for _, h := range n.Hijos {
+			recorre(h)
+		}
+	}
+	recorre(raiz)
+	for _, lista := range listas {
+		n := porID[fmt.Sprintf("%#08x", lista.ID)]
+		if n == nil {
+			continue
+		}
+		n.Hijos = nil
+		for _, fila := range lista.Filas {
+			n.Hijos = append(n.Hijos, nodoDeFila(fila, tabla, zr))
+		}
+		// el ListView apila sus filas: sin orientación, la medida caería al apilado de un
+		// FrameLayout y las tres filas quedarían una encima de otra
+		if n.orientacion == "" {
+			n.orientacion = "vertical"
+		}
+	}
+}
+
+// nodoDeFila arma el nodo de una fila a partir del layout que el getView infló, con los textos que
+// ese getView escribió en sus vistas con id. Sin layout (una vista creada en código) el nodo es la
+// vista tal cual: su tipo y su texto, que es lo único que se puede medir sin inventar un XML.
+func nodoDeFila(fila filaPintada, tabla *tablaRecursos, zr *zip.Reader) *nodoVista {
+	if fila.LayoutID != 0 && tabla != nil && zr != nil {
+		if ruta, err := rutaDeLayoutPorId(tabla, fila.LayoutID); err == nil {
+			if datos, err := entradaDeZip(zr, ruta); err == nil {
+				if axml, err := leeAXML(datos); err == nil {
+					ctx := &contextoVista{axml: axml, tabla: tabla}
+					if arbol, err := ctx.arbol(); err == nil {
+						if n := ctx.nodoDe(arbol); n != nil {
+							// en una lista, una fila ocupa el ancho del padre y solo pide el alto
+							// que necesita: sin medidas declaradas, es lo que haría el ListView
+							if n.declAncho == medidaWrap {
+								n.declAncho = medidaMatch
+							}
+							aplicaTextosDeFila(n, fila.Textos)
+							return n
+						}
+					}
+				}
+			}
+		}
+	}
+	return &nodoVista{Tipo: fila.Tipo, Texto: fila.Texto, declAncho: medidaMatch,
+		declAlto: medidaWrap, layoutGravity: -1}
+}
+
+// aplicaTextosDeFila copia a cada nodo el texto que el getView escribió en la vista de su id. Es el
+// equivalente de `anotaTextoDinamico`, pero por instancia: cada fila trae los suyos y no el último
+// que se escribió en la pantalla.
+func aplicaTextosDeFila(n *nodoVista, textos map[uint32]string) {
+	if n == nil || len(textos) == 0 {
+		return
+	}
+	if n.IDRef != "" {
+		id := strings.TrimPrefix(strings.ToLower(n.IDRef), "0x")
+		if v, err := strconv.ParseUint(id, 16, 32); err == nil {
+			if texto, ok := textos[uint32(v)]; ok {
+				n.TextoDinamico = texto
+			}
+		}
+	}
+	for _, h := range n.Hijos {
+		aplicaTextosDeFila(h, textos)
 	}
 }
 
@@ -1702,6 +1798,9 @@ func tipoDeContenedor(tipo string) string {
 		return "lineal"
 	case "FrameLayout":
 		return "frame"
+	case "ListView", "AbsListView":
+		// una lista apila sus filas; la orientación la fija el modelo al expandirla
+		return "lineal"
 	}
 	if strings.HasSuffix(tipo, "Layout") {
 		return "apilado"
