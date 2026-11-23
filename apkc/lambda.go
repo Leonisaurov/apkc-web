@@ -27,6 +27,18 @@ type classBootstrap struct {
 
 // classLambda es el sitio desugrado: qué clase sintética construye el llamador, con qué constructor
 // y cuántos valores captura (en orden). La clave es el pc del `invokedynamic` en su método.
+// sitioKey: un `invokedynamic` se identifica por su pc DENTRO de su método. El pc solo no vale: dos
+// métodos de la misma clase pueden tener un sitio en el mismo pc, y el mapa de la clase guardaba
+// uno solo. Medido en Droidloom con el fixture `arreglos`: la concatenación de `largos` (pc 28,
+// `(IJJ)`) se traducía con los tipos de la de otro método y salía `append:(I)` sobre la mitad baja
+// de un `long`; ART cortó con «register v4 has type Long (Low Half) but expected Integer».
+type sitioKey struct {
+	metodo string // Nombre + Descriptor del método dueño
+	pc     int
+}
+
+func claveSitio(m classMethod, pc int) sitioKey { return sitioKey{metodo: m.Name + m.Desc, pc: pc} }
+
 type classLambda struct {
 	clase    string   // descriptor, LLam$$Lambda$0;
 	ctorDesc string   // descriptor del constructor, (I)V o (LLam;)V
@@ -45,7 +57,7 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 		}
 		x := poolIndex{p: cf.p}
 		if cf.Lambdas == nil {
-			cf.Lambdas = map[int]classLambda{}
+			cf.Lambdas = map[sitioKey]classLambda{}
 		}
 		// `javac` deja `$deserializeLambda$` para que la JVM reconstruya una lambda serializable.
 		// `d8` la quita y la clase sintética implementa Serializable a secas (medido en el §115);
@@ -79,9 +91,9 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 					return nil, fmt.Errorf("%s%s pc %d: %w", cf.Name, m.Desc, in.pc, err)
 				} else if es {
 					if cf.Concats == nil {
-						cf.Concats = map[int]classConcat{}
+						cf.Concats = map[sitioKey]classConcat{}
 					}
-					cf.Concats[in.pc] = concat
+					cf.Concats[claveSitio(*m, in.pc)] = concat
 					continue
 				}
 				sitio, impl, err := sitioDeLambda(cf, x, int(binary.BigEndian.Uint16(in.ops)))
@@ -91,7 +103,7 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 				nombre := cf.Name[:len(cf.Name)-1] + "$$Lambda$" + itoa(contador)
 				contador++
 				extras = append(extras, claseDeLambda(nombre, sitio, impl))
-				cf.Lambdas[in.pc] = classLambda{
+				cf.Lambdas[claveSitio(*m, in.pc)] = classLambda{
 					clase:    nombre + ";",
 					ctorDesc: descriptorVacio(sitio.capturas),
 					capturas: sitio.capturas,

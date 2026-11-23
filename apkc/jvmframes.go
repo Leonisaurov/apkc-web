@@ -448,6 +448,15 @@ func nombreTipoVerif(que byte) string {
 	return "top"
 }
 
+// indiceLocal: el hueco de local que nombra una carga, un almacén o un `iinc`. La forma `wide`
+// (0xc4) lo lleva en dos bytes (JVMS 6.5) y el caminante la deja en `in.ancho`.
+func indiceLocal(in jvmInstr) int {
+	if in.ancho {
+		return u2De(in.ops, 0)
+	}
+	return int(in.ops[0])
+}
+
 func salto16(in jvmInstr) int { return in.pc + int(int16(uint16(in.ops[0])<<8|uint16(in.ops[1]))) }
 
 func salto32(in jvmInstr) int { return in.pc + int(leer4(in.ops, 0)) }
@@ -521,7 +530,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		}
 		a.empuja(t)
 	case op == 0x15:
-		if err := a.cargaLocal(int(in.ops[0]), 'i'); err != nil {
+		if err := a.cargaLocal(indiceLocal(in), 'i'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x1a && op <= 0x1d:
@@ -529,7 +538,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 	case op == 0x19:
-		if err := a.cargaLocal(int(in.ops[0]), 'l'); err != nil {
+		if err := a.cargaLocal(indiceLocal(in), 'l'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x2a && op <= 0x2d:
@@ -537,7 +546,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 	case op == 0x36:
-		if err := a.guardaLocal(int(in.ops[0]), 'i'); err != nil {
+		if err := a.guardaLocal(indiceLocal(in), 'i'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x3b && op <= 0x3e:
@@ -545,7 +554,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 	case op == 0x3a:
-		if err := a.guardaLocal(int(in.ops[0]), 'l'); err != nil {
+		if err := a.guardaLocal(indiceLocal(in), 'l'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x4b && op <= 0x4e:
@@ -556,7 +565,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		if len(in.ops) < 2 {
 			return nil, false, fmt.Errorf("el iinc se corta")
 		}
-		n := int(in.ops[0])
+		n := indiceLocal(in)
 		if n >= len(a.est.locales) || a.est.locales[n].etiqueta != 'i' {
 			return nil, false, fmt.Errorf("el iinc sobre el hueco %d, que no es un entero asignado", n)
 		}
@@ -585,7 +594,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		}
 		a.empuja(t)
 	case op == 0x16: // lload
-		if err := a.cargaLocal(int(in.ops[0]), 'j'); err != nil {
+		if err := a.cargaLocal(indiceLocal(in), 'j'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x1e && op <= 0x21: // lload_0 .. lload_3
@@ -593,7 +602,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 	case op == 0x37: // lstore
-		if err := a.guardaLocal(int(in.ops[0]), 'j'); err != nil {
+		if err := a.guardaLocal(indiceLocal(in), 'j'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x3f && op <= 0x42: // lstore_0 .. lstore_3
@@ -644,11 +653,11 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 		a.empuja(verifInt)
 	// ----- el `float` y el `double`, leidos de `javap -c` sobre `FyD` (parrafo 77) -----
 	case op == 0x17: // fload
-		if err := a.cargaLocal(int(in.ops[0]), 'f'); err != nil {
+		if err := a.cargaLocal(indiceLocal(in), 'f'); err != nil {
 			return nil, false, err
 		}
 	case op == 0x18: // dload
-		if err := a.cargaLocal(int(in.ops[0]), 'd'); err != nil {
+		if err := a.cargaLocal(indiceLocal(in), 'd'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x22 && op <= 0x25: // fload_0 .. fload_3
@@ -660,11 +669,11 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 			return nil, false, err
 		}
 	case op == 0x38: // fstore
-		if err := a.guardaLocal(int(in.ops[0]), 'f'); err != nil {
+		if err := a.guardaLocal(indiceLocal(in), 'f'); err != nil {
 			return nil, false, err
 		}
 	case op == 0x39: // dstore
-		if err := a.guardaLocal(int(in.ops[0]), 'd'); err != nil {
+		if err := a.guardaLocal(indiceLocal(in), 'd'); err != nil {
 			return nil, false, err
 		}
 	case op >= 0x43 && op <= 0x46: // fstore_0 .. fstore_3

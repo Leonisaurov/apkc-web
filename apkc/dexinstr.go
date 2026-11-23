@@ -1108,7 +1108,13 @@ func (p *traduce) guardaLocalEn(in jvmInstr, n int, ancho bool) {
 		op = opMueveObjeto
 	}
 	_, yaAtado := p.renom[n]
-	if !yaAtado && n >= p.m.ArgCount && r < p.base {
+	// Dentro de un tramo protegido no se funde: el `catch` del mismo `try` entra con otro marco y el
+	// registro de casa de un local fusionado solo existe en la rama que lo escribió. El caso medido
+	// en Droidloom es `MainActivity.onCreate` de este banco, con `salida` asignada en el `try` y en
+	// el `catch`: la fusión dejaba la del `try` en un temporal y el `catch` movía el local a su hueco
+	// en plena rama (`move-object/from16 v9, v59`), y ART cortaba con `copy-reference v9<-v59
+	// type=Undefined`.
+	if !yaAtado && n >= p.m.ArgCount && r < p.base && !p.protegido(in.pc) {
 		p.renom[n] = r
 		if p.fijos == nil {
 			p.fijos = map[int]bool{}
@@ -1135,7 +1141,7 @@ func (p *traduce) guardaLocalEn(in jvmInstr, n int, ancho bool) {
 	// El destino de la escritura es el registro del local; si es inalcanzable para cuatro bits se baja el
 	// hueco a un temporal (parrafo 86) y el valor se copia sobre ese bajo. La otra dirección —escribir
 	// SOBRE un registro alto— no la emite `d8` nunca: renombra (medido en `D16d.reasignaEntero`).
-	destino = p.bajaAlto(in, n, op)
+	destino = p.bajaAltoGuardar(in, n, op)
 	if p.err != nil {
 		return
 	}
@@ -1433,6 +1439,73 @@ func (p *traduce) aseguraRegistro(in jvmInstr, r, techo int, opMueve byte, par b
 // temporal con el mismo mecanismo con el que `guardaLocal` ata la primera escritura, así que el
 // registro alto no se vuelve a nombrar nunca. La copia se emite UNA sola vez por hueco, no por lectura:
 // copiar en cada lectura costaba un temporal más por uso y el marco de `Ver.compara` se salía de v15.
+// bajaAltoGuardar: como `bajaAlto`, pero para una ESCRITURA. El local va a recibir un valor nuevo,
+// así que no hay que copiar el viejo al registro bajo; copiarlo, si el local aún no se había
+// asignado, es leer un registro indefinido y el verificador lo corta (`copy-reference v2<-v71
+// type=Undefined`, medido en Droidloom con el `try` de este banco). Lo que sí hay que hacer es
+// bajar el hueco: el registro de casa pasa a ser el bajo.
+func (p *traduce) bajaAltoGuardar(in jvmInstr, n int, op byte) int {
+	ancho := op == opMueveWide
+	techo := 15
+	if ancho {
+		techo = 14
+	}
+	r := p.local(n)
+	if r <= techo {
+		return r
+	}
+	var t int
+	if ancho {
+		t = p.tomaPar(in)
+	} else {
+		t = p.tomaBajo(in, techo)
+	}
+	if p.err != nil {
+		return 0
+	}
+	if ancho && t > techo {
+		p.falla(in, "no low register is free to carry a high slot down")
+		return 0
+	}
+	if p.renom == nil {
+		p.renom = map[int]int{}
+	}
+	if _, ok := p.renom[n]; !ok {
+	}
+	p.renom[n] = t
+	if p.fijos == nil {
+		p.fijos = map[int]bool{}
+	}
+	if p.kindFijo == nil {
+		p.kindFijo = map[int]byte{}
+	}
+	quitar := []int{t}
+	if ancho {
+		quitar = append(quitar, t+1)
+	}
+	for _, q := range quitar {
+		p.fijos[q] = true
+		p.kindFijo[q] = op
+		for i, vivo := range p.libres {
+			if vivo == q {
+				p.libres = append(p.libres[:i], p.libres[i+1:]...)
+				break
+			}
+		}
+	}
+	return t
+}
+
+// protegido: el pc cae dentro de un tramo con `catch`.
+func (p *traduce) protegido(pc int) bool {
+	for _, tr := range p.m.Tries {
+		if pc >= tr.start && pc < tr.end {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *traduce) bajaAlto(in jvmInstr, n int, op byte) int {
 	ancho := op == opMueveWide
 	techo := 15
@@ -1463,6 +1536,8 @@ func (p *traduce) bajaAlto(in jvmInstr, n int, op byte) int {
 	p.palabra(uint16(r))
 	if p.renom == nil {
 		p.renom = map[int]int{}
+	}
+	if _, ok := p.renom[n]; !ok {
 	}
 	p.renom[n] = t
 	if p.fijos == nil {
@@ -2044,10 +2119,26 @@ func (p *traduce) cuentaEntera(in jvmInstr) {
 // parrafo 67 sobre `Inc.local` (`d800 0001` para `i++` y `d800 00ff` para `i--`). Es la forma 22b:
 // el opcode con el destino en el byte alto, y el registro fuente con la constante al lado.
 func (p *traduce) incrementa(in jvmInstr) {
-	n := int(in.ops[0])
-	c := int(int8(in.ops[1]))
+	// La forma `wide` (0xc4) del `.class` lleva el índice y la constante en dos bytes cada uno, y
+	// javac la usa en cuanto la constante no cabe en un byte con signo. Medido con javac 21 sobre
+	// `iinc 1, 1000` (`iinc_w 1, 1000` en `javap -c`): `d8` la traduce a `add-int/lit16 v0, v0,
+	// #int 1000` —`d000 e803`—, que es la 22s con el registro en el byte bajo y el literal de 16
+	// bits con signo detrás. El `add-int/lit8` (0xd8) sigue siendo el de la forma corta.
+	var n, c int
+	if in.ancho {
+		n = int(uint16(in.ops[0])<<8 | uint16(in.ops[1]))
+		c = int(int16(uint16(in.ops[2])<<8 | uint16(in.ops[3])))
+	} else {
+		n = int(in.ops[0])
+		c = int(int8(in.ops[1]))
+	}
 	r := p.local(n)
 	if !p.octeto(r, in) {
+		return
+	}
+	if c < -128 || c > 127 {
+		p.palabra(uint16(0xd0) | uint16(r&0xff)<<8)
+		p.palabra(uint16(c) & 0xffff)
 		return
 	}
 	p.palabra(uint16(0xd8) | uint16(r&0xff)<<8)
@@ -2089,7 +2180,23 @@ func (p *traduce) nuevoArreglo(in jvmInstr) {
 		desc = "[" + clase
 	}
 	largo := p.pop(in)
-	r := p.toma(in)
+	// El 22c reparte tamaño y destino en cuatro bits cada uno (es la forma que emite `d8` y la que
+	// está medida en `Arreglos`). Con muchas entradas vivas el tamaño puede caer por encima de v15:
+	// se baja a un temporal con `move/from16`, que es la misma salida que usa `bajaAlto` para un
+	// hueco alto. Medido en Droidloom con `com.ejemplo.artver.arreglos.MainActivity.onCreate`: antes
+	// de esto el dexer se negaba («anewarray: register v16 does not fit a four-bit format») en un
+	// arreglo de nuevo tipos, que es una app legal.
+	if largo > 15 {
+		t := p.tomaBajo(in, 15)
+		if p.err != nil {
+			return
+		}
+		p.palabra(unidad22v(opMueveFrom16, t))
+		p.palabra(uint16(largo))
+		p.suelta(largo)
+		largo = t
+	}
+	r := p.tomaBajo(in, 15)
 	if !p.nibble(largo, in) || !p.nibble(r, in) {
 		return
 	}
@@ -2523,7 +2630,7 @@ func (p *traduce) recorre() error {
 			p.push(r)
 			p.ponMoveCima(opMueveObjeto)
 		case "invokedynamic":
-			if _, ok := p.clase.Concats[in.pc]; ok {
+			if _, ok := p.clase.Concats[claveSitio(p.m, in.pc)]; ok {
 				p.concat(in)
 			} else {
 				p.lambda(in)
@@ -2647,7 +2754,7 @@ func (p *traduce) recorre() error {
 			}
 			p.palabra(unidad11x(opLanza, r))
 			p.vaciaPila()
-		case "iinc":
+		case "iinc", "iinc_w":
 			p.incrementa(in)
 		case "newarray", "anewarray":
 			p.nuevoArreglo(in)
@@ -3107,7 +3214,7 @@ func (p *traduce) metodoPrivado(nombre, desc string) bool {
 // `new-instance`, se pasan las capturas que el sitio tenía en la pila y se construye con
 // `invoke-direct {v, capturas…}, <init>`. El valor que queda es el mismo registro.
 func (p *traduce) lambda(in jvmInstr) {
-	sitio, ok := p.clase.Lambdas[in.pc]
+	sitio, ok := p.clase.Lambdas[claveSitio(p.m, in.pc)]
 	if !ok {
 		p.falla(in, "an invokedynamic that the lambda expansion did not cover")
 		return

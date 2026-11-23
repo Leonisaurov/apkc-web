@@ -33,15 +33,20 @@ import (
 )
 
 const (
-	anotacionInnerClass      = "Ldalvik/annotation/InnerClass;"
-	anotacionEnclosingMethod = "Ldalvik/annotation/EnclosingMethod;"
-	anotacionEnclosingClass  = "Ldalvik/annotation/EnclosingClass;"
-	anotacionMemberClasses   = "Ldalvik/annotation/MemberClasses;"
-	anotacionMethodParams    = "Ldalvik/annotation/MethodParameters;"
-	anotacionSignature       = "Ldalvik/annotation/Signature;"
+	anotacionInnerClass        = "Ldalvik/annotation/InnerClass;"
+	anotacionEnclosingMethod   = "Ldalvik/annotation/EnclosingMethod;"
+	anotacionEnclosingClass    = "Ldalvik/annotation/EnclosingClass;"
+	anotacionMemberClasses     = "Ldalvik/annotation/MemberClasses;"
+	anotacionMethodParams      = "Ldalvik/annotation/MethodParameters;"
+	anotacionSignature         = "Ldalvik/annotation/Signature;"
+	anotacionAnnotationDefault = "Ldalvik/annotation/AnnotationDefault;"
 
 	// Las visibilidades del formato son 0x00 de construccion, 0x01 de runtime y 0x02 de sistema; las cinco
-	// anotaciones de Ldalvik/annotation/* que se emiten salen 0x02 en las dos sondas medidas.
+	// anotaciones de Ldalvik/annotation/* que se emiten salen 0x02 en las dos sondas medidas. Las del
+	// usuario viajan con la visibilidad de su atributo del `.class`: `RuntimeVisibleAnnotations` es 0x01
+	// y `RuntimeInvisibleAnnotations` es 0x00 (el valor por omision de Go, asi que se escribe siempre).
+	visibilidadBuild   = 0x00
+	visibilidadRuntime = 0x01
 	visibilidadSistema = 0x02
 
 	// Nombres de los elementos, tal como aparecen en el pool de d8.
@@ -54,13 +59,18 @@ const (
 // valor: uno de los encoded_value que este subconjunto necesita. Los indices se resuelven al codificar,
 // contra las tablas ya ordenadas; por eso aqui viajan los nombres, no los numeros.
 type valorAnotacion struct {
-	clase  byte // valueNull, valueInt, valueString, valueType, valueMethod o valueArray
+	// clase es el tipo del encoded_value: los numéricos y el booleano del usuario que caben en un
+	// entero, más los de `Ldalvik/annotation/*`.
+	clase  byte // valueNull, valueByte, valueShort, valueChar, valueInt, valueLong, valueFloat, valueDouble, valueBool, valueString, valueType, valueMethod, valueEnum, valueArray o valueAnnotation
 	entero int64
-	cadena string // texto de cuerda o descriptor de tipo, segun la clase
+	cadena string // texto de cuerda, descriptor de tipo o, en un enum, el descriptor de su tipo
 	duenio string // las tres piezas de una referencia a metodo
 	desc   string
-	nombre string
+	nombre string // en un enum, el nombre de la constante
 	lista  []valorAnotacion
+	// interna lleva la anotación de un `valueAnnotation`: el `AnnotationDefault` del usuario es una
+	// anotación dentro de otra, y el formato la escribe con el tipo y sus pares.
+	interna *anotacion
 }
 
 func valorNulo() valorAnotacion           { return valorAnotacion{clase: valueNull} }
@@ -69,6 +79,22 @@ func valorCadena(s string) valorAnotacion { return valorAnotacion{clase: valueSt
 func valorTipo(d string) valorAnotacion   { return valorAnotacion{clase: valueType, cadena: d} }
 func valorArreglo(v ...valorAnotacion) valorAnotacion {
 	return valorAnotacion{clase: valueArray, lista: v}
+}
+
+// valorEnum: el `e` de un `element_value` del `.class`. En el dex no viaja como tipo + nombre: es UN
+// índice de `field_ids` a la constante del enum, con el código de anchura en la cabecera, igual que
+// `VALUE_METHOD` con `method_ids`. Medido sobre el fichero de `d8` para `@Retention(RUNTIME)`:
+// `01 08 01 16 1b 04`, o sea visibilidad runtime, el tipo de la anotación, un elemento llamado
+// `value` y el campo 4, que es `Ljava/lang/annotation/RetentionPolicy;.RUNTIME`. Con la pareja
+// tipo/nombre en su lugar, el verificador del aparato corta con «Bad index for encoded_value
+// field». El campo es de la clase del enum y de su mismo tipo.
+func valorEnum(tipo, nombre string) valorAnotacion {
+	return valorAnotacion{clase: valueEnum, duenio: tipo, desc: tipo, nombre: nombre}
+}
+
+// valorAnidado: el `@` de un `element_value`: una anotación dentro de otra.
+func valorAnidado(a *anotacion) valorAnotacion {
+	return valorAnotacion{clase: valueAnnotation, interna: a}
 }
 
 // valorMetodo: el valor que lleva EnclosingMethod. d8 escribe un indice de method_ids, medido con
@@ -82,14 +108,18 @@ func (v valorAnotacion) clave() string {
 	switch v.clase {
 	case valueNull:
 		return "null"
-	case valueInt:
-		return fmt.Sprintf("%d", v.entero)
+	case valueByte, valueShort, valueChar, valueInt, valueLong, valueFloat, valueDouble, valueBool:
+		return fmt.Sprintf("%02x:%d", v.clase, v.entero)
 	case valueString:
 		return "cadena:" + v.cadena
 	case valueType:
 		return "tipo:" + v.cadena
 	case valueMethod:
 		return "metodo:" + v.duenio + "." + v.nombre + v.desc
+	case valueEnum:
+		return "enum:" + v.duenio + "." + v.nombre
+	case valueAnnotation:
+		return "anidada:" + v.interna.clave()
 	}
 	s := "arreglo["
 	for i, e := range v.lista {
@@ -106,6 +136,10 @@ func (v valorAnotacion) clave() string {
 type anotacion struct {
 	tipo      string
 	elementos []par
+	// visibilidad: 0x00 de construccion, 0x01 de runtime y 0x02 de sistema. Una anotacion del usuario
+	// lleva la de su atributo (`RuntimeVisible` es runtime, `RuntimeInvisible` es construccion); las
+	// sinteticas de `Ldalvik/annotation/*` van siempre en sistema.
+	visibilidad byte
 }
 
 type par struct {
@@ -114,7 +148,7 @@ type par struct {
 }
 
 func (a *anotacion) clave() string {
-	s := a.tipo
+	s := fmt.Sprintf("%02x:%s", a.visibilidad, a.tipo)
 	for _, p := range a.elementos {
 		s += "|" + p.nombre + "=" + p.valor.clave()
 	}
@@ -122,12 +156,18 @@ func (a *anotacion) clave() string {
 }
 
 func (a *anotacion) bytes(td *dexTables) []byte {
-	out := []byte{visibilidadSistema}
+	out := []byte{a.visibilidad}
 	out = putUleb(out, uint32(td.typeIdx[a.tipo]))
-	// el verificador exige los elementos en orden ascendente de `name_idx`; la tabla del `.class` no
-	// los trae necesariamente así (lo destapó `dexdump` sobre el jar real: `Out-of-order field_idx
-	// for annotation: c4 then ba`). d8 los ordena.
-	elementos := append([]par(nil), a.elementos...)
+	out = escribePares(td, out, a.elementos)
+	return out
+}
+
+// escribePares: el conteo y los pares de una anotacion, con los elementos en orden ascendente de
+// `name_idx`. El verificador lo exige (lo destapo `dexdump` sobre el jar real: `Out-of-order
+// field_idx for annotation: c4 then ba`) y la tabla del `.class` no los trae necesariamente asi.
+// Lo comparten la anotacion de un item y la que viaja dentro de un encoded_value.
+func escribePares(td *dexTables, out []byte, pares []par) []byte {
+	elementos := append([]par(nil), pares...)
 	sort.Slice(elementos, func(i, j int) bool {
 		return td.stringIdx[elementos[i].nombre] < td.stringIdx[elementos[j].nombre]
 	})
@@ -145,8 +185,29 @@ func codificaValor(td *dexTables, out []byte, v valorAnotacion) []byte {
 	switch v.clase {
 	case valueNull:
 		return append(out, valueNull)
+	case valueByte:
+		// VALUE_BYTE lleva siempre un byte y el campo de anchura va a cero.
+		return codificaBytes(out, valueByte, 0, v.entero)
+	case valueShort:
+		return codificaBytes(out, valueShort, anchuraEntero(v.entero), v.entero)
+	case valueChar:
+		// `char` es de 16 bits sin signo: el ancho no se firma.
+		return codificaBytes(out, valueChar, anchuraIndice(uint32(v.entero)&0xffff), v.entero&0xffff)
 	case valueInt:
 		return codificaBytes(out, valueInt, anchuraEntero(v.entero), v.entero)
+	case valueLong:
+		return codificaBytes(out, valueLong, 7, v.entero)
+	case valueFloat:
+		return codificaBytes(out, valueFloat, 3, int64(uint32(v.entero)))
+	case valueDouble:
+		return codificaBytes(out, valueDouble, 7, v.entero)
+	case valueBool:
+		// VALUE_BOOLEAN no lleva bytes: el valor vive en el código de anchura.
+		bit := int64(0)
+		if v.entero != 0 {
+			bit = 1
+		}
+		return append(out, byte(valueBool)|byte(bit<<5))
 	case valueString:
 		return codificaBytes(out, valueString, anchuraIndice(uint32(td.stringIdx[v.cadena])),
 			int64(td.stringIdx[v.cadena]))
@@ -157,6 +218,15 @@ func codificaValor(td *dexTables, out []byte, v valorAnotacion) []byte {
 		k := methodKey{owner: v.duenio, proto: protoKeyOf(v.desc), desc: v.desc, name: v.nombre}
 		i := int64(td.methodIdx[k])
 		return codificaBytes(out, valueMethod, anchuraIndice(uint32(i)), i)
+	case valueEnum:
+		// el `e` del `.class` viaja como el índice del campo de la constante (ver `valorEnum`)
+		k := fieldKey{owner: v.duenio, typeOf: v.desc, name: v.nombre}
+		i := int64(td.fieldIdx[k])
+		return codificaBytes(out, valueEnum, anchuraIndice(uint32(i)), i)
+	case valueAnnotation:
+		out = append(out, valueAnnotation)
+		out = putUleb(out, uint32(td.typeIdx[v.interna.tipo]))
+		return escribePares(td, out, v.interna.elementos)
 	case valueArray:
 		out = append(out, valueArray)
 		out = putUleb(out, uint32(len(v.lista)))
@@ -271,7 +341,7 @@ func anotacionDeFirma(firma string) anotacion {
 	for _, p := range partes {
 		valores = append(valores, valorCadena(p))
 	}
-	return anotacion{tipo: anotacionSignature, elementos: []par{
+	return anotacion{tipo: anotacionSignature, visibilidad: visibilidadSistema, elementos: []par{
 		{elementoValue, valorArreglo(valores...)},
 	}}
 }
@@ -281,11 +351,20 @@ func reglasDe(cf classFull) anotacionesDe {
 	if cf.Signature != "" {
 		sal.clase = append(sal.clase, anotacionDeFirma(cf.Signature))
 	}
+	// Las anotaciones del usuario van tal como las dejo el `.class`, con su visibilidad. `d8` las
+	// copia sin mirar lo que valen (enum, tipo, anidada o arreglo): el encoded_value es el mismo
+	// formato que ya se escribe para `Signature`, solo que con todos los tipos.
+	sal.clase = append(sal.clase, cf.Anotaciones...)
+	sal.clase = append(sal.clase, cf.AnotacionesInvisibles...)
 	for _, f := range cf.Fields {
+		items := append([]anotacion(nil), f.Anotaciones...)
+		items = append(items, f.AnotacionesInvisibles...)
 		if f.Signature != "" {
+			items = append(items, anotacionDeFirma(f.Signature))
+		}
+		if len(items) > 0 {
 			sal.campos = append(sal.campos, anotacionesCampo{
-				owner: cf.Name, desc: f.Desc, nombre: f.Name,
-				items: []anotacion{anotacionDeFirma(f.Signature)},
+				owner: cf.Name, desc: f.Desc, nombre: f.Name, items: items,
 			})
 		}
 	}
@@ -305,13 +384,13 @@ func reglasDe(cf classFull) anotacionesDe {
 	// Medido en la anonima: el set es {EnclosingMethod, InnerClass}, o sea primero donde esta la clase
 	// y despues como se llama.
 	if cf.EnclosingMethod && cf.Enclosing.nombre != "" {
-		sal.clase = append(sal.clase, anotacion{tipo: anotacionEnclosingMethod, elementos: []par{
+		sal.clase = append(sal.clase, anotacion{tipo: anotacionEnclosingMethod, visibilidad: visibilidadSistema, elementos: []par{
 			{elementoValue, valorMetodo(cf.Enclosing.clase, cf.Enclosing.desc, cf.Enclosing.nombre)},
 		}})
 	} else if propia != nil && propia.outer != "" && propia.name != "" {
 		// @EnclosingClass la pide una clase miembro CON nombre (R$id, R$layout, R$style), no la
 		// anonima: asi esta en el fichero de d8 del fixture, medido en el parrafo 59
-		sal.clase = append(sal.clase, anotacion{tipo: anotacionEnclosingClass, elementos: []par{
+		sal.clase = append(sal.clase, anotacion{tipo: anotacionEnclosingClass, visibilidad: visibilidadSistema, elementos: []par{
 			{elementoValue, valorTipo(propia.outer)},
 		}})
 	}
@@ -322,7 +401,7 @@ func reglasDe(cf classFull) anotacionesDe {
 		}
 		// accessFlags va **tal cual lo dejo javac en InnerClasses** (medido: 0x19 para R$id, 0x0 para
 		// la anonima), no convertido a los flags del dex, que colisionan entre public y static
-		sal.clase = append(sal.clase, anotacion{tipo: anotacionInnerClass, elementos: []par{
+		sal.clase = append(sal.clase, anotacion{tipo: anotacionInnerClass, visibilidad: visibilidadSistema, elementos: []par{
 			{elementoAccessFlags, valorEntero(int64(propia.access))},
 			{elementoName, nom},
 		}})
@@ -334,12 +413,31 @@ func reglasDe(cf classFull) anotacionesDe {
 		}
 		// el orden del arreglo es el orden de las filas del InnerClasses del .class (medido: style,
 		// layout, id en R, que es como javac las escribe y como d8 las copia)
-		sal.clase = append(sal.clase, anotacion{tipo: anotacionMemberClasses, elementos: []par{
+		sal.clase = append(sal.clase, anotacion{tipo: anotacionMemberClasses, visibilidad: visibilidadSistema, elementos: []par{
 			{elementoValue, valorArreglo(valores...)},
 		}})
 	}
+	// AnnotationDefault: d8 lo escribe en la CLASE de la anotación, como una anotación de sistema
+	// cuyo `value` es la anotación del propio tipo con los elementos que llevan valor por omisión.
+	// javac deja un atributo AnnotationDefault en cada MÉTODO del tipo anotación, no en la clase:
+	// se juntan aquí y el orden lo pone el emisor por `name_idx`.
+	defectos := []par{}
 	for _, m := range cf.Methods {
-		items := []anotacion{}
+		if m.Default != nil {
+			defectos = append(defectos, par{nombre: m.Name, valor: *m.Default})
+		}
+	}
+	if len(defectos) > 0 {
+		sal.clase = append(sal.clase, anotacion{
+			tipo: anotacionAnnotationDefault, visibilidad: visibilidadSistema,
+			elementos: []par{{elementoValue, valorAnidado(&anotacion{
+				tipo: cf.Name, visibilidad: visibilidadRuntime, elementos: defectos,
+			})}},
+		})
+	}
+	for _, m := range cf.Methods {
+		items := append([]anotacion(nil), m.Anotaciones...)
+		items = append(items, m.AnotacionesInvisibles...)
 		if m.Parameters && len(m.Parametros) > 0 {
 			flags := make([]valorAnotacion, 0, len(m.Parametros))
 			nombres := make([]valorAnotacion, 0, len(m.Parametros))
@@ -351,7 +449,7 @@ func reglasDe(cf classFull) anotacionesDe {
 				}
 				nombres = append(nombres, valorCadena(p.nombre))
 			}
-			items = append(items, anotacion{tipo: anotacionMethodParams, elementos: []par{
+			items = append(items, anotacion{tipo: anotacionMethodParams, visibilidad: visibilidadSistema, elementos: []par{
 				{elementoAccessFlags, valorArreglo(flags...)},
 				{elementoNames, valorArreglo(nombres...)},
 			}})
@@ -407,14 +505,25 @@ func (t *dexTables) internAnotaciones(de map[string]anotacionesDe) {
 func internaValor(t *dexTables, v valorAnotacion) {
 	switch v.clase {
 	case valueString:
-		if v.cadena != "" {
-			t.internString(v.cadena)
-		}
+		// la cadena vacía también se interna: un `default ""` de una anotación es un `VALUE_STRING`
+		// con su índice, y sin la entrada el índice cae en la primera cadena de la tabla (que con las
+		// cadenas del fixture es « campo=»). d8 la escribe en la posición 0.
+		t.internString(v.cadena)
 	case valueType:
 		t.internType(v.cadena)
 	case valueMethod:
 		t.internType(v.duenio)
 		t.internMethod(v.duenio, v.desc, v.nombre)
+	case valueEnum:
+		// la constante del enum es un field_id más: d8 las escribe en la tabla aunque la clase del
+		// enum no viaje en este dex (medido: `Color.ROJO` entre los cinco campos de su fichero)
+		t.internField(v.duenio, v.desc, v.nombre)
+	case valueAnnotation:
+		t.internType(v.interna.tipo)
+		for _, p := range v.interna.elementos {
+			t.internString(p.nombre)
+			internaValor(t, p.valor)
+		}
 	}
 	for _, e := range v.lista {
 		internaValor(t, e)

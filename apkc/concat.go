@@ -213,7 +213,7 @@ func (t *dexTables) internConcat(c classConcat) {
 // sacan en orden inverso, se crea el constructor, se hace un `append` por trozo y se cierra con
 // `toString`. El resultado queda en un registro nuevo y los argumentos se sueltan al final.
 func (p *traduce) concat(in jvmInstr) {
-	sitio, ok := p.clase.Concats[in.pc]
+	sitio, ok := p.clase.Concats[claveSitio(p.m, in.pc)]
 	if !ok {
 		p.falla(in, "an invokedynamic that the concat expansion did not cover")
 		return

@@ -53,6 +53,13 @@ type classFull struct {
 	Inners             []classInner
 	VisibleAnnotations []byte // raw, so the markers survive without interpreting them
 
+	// Anotaciones y AnotacionesInvisibles: los atributos RuntimeVisibleAnnotations y
+	// RuntimeInvisibleAnnotations de la clase, ya decodificados al mismo encoded_annotation que el dex
+	// escribe (con la visibilidad de cada atributo). Las del usuario viajan enteras: enum, tipo,
+	// anidada y arreglo, que es lo que `d8` copia.
+	Anotaciones           []anotacion
+	AnotacionesInvisibles []anotacion
+
 	// The three attributes d8 turns into dalvik annotations. Presence is what the dexer needed
 	// until paragraph 58; from there the content is read too, because the annotation carries it:
 	// EnclosingMethod names the class and the method, MethodParameters lists one entry per
@@ -66,8 +73,8 @@ type classFull struct {
 	// dinámica (concat.go). Los mapas van por pc y solo llevan los invokedynamic que este fork
 	// convierte; los demás se rechazan por nombre.
 	BootstrapMethods []classBootstrap
-	Lambdas          map[int]classLambda
-	Concats          map[int]classConcat
+	Lambdas          map[sitioKey]classLambda
+	Concats          map[sitioKey]classConcat
 
 	// p is the class's own constant pool. The dexer's interning follows operands that name
 	// pool entries, so the pool belongs with the class it came from; it is not part of what
@@ -119,6 +126,10 @@ type classField struct {
 	// Signature es el atributo del campo para los genéricos; d8 lo copia troceado en
 	// `dalvik.annotation.Signature` (parrafo 101).
 	Signature string
+
+	// Las anotaciones del usuario, con la visibilidad de su atributo.
+	Anotaciones           []anotacion
+	AnotacionesInvisibles []anotacion
 }
 
 type classMethod struct {
@@ -140,6 +151,12 @@ type classMethod struct {
 	Parameters bool
 	Parametros []classParametro
 	Signature  string // el attribute Signature del metodo, en texto
+
+	// Las anotaciones del usuario, con la visibilidad de su atributo, y el valor por omisión del
+	// elemento si esto es un método de un tipo anotación (`AnnotationDefault`, JVMS 4.7.22).
+	Anotaciones           []anotacion
+	AnotacionesInvisibles []anotacion
+	Default               *valorAnotacion
 }
 
 type classTry struct {
@@ -192,6 +209,18 @@ func readClassFull(data []byte) (classFull, error) {
 			case "Signature":
 				r := &cursor{b: a.body}
 				f.Signature = p.utf[r.u2()]
+			case "RuntimeVisibleAnnotations":
+				r := &cursor{b: a.body}
+				f.Anotaciones = r.anotacionesDe(x, p, visibilidadRuntime)
+				if r.failed() {
+					return classFull{}, fmt.Errorf("las anotaciones del campo %s: %s", f.Name, r.reason())
+				}
+			case "RuntimeInvisibleAnnotations":
+				r := &cursor{b: a.body}
+				f.AnotacionesInvisibles = r.anotacionesDe(x, p, visibilidadBuild)
+				if r.failed() {
+					return classFull{}, fmt.Errorf("las anotaciones invisibles del campo %s: %s", f.Name, r.reason())
+				}
 			}
 		}
 		cf.Fields = append(cf.Fields, f)
@@ -230,6 +259,25 @@ func readClassFull(data []byte) (classFull, error) {
 			case "Signature":
 				r := &cursor{b: a.body}
 				m.Signature = p.utf[r.u2()]
+			case "RuntimeVisibleAnnotations":
+				r := &cursor{b: a.body}
+				m.Anotaciones = r.anotacionesDe(x, p, visibilidadRuntime)
+				if r.failed() {
+					return classFull{}, fmt.Errorf("las anotaciones de %s%s: %s", m.Name, m.Desc, r.reason())
+				}
+			case "RuntimeInvisibleAnnotations":
+				r := &cursor{b: a.body}
+				m.AnotacionesInvisibles = r.anotacionesDe(x, p, visibilidadBuild)
+				if r.failed() {
+					return classFull{}, fmt.Errorf("las anotaciones invisibles de %s%s: %s", m.Name, m.Desc, r.reason())
+				}
+			case "AnnotationDefault":
+				r := &cursor{b: a.body}
+				v := r.valorDe(x, p)
+				if r.failed() {
+					return classFull{}, fmt.Errorf("el AnnotationDefault de %s: %s", m.Name, r.reason())
+				}
+				m.Default = &v
 			}
 		}
 		cf.Methods = append(cf.Methods, m)
@@ -244,6 +292,17 @@ func readClassFull(data []byte) (classFull, error) {
 			cf.readInners(x, a.body)
 		case "RuntimeVisibleAnnotations":
 			cf.VisibleAnnotations = a.body
+			r := &cursor{b: a.body}
+			cf.Anotaciones = r.anotacionesDe(x, p, visibilidadRuntime)
+			if r.failed() {
+				return classFull{}, fmt.Errorf("las anotaciones de la clase: %s", r.reason())
+			}
+		case "RuntimeInvisibleAnnotations":
+			r := &cursor{b: a.body}
+			cf.AnotacionesInvisibles = r.anotacionesDe(x, p, visibilidadBuild)
+			if r.failed() {
+				return classFull{}, fmt.Errorf("las anotaciones invisibles de la clase: %s", r.reason())
+			}
 		case "EnclosingMethod":
 			// JVMS 4.7.7: dos u2, la clase que envuelve y UNA entrada del pool con el metodo. d8 lo
 			// convierte en Ldalvik/annotation/EnclosingMethod; con un indice de method_ids, asi que
@@ -291,6 +350,85 @@ func (f *classField) readConstant(x poolIndex, body []byte) {
 	case cpDouble:
 		f.ConstLong = int64(math.Float64bits(x.doubleOf(idx)))
 	}
+}
+
+// anotacionesDe: el cuerpo de un RuntimeVisibleAnnotations o RuntimeInvisibleAnnotations (JVMS
+// 4.7.16): el conteo y cada anotación. La visibilidad la fija quien llama, porque es quien sabe de
+// qué atributo salió el cuerpo.
+func (c *cursor) anotacionesDe(x poolIndex, p *pool, visibilidad byte) []anotacion {
+	n := c.u2()
+	out := make([]anotacion, 0, n)
+	for i := 0; i < n && !c.failed(); i++ {
+		out = append(out, c.anotacionDe(x, p, visibilidad))
+	}
+	return out
+}
+
+// anotacionDe: una anotación de JVMS 4.7.16: el índice del tipo, que es una entrada CONSTANT_Class
+// con el descriptor, y los pares {nombre del elemento, valor}. Aquí se resuelve a las piezas que el
+// formato del dex necesita (descriptores, nombres y números); los índices de sus tablas no existen
+// todavía y los pone `codificaValor` cuando están ordenadas.
+func (c *cursor) anotacionDe(x poolIndex, p *pool, visibilidad byte) anotacion {
+	// el type_index es un Utf8 con el descriptor, no una entrada CONSTANT_Class (JVMS 4.7.16)
+	a := anotacion{tipo: p.utf[c.u2()], visibilidad: visibilidad}
+	for i, n := 0, c.u2(); i < n && !c.failed(); i++ {
+		nombre := p.utf[c.u2()]
+		a.elementos = append(a.elementos, par{nombre: nombre, valor: c.valorDe(x, p)})
+	}
+	return a
+}
+
+// valorDe: el element_value de JVMS 4.7.16.1. Las etiquetas son las del class file, no las del dex:
+// aquí se traducen al tipo del encoded_value y el número queda en su ancho real; la anchura mínima
+// con la que se escribe la elige `codificaValor`, que es la que d8 usa.
+func (c *cursor) valorDe(x poolIndex, p *pool) valorAnotacion {
+	tag := c.u1()
+	switch tag {
+	case 'B':
+		return valorAnotacion{clase: valueByte, entero: int64(int8(x.intOf(c.u2())))}
+	case 'C':
+		return valorAnotacion{clase: valueChar, entero: int64(uint16(x.intOf(c.u2())))}
+	case 'D':
+		return valorAnotacion{clase: valueDouble, entero: int64(math.Float64bits(x.doubleOf(c.u2())))}
+	case 'F':
+		return valorAnotacion{clase: valueFloat, entero: int64(math.Float32bits(x.floatOf(c.u2())))}
+	case 'I':
+		return valorAnotacion{clase: valueInt, entero: int64(x.intOf(c.u2()))}
+	case 'J':
+		return valorAnotacion{clase: valueLong, entero: x.longOf(c.u2())}
+	case 'S':
+		return valorAnotacion{clase: valueShort, entero: int64(int16(x.intOf(c.u2())))}
+	case 'Z':
+		n := int64(0)
+		if x.intOf(c.u2()) != 0 {
+			n = 1
+		}
+		return valorAnotacion{clase: valueBool, entero: n}
+	case 's':
+		// el índice apunta a un Utf8, no a un CONSTANT_String como el de `ConstantValue`
+		return valorCadena(p.utf[c.u2()])
+	case 'e':
+		// el tipo del enum (descriptor) y el nombre de la constante, los dos como nombre
+		// el type_name_index también es un Utf8 con el descriptor (JVMS 4.7.16.1)
+		return valorEnum(p.utf[c.u2()], p.utf[c.u2()])
+	case 'c':
+		// el índice apunta a un Utf8 con el descriptor: primitivo, arreglo o clase
+		return valorTipo(p.utf[c.u2()])
+	case '@':
+		a := c.anotacionDe(x, p, visibilidadRuntime)
+		return valorAnidado(&a)
+	case '[':
+		n := c.u2()
+		lista := make([]valorAnotacion, 0, n)
+		for i := 0; i < n && !c.failed(); i++ {
+			lista = append(lista, c.valorDe(x, p))
+		}
+		return valorArreglo(lista...)
+	}
+	if !c.failed() {
+		c.bad = fmt.Sprintf("element_value con la etiqueta %q, que este subconjunto no traduce", string(rune(tag)))
+	}
+	return valorNulo()
 }
 
 // attribute is one entry of an attribute table, kept with its bytes: the caller decides what to

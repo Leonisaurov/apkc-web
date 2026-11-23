@@ -508,7 +508,18 @@ func (c *cursor) constantPool() (*pool, error) {
 		// una CONSTANT_Class se leia con etiqueta 0.
 		p.tag[i] = t
 		if t == cpUtf8 {
-			p.utf[i] = string(c.bytes(c.u2()))
+			// El `CONSTANT_Utf8` del `.class` tambien es MUTF-8: el NUL va como `c0 80` y lo que
+			// pasa de U+FFFF, como el par de subrogados. Guardarlo crudo deja bytes que no son
+			// UTF-8 valido, y al reescribirlos cada byte se convierte en U+FFFD. Medido en
+			// Droidloom con el fixture `cadenas`: `"antes\u0000despues"` salia con 14 unidades y
+			// un 65533 en vez de 13 y un 0. Se decodifica al leer y se vuelve a codificar al
+			// escribir el dex (`encodeMUTF8`).
+			crudo := c.bytes(c.u2())
+			if texto, err := decodeMUTF8(crudo); err == nil {
+				p.utf[i] = texto
+			} else {
+				p.utf[i] = string(crudo)
+			}
 		} else if t == cpClass {
 			p.class[i] = c.u2()
 		} else {

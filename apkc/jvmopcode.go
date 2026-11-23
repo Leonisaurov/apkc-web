@@ -256,9 +256,24 @@ type jvmInstr struct {
 	// `lookupswitch`, contados desde el principio del Code (medido en el parrafo 64: la tabla de la
 	// sonda está en el pc 1 y sus operandos empiezan en el 4, o sea tres bytes de relleno).
 	relleno int
+	// ancho marca la forma `wide` (0xc4): el opcode que queda en `op` es el modificado y el índice
+	// de local ocupa dos bytes donde la forma corta pone uno.
+	ancho bool
 }
 
 var jvmSwitch = map[byte]string{0xaa: "tableswitch", 0xab: "lookupswitch"}
+
+// jvmWide: los opcodes que `wide` modifica (JVMS 6.5) y cuántos bytes llevan sus operandos detrás
+// del propio opcode. `iinc` es el único con cuatro (índice de dos y constante de dos); las cargas,
+// los almacenes y `ret` llevan solo el índice, de dos bytes. El resto no aparece en `wide`.
+var jvmWide = map[byte]struct {
+	name string
+	ops  int
+}{
+	0x15: {"iload", 2}, 0x16: {"lload", 2}, 0x17: {"fload", 2}, 0x18: {"dload", 2},
+	0x19: {"aload", 2}, 0x36: {"istore", 2}, 0x37: {"lstore", 2}, 0x38: {"fstore", 2},
+	0x39: {"dstore", 2}, 0x3a: {"astore", 2}, 0x84: {"iinc", 4}, 0xa9: {"ret", 2},
+}
 
 // anchoDeSwitch: cuántos bytes de operandos tiene un switch empezando en `base` (ya sin el relleno).
 func anchoDeSwitch(op byte, code []byte, base int) (int, error) {
@@ -316,6 +331,29 @@ func walkJvmCode(code []byte) ([]jvmInstr, error) {
 			}
 			out = append(out, jvmInstr{pc: i, op: op, name: nombre, ops: code[base : base+ancho], relleno: relleno})
 			i = base + ancho
+			continue
+		}
+		if op == 0xc4 {
+			// `wide` (JVMS 6.5): el opcode siguiente va con el índice de local en dos bytes y, en
+			// `iinc`, la constante también en dos. Medido con javac 21 sobre `iinc 1, 1000`, que sale
+			// como `iinc_w 1, 1000` en `javap -c` y como `c4 84 00 01 03 e8` en el `Code`.
+			if i+1 >= len(code) {
+				return nil, &jvmWalkError{pc: i, op: op, what: "el wide se corta antes del opcode"}
+			}
+			mod := code[i+1]
+			k, ok := jvmWide[mod]
+			if !ok {
+				return nil, &jvmWalkError{pc: i, op: op,
+					what: "wide de un opcode que no modifica el JVMS medido"}
+			}
+			instr := jvmInstr{pc: i, op: mod, name: k.name + "_w", ancho: true}
+			i += 2
+			if i+k.ops > len(code) {
+				return nil, &jvmWalkError{pc: i, op: op, what: "los operandos del wide se salen del code"}
+			}
+			instr.ops = code[i : i+k.ops]
+			i += k.ops
+			out = append(out, instr)
 			continue
 		}
 		k, ok := jvmMeasured[op]

@@ -30,7 +30,7 @@ func TestDexLaCadenaEstaticaVaEnBytesLittleEndian(t *testing.T) {
 // tiene que escribir primero `b`. Falla si se respeta el orden del `.class`.
 func TestDexLosElementosDeAnotacionVanPorNameIdx(t *testing.T) {
 	td := &dexTables{typeIdx: map[string]int{"LA;": 0}, stringIdx: map[string]int{"a": 5, "b": 2}}
-	a := &anotacion{tipo: "LA;", elementos: []par{
+	a := &anotacion{tipo: "LA;", visibilidad: visibilidadSistema, elementos: []par{
 		{nombre: "a", valor: valorEntero(1)},
 		{nombre: "b", valor: valorEntero(2)},
 	}}
