@@ -7,7 +7,8 @@ package main
 // por prioridad determinista: gana el proyecto, sin depender del orden en que se leyeron las islas.
 //
 // La segunda mitad comprueba lo que ve la vista previa: un `android:background="@drawable/x"` cuyo
-// XML es un `<shape><solid android:color>` se publica como el color de relleno del nodo.
+// XML es un `<shape><solid android:color>` se publica como el color de relleno del nodo; un
+// `<layer-list>` con un `<solid>` dentro NO, porque solo la raíz `<shape>` es un fondo único.
 
 import (
 	"testing"
@@ -30,6 +31,9 @@ func proyectoConRecursosDeAAR(t *testing.T) string {
     <TextView android:id="@+id/etiqueta"
         android:layout_width="wrap_content" android:layout_height="wrap_content"
         android:text="@string/app_name" android:background="@drawable/fondo_deps" />
+    <TextView android:id="@+id/capas"
+        android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:text="@string/solo_deps" android:background="@drawable/capas_deps" />
 </FrameLayout>`,
 		"res/__deps/" + islaAmpliada + "/values/deps.xml": `<resources>
     <string name="app_name">AAR</string>
@@ -39,6 +43,10 @@ func proyectoConRecursosDeAAR(t *testing.T) string {
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
     <solid android:color="#112233" />
 </shape>`,
+		"res/__deps/" + islaAmpliada + "/drawable/capas_deps.xml": `<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item><shape><solid android:color="#445566" /></shape></item>
+</layer-list>`,
 		"res/__deps/" + islaAmpliada + "/anim/fade_in.xml": `<?xml version="1.0" encoding="utf-8"?>
 <alpha xmlns:android="http://schemas.android.com/apk/res/android"
     android:fromAlpha="0.0" android:toAlpha="1.0" android:duration="300" />`,
@@ -78,12 +86,12 @@ func TestPreviewRecursosDeAarDrawableAnimYFont(t *testing.T) {
 	enLayouts := map[string]bool{}
 	for _, f := range layouts {
 		enLayouts[f.nombre] = true
-		if f.deDependencia != (f.nombre == "res/drawable/fondo_deps.xml" ||
-			f.nombre == "res/anim/fade_in.xml" || f.nombre == "res/font/familia.xml") {
+		if f.deDependencia != (f.nombre != "res/layout/main.xml") {
 			t.Errorf("%s sale con deDependencia=%v", f.nombre, f.deDependencia)
 		}
 	}
-	for _, quiero := range []string{"res/drawable/fondo_deps.xml", "res/anim/fade_in.xml", "res/font/familia.xml"} {
+	for _, quiero := range []string{"res/drawable/fondo_deps.xml", "res/drawable/capas_deps.xml",
+		"res/anim/fade_in.xml", "res/font/familia.xml"} {
 		if !enLayouts[quiero] {
 			t.Errorf("%s no salió como documento AXML; layouts=%v", quiero, enLayouts)
 		}
@@ -106,6 +114,9 @@ func TestPreviewRecursosDeAarDrawableAnimYFont(t *testing.T) {
 	}
 	if doc := salida.layouts["res/drawable/fondo_deps.xml"]; doc.raiz == nil || doc.raiz.nombre != "shape" {
 		t.Fatalf("el drawable XML no se escribió como un <shape>: %+v", doc.raiz)
+	}
+	if doc := salida.layouts["res/drawable/capas_deps.xml"]; doc.raiz == nil || doc.raiz.nombre != "layer-list" {
+		t.Fatalf("el layer-list no se escribió como tal: %+v", doc.raiz)
 	}
 	if doc := salida.layouts["res/anim/fade_in.xml"]; doc.raiz == nil || doc.raiz.nombre != "alpha" {
 		t.Fatalf("el anim no se escribió como un <alpha>: %+v", doc.raiz)
@@ -173,18 +184,23 @@ func TestPreviewVeElDrawableXmlDeLaDependencia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	capas, err := escribeAXML(salida.layouts["res/drawable/capas_deps.xml"])
+	if err != nil {
+		t.Fatal(err)
+	}
 	apk := zipDeEntradas(t, map[string][]byte{
 		"AndroidManifest.xml":         manifiestoBinario,
 		"resources.arsc":              arsc,
 		"res/layout/main.xml":         layout,
 		"res/drawable/fondo_deps.xml": fondo,
+		"res/drawable/capas_deps.xml": capas,
 	})
 	modelo, err := modeloVistaDeAPKCon(apk, "main", false)
 	if err != nil {
 		t.Fatalf("la vista previa abortó con el drawable XML del AAR: %v", err)
 	}
-	if modelo.Raiz == nil || len(modelo.Raiz.Hijos) != 1 {
-		t.Fatalf("el modelo no trae el TextView: %+v", modelo.Raiz)
+	if modelo.Raiz == nil || len(modelo.Raiz.Hijos) != 2 {
+		t.Fatalf("el modelo no trae los dos TextView: %+v", modelo.Raiz)
 	}
 	nodo := modelo.Raiz.Hijos[0]
 	if nodo.Texto != "Proyecto" {
@@ -192,5 +208,11 @@ func TestPreviewVeElDrawableXmlDeLaDependencia(t *testing.T) {
 	}
 	if nodo.Fondo != "#112233" {
 		t.Errorf("el fondo del TextView es %q y el <solid> del AAR declara #112233", nodo.Fondo)
+	}
+	// el <layer-list> no es un <shape> de raíz: aunque tenga un <solid> dentro, no se publica como
+	// fondo, porque la primera capa de una lista no es «el color del drawable».
+	capasNodo := modelo.Raiz.Hijos[1]
+	if capasNodo.Fondo != "" {
+		t.Errorf("el <layer-list> publicó el fondo %q; se decidió no interpretarlo", capasNodo.Fondo)
 	}
 }

@@ -4512,9 +4512,36 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if obj != nil && es("Landroid/graphics/Paint;") {
 			return nil, true, nil
 		}
-	case "drawColor", "drawRGB", "drawARGB":
+	case "drawColor":
 		if len(vals) == 1 && obj != nil && es("Landroid/graphics/Canvas;") {
 			if c, ok := enteroDeDibujo(vals[0]); ok {
+				m.anotaDibujo(operacionDibujo{Operacion: "color", Color: formatoColor(c)})
+			}
+			return nil, true, nil
+		}
+	case "drawRGB":
+		// `Canvas.drawRGB(int r, int g, int b)` compone un color opaco. Antes compartía el `case` de
+		// `drawColor`, que exige un argumento: una llamada real de tres caía al stub genérico y el
+		// color no se publicaba. Cada canal se recorta a ocho bits, como hace el framework.
+		if len(vals) == 3 && obj != nil && es("Landroid/graphics/Canvas;") {
+			r, rok := enteroDeDibujo(vals[0])
+			g, gok := enteroDeDibujo(vals[1])
+			b, bok := enteroDeDibujo(vals[2])
+			if rok && gok && bok {
+				c := 0xff000000 | (r&0xff)<<16 | (g&0xff)<<8 | (b & 0xff)
+				m.anotaDibujo(operacionDibujo{Operacion: "color", Color: formatoColor(c)})
+			}
+			return nil, true, nil
+		}
+	case "drawARGB":
+		// `Canvas.drawARGB(int a, int r, int g, int b)`: la misma composición con alfa explícito.
+		if len(vals) == 4 && obj != nil && es("Landroid/graphics/Canvas;") {
+			a, aok := enteroDeDibujo(vals[0])
+			r, rok := enteroDeDibujo(vals[1])
+			g, gok := enteroDeDibujo(vals[2])
+			b, bok := enteroDeDibujo(vals[3])
+			if aok && rok && gok && bok {
+				c := (a&0xff)<<24 | (r&0xff)<<16 | (g&0xff)<<8 | (b & 0xff)
 				m.anotaDibujo(operacionDibujo{Operacion: "color", Color: formatoColor(c)})
 			}
 			return nil, true, nil

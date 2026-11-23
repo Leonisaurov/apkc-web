@@ -1608,7 +1608,8 @@ func cargaImagenes(n *nodoVista, zr *zip.Reader, tabla *tablaRecursos) {
 	}
 	// un `android:background="@drawable/x"` XML: `<shape>` con `<solid android:color>` se publica
 	// como el color de relleno. Es lo que el preview puede dibujar de un drawable XML; un
-	// `<vector>` o un `<selector>` no se interpretan y el fondo se queda vacío, sin inventarlo.
+	// `<vector>`, un `<selector>` o un `<layer-list>` no se interpretan y el fondo se queda vacío,
+	// sin inventarlo.
 	if n.fondoRef != 0 && n.Fondo == "" {
 		n.Fondo = fondoDeDrawableXML(zr, tabla, n.fondoRef)
 	}
@@ -1672,9 +1673,10 @@ func imagenDeRecurso(zr *zip.Reader, tabla *tablaRecursos, id uint32) (*imagenVi
 }
 
 // fondoDeDrawableXML resuelve el relleno de un `android:background="@drawable/x"` cuando el recurso
-// es un XML compilado: `<shape>` con un `<solid android:color>`. Es la parte de un drawable XML que
-// el modelo puede enseñar de verdad; un `<vector>`, un `<selector>` o un `<layer-list>` no se
-// interpretan aquí y devuelven vacío, para no pintar un color que el fichero no declara.
+// es un XML compilado: un `<shape>` en la raíz con un `<solid android:color>`. Es la parte de un
+// drawable XML que el modelo puede enseñar de verdad; un `<vector>`, un `<selector>` o un
+// `<layer-list>` no se interpretan aquí y devuelven vacío, para no pintar un color que el fichero
+// no declara como fondo único (en un layer-list el primer `<solid>` puede ser una capa de sombra).
 func fondoDeDrawableXML(zr *zip.Reader, tabla *tablaRecursos, id uint32) string {
 	if tabla == nil {
 		return ""
@@ -1703,7 +1705,7 @@ func fondoDeDrawableXML(zr *zip.Reader, tabla *tablaRecursos, id uint32) string 
 	}
 	ctx := &contextoVista{axml: axml, tabla: tabla}
 	arbol, err := ctx.arbol()
-	if err != nil || arbol == nil {
+	if err != nil || arbol == nil || arbol.nombre != "shape" {
 		return ""
 	}
 	var andar func(*elementoLeido) string

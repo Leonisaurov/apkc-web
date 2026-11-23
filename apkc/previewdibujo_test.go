@@ -3,9 +3,9 @@ package main
 // El dibujo de una vista propia: el modelo ya colocaba su rectángulo, pero su `onDraw` no corría y
 // la pantalla se veía vacía sin decirlo. Aquí se arma un apk de verdad —manifiesto, layout, tabla y
 // el classes.dex que emite el propio compilador del fork— y se comprueba que `onDraw` se ejecuta
-// contra el Canvas del modelo: el color de fondo y una línea con su color y su grosor salen en
-// `dibujo.operaciones`. La frontera también se mide: sin ejecución el nodo lo dice con su motivo, y
-// nunca se inventa un trazo.
+// contra el Canvas del modelo: el color de fondo, `drawRGB`, `drawARGB` y una línea con su color y
+// su grosor salen en `dibujo.operaciones`. La frontera también se mide: sin ejecución el nodo lo
+// dice con su motivo, y nunca se inventa un trazo.
 
 import (
 	"strings"
@@ -42,6 +42,8 @@ public class Lienzo extends View {
         p.setColor(0xFF336699);
         p.setStrokeWidth(4f);
         canvas.drawColor(0xFFFFEEDD);
+        canvas.drawRGB(0x11, 0x22, 0x33);
+        canvas.drawARGB(0x80, 0x44, 0x55, 0x66);
         canvas.drawLine(0f, 0f, 120f, 40f, p);
     }
 }
@@ -131,23 +133,29 @@ func TestPreviewDibujaElOnDrawDeLaVistaPropia(t *testing.T) {
 		t.Fatalf("el onDraw quedó como frontera: %s", nodo.Dibujo.Frontera)
 	}
 	ops := nodo.Dibujo.Operaciones
-	if len(ops) != 2 {
-		t.Fatalf("se publicaron %d operaciones y el onDraw hace dos: %+v", len(ops), ops)
+	if len(ops) != 4 {
+		t.Fatalf("se publicaron %d operaciones y el onDraw hace cuatro: %+v", len(ops), ops)
 	}
 	if ops[0].Operacion != "color" || ops[0].Color != "#ffeedd" {
 		t.Errorf("la primera operación es %+v y se esperaba el color #ffeedd", ops[0])
 	}
-	if ops[1].Operacion != "linea" {
-		t.Errorf("la segunda operación es %q y se esperaba una línea", ops[1].Operacion)
+	if ops[1].Operacion != "color" || ops[1].Color != "#112233" {
+		t.Errorf("drawRGB(0x11,0x22,0x33) se publica como %+v y se esperaba #112233", ops[1])
 	}
-	if ops[1].X2 != 120 || ops[1].Y2 != 40 {
-		t.Errorf("la línea termina en (%v,%v), medido (120,40)", ops[1].X2, ops[1].Y2)
+	if ops[2].Operacion != "color" || ops[2].Color != "#80445566" {
+		t.Errorf("drawARGB(0x80,0x44,0x55,0x66) se publica como %+v y se esperaba #80445566", ops[2])
 	}
-	if ops[1].Color != "#336699" {
-		t.Errorf("la línea sale %q y el Paint pide #336699", ops[1].Color)
+	if ops[3].Operacion != "linea" {
+		t.Errorf("la cuarta operación es %q y se esperaba una línea", ops[3].Operacion)
 	}
-	if ops[1].Grosor != 4 {
-		t.Errorf("la línea sale con grosor %v, medido 4", ops[1].Grosor)
+	if ops[3].X2 != 120 || ops[3].Y2 != 40 {
+		t.Errorf("la línea termina en (%v,%v), medido (120,40)", ops[3].X2, ops[3].Y2)
+	}
+	if ops[3].Color != "#336699" {
+		t.Errorf("la línea sale %q y el Paint pide #336699", ops[3].Color)
+	}
+	if ops[3].Grosor != 4 {
+		t.Errorf("la línea sale con grosor %v, medido 4", ops[3].Grosor)
 	}
 }
 
