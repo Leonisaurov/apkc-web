@@ -110,6 +110,98 @@ func TestAsignacionComoValorContraJavac17(t *testing.T) {
 	}
 }
 
+// fuenteAnidada: `a = b = c` dentro de la condición. La asignación asocia a la derecha (JLS 15.26.1),
+// así que el árbol es `a = (b = siguiente())` y la pila lleva el valor del interno al externo:
+// javac escribe el valor una vez, `dup; istore b`, `dup; istore a`, y solo después la comparación.
+// Es lo que el frente no había ejecutado: el parser anida por la misma ruta y el emisor duplica dos
+// veces el mismo valor.
+const fuenteAnidada = `package p;
+
+class Anidada {
+    int siguiente() {
+        return 3;
+    }
+
+    int suma(int a, int b) {
+        while ((a = b = siguiente()) > 0) {
+            b = b - 1;
+        }
+        return a + b;
+    }
+}
+`
+
+// TestAsignacionAnidadaEnCondicionContraJavac17: el `a = b = c` de una condición, contra javac 17
+// `--release 8 -g:lines,source`, con el dex entero byte a byte.
+func TestAsignacionAnidadaEnCondicionContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Anidada.java", contenido: fuenteAnidada}}
+	raiz := t.TempDir()
+	for _, f := range fuentes {
+		pon(t, raiz, f.nombre[len("src/"):], f.contenido)
+	}
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó la asignación anidada de la condición: %v", err)
+	}
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+	nuestra, suya := buscaLaClase(t, nuestras, "Lp/Anidada;", deJavac)
+
+	comparaMetodos(t, nuestra, suya)
+
+	if err := comparaDex(t, nuestras, deJavac); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fuenteAncha: `long x; while ((x = f()) > 0)`. El valor asignado ocupa dos palabras de pila, así que
+// el duplicado es `dup2` y el guardado `lstore`; y la comparación no es de enteros: javac escribe
+// `lconst_0; lcmp; ifle`, que es el camino ancho de `condicionBranca` y necesita saber el tipo del
+// operando antes de emitirlo (`tipoPrevisto`).
+const fuenteAncha = `package p;
+
+class Largo {
+    long siguiente() {
+        return 3L;
+    }
+
+    long suma(long n) {
+        long x;
+        while ((x = siguiente()) > 0) {
+            n = n - 1L;
+        }
+        return n + x;
+    }
+}
+`
+
+// TestAsignacionAnchaComoValorContraJavac17: el `dup2` del `long` y la comparación con `lcmp`, contra
+// javac 17 `--release 8 -g:lines,source`, con el dex entero byte a byte.
+func TestAsignacionAnchaComoValorContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Largo.java", contenido: fuenteAncha}}
+	raiz := t.TempDir()
+	for _, f := range fuentes {
+		pon(t, raiz, f.nombre[len("src/"):], f.contenido)
+	}
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó la asignación ancha como valor: %v", err)
+	}
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+	nuestra, suya := buscaLaClase(t, nuestras, "Lp/Largo;", deJavac)
+
+	comparaMetodos(t, nuestra, suya)
+
+	if err := comparaDex(t, nuestras, deJavac); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestCopiaDelBloqueDeLaLinea187: el bloque entero del zip, con el `try`/`catch`. Aquí el dex no sale
 // byte a byte por una diferencia anterior a este frente —la sección de datos mide 12 bytes más en
 // nuestro lado, en el primer ítem de anotaciones—, así que se compara lo que sí es de la línea: las

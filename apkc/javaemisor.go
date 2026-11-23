@@ -4834,6 +4834,24 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 			return d, true
 		}
 		return "", false
+	case jasignExp:
+		// `(x = f())` como valor de una comparación: la pila lleva el tipo del local, y saberlo antes
+		// de emitir es lo que elige entre `if_icmp*` y el `lcmp`/`fcmpl`/`dcmpl` de la comparación
+		// ancha. Es lo que mide el caso `long x; while ((x = f()) > 0)` de
+		// `javaemisor_asignacion_valor_test.go` contra javac 17.
+		acc, esAcceso := v.destino.(jacceso)
+		if !esAcceso {
+			return "", false
+		}
+		segs, base := aplanar(acc)
+		if base != nil || len(segs) != 1 {
+			return "", false
+		}
+		lv, ok := e.locales[segs[0]]
+		if !ok {
+			return "", false
+		}
+		return lv.desc, true
 	case jacceso:
 		segs, base := aplanar(v)
 		if base != nil || len(segs) == 0 {
