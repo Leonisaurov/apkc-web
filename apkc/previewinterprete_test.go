@@ -1397,12 +1397,11 @@ func TestLaSiembraDelLayoutNoPisaLoQueLaAppEscribio(t *testing.T) {
 }
 
 // TestElInterpreteRechazaPorNombreLoQueNoEmula fija la otra mitad: lo que no tiene una aproximación
-// honesta (formato de cadenas, Editable/Spannable, Html, reflexión) no se stubbea a medias. El
-// aviso lo nombra y el test comprueba que el nombre y el motivo están.
+// honesta (formato de cadenas, Html, reflexión) no se stubbea a medias. El aviso lo nombra y el test
+// comprueba que el nombre y el motivo están. `getEditableText` ya no está aquí: se emula como texto
+// plano desde E5, porque es lo único que una app lee de un Editable.
 func TestElInterpreteRechazaPorNombreLoQueNoEmula(t *testing.T) {
 	m := maquinaDelContador(t)
-	vista := m.vista(0x7f010001)
-	vista.clase = "Landroid/widget/EditText;"
 	casos := []struct {
 		nombre     string
 		proto      string
@@ -1413,8 +1412,6 @@ func TestElInterpreteRechazaPorNombreLoQueNoEmula(t *testing.T) {
 	}{
 		{"getString", "(I[Ljava/lang/Object;)Ljava/lang/String;", []any{int32(0x7f030000), nil},
 			[]string{"Lcom/hola/contador/MainActivity;"}, m.actividad, "formato de cadenas"},
-		{"getEditableText", "()Landroid/text/Editable;", nil,
-			[]string{"Landroid/widget/EditText;", "Landroid/widget/TextView;"}, vista, "Editable y Spannable"},
 		{"fromHtml", "(Ljava/lang/String;)Landroid/text/Spanned;", []any{"<b>x</b>"},
 			[]string{"Landroid/text/Html;"}, nil, "Html"},
 		{"forName", "(Ljava/lang/String;)Ljava/lang/Class;", []any{"java.lang.String"},

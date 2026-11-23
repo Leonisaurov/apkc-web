@@ -166,6 +166,11 @@ type nodoVista struct {
 	IDRef         string `json:"idRef,omitempty"`
 	Texto         string `json:"texto,omitempty"`
 	TextoDinamico string `json:"textoDinamico,omitempty"`
+	// Pista es el `setHint` de un EditText: lo que se lee cuando está vacío. Marcado es el estado de
+	// un CheckBox, RadioButton o Switch; viaja como puntero porque «sin marcar» también es un dato y
+	// no puede confundirse con «esta vista no se marca».
+	Pista   string `json:"pista,omitempty"`
+	Marcado *bool  `json:"marcado,omitempty"`
 	// Oyente marca la vista que registró un OnClickListener: es la que responde a un clic en el
 	// render y la única a la que se le puede pedir `--pulsar`.
 	Oyente  bool        `json:"oyente,omitempty"`
@@ -254,37 +259,49 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
 default) unless the app's onCreate calls setContentView with a resource id, which the Dalvik
 interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and stops
-there: it does NOT click anything on its own. An android:onClick="metodo" declared in the layout is
-bound before any click, as the framework does on inflate, so --pulsar reaches it. Each --pulsar id runs the OnClickListener registered
-on that view, in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal); an
-AlertDialog that the app shows is published as a layer (dialogo and ejecucion.dialogos) and its
-buttons are pressed with --pulsar dialogo/positivo|negativo|neutro, which runs their OnClickListener
-and closes the dialog; a Toast leaves a line in ejecucion.consola and the last one in ejecucion.toast.
-the
-text the app writes (TextView.setText) comes back in ejecucion.capturas and in each node's
-textoDinamico, and the app's own output (print, println, Log.*) in ejecucion.consola. Each --recrear
-destroys and recreates the current activity with its Bundle, as a rotation does, so onSaveInstanceState
-feeds savedInstanceState in the new onCreate and SharedPreferences survives the run; both stores come
-back in ejecucion.bundle and ejecucion.preferencias. --pulsar and --recrear are delivered in the order
-they are written. A ListView whose adapter is the project's own is painted with one child per row,
-texts included: --pulsar id/lista:1 delivers onItemClick for row 1 of that list. Repeating the same
-list reproduces the same screen. No process is started and nothing is written, so it runs inside the
-tab.
+there: it does NOT touch anything on its own. An android:onClick="metodo" declared in the layout is
+bound before any click, as the framework does on inflate, so --pulsar reaches it. The orders are
+delivered in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal):
+--pulsar runs the OnClickListener registered on that view, --escribir gives id/text to an EditText
+as if the user typed it (the project's TextWatchers run), and --marcar/--desmarcar set the state of
+a CheckBox, RadioButton or Switch (its OnCheckedChangeListener runs; a RadioGroup keeps one option
+checked); an AlertDialog that the app shows is published as a layer (dialogo and ejecucion.dialogos)
+and its buttons are pressed with --pulsar dialogo/positivo|negativo|neutro, which runs their
+OnClickListener and closes the dialog; a Toast leaves a line in ejecucion.consola and the last one in
+ejecucion.toast. The text the app writes (TextView.setText) comes back in ejecucion.capturas and in
+each node's textoDinamico, the check state in each node's marcado and in ejecucion.marcas, and the
+app's own output (print, println, Log.*) in ejecucion.consola. Each --recrear destroys and recreates
+the current activity with its Bundle, as a rotation does, so onSaveInstanceState feeds
+savedInstanceState in the new onCreate and SharedPreferences survives the run; both stores come back
+in ejecucion.bundle and ejecucion.preferencias. --pulsar, --escribir, --marcar, --desmarcar and
+--recrear are delivered in the order they are written. A ListView whose adapter is the project's own
+is painted with one child per row, texts included: --pulsar id/lista:1 delivers onItemClick for row 1
+of that list. Repeating the same list reproduces the same screen. No process is started and nothing
+is written, so it runs inside the tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
 	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
-	var ordenes []ordenEjecucion
-	set.Var(ordenDePulsar{destino: &ordenes}, "pulsar",
-		"id de la vista (o dialogo/positivo|negativo|neutro) cuyo OnClickListener se ejecuta "+
+	// el guion conserva el orden de la línea de comandos: flag llama a Set en ese orden, así que
+	// `--pulsar a --escribir b/hola --recrear --pulsar c` se entrega como se escribió, y la lista de
+	// clics, textos, marcas y recreaciones no pierde su sitio
+	guion := []eventoUsuario{}
+	set.Var(guionDeEntrada{tipo: "pulsar", eventos: &guion}, "pulsar",
+		"id de la vista (o dialogo/positivo|negativo|neutro, o id/lista:fila) cuyo oyente se ejecuta "+
 			"(repetible, en orden)")
-	set.Var(ordenDeRecrear{destino: &ordenes}, "recrear",
+	set.Var(guionDeEntrada{tipo: "escribir", eventos: &guion}, "escribir",
+		"id/texto: entrega texto a un EditText como si el usuario lo tecleara (repetible)")
+	set.Var(guionDeEntrada{tipo: "marcar", eventos: &guion}, "marcar",
+		"id de la vista que se marca: CheckBox, RadioButton o Switch (repetible)")
+	set.Var(guionDeEntrada{tipo: "desmarcar", eventos: &guion}, "desmarcar",
+		"id de la vista que se desmarca (repetible)")
+	set.Var(ordenDeRecrear{eventos: &guion}, "recrear",
 		"recrea la actividad actual con su Bundle, como una rotación (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
@@ -294,8 +311,9 @@ tab.
 		fmt.Fprintln(os.Stderr, "preview: se espera un apk")
 		os.Exit(2)
 	}
-	if *sinEjecutar && len(ordenes) > 0 {
-		fmt.Fprintln(os.Stderr, "preview: --pulsar y --recrear necesitan ejecutar el dex; quita --sin-ejecutar")
+	if *sinEjecutar && len(guion) > 0 {
+		fmt.Fprintln(os.Stderr, "preview: --pulsar, --escribir, --marcar, --desmarcar y --recrear "+
+			"necesitan ejecutar el dex; quita --sin-ejecutar")
 		os.Exit(2)
 	}
 	datos, err := os.ReadFile(rutas[0])
@@ -303,7 +321,7 @@ tab.
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
-	modelo, err := modeloVistaDeAPKConOrdenes(datos, *layout, !*sinEjecutar, ordenes)
+	modelo, err := modeloVistaDeAPKConEventos(datos, *layout, !*sinEjecutar, guion)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
@@ -317,8 +335,8 @@ tab.
 }
 
 // ordenEjecucion es una orden del emulador en el orden en que se escribió: `pulsar` lleva el id de
-// la vista y `recrear` no lleva valor. El orden importa: `--pulsar id/a --recrear` recrea el estado
-// que dejó el clic, no el del arranque.
+// la vista y `recrear` no lleva valor. Es la forma clásica que usan las pruebas de la recreación y
+// de los diálogos; el comando construye eventos y esta se convierte en `modeloVistaDeAPKConOrdenes`.
 type ordenEjecucion struct {
 	Tipo  string
 	Valor string
@@ -329,28 +347,50 @@ const (
 	ordenRecrearTipo = "recrear"
 )
 
-// ordenDePulsar y ordenDeRecrear son los dos flag.Value del mismo acumulador: el paquete flag llama
-// a Set en el orden de la línea de comandos, y así `--pulsar a --recrear --pulsar b` conserva su
-// orden. `--recrear` es una bandera sin valor (`IsBoolFlag`), que es como se escribe.
-type ordenDePulsar struct{ destino *[]ordenEjecucion }
+// guionDeEntrada es el flag de una orden de entrada. Todas las órdenes van a la misma lista, en el
+// orden en que se leen de la línea de comandos: es lo que permite intercalar un clic entre dos
+// tecleos y que el estado que ve cada orden sea el que dejó la anterior.
+type guionDeEntrada struct {
+	tipo    string
+	eventos *[]eventoUsuario
+}
 
-func (o ordenDePulsar) String() string { return "" }
-
-func (o ordenDePulsar) Set(v string) error {
-	if strings.TrimSpace(v) == "" {
-		return fmt.Errorf("--pulsar necesita un id: id/pulsar, 0x7f010000 o su decimal")
+func (g guionDeEntrada) String() string {
+	partes := make([]string, 0, len(*g.eventos))
+	for _, e := range *g.eventos {
+		if e.Tipo == g.tipo {
+			partes = append(partes, e.Dato)
+		}
 	}
-	*o.destino = append(*o.destino, ordenEjecucion{Tipo: ordenPulsarTipo, Valor: v})
+	return strings.Join(partes, ",")
+}
+
+func (g guionDeEntrada) Set(v string) error {
+	dato := strings.TrimSpace(v)
+	if dato == "" {
+		return fmt.Errorf("--%s necesita un id: id/nombre, 0x7f010000 o su decimal", g.tipo)
+	}
+	if g.tipo == "escribir" {
+		// `id/texto`: el id puede ser `id/nombre` y el texto llevar barras, así que aquí solo se exige
+		// que haya barra; `partirEscribir` corta por la que cierra el id
+		if id, _, ok := strings.Cut(dato, "/"); !ok || strings.TrimSpace(id) == "" {
+			return fmt.Errorf("--escribir necesita id/texto: el id de la vista y el texto, " +
+				"separados por «/»")
+		}
+	}
+	*g.eventos = append(*g.eventos, eventoUsuario{Tipo: g.tipo, Dato: dato})
 	return nil
 }
 
-type ordenDeRecrear struct{ destino *[]ordenEjecucion }
+// ordenDeRecrear es la bandera sin valor de `--recrear`: entra en el mismo guion que las demás
+// órdenes, así que `--pulsar id/a --recrear` recrea el estado que dejó el clic y no el del arranque.
+type ordenDeRecrear struct{ eventos *[]eventoUsuario }
 
 func (o ordenDeRecrear) String() string { return "false" }
 
 func (o ordenDeRecrear) Set(v string) error {
 	if v == "true" {
-		*o.destino = append(*o.destino, ordenEjecucion{Tipo: ordenRecrearTipo})
+		*o.eventos = append(*o.eventos, eventoUsuario{Tipo: ordenRecrearTipo})
 	}
 	return nil
 }
@@ -374,16 +414,30 @@ func modeloVistaDeAPKCon(datos []byte, layout string, ejecutar bool) (*modeloVis
 
 // modeloVistaDeAPKConPulsos es el mismo cuerpo con la lista de clics de `--pulsar`, que se entrega en
 // orden dentro de la misma ejecución. Un clic que no se puede entregar devuelve error: un modelo con
-// la pantalla a medias se leería como si el clic hubiera funcionado.
+// la pantalla a medias se leería como si el clic hubiera funcionado. Se queda como envoltorio para no
+// cambiar la forma de llamada de las pruebas de la Fase 2.
 func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulsos []string) (*modeloVista, error) {
-	return modeloVistaDeAPKConOrdenes(datos, layout, ejecutar, ordenesDePulsos(pulsos))
+	eventos := make([]eventoUsuario, 0, len(pulsos))
+	for _, p := range pulsos {
+		eventos = append(eventos, eventoUsuario{Tipo: ordenPulsarTipo, Dato: p})
+	}
+	return modeloVistaDeAPKConEventos(datos, layout, ejecutar, eventos)
 }
 
-// modeloVistaDeAPKConOrdenes es el cuerpo con la secuencia completa de órdenes (`--pulsar` y
-// `--recrear`), que se entrega en orden dentro de la misma ejecución. Un clic o una recreación que
-// no se pueden entregar devuelven error: un modelo con la pantalla a medias se leería como si la
-// orden hubiera funcionado.
+// modeloVistaDeAPKConOrdenes es la misma llamada con la forma clásica de órdenes (`--pulsar` y
+// `--recrear`): convierte cada una en un evento del guion y deja una sola ruta de ejecución.
 func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, ordenes []ordenEjecucion) (*modeloVista, error) {
+	eventos := make([]eventoUsuario, 0, len(ordenes))
+	for _, o := range ordenes {
+		eventos = append(eventos, eventoUsuario{Tipo: o.Tipo, Dato: o.Valor})
+	}
+	return modeloVistaDeAPKConEventos(datos, layout, ejecutar, eventos)
+}
+
+// modeloVistaDeAPKConEventos es el mismo cuerpo con el guion de entrada completo (`--pulsar`,
+// `--escribir`, `--marcar`, `--desmarcar` y `--recrear`), en el orden en que se pidió. Una orden que
+// no se puede entregar devuelve error, por el mismo motivo: no se publica una pantalla a medias.
+func modeloVistaDeAPKConEventos(datos []byte, layout string, ejecutar bool, eventos []eventoUsuario) (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(datos), int64(len(datos)))
 	if err != nil {
 		return nil, fmt.Errorf("el apk no es un zip: %w", err)
@@ -434,11 +488,11 @@ func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, orde
 		if dexBytes, err := entradaDeZip(zr, "classes.dex"); err == nil {
 			if d, err := readDex(dexBytes); err == nil {
 				preferida := descriptorDeActividad(modelo.Paquete, nombreActividad)
-				var errPulsos error
-				modelo.Ejecucion, layoutID, errPulsos = ejecutaOnCreateConOrdenes(d, tabla, preferida, ordenes,
+				var errEventos error
+				modelo.Ejecucion, layoutID, errEventos = ejecutaOnCreateConEventos(d, tabla, preferida, eventos,
 					func(m *maquinaDalvik) { preparaVistasDelLayout(m, zr, tabla, layout) }, declaradas)
-				if errPulsos != nil {
-					return nil, errPulsos
+				if errEventos != nil {
+					return nil, errEventos
 				}
 				// la pantalla que se pinta es la que quedó delante tras la navegación, no la lanzadora
 				if modelo.Ejecucion != nil && len(modelo.Ejecucion.Pantallas) > 1 &&
@@ -489,6 +543,7 @@ func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, orde
 	coloca(raiz, 0, 0, dpPantallaAncho, dpPantallaAlto)
 	anotaTextoDinamico(raiz, modelo.Ejecucion)
 	anotaOyentes(raiz, modelo.Ejecucion)
+	anotaEstados(raiz, modelo.Ejecucion)
 	// las listas se expanden después de los clics: el adaptador ya está armado y es su getView el
 	// que decide qué filas y qué textos se ven
 	expandeListas(raiz, modelo.Ejecucion, tabla, zr)
@@ -581,24 +636,105 @@ func preparaVistasDelLayout(m *maquinaDalvik, zr *zip.Reader, tabla *tablaRecurs
 	}
 	recorre(raiz)
 	m.siembraTextosDelLayout(textos)
+	tipos, marcas, grupos := estadoDeMarcasDelLayout(raiz)
+	m.siembraMarcas(marcas, grupos, tipos)
+}
+
+// estadoDeMarcasDelLayout lee del layout lo que el inflado deja en las vistas marcables: el tipo de
+// cada vista con id —para poder rechazar por nombre una orden que no le corresponde—, el
+// `android:checked` de cada una y los RadioButton de cada RadioGroup, con su `android:checkedButton`.
+func estadoDeMarcasDelLayout(raiz *elementoLeido) (map[uint32]string, map[uint32]bool, map[uint32][]uint32) {
+	tipos := map[uint32]string{}
+	marcas := map[uint32]bool{}
+	grupos := map[uint32][]uint32{}
+	var recorre func(e *elementoLeido, grupo uint32)
+	recorre = func(e *elementoLeido, grupo uint32) {
+		propio := uint32(0)
+		if id, ok := e.atributo(uriDeRecursos, "id"); ok && id.datos != 0 {
+			propio = id.datos
+			tipos[propio] = e.nombre
+		}
+		if v, ok := e.atributo(uriDeRecursos, "checked"); ok && propio != 0 {
+			marcas[propio] = v.datos != 0
+		}
+		if grupo != 0 && propio != 0 && e.nombre == "RadioButton" {
+			grupos[grupo] = append(grupos[grupo], propio)
+		}
+		if e.nombre == "RadioGroup" && propio != 0 {
+			if v, ok := e.atributo(uriDeRecursos, "checkedButton"); ok && v.datos != 0 {
+				marcas[uint32(v.datos)] = true
+			}
+			grupo = propio
+		}
+		for _, h := range e.hijos {
+			recorre(h, grupo)
+		}
+	}
+	recorre(raiz, 0)
+	return tipos, marcas, grupos
+}
+
+// esTipoMarcable dice si un widget del layout lleva estado de marcado, por su nombre de elemento:
+// lo que el render pinta con una casilla o un botón de radio y lo que `--marcar` puede tocar.
+func esTipoMarcable(tipo string) bool {
+	switch tipo {
+	case "CheckBox", "RadioButton", "Switch", "ToggleButton", "CheckedTextView":
+		return true
+	}
+	return false
+}
+
+// admiteTecleo dice si una vista del layout acepta texto de usuario. `--escribir` sobre otra cosa se
+// rechaza por su nombre en vez de meter texto donde el aparato no dejaría teclearlo.
+func admiteTecleo(tipo string) bool {
+	switch tipo {
+	case "EditText", "AutoCompleteTextView", "MultiAutoCompleteTextView", "TextInputEditText":
+		return true
+	}
+	return false
 }
 
 // anotaTextoDinamico copia a cada nodo la última escritura que el intérprete capturó sobre su id.
 // El match es por el id de recurso, que es lo que comparten el layout y el `findViewById`. Cuenta
-// tanto `setText` como `append`, porque las dos cambian lo que la pantalla enseña.
+// tanto `setText` como `append`, porque las dos cambian lo que la pantalla enseña, y el texto que
+// entregó `--escribir`, que es lo que el usuario tecleó.
 func anotaTextoDinamico(n *nodoVista, ejecucion *resultadoEjecucion) {
 	if n == nil || ejecucion == nil {
 		return
 	}
 	for _, c := range ejecucion.Capturas {
 		if c.IDRef == "" || c.IDRef != n.IDRef ||
-			(c.Origen != "TextView.setText" && c.Origen != "TextView.append") {
+			(c.Origen != "TextView.setText" && c.Origen != "TextView.append" &&
+				c.Origen != "usuario.escribir") {
 			continue
 		}
 		n.TextoDinamico = c.Texto
 	}
 	for _, h := range n.Hijos {
 		anotaTextoDinamico(h, ejecucion)
+	}
+}
+
+// anotaEstados copia al árbol el estado de marcado y la pista que dejó la ejecución. El match es por
+// id de recurso, como el de los oyentes. Una vista marcable sin entrada en `marcas` conserva el
+// estado que declaró el layout (o el «sin marcar» del framework que puso `nodoDe`).
+func anotaEstados(n *nodoVista, ejecucion *resultadoEjecucion) {
+	if n == nil || ejecucion == nil {
+		return
+	}
+	for _, m := range ejecucion.Marcas {
+		if m.IDRef != "" && m.IDRef == n.IDRef {
+			valor := m.Marcado
+			n.Marcado = &valor
+		}
+	}
+	for _, p := range ejecucion.Pistas {
+		if p.IDRef != "" && p.IDRef == n.IDRef {
+			n.Pista = p.Pista
+		}
+	}
+	for _, h := range n.Hijos {
+		anotaEstados(h, ejecucion)
 	}
 }
 
@@ -1050,6 +1186,19 @@ func (c *contextoVista) nodoDe(e *elementoLeido) *nodoVista {
 	}
 	if texto, ok := e.atributo(uriDeRecursos, "text"); ok {
 		n.Texto = c.texto(texto)
+	}
+	if pista, ok := e.atributo(uriDeRecursos, "hint"); ok {
+		n.Pista = c.texto(pista)
+	}
+	// el estado que declara el layout: `android:checked` en una vista marcable y, para las que no
+	// declaran nada, el «sin marcar» del framework. Un RadioGroup marca su opción con
+	// `android:checkedButton`, que se resuelve al ejecutar (hace falta la tabla de ids).
+	if esTipoMarcable(e.nombre) {
+		marcado := false
+		if v, ok := e.atributo(uriDeRecursos, "checked"); ok {
+			marcado = v.datos != 0
+		}
+		n.Marcado = &marcado
 	}
 	if ancho, ok := e.atributo(uriDeRecursos, "layout_width"); ok {
 		n.Ancho, n.declAncho = c.valorDeMedida(ancho)

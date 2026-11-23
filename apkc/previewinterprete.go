@@ -11,10 +11,14 @@ package main
 //     para lo que la app toca: `Activity.onCreate`, `setContentView`, `findViewById`,
 //     `View.setOnClickListener`, `TextView.setText`, `StringBuilder`, `Log` y `println`;
 //   - la app arranca con `onCreate` y nada más: NO se pulsa ningún listener por su cuenta, porque un
-//     texto que cambia sin que nadie toque la pantalla no es un emulador. Los clics llegan por
-//     `--pulsar id/pulsar`, en el orden en que se piden y dentro de la misma ejecución, así que el
-//     estado que ve el `onClick` es el que dejó `onCreate` y los clics anteriores. Repetir la lista
-//     reproduce la misma pantalla: el emulador no guarda estado entre comandos y no lo finge.
+//     texto que cambia sin que nadie toque la pantalla no es un emulador. Las órdenes de entrada
+//     llegan por `--pulsar id/pulsar`, `--escribir id/texto`, `--marcar id` y `--desmarcar id` —y
+//     `--recrear`, que rehace la actividad con su Bundle—, en el
+//     orden en que se piden y dentro de la misma ejecución, así que el estado que ve cada una es el
+//     que dejó `onCreate` y las órdenes anteriores. Teclear entrega el texto entero de una vez y
+//     avisa a los `TextWatcher` del proyecto; marcar avisa al `OnCheckedChangeListener` y un
+//     RadioGroup desmarca el resto de su grupo. Repetir el guion reproduce la misma pantalla: el
+//     emulador no guarda estado entre comandos y no lo finge.
 //   - la salida de la app (`System.out.println`, `print` y `Log.*`) se anota además en `consola`, en
 //     orden de emisión y numerada con `secuencia`, que es el panel de consola de la pestaña. Las
 //     escrituras de view siguen en `capturas`, que es el registro del emulador.
@@ -37,8 +41,8 @@ import (
 )
 
 const (
-	pasosMaximos = 200000
-	avisosMaximos = 24
+	pasosMaximos            = 200000
+	avisosMaximos           = 24
 	profundidadMaximaDalvik = 48
 	// pantallasMaximas no es un límite de uso: es la única salvaguarda ante una app que se abre a
 	// sí misma en onCreate sin parar. Un dispositivo acabaría agotando memoria; aquí se avisa y se
@@ -49,6 +53,16 @@ const (
 	filasMaximas = 50
 )
 
+// eventoUsuario es una orden de entrada del guion —un clic, un texto tecleado o una marca— con el
+// nombre del flag que la pidió. Se entregan en el orden de la línea de comandos, dentro de la misma
+// ejecución, así que cada una ve el estado que dejó la anterior.
+type eventoUsuario struct {
+	// Tipo es el flag que la pidió: "pulsar", "escribir", "marcar" o "desmarcar".
+	Tipo string
+	// Dato lleva el id de la vista y, en «escribir», el texto pegado tras el primer «/».
+	Dato string
+}
+
 // capturaTexto es una escritura que el intérprete pudo ver: qué stub la recibió, sobre qué view (si
 // es una view con id de recurso) y con qué texto.
 type capturaTexto struct {
@@ -56,6 +70,21 @@ type capturaTexto struct {
 	ID     string `json:"id,omitempty"`
 	IDRef  string `json:"idRef,omitempty"`
 	Texto  string `json:"texto"`
+}
+
+// marcaVista es el estado de una vista marcable (CheckBox, RadioButton, Switch) con el estado que
+// tiene al final del guion.
+type marcaVista struct {
+	ID      string `json:"id,omitempty"`
+	IDRef   string `json:"idRef,omitempty"`
+	Marcado bool   `json:"marcado"`
+}
+
+// pistaVista es el `setHint` que la app puso en una vista: no es su texto y no se mezcla con él.
+type pistaVista struct {
+	ID    string `json:"id,omitempty"`
+	IDRef string `json:"idRef,omitempty"`
+	Pista string `json:"pista"`
 }
 
 // lineaConsola es una línea de la consola de la app: una llamada a `print`/`println` o a `Log.*`.
@@ -119,8 +148,13 @@ type resultadoEjecucion struct {
 	Consola       []lineaConsola `json:"consola,omitempty"`
 	Oyentes       []oyenteVista  `json:"oyentes,omitempty"`
 	Pulsaciones   []string       `json:"pulsaciones,omitempty"`
-	Avisos        []string       `json:"avisos,omitempty"`
-	Error         string         `json:"error,omitempty"`
+	// Escrituras es el guion de `--escribir` entregado, en orden; Marcas y Pistas son el estado que
+	// dejó en las vistas que lo declaran o lo tocaron, para que el modelo y el render lo enseñen.
+	Escrituras []string     `json:"escrituras,omitempty"`
+	Marcas     []marcaVista `json:"marcas,omitempty"`
+	Pistas     []pistaVista `json:"pistas,omitempty"`
+	Avisos     []string     `json:"avisos,omitempty"`
+	Error      string       `json:"error,omitempty"`
 	// Pantallas es el recorrido de actividades que la ejecución abrió, en orden, con la actual al
 	// final: es la prueba de que `startActivity` y `finish()` movieron la app de pantalla.
 	Pantallas []string `json:"pantallas,omitempty"`
@@ -201,6 +235,18 @@ type objetoDalvik struct {
 	tag          any
 	cadena       *strings.Builder
 	oyente       any
+	// marcado es el estado de un CompoundButton y `marcadoPuesto` recuerda si alguien lo fijó (la
+	// siembra del layout, un `setChecked` o un toque); sin ese segundo campo no se distingue un
+	// «sin marcar» de un «nadie dijo nada» a la hora de sembrar.
+	marcado       bool
+	marcadoPuesto bool
+	// vigilantesTexto son los TextWatcher de `addTextChangedListener`: se avisan al teclear
+	vigilantesTexto []any
+	// oyenteMarca es el OnCheckedChangeListener de un CompoundButton; el último registrado gana,
+	// como en el framework
+	oyenteMarca any
+	// pista es el `setHint` de un EditText: no es su texto y no se mezcla con él
+	pista string
 	// intentClase es el destino de un `Intent(Context, Class)` de una actividad propia: es lo que
 	// `startActivity` lee para abrir la pantalla siguiente
 	intentClase string
@@ -389,6 +435,18 @@ type maquinaDalvik struct {
 	// inflado (un `findViewById` dentro del `onClick`, por ejemplo): el framework no devuelve una
 	// vista vacía, devuelve la que ya trae su texto
 	textosDeLayout map[uint32]string
+	// lo que el layout dice de cada vista con id: su tipo (para rechazar por nombre una orden que no
+	// le corresponde), su `android:checked` y los RadioButton de cada RadioGroup
+	tiposVista map[uint32]string
+	marcas     map[uint32]bool
+	pistas     map[uint32]string
+	// marcasConocidas son las vistas cuyo estado se sabe (lo declaró el layout o alguien las tocó):
+	// las únicas que el resultado publica
+	marcasConocidas map[uint32]bool
+	// gruposRadio lleva, por id del RadioGroup, los ids de sus RadioButton: marcar uno desmarca el
+	// resto del grupo, como el framework. grupoDe hace el camino inverso.
+	gruposRadio map[uint32][]uint32
+	grupoDe     map[uint32]uint32
 	// el recorrido de actividades: cada `startActivity` deja aquí la clase destino y el bucle de
 	// `ejecutaOnCreateNavegando` abre la siguiente pantalla; `finish()` pide volver a la anterior
 	pendiente string
@@ -482,7 +540,10 @@ type oyenteItemRegistrado struct {
 
 func nuevaMaquina(p *programaDalvik, tabla *tablaRecursos) *maquinaDalvik {
 	return &maquinaDalvik{prog: p, tabla: tabla, vistos: map[string]bool{},
-		vistas: map[uint32]*objetoDalvik{}, almacen: nuevoAlmacenPreferencias()}
+		vistas: map[uint32]*objetoDalvik{}, almacen: nuevoAlmacenPreferencias(),
+		tiposVista: map[uint32]string{}, marcas: map[uint32]bool{}, pistas: map[uint32]string{},
+		marcasConocidas: map[uint32]bool{}, gruposRadio: map[uint32][]uint32{},
+		grupoDe: map[uint32]uint32{}}
 }
 
 // siembraTextosDelLayout deja en la máquina el `android:text` que el layout declara para cada id y
@@ -501,9 +562,199 @@ func (m *maquinaDalvik) siembraTextosDelLayout(textos map[uint32]string) {
 	}
 }
 
+// siembraMarcas deja en la máquina el estado que el layout declara —el `android:checked` de cada
+// vista y el `android:checkedButton` de un RadioGroup— y la forma de cada grupo. No pisa lo que la
+// app ya fijó en `onCreate`, con el mismo criterio que la siembra de textos, y no avisa a ningún
+// oyente: el inflado tampoco lo hace.
+func (m *maquinaDalvik) siembraMarcas(marcas map[uint32]bool, grupos map[uint32][]uint32, tipos map[uint32]string) {
+	for id, tipo := range tipos {
+		m.tiposVista[id] = tipo
+	}
+	for grupo, hijos := range grupos {
+		m.gruposRadio[grupo] = hijos
+		for _, hijo := range hijos {
+			m.grupoDe[hijo] = grupo
+		}
+	}
+	for id, valor := range marcas {
+		m.marcas[id] = valor
+		m.marcasConocidas[id] = true
+		if vista := m.vistas[id]; vista != nil && !vista.marcadoPuesto {
+			vista.marcado = valor
+			vista.marcadoPuesto = true
+		}
+	}
+}
+
+// escribe entrega texto a una vista como si el usuario lo tecleara: lo deja en el EditText, lo
+// captura y avisa a los TextWatcher registrados, en el orden del framework (`beforeTextChanged`,
+// `onTextChanged` y `afterTextChanged`). El texto llega entero de una vez: el comando no finge un
+// IME, un cursor ni una pulsación por carácter.
+func (m *maquinaDalvik) escribe(id uint32, texto string) {
+	vista := m.vista(id)
+	anterior := vista.texto
+	m.captura("usuario.escribir", vista, texto)
+	m.avisaTecleo(vista, anterior, texto)
+}
+
+// avisaTecleo llama a los tres métodos de cada TextWatcher registrado, si el proyecto los declara.
+// El texto nuevo viaja como cadena del intérprete, que es lo que un `toString` o un `length` de dentro
+// del vigilante leen, y los enteros llevan los recuentos de antes y de después. Un `setText` que el
+// propio vigilante haga sobre la misma vista no vuelve a disparar el aviso: el comando no finge una
+// cascada que en el aparato depende de las marcas del Editable.
+func (m *maquinaDalvik) avisaTecleo(v *objetoDalvik, anterior, nuevo string) {
+	if len(v.vigilantesTexto) == 0 {
+		return
+	}
+	antes := int32(len(unidadesDeCadena(anterior)))
+	despues := int32(len(unidadesDeCadena(nuevo)))
+	for _, vigilante := range v.vigilantesTexto {
+		obj, ok := vigilante.(*objetoDalvik)
+		if !ok {
+			m.avisa("un TextWatcher de %#08x no es un objeto del dex", v.id)
+			continue
+		}
+		s := &objetoDalvik{clase: "Ljava/lang/CharSequence;", campos: map[string]any{}, texto: nuevo}
+		// beforeTextChanged(CharSequence s, int start, int count, int after)
+		m.llamaVigilante(obj, "beforeTextChanged", "(Ljava/lang/CharSequence;III)V",
+			[]any{obj, s, int32(0), antes, despues},
+			[]string{obj.clase, "Ljava/lang/CharSequence;", "I", "I", "I"})
+		// onTextChanged(CharSequence s, int start, int before, int count)
+		m.llamaVigilante(obj, "onTextChanged", "(Ljava/lang/CharSequence;III)V",
+			[]any{obj, s, int32(0), antes, despues},
+			[]string{obj.clase, "Ljava/lang/CharSequence;", "I", "I", "I"})
+		// afterTextChanged(Editable s)
+		m.llamaVigilante(obj, "afterTextChanged", "(Landroid/text/Editable;)V",
+			[]any{obj, s}, []string{obj.clase, "Landroid/text/Editable;"})
+	}
+}
+
+// llamaVigilante ejecuta el método si el objeto lo declara. Un vigilante puede implementar solo
+// alguno de los tres (es una interfaz con métodos vacíos por defecto en Kotlin y una clase abstracta
+// en Java, pero aquí llegan los tres como métodos normales): el que falte no se inventa.
+func (m *maquinaDalvik) llamaVigilante(obj *objetoDalvik, nombre, proto string, args []any, tipos []string) {
+	met := m.buscaMetodo(obj.clase, nombre, proto)
+	if met == nil {
+		return
+	}
+	if _, err := m.ejecutaCuerpo(obj.clase, met, args, tipos); err != nil {
+		m.avisa("el %s de %s falló: %v", nombre, claseCorta(obj.clase), err)
+	}
+}
+
+// marcaVista fija el estado de una vista marcable como `CompoundButton.setChecked`: si el valor
+// cambia, avisa a su OnCheckedChangeListener. Marcar un RadioButton desmarca el resto de su grupo,
+// que es lo que hace un RadioGroup. No cuenta como interacción por sí sola: `--marcar` la cuenta y un
+// `setChecked` de la app no, igual que el framework.
+func (m *maquinaDalvik) marcaVista(v *objetoDalvik, valor bool) {
+	if v == nil {
+		return
+	}
+	// el aviso sale solo si el valor cambia, como en `CompoundButton.setChecked`: desmarcar lo que ya
+	// estaba desmarcado no dispara nada
+	cambia := v.marcado != valor
+	v.marcado = valor
+	v.marcadoPuesto = true
+	if v.id != 0 {
+		m.marcas[v.id] = valor
+		m.marcasConocidas[v.id] = true
+	}
+	if !cambia {
+		return
+	}
+	if valor && v.id != 0 {
+		if grupo, ok := m.grupoDe[v.id]; ok {
+			for _, otroID := range m.gruposRadio[grupo] {
+				if otroID == v.id {
+					continue
+				}
+				if m.marcas[otroID] {
+					// el grupo desmarca al que estaba: su oyente también recibe el cambio
+					m.marcaVista(m.vista(otroID), false)
+				}
+			}
+		}
+	}
+	m.avisaMarca(v, valor)
+}
+
+// avisaMarca entrega el cambio al OnCheckedChangeListener registrado, con la firma de
+// CompoundButton.OnCheckedChangeListener. Si el proyecto declara otra cosa, se avisa en vez de
+// inventar una llamada.
+func (m *maquinaDalvik) avisaMarca(v *objetoDalvik, valor bool) {
+	if v.oyenteMarca == nil {
+		return
+	}
+	oyente, ok := v.oyenteMarca.(*objetoDalvik)
+	if !ok {
+		m.avisa("el OnCheckedChangeListener de %#08x no es un objeto del dex", v.id)
+		return
+	}
+	met := m.buscaMetodo(oyente.clase, "onCheckedChanged", "(Landroid/widget/CompoundButton;Z)V")
+	if met == nil {
+		m.avisa("%s se registró como OnCheckedChangeListener y no tiene "+
+			"onCheckedChanged(CompoundButton, boolean)", claseCorta(oyente.clase))
+		return
+	}
+	if _, err := m.ejecutaCuerpo(oyente.clase, met, []any{oyente, v, boolAInt(valor)},
+		[]string{oyente.clase, "Landroid/widget/CompoundButton;", "Z"}); err != nil {
+		m.avisa("el onCheckedChanged de %s falló: %v", claseCorta(oyente.clase), err)
+	}
+}
+
+// marcasDeVista publica el estado final de las vistas marcables conocidas, en orden de id para que
+// el JSON sea determinista.
+func (m *maquinaDalvik) marcasDeVista() []marcaVista {
+	ids := make([]uint32, 0, len(m.marcasConocidas))
+	for id := range m.marcasConocidas {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	salida := make([]marcaVista, 0, len(ids))
+	for _, id := range ids {
+		valor := m.marcas[id]
+		if v := m.vistas[id]; v != nil && v.marcadoPuesto {
+			valor = v.marcado
+		}
+		entrada := marcaVista{IDRef: fmt.Sprintf("%#08x", id), Marcado: valor}
+		if tipo, clave, ok := m.nombreDeID(id); ok {
+			entrada.ID = tipo + "/" + clave
+		}
+		salida = append(salida, entrada)
+	}
+	return salida
+}
+
+// pistasDeVista publica los `setHint` que la app puso, en orden de id.
+func (m *maquinaDalvik) pistasDeVista() []pistaVista {
+	ids := make([]uint32, 0, len(m.pistas))
+	for id := range m.pistas {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	salida := make([]pistaVista, 0, len(ids))
+	for _, id := range ids {
+		entrada := pistaVista{IDRef: fmt.Sprintf("%#08x", id), Pista: m.pistas[id]}
+		if tipo, clave, ok := m.nombreDeID(id); ok {
+			entrada.ID = tipo + "/" + clave
+		}
+		salida = append(salida, entrada)
+	}
+	return salida
+}
+
+// nombreDeID traduce un id de recurso a su tipo y su clave con la tabla del apk; sin tabla no hay
+// nombre que dar y el resultado se queda con el número.
+func (m *maquinaDalvik) nombreDeID(id uint32) (string, string, bool) {
+	if m.tabla == nil {
+		return "", "", false
+	}
+	return m.tabla.nombreDeId(id)
+}
+
 // vista devuelve la vista que ese id ya tiene o la crea como la dejaría el inflado: la clase genérica
-// de View y el `android:text` que el layout declare para ese id. El id 0 no se registra: no es una
-// vista del layout y no se puede volver a encontrar.
+// de View, el `android:text` que el layout declare para ese id, y el estado marcado o la pista que ya
+// se conozcan. El id 0 no se registra: no es una vista del layout y no se puede volver a encontrar.
 func (m *maquinaDalvik) vista(id uint32) *objetoDalvik {
 	if id == 0 {
 		return &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{}}
@@ -512,7 +763,8 @@ func (m *maquinaDalvik) vista(id uint32) *objetoDalvik {
 		return v
 	}
 	v := &objetoDalvik{clase: "Landroid/view/View;", campos: map[string]any{}, id: id,
-		texto: m.textosDeLayout[id]}
+		texto: m.textosDeLayout[id], marcado: m.marcas[id], marcadoPuesto: m.marcasConocidas[id],
+		pista: m.pistas[id]}
 	if m.vistas == nil {
 		m.vistas = map[uint32]*objetoDalvik{}
 	}
@@ -694,10 +946,14 @@ func ejecutaOnCreate(d *dexFile, tabla *tablaRecursos, actividad string) (*resul
 
 // ejecutaOnCreateConPulsos es el mismo arranque con una lista de clics: cada entrada se entrega al
 // `onClick` de la vista con ese id, en orden y en la MISMA ejecución. Devolver un error fuera del
-// resultado es solo para la lista de clics (un id que no existe o una vista sin listener): la app
-// ejecutada a medias no se devuelve como si fuera una pantalla buena.
+// resultado es solo para el guion (un id que no existe, una vista sin listener o una orden que no le
+// corresponde): la app ejecutada a medias no se devuelve como si fuera una pantalla buena.
 func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string) (*resultadoEjecucion, uint32, error) {
-	return ejecutaOnCreatePreparando(d, tabla, actividad, pulsos, nil)
+	eventos := make([]eventoUsuario, 0, len(pulsos))
+	for _, p := range pulsos {
+		eventos = append(eventos, eventoUsuario{Tipo: "pulsar", Dato: p})
+	}
+	return ejecutaOnCreateConEventos(d, tabla, actividad, eventos, nil, nil)
 }
 
 // ejecutaOnCreatePreparando es el mismo arranque con un gancho entre `onCreate` y los clics. Lo usa
@@ -707,34 +963,29 @@ func ejecutaOnCreateConPulsos(d *dexFile, tabla *tablaRecursos, actividad string
 // destino de `startActivity` (es el camino de las pruebas que no leen manifiesto).
 func ejecutaOnCreatePreparando(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string,
 	preparar func(m *maquinaDalvik)) (*resultadoEjecucion, uint32, error) {
-	return ejecutaOnCreateNavegando(d, tabla, actividad, pulsos, preparar, nil)
+	eventos := make([]eventoUsuario, 0, len(pulsos))
+	for _, p := range pulsos {
+		eventos = append(eventos, eventoUsuario{Tipo: "pulsar", Dato: p})
+	}
+	return ejecutaOnCreateConEventos(d, tabla, actividad, eventos, preparar, nil)
 }
 
-// ejecutaOnCreateNavegando es el arranque con ciclo de vida y navegación. `declaradas` son las
-// actividades que el manifiesto declara, por descriptor: una que no esté ahí no se lanza, como en el
-// aparato.
+// ejecutaOnCreateNavegando es el nombre anterior del arranque con navegación: se queda como
+// envoltorio fino para las llamadas que solo piden entregar el guion.
+func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string, eventos []eventoUsuario,
+	preparar func(m *maquinaDalvik), declaradas map[string]bool) (*resultadoEjecucion, uint32, error) {
+	return ejecutaOnCreateConEventos(d, tabla, actividad, eventos, preparar, declaradas)
+}
+
+// ejecutaOnCreateConEventos es el arranque con el guion de entrada completo —clics, texto tecleado,
+// marcas, desmarcas y recreaciones—, en el orden en que se pidieron, con ciclo de vida y navegación.
 //
 // La pila de actividades vive aquí y no en el dex: cada pantalla conserva su propia máquina (sus
 // objetos, sus capturas y sus oyentes) mientras está cubierta, y `finish()` la descubre otra vez sin
-// repetir su `onCreate`, que es lo que hace que el estado vuelva como estaba.
-func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string, pulsos []string,
-	preparar func(m *maquinaDalvik), declaradas map[string]bool) (*resultadoEjecucion, uint32, error) {
-	return ejecutaOnCreateConOrdenes(d, tabla, actividad, ordenesDePulsos(pulsos), preparar, declaradas)
-}
-
-// ordenesDePulsos convierte la lista clásica de `--pulsar` en órdenes, para las envolturas y las
-// pruebas que no necesitan recrear.
-func ordenesDePulsos(pulsos []string) []ordenEjecucion {
-	ordenes := make([]ordenEjecucion, 0, len(pulsos))
-	for _, p := range pulsos {
-		ordenes = append(ordenes, ordenEjecucion{Tipo: ordenPulsarTipo, Valor: p})
-	}
-	return ordenes
-}
-
-// ejecutaOnCreateConOrdenes es el arranque con ciclo de vida, navegación y la secuencia de órdenes
-// (`--pulsar` y `--recrear`) entregada en el orden en que se escribió.
-func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad string, ordenes []ordenEjecucion,
+// repetir su `onCreate`, que es lo que hace que el estado vuelva como estaba. `declaradas` son las
+// actividades que el manifiesto declara, por descriptor: una que no esté ahí no se lanza, como en el
+// aparato.
+func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad string, eventos []eventoUsuario,
 	preparar func(m *maquinaDalvik), declaradas map[string]bool) (*resultadoEjecucion, uint32, error) {
 	res := &resultadoEjecucion{Metodo: "onCreate"}
 	prog, err := cargaPrograma(d)
@@ -781,6 +1032,8 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 			res.Capturas = m.capturas
 			res.Consola = m.consola
 			res.Avisos = m.avisos
+			res.Marcas = m.marcasDeVista()
+			res.Pistas = m.pistasDeVista()
 			res.Ciclo = m.ciclo
 			res.maquina = m
 			return res, m.layoutID, nil
@@ -878,25 +1131,27 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 		return nil
 	}
 
-	// las órdenes pedidas, en orden y solo si la app llegó viva a este punto. El estado que ve cada
-	// `onClick` incluye los anteriores, porque comparten la misma máquina: es lo que hace que
-	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1. Entre orden y orden se estabiliza la
-	// navegación: la siguiente va a la pantalla que quedó delante.
-	var errPulsos error
+	// el guion pedido, en orden y solo si la app llegó viva a este punto. El estado que ve cada orden
+	// incluye las anteriores, porque comparten la misma máquina: es lo que hace que
+	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1, y que teclear antes de pulsar cambie lo
+	// que el onClick lee. Entre orden y orden se estabiliza la navegación: la siguiente va a la
+	// pantalla que quedó delante. Ni los clics ni los tecleos ni las marcas tienen tope: los pone el
+	// usuario y el emulador los entrega todos.
+	var errEventos error
 	if res.Error == "" {
-		for _, orden := range ordenes {
-			pedido := orden.Valor
+		for _, orden := range eventos {
 			if orden.Tipo == ordenRecrearTipo {
 				if err := recreaActual(); err != nil {
-					errPulsos = err
+					errEventos = err
 					break
 				}
 				estabiliza()
 				continue
 			}
-			if esOrdenDeDialogo(pedido) {
+			pedido := orden.Dato
+			if orden.Tipo == ordenPulsarTipo && esOrdenDeDialogo(pedido) {
 				if err := m.pulsaBotonDeDialogo(pedido); err != nil {
-					errPulsos = err
+					errEventos = err
 					break
 				}
 				res.Pulsaciones = append(res.Pulsaciones, pedido)
@@ -905,14 +1160,14 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 			}
 			// `id/lista:1` es un clic en una fila: la forma lleva la posición después de los dos
 			// puntos, y es la única que le entrega al `onItemClick` el número que tocó.
-			if vista, fila, esFila := cortaFila(pedido); esFila {
-				id, err := idDePulsacion(tabla, vista)
+			if vista, fila, esFila := cortaFila(pedido); orden.Tipo == ordenPulsarTipo && esFila {
+				id, err := idDeEvento(tabla, ordenPulsarTipo, vista)
 				if err != nil {
-					errPulsos = err
+					errEventos = err
 					break
 				}
 				if !m.pulsaFila(id, fila) {
-					errPulsos = fmt.Errorf("no se puede pulsar la fila %d de %q: ninguna lista con ese "+
+					errEventos = fmt.Errorf("no se puede pulsar la fila %d de %q: ninguna lista con ese "+
 						"id registró un OnItemClickListener%s", fila, vista, listaDeOyentesDeItem(m))
 					break
 				}
@@ -920,17 +1175,10 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 				estabiliza()
 				continue
 			}
-			id, err := idDePulsacion(tabla, pedido)
-			if err != nil {
-				errPulsos = err
+			if err := m.entregaEvento(tabla, orden, res); err != nil {
+				errEventos = err
 				break
 			}
-			if !m.pulsa(id) {
-				errPulsos = fmt.Errorf("no se puede pulsar %q: ninguna vista con ese id se registró "+
-					"como OnClickListener%s", orden.Valor, listaDeOyentes(m))
-				break
-			}
-			res.Pulsaciones = append(res.Pulsaciones, orden.Valor)
 			estabiliza()
 		}
 	}
@@ -939,6 +1187,8 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 	res.Actividad = claseCorta(m.actividad.clase)
 	res.Capturas = m.capturas
 	res.Oyentes = m.oyentesDeVista()
+	res.Marcas = m.marcasDeVista()
+	res.Pistas = m.pistasDeVista()
 	for _, x := range todas {
 		res.Pasos += x.pasos
 		res.Interacciones += x.interaccion
@@ -966,7 +1216,51 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 	for i := range res.Consola {
 		res.Consola[i].Secuencia = i + 1
 	}
-	return res, m.layoutID, errPulsos
+	return res, m.layoutID, errEventos
+}
+
+// entregaEvento ejecuta una orden de entrada sobre la pantalla que está delante. Cada tipo comprueba
+// que la vista exista y que la orden le corresponda: un id que no resuelve, un clic sin oyente, texto
+// a una vista que no es un EditText o una marca sobre algo que no se marca devuelven error, porque un
+// modelo a medias se leería como si la orden hubiera funcionado.
+func (m *maquinaDalvik) entregaEvento(tabla *tablaRecursos, e eventoUsuario, res *resultadoEjecucion) error {
+	switch e.Tipo {
+	case "pulsar":
+		id, err := idDeEvento(tabla, e.Tipo, e.Dato)
+		if err != nil {
+			return err
+		}
+		if !m.pulsa(id) {
+			return fmt.Errorf("no se puede pulsar %q: ninguna vista con ese id se registró "+
+				"como OnClickListener%s", e.Dato, listaDeOyentes(m))
+		}
+		res.Pulsaciones = append(res.Pulsaciones, e.Dato)
+	case "escribir":
+		idParte, texto := partirEscribir(e.Dato)
+		id, err := idDeEvento(tabla, e.Tipo, idParte)
+		if err != nil {
+			return err
+		}
+		if tipo := m.tiposVista[id]; tipo != "" && !admiteTecleo(tipo) {
+			return fmt.Errorf("no se puede escribir en %q: el layout dice %s y solo se teclea en un "+
+				"EditText", idParte, tipo)
+		}
+		m.interaccion++
+		m.escribe(id, texto)
+		res.Escrituras = append(res.Escrituras, e.Dato)
+	case "marcar", "desmarcar":
+		id, err := idDeEvento(tabla, e.Tipo, e.Dato)
+		if err != nil {
+			return err
+		}
+		if tipo := m.tiposVista[id]; tipo != "" && !esTipoMarcable(tipo) {
+			return fmt.Errorf("no se puede %s %q: el layout dice %s y solo se marcan CheckBox, "+
+				"RadioButton o Switch", e.Tipo, e.Dato, tipo)
+		}
+		m.interaccion++
+		m.marcaVista(m.vista(id), e.Tipo == "marcar")
+	}
+	return nil
 }
 
 // contieneTexto dice si la lista ya tiene ese aviso, para no repetirlo al unir pantallas.
@@ -1215,22 +1509,23 @@ func listaDeOyentes(m *maquinaDalvik) string {
 	return " (los listeners registrados son " + strings.Join(nombres, ", ") + ")"
 }
 
-// idDePulsacion lleva lo que se escribe en `--pulsar` al id de recurso de la vista. Se aceptan las
-// tres formas que el modelo publica: `id/pulsar` (nombreDeId al revés), `0x7f010000` (el `idRef` de
-// los nodos) y el decimal del mismo número.
-func idDePulsacion(tabla *tablaRecursos, pedido string) (uint32, error) {
+// idDeEvento lleva lo que se escribe en una orden de entrada (`--pulsar`, `--escribir`, `--marcar`,
+// `--desmarcar`) al id de recurso de la vista. Se aceptan las tres formas que el modelo publica:
+// `id/pulsar` (nombreDeId al revés), `0x7f010000` (el `idRef` de los nodos) y el decimal del mismo
+// número. `orden` es el nombre del flag, para que el error diga cuál falló.
+func idDeEvento(tabla *tablaRecursos, orden, pedido string) (uint32, error) {
 	s := strings.TrimSpace(pedido)
 	if s == "" {
-		return 0, fmt.Errorf("--pulsar necesita un id: id/pulsar, 0x7f010000 o su decimal")
+		return 0, fmt.Errorf("--%s necesita un id: id/pulsar, 0x7f010000 o su decimal", orden)
 	}
 	if tipo, clave, ok := strings.Cut(s, "/"); ok {
 		if tabla == nil {
-			return 0, fmt.Errorf("no se puede pulsar %q: sin resources.arsc no hay tabla que traduzca "+
-				"el nombre; pasa el id numérico", pedido)
+			return 0, fmt.Errorf("no se puede %s %q: sin resources.arsc no hay tabla que traduzca "+
+				"el nombre; pasa el id numérico", orden, pedido)
 		}
 		id, ok := tabla.idDeNombre(tipo, clave)
 		if !ok {
-			return 0, fmt.Errorf("no se puede pulsar %q: la tabla no tiene %s/%s", pedido, tipo, clave)
+			return 0, fmt.Errorf("no se puede %s %q: la tabla no tiene %s/%s", orden, pedido, tipo, clave)
 		}
 		return id, nil
 	}
@@ -1241,7 +1536,24 @@ func idDePulsacion(tabla *tablaRecursos, pedido string) (uint32, error) {
 	if n, err := strconv.ParseUint(s, 10, 32); err == nil {
 		return uint32(n), nil
 	}
-	return 0, fmt.Errorf("no se puede pulsar %q: se espera id/pulsar, 0x7f010000 o un decimal", pedido)
+	return 0, fmt.Errorf("no se puede %s %q: se espera id/pulsar, 0x7f010000 o un decimal", orden, pedido)
+}
+
+// partirEscribir separa `id/texto` en el id de la vista y el texto que se le entrega. El id puede ser
+// `id/nombre`, que ya lleva una barra, o un número; y el texto puede llevar barras, así que se corta
+// por la barra que cierra el id y no por la última. Un `id/nombre` sin texto entrega el texto vacío,
+// que es vaciar el campo.
+func partirEscribir(dato string) (string, string) {
+	if resto := strings.TrimPrefix(dato, "id/"); resto != dato {
+		if clave, texto, ok := strings.Cut(resto, "/"); ok {
+			return "id/" + clave, texto
+		}
+		return dato, ""
+	}
+	if id, texto, ok := strings.Cut(dato, "/"); ok {
+		return id, texto
+	}
+	return dato, ""
 }
 
 // pulsa entrega el clic al `onClick` de la última vista con ese id que se registró, como un
@@ -2736,8 +3048,17 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	esVista := func() bool {
 		return es("Landroid/view/View;", "Landroid/widget/TextView;", "Landroid/widget/Button;",
 			"Landroid/widget/EditText;", "Landroid/widget/CheckBox;", "Landroid/widget/Switch;",
+			"Landroid/widget/RadioButton;", "Landroid/widget/CompoundButton;",
+			"Landroid/widget/ToggleButton;", "Landroid/widget/CheckedTextView;",
 			"Landroid/widget/ImageView;", "Landroid/widget/LinearLayout;",
 			"Landroid/widget/FrameLayout;", "Landroid/widget/RelativeLayout;")
+	}
+	// esMarcable es el subconjunto de vistas con estado de marcado: el CompoundButton y sus hijos
+	// (CheckBox, RadioButton, Switch, ToggleButton) y el CheckedTextView de las listas
+	esMarcable := func() bool {
+		return es("Landroid/widget/CheckBox;", "Landroid/widget/RadioButton;",
+			"Landroid/widget/Switch;", "Landroid/widget/ToggleButton;",
+			"Landroid/widget/CompoundButton;", "Landroid/widget/CheckedTextView;")
 	}
 	obj, _ := receptor.(*objetoDalvik)
 
@@ -3007,9 +3328,60 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			}
 			return nil, true, nil
 		}
+	case "setOnCheckedChangeListener":
+		// el framework guarda un solo oyente: el último registrado sustituye al anterior
+		if len(vals) == 1 && obj != nil && esMarcable() {
+			obj.oyenteMarca = vals[0]
+			return nil, true, nil
+		}
+	case "addTextChangedListener":
+		// los vigilantes se acumulan, como en TextView; el que se registra dos veces se avisa dos
+		// veces, que es lo que hace el framework con una lista de listeners
+		if len(vals) == 1 && obj != nil && esVista() {
+			obj.vigilantesTexto = append(obj.vigilantesTexto, vals[0])
+			return nil, true, nil
+		}
+	case "isChecked":
+		if len(vals) == 0 && obj != nil && esMarcable() {
+			return boolAInt(obj.marcado), true, nil
+		}
+	case "setChecked":
+		// `setChecked` cambia el estado y avisa al oyente si el valor cambió; `toggle` es su
+		// inverso. En los dos el receptor tiene que ser una vista marcable.
+		if len(vals) == 1 && obj != nil && esMarcable() {
+			n, err := aInt32(vals[0])
+			if err != nil {
+				return nil, true, err
+			}
+			m.marcaVista(obj, n != 0)
+			return nil, true, nil
+		}
+	case "toggle":
+		if len(vals) == 0 && obj != nil && esMarcable() {
+			m.marcaVista(obj, !obj.marcado)
+			return nil, true, nil
+		}
+	case "setHint":
+		if len(vals) == 1 && obj != nil && esVista() {
+			pista := textoDe(vals[0])
+			if resuelto, ok := m.textoDeId(vals[0]); ok {
+				pista = resuelto
+			}
+			obj.pista = pista
+			if obj.id != 0 {
+				m.pistas[obj.id] = pista
+			}
+			return nil, true, nil
+		}
+	case "getHint":
+		if len(vals) == 0 && obj != nil && esVista() {
+			return &objetoDalvik{clase: "Ljava/lang/CharSequence;", campos: map[string]any{},
+				texto: obj.pista}, true, nil
+		}
 	case "setText":
 		if len(vals) == 1 && es("Landroid/widget/TextView;", "Landroid/widget/Button;",
-			"Landroid/widget/EditText;", "Landroid/widget/CheckBox;", "Landroid/widget/Switch;") {
+			"Landroid/widget/EditText;", "Landroid/widget/CheckBox;", "Landroid/widget/Switch;",
+			"Landroid/widget/RadioButton;", "Landroid/widget/CompoundButton;") {
 			texto := textoDe(vals[0])
 			// `setText(R.string.x)` llega como su número: se resuelve contra la tabla, que es lo
 			// que el layout hace con `@string/x`. Un literal cualquiera no cae aquí porque la
@@ -3043,7 +3415,13 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			if obj.cadena == nil {
 				obj.cadena = &strings.Builder{}
 			}
-			obj.cadena.WriteString(textoDe(vals[0]))
+			// un `append(boolean)` llega como 0/1 y el framework lo imprime «true»/«false»: la firma
+			// del invoke es lo único que distingue un booleano de un entero
+			if strings.HasPrefix(proto, "(Z)") {
+				obj.cadena.WriteString(strconv.FormatBool(textoDe(vals[0]) != "0"))
+			} else {
+				obj.cadena.WriteString(textoDe(vals[0]))
+			}
 			return obj, true, nil
 		}
 	case "getString":
@@ -3095,10 +3473,12 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return obj.tag, true, nil
 		}
 	case "getEditableText":
-		if obj != nil && esVista() {
-			return m.rechaza(nombre, proto,
-				"Editable y Spannable no están en el subconjunto: solo se emula texto plano",
-				"Landroid/text/Editable;")
+		// EditText.getEditableText() devuelve un Editable; aquí se emula como el texto plano de la
+		// vista, que es lo único que una app usa de él (`toString`, `length`, `charAt`). Los tramos y
+		// los spans siguen fuera del subconjunto: no hay nada que medir en ellos y no se finge.
+		if len(vals) == 0 && obj != nil && esVista() {
+			return &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{},
+				texto: obj.texto}, true, nil
 		}
 	case "fromHtml":
 		if es("Landroid/text/Html;") {
