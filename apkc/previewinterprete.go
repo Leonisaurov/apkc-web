@@ -52,9 +52,11 @@ const (
 	// de elementos no es lo que esta fase pinta, y el recorte se avisa en vez de callarse.
 	filasMaximas = 50
 	// tareasMaximas no es un tope de uso: es la salvaguarda de la cola del reloj lógico ante una
-	// tarea que se reprograma a sí misma sin mover el instante. Al llegar se avisa y se deja de
-	// drenar; los `--avanzar` del guion no tienen tope.
-	tareasMaximas = 256
+	// tarea que se reprograma a sí misma sin mover el instante, que encadenaría tareas sin fin. Es
+	// alta a propósito —100000 tareas cubren un `--avanzar` de un día con un tic por segundo— y, si
+	// se alcanza, se avisa y el reloj no llega al destino: se queda en el instante de la última
+	// tarea ejecutada, porque publicar una hora que no corrió sería mentir.
+	tareasMaximas = 100000
 )
 
 // eventoUsuario es una orden de entrada del guion —un clic, un texto tecleado, una marca o un
@@ -507,6 +509,9 @@ type maquinaDalvik struct {
 	// tareas es cuántas tareas ejecutó la cola y encoladas el orden de encolado siguiente
 	tareas    int
 	encoladas int
+	// cortada recuerda que la cola se detuvo por la salvaguarda: el reloj no puede publicar un
+	// destino que no se ejecutó
+	cortada bool
 }
 
 type oyenteRegistrado struct {
@@ -586,11 +591,19 @@ func (m *maquinaDalvik) ahora() int64 {
 }
 
 // avanza mueve el reloj lógico hacia adelante. Solo lo llama el guion: ninguna tarea puede moverlo
-// por su cuenta, y por eso dos ejecuciones del mismo guion dan el mismo JSON.
-func (m *maquinaDalvik) avanza(ms int64) {
-	if m.reloj != nil {
-		*m.reloj += ms
+// por su cuenta, y por eso dos ejecuciones del mismo guion dan el mismo JSON. Un avance que no cabe
+// en el reloj devuelve error en vez de envolver: un tiempo negativo no es una pantalla que se pueda
+// leer, y el comando entero se rechaza como cualquier otra orden que no se puede entregar.
+func (m *maquinaDalvik) avanza(ms int64) error {
+	if m.reloj == nil {
+		return nil
 	}
+	if ms < 0 || ms > math.MaxInt64-*m.reloj {
+		return fmt.Errorf("--avanzar %d desborda el reloj lógico: está en %d ms y el máximo es %d",
+			ms, *m.reloj, int64(math.MaxInt64))
+	}
+	*m.reloj += ms
+	return nil
 }
 
 // programa encola una tarea para un instante del reloj lógico. No la ejecuta: la cola se drena en
@@ -607,6 +620,7 @@ func (m *maquinaDalvik) programa(instante int64, origen string, ejecuta func() e
 // postear. Devuelve falso cuando no queda ninguna tarea vencida.
 func (m *maquinaDalvik) vence(limite int64) bool {
 	if m.tareas >= tareasMaximas {
+		m.cortada = true
 		m.avisa("la cola del reloj lógico se detuvo a las %d tareas ejecutadas", tareasMaximas)
 		return false
 	}
@@ -638,12 +652,17 @@ func (m *maquinaDalvik) vence(limite int64) bool {
 }
 
 // difiere encola el `run()` de un Runnable, que es lo que hacen `Handler.post`/`postDelayed` y
-// `View.post`/`postDelayed`: la tarea corre cuando el guion llega a su instante, no antes.
+// `View.post`/`postDelayed`: la tarea corre cuando el guion llega a su instante, no antes. Un
+// retraso negativo se trata como cero, como hace Android: no puede adelantar el reloj ni dejar una
+// tarea antes del arranque.
 func (m *maquinaDalvik) difiere(origen string, runnable any, espera int64) any {
 	r, ok := runnable.(*objetoDalvik)
 	if !ok {
 		m.avisa("%s con un Runnable que no es un objeto del dex: no hay código que ejecutar", origen)
 		return nil
+	}
+	if espera < 0 {
+		espera = 0
 	}
 	m.programa(m.ahora()+espera, origen, func() error { return m.ejecutaRunnable(r, origen) })
 	return nil
@@ -1398,12 +1417,13 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 		// drena corre, por orden de instante, las tareas que vencen hasta `limite`: primero la de
 		// menor instante y, a igual instante, la que se encoló antes. Se repite porque una tarea
 		// puede navegar a otra pantalla: la nueva trae su propia cola y es esa la que sigue. Al
-		// terminar, el reloj queda en el límite, que es la hora que pidió el guion.
+		// terminar, el reloj queda en el límite, que es la hora que pidió el guion; si la cola se
+		// cortó por la salvaguarda, se queda en el instante de la última tarea ejecutada.
 		drena := func(limite int64) {
 			for m.vence(limite) {
 				estabiliza()
 			}
-			if m.ahora() < limite && m.reloj != nil {
+			if !m.cortada && m.ahora() < limite && m.reloj != nil {
 				*m.reloj = limite
 			}
 		}
@@ -1417,7 +1437,10 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 						orden.Dato)
 					break
 				}
-				m.avanza(ms)
+				if err := m.avanza(ms); err != nil {
+					errEventos = err
+					break
+				}
 				drena(m.ahora())
 				continue
 			}

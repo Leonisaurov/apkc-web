@@ -13,6 +13,8 @@ import (
 	"encoding/json"
 	"flag"
 	"io"
+	"math"
+	"strings"
 	"testing"
 )
 
@@ -202,9 +204,96 @@ public class Tarea extends AsyncTask {
 }
 `
 
+// fuenteQuieta es una actividad que no postea nada: sirve para medir el reloj solo, sin la cola de
+// tareas del tic.
+const fuenteQuieta = `package com.hola.reloj;
+
+import android.app.*;
+import android.os.*;
+
+public class Casos extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+    }
+}
+`
+
+// fuenteRetraso es la sonda del retraso negativo: la actividad postea el padre con -1000 ms y el
+// padre, cuando corre, postea la hija con +1100. Con el retraso acotado a cero, el padre corre en el
+// instante 0 y la hija queda en 1100; sin acotarlo, el padre correría en -1000 y la hija se
+// adelantaría a 100.
+const fuenteRetraso = `package com.hola.reloj;
+
+import android.app.*;
+import android.os.*;
+import android.widget.*;
+
+public class Casos extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        TextView total = (TextView) findViewById(R.id.total);
+        Handler reloj = new Handler();
+        reloj.postDelayed(new Padre(total, reloj), -1000L);
+    }
+}
+`
+
+// fuentePadre es el Runnable que se postea con retraso negativo y reprograma a su hija.
+const fuentePadre = `package com.hola.reloj;
+
+import android.os.*;
+import android.widget.*;
+
+public class Padre implements Runnable {
+    TextView total;
+    Handler reloj;
+
+    public Padre(TextView t, Handler r) {
+        total = t;
+        reloj = r;
+    }
+
+    public void run() {
+        total.setText("1");
+        reloj.postDelayed(new Hija(total), 1100L);
+    }
+}
+`
+
+// fuenteHija es la tarea que el padre deja a 1100 ms: si el reloj retrocediera, correría antes.
+const fuenteHija = `package com.hola.reloj;
+
+import android.widget.*;
+
+public class Hija implements Runnable {
+    TextView total;
+
+    public Hija(TextView t) {
+        total = t;
+    }
+
+    public void run() {
+        total.setText("2");
+    }
+}
+`
+
 // apkDelReloj arma en memoria el apk de la prueba: manifiesto, tabla, layout y el dex de las dos
 // fuentes.
 func apkDelReloj(t *testing.T) []byte {
+	t.Helper()
+	return apkConFuentes(t,
+		fuenteJava{nombre: "Casos.java", contenido: fuenteReloj},
+		fuenteJava{nombre: "Tarea.java", contenido: fuenteTarea},
+	)
+}
+
+// apkConFuentes es el armazón común: el mismo manifiesto, la misma tabla y el mismo layout, con el
+// dex de las fuentes que pida cada prueba. El R.java sale siempre de la tabla, para que las fuentes
+// usen los ids reales.
+func apkConFuentes(t *testing.T, fuentes ...fuenteJava) []byte {
 	t.Helper()
 	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
 	if err != nil {
@@ -222,15 +311,12 @@ func apkDelReloj(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("el R.java no sale de la tabla: %v", err)
 	}
+	todas := append([]fuenteJava{{nombre: "R.java", contenido: r}}, fuentes...)
 	return zipDeEntradas(t, map[string][]byte{
 		"AndroidManifest.xml": manifiesto,
 		"resources.arsc":      arsc,
 		"res/layout/main.xml": layout,
-		"classes.dex": dexDeFuentes(t,
-			fuenteJava{nombre: "R.java", contenido: r},
-			fuenteJava{nombre: "Casos.java", contenido: fuenteReloj},
-			fuenteJava{nombre: "Tarea.java", contenido: fuenteTarea},
-		),
+		"classes.dex":         dexDeFuentes(t, todas...),
 	})
 }
 
@@ -406,5 +492,126 @@ func TestElGuionDelPreviewConservaElOrden(t *testing.T) {
 	}
 	if err := set.Parse([]string{"--avanzar", "medio"}); err == nil {
 		t.Error("--avanzar medio se aceptó y no son milisegundos")
+	}
+}
+
+// avisoDeTruncamiento devuelve el aviso de la salvaguarda de la cola, si la ejecución lo trae.
+func avisoDeTruncamiento(r *resultadoEjecucion) string {
+	for _, a := range r.Avisos {
+		if strings.Contains(a, "se detuvo") {
+			return a
+		}
+	}
+	return ""
+}
+
+// TestElRelojNoDesborda fija la salida del desbordamiento: un avance que no cabe en el reloj no se
+// satura en silencio ni envuelve a negativo; el comando devuelve error, como cualquier otra orden
+// que no se puede entregar.
+func TestElRelojNoDesborda(t *testing.T) {
+	// el borde exacto, sobre una máquina sin programa: MaxInt64-1 más uno cabe, y un milisegundo
+	// más no
+	m := &maquinaDalvik{}
+	reloj := int64(math.MaxInt64 - 1)
+	m.reloj = &reloj
+	if err := m.avanza(1); err != nil {
+		t.Fatalf("MaxInt64-1 más uno cabe y devolvió %v", err)
+	}
+	if reloj != math.MaxInt64 {
+		t.Fatalf("el reloj quedó en %d y se esperaba %d", reloj, int64(math.MaxInt64))
+	}
+	if err := m.avanza(1); err == nil {
+		t.Fatalf("MaxInt64 más uno no desbordó: el reloj quedó en %d", reloj)
+	}
+
+	apk := apkConFuentes(t, fuenteJava{nombre: "Casos.java", contenido: fuenteQuieta})
+	tope := "9223372036854775807"
+	uno, err := modeloVistaDeAPKConEventos(apk, "", true, []eventoUsuario{{Tipo: "avanzar", Dato: tope}})
+	if err != nil {
+		t.Fatalf("un solo --avanzar %s falló: %v", tope, err)
+	}
+	if uno.Ejecucion.Reloj != math.MaxInt64 {
+		t.Errorf("el reloj es %d y se esperaba %d", uno.Ejecucion.Reloj, int64(math.MaxInt64))
+	}
+	// dos avances válidos por separado: el segundo no cabe y el comando se rechaza, sin publicar un
+	// reloj envuelto
+	_, err = modeloVistaDeAPKConEventos(apk, "", true, []eventoUsuario{
+		{Tipo: "avanzar", Dato: tope},
+		{Tipo: "avanzar", Dato: "1"},
+	})
+	if err == nil {
+		t.Fatal("MaxInt64 más uno se aceptó y el reloj habría envuelto a negativo")
+	}
+	if !strings.Contains(err.Error(), "desborda") {
+		t.Errorf("el error no dice que desborda: %v", err)
+	}
+}
+
+// TestElRelojAvanzaSinTruncar comprueba que la salvaguarda de la cola no corta un avance legítimo:
+// 300 y 3000 tics de un segundo corren enteros, el reloj llega al destino y no hay aviso.
+func TestElRelojAvanzaSinTruncar(t *testing.T) {
+	apk := apkDelReloj(t)
+	casos := []struct {
+		avance string
+		tics   string
+		reloj  int64
+	}{
+		{"300000", "Tic: 300", 300000},
+		{"3000000", "Tic: 3000", 3000000},
+	}
+	for _, c := range casos {
+		m, err := modeloVistaDeAPKConEventos(apk, "", true,
+			[]eventoUsuario{{Tipo: "avanzar", Dato: c.avance}})
+		if err != nil {
+			t.Fatalf("--avanzar %s falló: %v", c.avance, err)
+		}
+		if got := textoDeNodo(t, m, idTotal); got != c.tics {
+			t.Errorf("tras --avanzar %s el contador vale %q y se esperaba %q", c.avance, got, c.tics)
+		}
+		if m.Ejecucion.Reloj != c.reloj {
+			t.Errorf("tras --avanzar %s el reloj es %d y se esperaba %d", c.avance,
+				m.Ejecucion.Reloj, c.reloj)
+		}
+		if a := avisoDeTruncamiento(m.Ejecucion); a != "" {
+			t.Errorf("--avanzar %s se truncó: %s", c.avance, a)
+		}
+	}
+}
+
+// TestElRetrasoNegativoNoRetrocedeElReloj es la sonda del retraso negativo: `postDelayed(…, -1000)`
+// se trata como cero, así que el padre corre en el instante 0, la hija queda en 1100 y el reloj
+// nunca baja de cero. Sin acotar, el padre correría en -1000 y la hija se adelantaría a 100.
+func TestElRetrasoNegativoNoRetrocedeElReloj(t *testing.T) {
+	apk := apkConFuentes(t,
+		fuenteJava{nombre: "Casos.java", contenido: fuenteRetraso},
+		fuenteJava{nombre: "Padre.java", contenido: fuentePadre},
+		fuenteJava{nombre: "Hija.java", contenido: fuenteHija},
+	)
+
+	medio, err := modeloVistaDeAPKConEventos(apk, "", true,
+		[]eventoUsuario{{Tipo: "avanzar", Dato: "500"}})
+	if err != nil {
+		t.Fatalf("--avanzar 500 falló: %v", err)
+	}
+	if medio.Ejecucion.Reloj < 0 {
+		t.Errorf("el reloj quedó en %d: el retraso negativo lo hizo retroceder", medio.Ejecucion.Reloj)
+	}
+	if medio.Ejecucion.Reloj != 500 {
+		t.Errorf("el reloj es %d y se esperaba 500", medio.Ejecucion.Reloj)
+	}
+	if got := textoDeNodo(t, medio, idTotal); got != "1" {
+		t.Errorf("a los 500 ms el contador vale %q: la hija de 1100 ms no debía correr", got)
+	}
+
+	completo, err := modeloVistaDeAPKConEventos(apk, "", true,
+		[]eventoUsuario{{Tipo: "avanzar", Dato: "2000"}})
+	if err != nil {
+		t.Fatalf("--avanzar 2000 falló: %v", err)
+	}
+	if completo.Ejecucion.Reloj != 2000 {
+		t.Errorf("el reloj es %d y se esperaba 2000", completo.Ejecucion.Reloj)
+	}
+	if got := textoDeNodo(t, completo, idTotal); got != "2" {
+		t.Errorf("a los 2000 ms el contador vale %q y se esperaba «2»", got)
 	}
 }
