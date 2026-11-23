@@ -1,20 +1,4 @@
 {
-  "tipo no internado por el colector": [
-    {
-      "clase": "Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;",
-      "metodo": "<init>",
-      "pc": 5,
-      "opcode": "ldc_w",
-      "motivo": "the type_id Landroid/app/ActionBar; was never interned (the collector does not follow this operand)"
-    },
-    {
-      "clase": "Landroid/support/v4/util/SimpleArrayMap;",
-      "metodo": "allocArrays",
-      "pc": 6,
-      "opcode": "ldc_w",
-      "motivo": "the type_id Landroid/support/v4/util/ArrayMap; was never interned (the collector does not follow this operand)"
-    }
-  ],
   "registro bajo ocupado": [
     {
       "clase": "Landroid/support/v4/app/FragmentActivity;",

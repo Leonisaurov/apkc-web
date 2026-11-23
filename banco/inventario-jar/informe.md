@@ -3,8 +3,8 @@
 Jar medido: `/home/leonisauro/Downloads/ApkShare-main/jar/android-support-v4.jar` (648327 bytes)
 
 - Clases recorridas: 520
-- Clases que el dexer rechaza: 22
-- Tipos de límite: 4
+- Clases que el dexer rechaza: 20
+- Tipos de límite: 3
 
 Primer fallo de `apkc dex` sobre las clases a la vez:
 
@@ -17,7 +17,6 @@ Primer fallo de `apkc dex` sobre las clases a la vez:
 | registro bajo ocupado | 12 | 12 | Landroid/support/v4/app/FragmentActivity;.onCreateView pc 195 · getfield |
 | presupuesto de temporales | 5 | 5 | Landroid/support/v4/view/GravityCompat$GravityCompatImplJellybeanMr1;.apply pc 13 · invokestatic |
 | registro fuera de formato | 3 | 3 | Landroid/support/v4/util/TimeUtils;.formatDurationLocked pc 340 · iconst_0 |
-| tipo no internado por el colector | 2 | 2 | Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;.<init> pc 5 · ldc_w |
 
 Cada clase se dexó en su propia invocación de `apkc dex`: el conteo de clases es exacto. El de métodos es la primera que falla en cada clase, porque el ensamblado se detiene ahí; es una cota inferior, no el total del jar.
 
@@ -28,7 +27,6 @@ Cada clase se dexó en su propia invocación de `apkc dex`: el conteo de clases 
 | registro bajo ocupado | un plan de registros con desalojo de un local a la pila de temporales; d8 resuelve el mismo método moviendo el valor a otro registro libre antes del uso. |
 | presupuesto de temporales | subir la base del reparto por encima de `max_stack` de javap cuando el bloque `/range` necesita más temporales; el bucle de `codeItemConPc` ya sube la base cuando el pico lo pide, y aquí el límite es el paso de medida. |
 | registro fuera de formato | las formas `/from16` (move-object/from16 0x08, move/from16 0x02, …) y 22x, que ya están medidas para otras familias; falta aplicarlas a `aload_*`, `iload_*`, `astore_*` y sus primas. |
-| tipo no internado por el colector | `const-class` (0x1c, 21c) con el type_id internado también desde `ldc_w` de una clase; el colector debe seguir ese operando, no solo `checkcast`/`instanceof`/`new`. |
 
 #### Oráculo d8/dexdump
 
@@ -171,44 +169,6 @@ Líneas que d8 escribe para ese límite:
 034784: 0202 1700                              |0002: move/from16 v2, v23
 0348c0: 0203 1000                              |00a0: move/from16 v3, v16
 03490c: 0214 0500                              |00c6: move/from16 v20, v5
-```
-
-Equivalente DEX de d8 para **tipo no internado por el colector** — `Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;.<init>`:
-
-```
-      name          : '<init>'
-      type          : '(Landroid/app/Activity;)V'
-      access        : 0x10000 (CONSTRUCTOR)
-      code          -
-      registers     : 9
-      ins           : 2
-      outs          : 3
-      insns size    : 90 16-bit code units
-01c0a8:                                        |[01c0a8] android.support.v4.app.ActionBarDrawerToggleHoneycomb$SetIndicatorInfo.<init>:(Landroid/app/Activity;)V
-01c0b8: 7010 a814 0700                         |0000: invoke-direct {v7}, Ljava/lang/Object;.<init>:()V // method@14a8
-01c0be: 1210                                   |0003: const/4 v0, #int 1 // #1
-01c0c0: 1201                                   |0004: const/4 v1, #int 0 // #0
-01c0c2: 1c02 0800                              |0005: const-class v2, Landroid/app/ActionBar; // type@0008
-01c0c6: 1a03 c115                              |0007: const-string v3, "setHomeAsUpIndicator" // string@15c1
-01c0ca: 2304 4d03                              |0009: new-array v4, v0, [Ljava/lang/Class; // type@034d
-01c0ce: 1c05 3d00                              |000b: const-class v5, Landroid/graphics/drawable/Drawable; // type@003d
-01c0d2: 4d05 0401                              |000d: aput-object v5, v4, v1
-01c0d6: 6e30 8514 3204                         |000f: invoke-virtual {v2, v3, v4}, Ljava/lang/Class;.getDeclaredMethod:(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method; // method@1485
-01c0dc: 0c02                                   |0012: move-result-object v2
-01c0de: 5b72 4600                              |0013: iput-object v2, v7, Landroid/support/v4/app/ActionBarDrawerToggleHoneycomb$SetIndicatorInfo;.setHomeAsUpIndicator:Ljava/lang/reflect/Method; // field@0046
-01c0e2: 1c02 0800                              |0015: const-class v2, Landroid/app/ActionBar; // type@0008
-01c0e6: 1a03 c015                              |0017: const-string v3, "setHomeActionContentDescription" // string@15c0
-01c0ea: 2304 4d03                              |0019: new-array v4, v0, [Ljava/lang/Class; // type@034d
-01c0ee: 6205 8105                              |001b: sget-object v5, Ljava/lang/Integer;.TYPE:Ljava/lang/Class; // field@0581
-01c0f2: 4d05 0401                              |001d: aput-object v5, v4, v1
-```
-
-Líneas que d8 escribe para ese límite:
-
-```
-01c0c2: 1c02 0800                              |0005: const-class v2, Landroid/app/ActionBar; // type@0008
-01c0ce: 1c05 3d00                              |000b: const-class v5, Landroid/graphics/drawable/Drawable; // type@003d
-01c0e2: 1c02 0800                              |0015: const-class v2, Landroid/app/ActionBar; // type@0008
 ```
 
 
