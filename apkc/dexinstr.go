@@ -180,7 +180,8 @@ const (
 	// escribe 0x2133 = if-ne v1, v2 y su desplazamiento en la unidad siguiente; `ifne` sobre un
 	// entero sale if-nez 0x39; `ifnull` sale if-eqz 0x38 (el nulo es cero para dalvik) y `goto`
 	// 0x28 con el desplazamiento de ocho bits en la mitad alta de su propia unidad.
-	opSalto = 0x28 // 10t goto +AAAA
+	opSalto  = 0x28 // 10t goto +AAAA (ocho bits en la mitad alta de la propia unidad)
+	opGoto16 = 0x29 // 21t goto/16 +AAAA (desplazamiento de 16 bits en la unidad siguiente)
 	// familia de dos registros (22c con desplazamiento) y de uno (21t), en el mismo orden que la
 	// de enteros del JVMS: eq, ne, lt, ge, gt, le
 	opIfEq, opIfNe, opIfLt, opIfGe, opIfGt, opIfLe       = 0x32, 0x33, 0x34, 0x35, 0x36, 0x37
@@ -222,6 +223,7 @@ type traduce struct {
 	fijos     map[int]bool  // temporal que quedó atado a un local: ya no es reusable
 	altos     map[int]bool  // registro ALTO de un par vivo: no se libera hasta que muera el par
 	pcs       map[int]int   // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
+	promover  map[int]bool  // pc JVM de los `goto` que se emiten como `goto/16` (no caben en 10t)
 	saltos    []parcheDEX   // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
 	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
 	siguiente int           // próximo temporal nuevo
@@ -1349,7 +1351,25 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 // `enMitadAlta` marca el `goto` 10t, que lleva los ocho bits dentro de su propia unidad.
 type parcheDEX struct {
 	desde, en, destino int
-	enMitadAlta        bool
+	origen             int  // pc JVM de la instrucción de salto, para poder promoverla
+	enMitadAlta        bool // `goto` 10t, que lleva los ocho bits dentro de su propia unidad
+}
+
+// necesitaPromocion: el `goto` 10t de `pc` no cabe en +-127 unidades y hay que rehacer la pasada con
+// la forma larga `goto/16` 0x29. No es un fallo del método: el bucle de `codeItemConPc` lo apunta en
+// `promover` y vuelve a traducir, porque la instrucción crece una unidad y cambia los desplazamientos.
+type necesitaPromocion struct{ pc int }
+
+func (e *necesitaPromocion) Error() string {
+	return "a goto that needs the long form at pc " + itoa(e.pc)
+}
+
+// esPromocion separa el aviso de promoción de los demás errores del traductor.
+func esPromocion(err error) (int, bool) {
+	if e, ok := err.(*necesitaPromocion); ok {
+		return e.pc, true
+	}
+	return 0, false
 }
 
 // salto emite la branquia con el desplazamiento en blanco y la deja apuntada al pc destino. `consume`
@@ -1399,7 +1419,7 @@ func (p *traduce) abreSalto(desde, en, destino int, mitadAlta bool, in jvmInstr)
 		p.falla(in, "a branch to pc "+itoa(destino)+", outside the code of the method")
 		return
 	}
-	p.saltos = append(p.saltos, parcheDEX{desde: desde, en: en, destino: destino, enMitadAlta: mitadAlta})
+	p.saltos = append(p.saltos, parcheDEX{desde: desde, en: en, destino: destino, origen: in.pc, enMitadAlta: mitadAlta})
 }
 
 // parchaSaltos completa los desplazamientos al final del método, cuando ya se escribió hasta el
@@ -1424,8 +1444,8 @@ func (p *traduce) parchaSaltos() error {
 		// se sigue rechazando por nombre.
 		if s.enMitadAlta {
 			if rel < -128 || rel > 127 {
-				return &traduceError{nombre: p.m.Name,
-					motivo: "a goto of " + itoa(rel) + " code units: the 10t form reaches +-127 and goto/16 is not measured here"}
+				// el `goto` 10t no llega: se promueve a `goto/16` 0x29 y la pasada se repite
+				return &necesitaPromocion{pc: s.origen}
 			}
 			p.w[s.en] |= uint16(rel&0xff) << 8
 			continue
@@ -2192,11 +2212,16 @@ func (p *traduce) recorre() error {
 			"if_acmpeq", "if_acmpne":
 			p.salto(ifEntreDos[in.name], destinoDe(in), 2, in)
 		case "goto":
-			p.salto(opSalto, destinoDe(in), 0, in)
+			if p.promover[in.pc] {
+				// el 10t no llegaba a este destino: `goto/16` 0x29, dos unidades, medido por d8
+				p.salto16(opGoto16, destinoDe(in), in)
+			} else {
+				p.salto(opSalto, destinoDe(in), 0, in)
+			}
 		case "goto_w":
 			// d8 baja el goto_w de JVM a goto/16 de Dalvik (0x29): dos palabras, la segunda con
 			// el desplazamiento en unidades de 16 bits.
-			p.salto16(0x29, destinoDe(in), in)
+			p.salto16(opGoto16, destinoDe(in), in)
 		case "tableswitch", "lookupswitch":
 			p.saltoTabla(in)
 		default:
@@ -2675,26 +2700,58 @@ func (t *dexTables) codeItemConPc(clase classFull, m classMethod) (codeItem, map
 	// §81), se sube la base a lo que pidió y se repite **sola ella**: volver a medir rebotaba entre
 	// dos picos. Cada vuelta sube al menos un registro y los formatos llegan a 255, así que el bucle
 	// termina.
-	prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: m.MaxStack + m.LocalCount + 1}
-	if err := prueba.recorre(); err != nil {
-		return codeItem{}, nil, err
-	}
-	base := prueba.pico
+	// `promover` es el conjunto de `goto` cuyo desplazamiento no cabe en 10t y se emiten como
+	// `goto/16` 0x29. Como la instrucción crece una unidad, cambiar el tamaño mueve los destinos y
+	// puede destapar otro `goto` fuera de rango: se vuelve a medir y a traducir hasta que ninguna
+	// promoción nueva haga falta. Cada vuelta apunta un pc distinto, así que el bucle termina.
+	var promover map[int]bool
 	var final *traduce
+medir:
 	for {
-		final = &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount, base: base, techo: true}
-		err := final.recorre()
-		if err == nil {
-			break
-		}
-		if !esPresupuesto(err) {
+		prueba := &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount,
+			base: m.MaxStack + m.LocalCount + 1, promover: promover}
+		if err := prueba.recorre(); err != nil {
+			if pc, ok := esPromocion(err); ok {
+				if promover[pc] {
+					return codeItem{}, nil, err
+				}
+				if promover == nil {
+					promover = map[int]bool{}
+				}
+				promover[pc] = true
+				continue
+			}
 			return codeItem{}, nil, err
 		}
-		if final.pico > 0xff {
-			return codeItem{}, nil, &traduceError{nombre: m.Name,
-				motivo: "the register plan does not fit the eight-bit registers of the three-register form"}
+		base := prueba.pico
+		for {
+			final = &traduce{t: t, x: x, clase: clase, m: m, locales: m.LocalCount,
+				base: base, techo: true, promover: promover}
+			err := final.recorre()
+			if err == nil {
+				break
+			}
+			if pc, ok := esPromocion(err); ok {
+				if promover[pc] {
+					return codeItem{}, nil, err
+				}
+				if promover == nil {
+					promover = map[int]bool{}
+				}
+				promover[pc] = true
+				// la instrucción crece una unidad: hay que volver a medir con la nueva forma
+				continue medir
+			}
+			if !esPresupuesto(err) {
+				return codeItem{}, nil, err
+			}
+			if final.pico > 0xff {
+				return codeItem{}, nil, &traduceError{nombre: m.Name,
+					motivo: "the register plan does not fit the eight-bit registers of the three-register form"}
+			}
+			base = final.pico
 		}
-		base = final.pico
+		break
 	}
 	tries, handlers, err := armaTries(final, m)
 	if err != nil {
