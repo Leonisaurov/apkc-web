@@ -4577,7 +4577,7 @@ func (e *emisor) descDeCampos(actual string, segs []string) (string, bool) {
 // que resuelve `info.applicationInfo` —el campo de una local— cuando hay que estimar su tipo como
 // argumento de una llamada y el receptor no se puede emitir todavía: la cadena de campos se apoya en el
 // tipo estático del receptor, que se conoce (la tabla de locales, `this` o un campo de la clase), y no
-// en un `aload`/`getfield` de más (§242). Devuelve ok falso en cuanto algo no se sabe sin código; el
+// en un `aload`/`getfield` de más (§244). Devuelve ok falso en cuanto algo no se sabe sin código; el
 // llamador elige el mensaje.
 func (e *emisor) tipoSinEmitir(x jexpr) (string, bool) {
 	switch v := x.(type) {

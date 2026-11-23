@@ -1,6 +1,6 @@
 package main
 
-// §242: el campo de una local como argumento (`getApks(pm, info.applicationInfo)`, `App.java:28`) y un
+// §244: el campo de una local como argumento (`getApks(pm, info.applicationInfo)`, `App.java:28`) y un
 // arreglo comparado con null (`info.splitSourceDirs == null`, `App.java:34`). El oráculo es el de
 // `compilar_test.go`: los mismos fuentes por el emisor y por javac 17 con `--release 8 -g:lines,source`,
 // dexados con el mismo dexer, y los dos dex idénticos byte a byte. Los dos fuentes del caso completo son
