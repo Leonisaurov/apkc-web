@@ -10044,6 +10044,60 @@ historial, no estado vigente.
 `sha256 8026c54aebfcf6af097a305f5faad55ca0ebb11b827c90ab351a476f82ab3b0e`.
 
 **Fronteras de este `§`.** Siguen fuera de la medida: `invokedynamic`/`condy`; un método que pase de
-32 KB y pida `goto/32`; el dex de la **app**, que aún no se reparte (§223); API < 21; y el `check`
-mono-fuente. No se corrió gate, chromium ni publicación: la comprobación es la del inventario y la del
-guion de los oráculos.
+32 KB y pida `goto/32` (resuelto en `23033fe`, medido en el §226); el dex de la **app**, que aún no se
+reparte (§223); API < 21; y el `check` mono-fuente. No se corrió gate, chromium ni publicación: la
+comprobación es la del inventario y la del guion de los oráculos.
+
+## 226. Promoción a `goto/32` de las ramas largas
+
+Medido el 2026-11-23 sobre `23033fe` (`feat(dex): promueve a goto/32 las ramas largas`). Hasta este
+commit el dexer escribía la forma corta y el código se quedaba sin sitio cuando el salto pasaba de
+32 767; ahora la rama se promueve a `goto/32` (y el condicional a su forma con `goto/32` detrás).
+
+```sh
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestDex.*Salto|TestDex.*Goto' -v .   # en apkc/
+```
+
+**La sonda.** 4300 sentencias `y = consume(<long>L)`, que empujan el salto por encima del techo de 16
+bits y obligan a la forma larga.
+
+**Oráculo `d8` + `dexdump`.** El `d8` de build-tools deja el condicional como un `if-gtz v2,+5`
+seguido de `goto/32`, y el salto largo como `goto_w 35011` que se desarma en `goto/32` con
+desplazamiento `+40009`. Nuestro dex escribe las mismas formas para las mismas ramas y `dexdump -d`
+sobre él da rc 0 (verifica y desarma).
+
+**Falsificaciones.** Dos, y las dos en rojo como se esperaba: devolver `salto32` a `salto16`, y hacer
+que el `condicional` ignore `promocionCond32`. Los cuatro tests fallan con `a branch that needs a long
+form at pc 3`; restaurado el código, vuelven a verde.
+
+**Suite y wasm.** La suite completa da `ok … 69.558s` y el wasm compila.
+
+**Frontera de este `§`.** `apkc/javaemisor.go:5154` sigue rechazando un `goto` hacia atrás de más de
+32 767 **bytes** en el emisor de `.class`; el arreglo de este commit es del dexer, no del emisor de
+`.class`. No se corrió gate, chromium, red ni publicación.
+
+## 227. `check` compila todos los fuentes del proyecto
+
+Medido el 2026-11-23 sobre `a4bf224` (`fix(check): compila todos los fuentes del proyecto`).
+
+```sh
+ANDROID_HOME=/home/leonisauro/opt/android-sdk APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestCheck.*|TestIndiceDelJar' -v .   # en apkc/
+```
+
+**Antes.** `check --proyecto P P/src/MainActivity.java` con `Helper.java` en otro fuente del proyecto
+daba `el tipo Helper no se resuelve…` y respondía `emisor:false`: el `check` solo compilaba el fichero
+pedido.
+
+**Después.** `{"emisor":true,"errores":[]}` y los 4 tests nuevos en verde. La causalidad está
+demostrada: en el padre de `a4bf224` esos mismos 4 tests fallan.
+
+**Contrato del informe.** Los errores de otros `.java` del proyecto nunca se convierten en filas del
+fichero pedido: van a `aviso`, con el nombre del fichero y la causa. `emisor` queda en `false` si lo
+que falló fue el parseo y en `true` si fue la emisión. El contrato de `compile`/`build` sale
+byte-idéntico, verificado con el binario anterior.
+
+**Fronteras de este `§`.** Dos ficheros con el mismo nombre en paquetes distintos; un fuente hermano
+que no parsea deja el informe sin verificar y con aviso; la latencia de leer N fuentes no se midió con
+techo; y el comportamiento en wasm/OPFS real no está verificado, porque no se corrió gate. Tampoco se
+tocó red ni publicación.
