@@ -3021,6 +3021,86 @@ func (e *emisor) cadenaDeCampos(desc string, segs []string, donde pos) (string, 
 	return actual, nil
 }
 
+// escribeCampoDe: `appInfo.sourceDir = valor`, el campo escrito a través de un receptor que no es
+// `this`: una local, un parámetro o un campo —también el que captura una anónima—, todos con tipo
+// conocido. El receptor se emite primero con el mismo camino que la lectura (`acceso`), y el campo se
+// busca en el tipo que ese camino devuelve, que es el que javac pone en el Fieldref: medido con javac
+// 17 en una sonda propia, `Sub s; s.n = v` con `n` declarado en `Base` sale `putfield
+// com/hola/apkcstudio/Sub.n:I`, y `b.n = v` con `b` de tipo `Base` sale contra `Base`. La fila de la
+// sentencia la marca el `jasign` antes de llamar aquí y el receptor no añade ninguna: la
+// LineNumberTable no se mueve.
+func (e *emisor) escribeCampoDe(segs []string, base jexpr, donde pos, valor jexpr) error {
+	nombre := strings.Join(segs, ".")
+	campo := segs[len(segs)-1]
+	if base == nil && len(segs) > 1 {
+		// el receptor empieza por un nombre suelto: una local o un parámetro, un campo de la clase (o del
+		// exterior que captura la anónima), o el nombre de un tipo. Si no es ninguna de las tres cosas no
+		// se adivina su tipo.
+		if _, ok := e.locales[segs[0]]; !ok {
+			_, cr, esCampo := e.duenioDelCampo(segs[0])
+			if esCampo {
+				if cr.acceso&accStatic == 0 && e.estatico {
+					return fmt.Errorf("linea %d: asignar a %s: %s es un campo de instancia y el metodo es estatico, sin `this` no es Java",
+						donde.linea, nombre, segs[0])
+				}
+			} else if _, err := e.ctx.resolverSimple(segs[0]); err == nil {
+				// `MainActivity.cuenta = v`: el receptor sería el nombre del tipo y el campo el estático
+				// que javac escribe con `putstatic`; esa forma no está medida aquí.
+				return fmt.Errorf("linea %d: asignar a %s por el nombre del tipo no esta medido", donde.linea, nombre)
+			} else {
+				return fmt.Errorf("linea %d: al asignar a %s: no se conoce el tipo del receptor %s", donde.linea, nombre, segs[0])
+			}
+		}
+	}
+	var dr string
+	var err error
+	if len(segs) > 1 {
+		receptor := jacceso{base: base, nombre: segs[0], donde: donde}
+		for _, seg := range segs[1 : len(segs)-1] {
+			receptor = jacceso{base: receptor, nombre: seg, donde: donde}
+		}
+		dr, err = e.acceso(receptor)
+		if err != nil {
+			return fmt.Errorf("linea %d: al asignar a %s: no se conoce el tipo del receptor %s (%v)",
+				donde.linea, nombre, strings.Join(segs[:len(segs)-1], "."), err)
+		}
+	} else {
+		// `this.datos.campo = v` y `getDatos().campo = v`: el receptor es la base tal cual
+		dr, err = e.exp(base)
+		if err != nil {
+			return fmt.Errorf("linea %d: al asignar a %s: no se conoce el tipo del receptor (%v)", donde.linea, nombre, err)
+		}
+	}
+	if len(dr) == 0 || dr[0] != 'L' {
+		return fmt.Errorf("linea %d: al asignar a %s: el receptor es %s y no un objeto", donde.linea, nombre, dr)
+	}
+	dueño := dr[1 : len(dr)-1]
+	cr, err := e.ctx.buscarCampo(dueño, campo)
+	if err != nil {
+		return fmt.Errorf("linea %d: al asignar a %s: %w", donde.linea, nombre, err)
+	}
+	if cr.constante {
+		return fmt.Errorf("linea %d: %s es una constante final y javac no la deja reasignar", donde.linea, campo)
+	}
+	if cr.acceso&accStatic != 0 {
+		// `appInfo.CUENTA = v` con un campo estático: javac emite `aload; pop; putstatic`, y esa forma
+		// todavía no está medida aquí
+		return fmt.Errorf("linea %d: asignar a %s: %s es un campo estatico y escribirlo por una instancia no esta medido",
+			donde.linea, nombre, campo)
+	}
+	dv, err := e.expA(valor, cr.desc)
+	if err != nil {
+		e.baja(1) // el receptor que ya estaba contado
+		return err
+	}
+	if dv != cr.desc {
+		e.baja(1)
+		return fmt.Errorf("linea %d: %s.%s es %s y se le asigna un %s", donde.linea, dueño, campo, cr.desc, dv)
+	}
+	e.putfieldDe(e.pool.campo(dueño, campo, cr.desc), cr.desc)
+	return nil
+}
+
 // accesoEstatico: `R.layout.main` desde el nombre del tipo. Las anidadas intermedias no emiten nada; el
 // ultimo segmento es un campo estatico o una constante doblada.
 func (e *emisor) accesoEstatico(interno string, segs []string, donde pos) (string, error) {
@@ -5776,6 +5856,13 @@ func (e *emisor) stm(s jstmt) error {
 		porThis := false
 		if t, esThis := base.(jthis); esThis && t.nombre == "" && len(segs) == 1 {
 			porThis = true
+		}
+		// `appInfo.sourceDir = valor` y `this.datos.ruta = valor`: el receptor no es `this` sino un
+		// valor con tipo conocido (una local, un parámetro o un campo, también el que captura una
+		// anónima), y el campo se busca en su clase. Va antes del error genérico y delega en
+		// `escribeCampoDe`, que es quien sabe decirlo cuando el receptor no tiene tipo.
+		if esAcceso && !porThis && (base != nil || len(segs) > 1) {
+			return e.escribeCampoDe(segs, base, v.donde, v.valor)
 		}
 		if !esAcceso || len(segs) != 1 || (base != nil && !porThis) {
 			return fmt.Errorf("linea %d: una asignacion con mas de un nombre en el destino no esta medida", v.donde.linea)

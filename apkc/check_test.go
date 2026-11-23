@@ -212,6 +212,82 @@ func TestCheckAsignacionCualificadaNombraElCampo(t *testing.T) {
 	}
 }
 
+// fuenteApkReceptor es el caso del usuario: `appInfo.sourceDir = filePath`, con el receptor en un
+// parámetro de tipo `ApplicationInfo`. La asignación cae en la línea 7.
+const fuenteApkReceptor = `package com.hola.apkcstudio;
+
+import android.content.pm.ApplicationInfo;
+
+public class Apk {
+    public void lee(ApplicationInfo appInfo, String filePath) {
+        appInfo.sourceDir = filePath;
+    }
+}
+`
+
+// TestCheckAsignacionPorReceptor: `appInfo.sourceDir = filePath` tiene el receptor en un parámetro con
+// tipo conocido, así que el emisor busca `sourceDir` en `ApplicationInfo` y deja el fuente en cero
+// errores. Era el caso que caía en «una asignacion con mas de un nombre en el destino».
+func TestCheckAsignacionPorReceptor(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteApkReceptor, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("`appInfo.sourceDir = filePath` da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
+// TestCheckAsignacionPorReceptorNombraElCampo es el control negativo del receptor con tipo: si el campo
+// no existe en su clase, el error tiene que nombrar `noExiste` y no volver al mensaje genérico.
+func TestCheckAsignacionPorReceptorNombraElCampo(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	roto := strings.Replace(fuenteApkReceptor, "appInfo.sourceDir = filePath;", "appInfo.noExiste = filePath;", 1)
+	if roto == fuenteApkReceptor {
+		t.Fatal("no se sustituyo la asignacion por receptor")
+	}
+	r := revisarFuenteJava(roto, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	e := r.Errores[0]
+	if !strings.Contains(e.Mensaje, "noExiste") {
+		t.Errorf("el mensaje no nombra el campo que falta: %q", e.Mensaje)
+	}
+	if strings.Contains(e.Mensaje, "mas de un nombre en el destino") {
+		t.Errorf("el mensaje sigue siendo el generico de antes: %q", e.Mensaje)
+	}
+	if e.Linea != 7 || e.Posicion != "Apk.java:7" {
+		t.Errorf("el error cae en %q y la asignacion esta en la linea 7", e.Posicion)
+	}
+}
+
+// TestCheckAsignacionReceptorSinTipo: un receptor que no es local, ni parámetro, ni campo, ni el nombre
+// de un tipo no tiene tipo conocido, y el error lo dice nombrando el receptor en vez de adivinar.
+func TestCheckAsignacionReceptorSinTipo(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	roto := strings.Replace(fuenteApkReceptor, "public void lee(ApplicationInfo appInfo, String filePath) {",
+		"public void lee(String filePath) {", 1)
+	if roto == fuenteApkReceptor {
+		t.Fatal("no se quito el parametro del receptor")
+	}
+	r := revisarFuenteJava(roto, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	e := r.Errores[0]
+	if !strings.Contains(e.Mensaje, "no se conoce el tipo del receptor appInfo") {
+		t.Errorf("el mensaje no dice que el receptor no tiene tipo conocido: %q", e.Mensaje)
+	}
+	if strings.Contains(e.Mensaje, "mas de un nombre en el destino") {
+		t.Errorf("el mensaje sigue siendo el generico de antes: %q", e.Mensaje)
+	}
+	if e.Linea != 7 {
+		t.Errorf("el error cae en la linea %d y la asignacion esta en la 7", e.Linea)
+	}
+}
+
 // TestCheckNoEscribeNada: el diagnostico no puede ensuciar el arbol del proyecto; el enlace de la R se
 // hace en memoria. Se mira que no aparezca ni build/ ni R.java donde no estaba.
 func TestCheckNoEscribeNada(t *testing.T) {
