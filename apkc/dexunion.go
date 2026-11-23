@@ -35,9 +35,31 @@ type estadoPila []valorPila
 type puntoDeUnion struct {
 	pila    estadoPila
 	destino int
+	origen  int // pc de la instrucción de salto, para nombrar una frontera
 	salto   int // índice en p.saltos, o -1
 	carga   int // índice en p.cargas, o -1
 	hueco   int // índice del destino dentro de c.destinos
+}
+
+// fronteraUnion: un camino que llega a un comienzo con OTRA altura de pila que la del bloque. El
+// reparto de registros no puede cambiar una altura —no hay registro que inventar ni que tirar sin una
+// instrucción—, así que esa llegada se deja como estaba en vez de abortar el método: la altura la fija
+// el cuerpo JVM que se traduce, no este plan. Medido el 2026-11-23 con `$record$hashCode` del
+// desugrado de records, cuyo `goto` de vuelta apunta al `istore_3` de la cabecera (pc 8) en vez de al
+// `iload_3` (pc 9): el camino que cae llega con un valor y el borde de vuelta con ninguno.
+type fronteraUnion struct {
+	pc       int // pc de la instrucción de salto
+	destino  int // pc del comienzo
+	cabecera int // altura con la que el bloque quedó escrito
+	borde    int // altura con la que llega este camino
+}
+
+// String nombra la frontera: es el mensaje propio de estas llegadas, distinto del de un reparto que
+// no se puede escribir (ese sí aborta, porque un `move` mal puesto cambia el valor).
+func (f fronteraUnion) String() string {
+	return "the path at pc " + itoa(f.pc) + " reaches pc " + itoa(f.destino) + " with " + itoa(f.borde) +
+		" values and that block starts with " + itoa(f.cabecera) + ": the register plan cannot change " +
+		"a stack height, so that arrival keeps the plan it had"
 }
 
 // padRecon es un bloque de fuera de línea que iguala el reparto de un camino con el del cuerpo.
@@ -271,12 +293,15 @@ func (p *traduce) reconcilia(in jvmInstr) bool {
 	creados := []int{}
 	for _, idx := range sitios {
 		s := &p.sitios[idx]
-		if igualPila(s.pila, canon) {
+		if len(s.pila) != len(canon) {
+			// otra altura: el plan de registros no la puede igualar, así que este camino se queda
+			// con el que traía (fronteraUnion) en vez de tumbar el método
+			p.fronteras = append(p.fronteras, fronteraUnion{pc: s.origen, destino: in.pc,
+				cabecera: len(canon), borde: len(s.pila)})
 			continue
 		}
-		if len(s.pila) != len(canon) {
-			p.falla(in, "two paths reach pc "+itoa(in.pc)+" with stacks of different height")
-			return false
+		if igualPila(s.pila, canon) {
+			continue
 		}
 		p.pads = append(p.pads, padRecon{pila: s.pila, hasta: canon, origen: in.pc, cuerpo: -1})
 		creados = append(creados, len(p.pads)-1)
@@ -313,8 +338,12 @@ func (p *traduce) reconciliaAntesDeSaltar(destino int, in jvmInstr) bool {
 		return true
 	}
 	if len(actual) != len(canon) {
-		p.falla(in, "two paths reach pc "+itoa(destino)+" with stacks of different height")
-		return false
+		// el borde de vuelta llega con otra altura: se deja el reparto que traía, sin abortar (ver
+		// fronteraUnion). Cambiar la altura aquí exigiría inventar o tirar un valor, y eso cambia el
+		// programa.
+		p.fronteras = append(p.fronteras, fronteraUnion{pc: in.pc, destino: destino,
+			cabecera: len(canon), borde: len(actual)})
+		return true
 	}
 	if !p.escribeReconciliacion(actual, canon, in) {
 		return false

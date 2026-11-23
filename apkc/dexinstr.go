@@ -250,6 +250,7 @@ type traduce struct {
 	sitios    []puntoDeUnion
 	union     map[int][]int
 	pads      []padRecon
+	fronteras []fronteraUnion
 	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
 	siguiente int           // próximo temporal nuevo
 	pico      int           // el mayor número de temporal usado
@@ -2003,7 +2004,7 @@ func (p *traduce) abreSalto(desde, en, destino int, forma byte, condicional bool
 	// pasa por un bloque que lo iguala (dexunion.go)
 	if destino < len(p.m.Code) {
 		p.sitios = append(p.sitios, puntoDeUnion{pila: p.pilaActual(), destino: destino,
-			salto: len(p.saltos) - 1, carga: -1, hueco: -1})
+			origen: in.pc, salto: len(p.saltos) - 1, carga: -1, hueco: -1})
 		p.union[destino] = append(p.union[destino], len(p.sitios)-1)
 	}
 }
@@ -3034,7 +3035,7 @@ func (p *traduce) saltoTabla(in jvmInstr) {
 			continue
 		}
 		p.sitios = append(p.sitios, puntoDeUnion{pila: p.cargas[idxCarga].pila, destino: pc,
-			salto: -1, carga: idxCarga, hueco: k})
+			origen: in.pc, salto: -1, carga: idxCarga, hueco: k})
 		p.union[pc] = append(p.union[pc], len(p.sitios)-1)
 	}
 	// el «ninguna clave casa» es un `goto` detrás del switch; si el bloque es largo, ese `goto`
@@ -3554,6 +3555,11 @@ medir:
 	tries, handlers, err := armaTries(final, m)
 	if err != nil {
 		return codeItem{}, nil, err
+	}
+	// las llegadas con otra altura de pila no abortan el método: se anotan para que quien integre
+	// pueda verlas (fronteraUnion) en vez de que se pierdan
+	if len(final.fronteras) > 0 {
+		t.fronterasUnion = append(t.fronterasUnion, final.fronteras...)
 	}
 	return codeItem{
 		registersSize: uint32(final.base + final.locales),

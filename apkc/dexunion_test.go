@@ -256,3 +256,90 @@ func ejecutaDalvik(t *testing.T, insns []uint16, regs []uint32, quien string) (i
 	}
 	return 0, false
 }
+
+// traduceSuelto corre el barrido sobre un cuerpo escrito a mano. Los cuerpos de estas dos pruebas no
+// nombran el pool —solo enteros y saltos—, así que no hace falta ni clase ni tablas.
+func traduceSuelto(t *testing.T, nombre string, pila, locales int, code []byte) *traduce {
+	t.Helper()
+	m := classMethod{Access: accStatic, Name: nombre, Desc: "()I", HasCode: true,
+		MaxStack: pila, LocalCount: locales, ArgCount: 0, Code: code}
+	p := &traduce{m: m, locales: locales, base: pila + locales + 2}
+	if err := p.recorre(); err != nil {
+		t.Fatalf("%s: el cuerpo no se traduce: %v", nombre, err)
+	}
+	return p
+}
+
+// TestElBordeDeVueltaConOtraAlturaNoAborta fija el comportamiento del cuerpo que sintetiza el
+// desugrado de records para `$record$hashCode`: su `goto` de vuelta apunta al `istore_1` de la
+// cabecera (pc 3) y no al `iload_1` que le sigue, así que el camino que cae llega con un valor en la
+// pila y el borde de vuelta con ninguno. El plan de registros no puede cambiar una altura —no hay
+// registro que inventar ni que tirar sin una instrucción—, así que esa llegada se deja como estaba y
+// se anota como frontera: el método se traduce y el dex se escribe.
+//
+//	0: iconst_0        2: iconst_0        4: iload_1       7: if_icmpge 16
+//	1: istore_0        3: istore_1        5: bipush 10    10: iinc 1, 1
+//	                    ^ cabecera                          13: goto 3   <- borde de vuelta
+func TestElBordeDeVueltaConOtraAlturaNoAborta(t *testing.T) {
+	codigo := []byte{
+		0x03, 0x3b, // iconst_0 / istore_0
+		0x03, 0x3c, // iconst_0 / istore_1  (pc 3: la cabecera)
+		0x1b, 0x10, 0x0a, // iload_1 / bipush 10
+		0xa2, 0x00, 0x09, // if_icmpge 16
+		0x84, 0x01, 0x01, // iinc 1, 1
+		0xa7, 0xff, 0xf6, // goto 3
+		0x1a, 0xac, // iload_0 / ireturn
+	}
+	p := traduceSuelto(t, "bordeConPila", 2, 2, codigo)
+	if len(p.fronteras) != 1 {
+		t.Fatalf("%d fronteras y la medida dice 1: %v", len(p.fronteras), p.fronteras)
+	}
+	f := p.fronteras[0]
+	if f.pc != 13 || f.destino != 3 || f.cabecera != 1 || f.borde != 0 {
+		t.Fatalf("la frontera es «%s», y la medida es pc 13 -> pc 3 con 1 valor en la cabecera y 0 en el borde",
+			f.String())
+	}
+	if !strings.Contains(f.String(), "cannot change a stack height") {
+		t.Errorf("la frontera no se nombra a sí misma: %s", f.String())
+	}
+	// no se inventa un bloque de reconciliación para ese borde: el único goto/32 sería el de un pad,
+	// y aquí no hay ninguno
+	for i, u := range p.w {
+		if u&0xff == 0x2a {
+			t.Fatalf("unidad %d: el borde de vuelta con otra altura sacó un goto/32 de pad: %v", i, p.w)
+		}
+	}
+}
+
+// TestElBordeDeVueltaQueCasaNoDejaFrontera es el control: un bucle corriente, con la cabecera a pila
+// vacía en los dos caminos, se traduce sin frontera y el `goto` de vuelta apunta a la cabecera.
+func TestElBordeDeVueltaQueCasaNoDejaFrontera(t *testing.T) {
+	codigo := []byte{
+		0x03, 0x3b, // iconst_0 / istore_0
+		0x1a, 0x10, 0x0a, // iload_0 / bipush 10   (pc 2: la cabecera)
+		0xa2, 0x00, 0x09, // if_icmpge 14
+		0x84, 0x00, 0x01, // iinc 0, 1
+		0xa7, 0xff, 0xf7, // goto 2
+		0x1a, 0xac, // iload_0 / ireturn
+	}
+	p := traduceSuelto(t, "bordeVacio", 2, 1, codigo)
+	if len(p.fronteras) != 0 {
+		t.Fatalf("un bucle que casa deja %d fronteras: %v", len(p.fronteras), p.fronteras)
+	}
+	unidades, err := desmontaPalabras(p.w)
+	if err != nil {
+		t.Fatalf("las palabras no se releen: %v", err)
+	}
+	vuelta := false
+	for _, u := range unidades {
+		if strings.Contains(u, "goto/32") {
+			t.Fatalf("el bucle corriente sacó un pad: %v", unidades)
+		}
+		if strings.HasPrefix(u, "goto") {
+			vuelta = true
+		}
+	}
+	if !vuelta {
+		t.Fatalf("no hay goto de vuelta en las palabras: %v", unidades)
+	}
+}

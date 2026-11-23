@@ -52,6 +52,12 @@ type dexTables struct {
 	// La pone dexDeClasesConCache después de ordenar las tablas, que es cuando ya se puede saber si
 	// lo guardado sigue valiendo.
 	cache *cacheDex
+
+	// fronterasUnion son las llegadas a un comienzo con otra altura de pila (fronteraUnion): no
+	// abortan el método y se quedan con el reparto que traían. Es el canal para que un test o una
+	// herramienta pueda decir en qué métodos el cuerpo JVM no casa consigo mismo, en vez de que el
+	// dexer lo adivine en silencio.
+	fronterasUnion []fronteraUnion
 }
 
 func newDexTables() *dexTables {
