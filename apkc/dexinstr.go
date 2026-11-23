@@ -225,21 +225,31 @@ type traduce struct {
 	x         poolIndex
 	clase     classFull
 	m         classMethod
-	base      int           // primer registro de los locales: cuántos temporales se usan
-	locales   int           // m.LocalCount, medido sobre el .class
-	enPila    []int         // registro de cada entrada de la pila JVM
-	pilaTipo  []byte        // tipo de arreglo primitivo de cada entrada (0 si no lo es o no se sabe)
-	pilaAncho []bool        // la entrada ocupa dos palabras (`long`/`double`), para las permutaciones
-	pilaMove  []byte        // move con el que se copia la entrada si hay que desalojarla (0 si no se sabe)
-	tipoLocal map[int]byte  // por ranura de local JVM: tipo de arreglo primitivo (0 si no)
-	libres    []int         // temporales ya muertos
-	renom     map[int]int   // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
-	fijos     map[int]bool  // temporal que quedó atado a un local: ya no es reusable
-	kindFijo  map[int]byte  // move (opMueve/Objeto/Wide) con el que se copió un registro atado, para desalojarlo
-	altos     map[int]bool  // registro ALTO de un par vivo: no se libera hasta que muera el par
-	pcs       map[int]int   // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
-	promover  map[int]byte  // pc JVM -> escalón de la branquia: 16, 32 o condicional con 32
-	saltos    []parcheDEX   // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
+	base      int          // primer registro de los locales: cuántos temporales se usan
+	locales   int          // m.LocalCount, medido sobre el .class
+	enPila    []int        // registro de cada entrada de la pila JVM
+	pilaTipo  []byte       // tipo de arreglo primitivo de cada entrada (0 si no lo es o no se sabe)
+	pilaAncho []bool       // la entrada ocupa dos palabras (`long`/`double`), para las permutaciones
+	pilaMove  []byte       // move con el que se copia la entrada si hay que desalojarla (0 si no se sabe)
+	tipoLocal map[int]byte // por ranura de local JVM: tipo de arreglo primitivo (0 si no)
+	libres    []int        // temporales ya muertos
+	renom     map[int]int  // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
+	fijos     map[int]bool // temporal que quedó atado a un local: ya no es reusable
+	kindFijo  map[int]byte // move (opMueve/Objeto/Wide) con el que se copió un registro atado, para desalojarlo
+	altos     map[int]bool // registro ALTO de un par vivo: no se libera hasta que muera el par
+	pcs       map[int]int  // pc JVM -> unidad dalvik donde cae su instrucción, para resolver saltos
+	promover  map[int]byte // pc JVM -> escalón de la branquia: 16, 32 o condicional con 32
+	saltos    []parcheDEX  // branquias abiertas: dónde va el desplazamiento y a qué pc apunta
+
+	// la reconciliación del reparto en los puntos de unión (dexunion.go): los pc donde empieza un
+	// bloque, los que se alcanzan cayendo, el reparto canónico de cada comienzo, los saltos que llegan
+	// a cada uno y los bloques que igualan a los que no coinciden
+	comienzos map[int]bool
+	caidas    map[int]bool
+	pilaEn    map[int]estadoPila
+	sitios    []puntoDeUnion
+	union     map[int][]int
+	pads      []padRecon
 	cargas    []cargaSwitch // payloads de switch, que se escriben al final del cuerpo
 	siguiente int           // próximo temporal nuevo
 	pico      int           // el mayor número de temporal usado
@@ -1824,6 +1834,7 @@ type parcheDEX struct {
 	origen             int  // pc JVM de la instrucción de salto, para poder promoverla
 	forma              byte // forma10, forma16 o forma30
 	condicional        bool // 21t/22t de un if-*: su forma larga es invertirse y saltar un goto/32
+	pad                int  // bloque de reconciliación al que salta, o -1 si va derecho al destino
 }
 
 // necesitaPromocion: la branquia de `pc` no cabe en la forma que se le dio y hay que rehacer la
@@ -1857,6 +1868,9 @@ func esPromocion(err error) (int, byte, bool) {
 // salto16 escribe un goto/16 (21t): el opcode en el byte bajo de la primera palabra y el
 // desplazamiento de 16 bits en la segunda, como el `2900 e32e` que d8 escribe para un goto_w.
 func (p *traduce) salto16(op byte, destino int, in jvmInstr) {
+	if !p.reconciliaAntesDeSaltar(destino, in) {
+		return
+	}
 	desde := len(p.w)
 	p.palabra(uint16(op))
 	p.palabra(0)
@@ -1867,6 +1881,9 @@ func (p *traduce) salto16(op byte, destino int, in jvmInstr) {
 // desplazamiento de 32 bits con signo en las dos unidades siguientes, contado desde la primera.
 // Medido con d8 sobre un método de 40010 unidades: `2a00 6586 0000` para +34405.
 func (p *traduce) salto32(destino int, in jvmInstr) {
+	if !p.reconciliaAntesDeSaltar(destino, in) {
+		return
+	}
 	desde := len(p.w)
 	p.palabra(uint16(opGoto32))
 	p.palabra(0)
@@ -1875,7 +1892,7 @@ func (p *traduce) salto32(destino int, in jvmInstr) {
 }
 
 func (p *traduce) salto(op byte, destino int, consume int, in jvmInstr) {
-	desde, ok := p.escribeBranquia(op, consume, in)
+	desde, ok := p.escribeBranquia(op, consume, destino, in)
 	if !ok {
 		return
 	}
@@ -1906,7 +1923,7 @@ func (p *traduce) saltoCondicionalLargo(op byte, destino int, consume int, in jv
 		p.falla(in, "a conditional branch with no inverted form for goto/32")
 		return
 	}
-	desde, ok := p.escribeBranquia(inv, consume, in)
+	desde, ok := p.escribeBranquia(inv, consume, destino, in)
 	if !ok {
 		return
 	}
@@ -1917,7 +1934,7 @@ func (p *traduce) saltoCondicionalLargo(op byte, destino int, consume int, in jv
 // escribeBranquia emite la instrucción con el hueco del desplazamiento y devuelve la unidad donde
 // empieza. No abre el parche: el if invertido de la forma larga reutiliza esta emisión pero no
 // apunta el salto, porque su desplazamiento es fijo (el que salta el goto/32).
-func (p *traduce) escribeBranquia(op byte, consume int, in jvmInstr) (int, bool) {
+func (p *traduce) escribeBranquia(op byte, consume int, destino int, in jvmInstr) (int, bool) {
 	var desde int
 	switch consume {
 	case 2:
@@ -1938,6 +1955,9 @@ func (p *traduce) escribeBranquia(op byte, consume int, in jvmInstr) (int, bool)
 		if p.err != nil {
 			return 0, false
 		}
+		if !p.reconciliaAntesDeSaltar(destino, in) {
+			return 0, false
+		}
 		desde = len(p.w)
 		p.palabra(unidad12x(op, ua, ub))
 		p.palabra(0)
@@ -1955,11 +1975,17 @@ func (p *traduce) escribeBranquia(op byte, consume int, in jvmInstr) (int, bool)
 		if !p.octeto(a, in) {
 			return 0, false
 		}
+		if !p.reconciliaAntesDeSaltar(destino, in) {
+			return 0, false
+		}
 		desde = len(p.w)
 		p.palabra(unidad11x(op, a))
 		p.palabra(0)
 		p.suelta(a)
 	default:
+		if !p.reconciliaAntesDeSaltar(destino, in) {
+			return 0, false
+		}
 		desde = len(p.w)
 		p.palabra(uint16(op)) // el goto 10t: la mitad alta queda en blanco hasta el parche
 	}
@@ -1972,7 +1998,14 @@ func (p *traduce) abreSalto(desde, en, destino int, forma byte, condicional bool
 		return
 	}
 	p.saltos = append(p.saltos, parcheDEX{desde: desde, en: en, destino: destino, origen: in.pc,
-		forma: forma, condicional: condicional})
+		forma: forma, condicional: condicional, pad: -1})
+	// el camino que salta, con la pila que lleva: si el destino acaba con otro reparto, este salto
+	// pasa por un bloque que lo iguala (dexunion.go)
+	if destino < len(p.m.Code) {
+		p.sitios = append(p.sitios, puntoDeUnion{pila: p.pilaActual(), destino: destino,
+			salto: len(p.saltos) - 1, carga: -1, hueco: -1})
+		p.union[destino] = append(p.union[destino], len(p.sitios)-1)
+	}
 }
 
 // parchaSaltos completa los desplazamientos al final del método, cuando ya se escribió hasta el
@@ -1983,13 +2016,20 @@ func (p *traduce) abreSalto(desde, en, destino int, forma byte, condicional bool
 // vieja, y el crecimiento puede destapar otra branquia fuera de rango (el bucle es un fixpoint).
 func (p *traduce) parchaSaltos() error {
 	for _, s := range p.saltos {
-		donde, ok := p.pcs[s.destino]
-		if !ok {
-			if s.destino != len(p.m.Code) {
-				return &traduceError{pc: s.destino, nombre: p.m.Name,
-					motivo: "a branch that does not land on the start of an instruction"}
+		var donde int
+		if s.pad >= 0 {
+			// el salto va al bloque de reconciliación, que está detrás del cuerpo
+			donde = p.pads[s.pad].desde
+		} else {
+			d, ok := p.pcs[s.destino]
+			if !ok {
+				if s.destino != len(p.m.Code) {
+					return &traduceError{pc: s.destino, nombre: p.m.Name,
+						motivo: "a branch that does not land on the start of an instruction"}
+				}
+				d = len(p.w) // se salta al hueco que hay despues de la ultima instruccion
 			}
-			donde = len(p.w) // se salta al hueco que hay despues de la ultima instruccion
+			donde = d
 		}
 		rel := donde - s.desde
 		// Las ramas hacia atrás son bucles, y están medidas: `d8` escribe el cuerpo del bucle con un
@@ -2536,6 +2576,20 @@ func (p *traduce) recorre() error {
 	if err != nil {
 		return err
 	}
+	// los puntos de unión y los pc a los que se llega cayendo: son los mismos que usa el
+	// StackMapTable (§65) y los que necesita la reconciliación del reparto (dexunion.go)
+	p.comienzos, err = comienzosDe(lista)
+	if err != nil {
+		return err
+	}
+	p.caidas = map[int]bool{}
+	for k := 1; k < len(lista); k++ {
+		if caeDespues(lista[k-1].name) {
+			p.caidas[lista[k].pc] = true
+		}
+	}
+	p.pilaEn = map[int]estadoPila{}
+	p.union = map[int][]int{}
 	for k := 0; k < len(lista); k++ {
 		in := lista[k]
 		// donde cae cada instruccion en unidades de codigo: es lo que hace falta para responder un
@@ -2543,10 +2597,10 @@ func (p *traduce) recorre() error {
 		if p.pcs == nil {
 			p.pcs = map[int]int{}
 		}
-		p.pcs[in.pc] = len(p.w)
 		// el handler de un try empieza con el `astore` de la excepcion (o con un `pop` si no se
 		// usa): en DEX eso es `move-exception` (medido en el parrafo 71)
 		if p.esHandler(in.pc) {
+			p.pcs[in.pc] = len(p.w)
 			if n, ok := indiceDeStore(in.name, in); ok {
 				r := p.local(n)
 				if !p.octeto(r, in) {
@@ -2560,6 +2614,15 @@ func (p *traduce) recorre() error {
 			}
 			p.falla(in, "a handler whose first instruction is "+in.name+", and none of those is measured")
 			return p.err
+		}
+		// un comienzo de bloque iguala el reparto de registros de la pila antes de escribir nada; el
+		// resto de pc caen aquí tal cual
+		if p.comienzos[in.pc] {
+			if !p.reconcilia(in) {
+				return p.err
+			}
+		} else {
+			p.pcs[in.pc] = len(p.w)
 		}
 		// mira: la siguiente instruccion JVM. Se usa para saber si el resultado de una llamada se
 		// va a tirar: d8 no emite move-result-object cuando el pop lo consume, y las palabras del
@@ -2881,6 +2944,9 @@ func (p *traduce) recorre() error {
 			return p.err
 		}
 	}
+	if err := p.escribePads(); err != nil {
+		return err
+	}
 	if err := p.parchaSaltos(); err != nil {
 		return err
 	}
@@ -2890,10 +2956,12 @@ func (p *traduce) recorre() error {
 // cargaSwitch: el payload de un switch, que se escribe al final del método —`d8` lo deja detrás de
 // todos los cuerpos— cuando ya se sabe en qué unidad cayó cada destino.
 type cargaSwitch struct {
-	desde     int      // unidad de la instrucción de switch, desde donde se cuenta el desplazamiento
-	datos     []uint16 // ident, tamaño y claves (o first_key); los destinos van a cero hasta el parcheo
-	destinos  []int    // pcs JVM de los destinos, en el orden de los pares
-	enDestino []int    // unidad de `datos` donde va cada destino
+	desde     int        // unidad de la instrucción de switch, desde donde se cuenta el desplazamiento
+	datos     []uint16   // ident, tamaño y claves (o first_key); los destinos van a cero hasta el parcheo
+	destinos  []int      // pcs JVM de los destinos, en el orden de los pares
+	enDestino []int      // unidad de `datos` donde va cada destino
+	pila      estadoPila // reparto de la pila al saltar, para reconciliar cada destino
+	pads      []int      // por destino: bloque de reconciliación, o -1
 }
 
 // saltoTabla: `tableswitch`/`lookupswitch` del `.class` a `packed-switch`/`sparse-switch`. La clave
@@ -2955,6 +3023,20 @@ func (p *traduce) saltoTabla(in jvmInstr) {
 		}
 	}
 	p.cargas = append(p.cargas, c)
+	// cada destino del switch es un punto de unión con la pila que queda tras sacar la clave; si el
+	// destino acaba con otro reparto, el payload apuntará al bloque que lo iguala (dexunion.go)
+	idxCarga := len(p.cargas) - 1
+	p.cargas[idxCarga].pila = p.pilaActual()
+	p.cargas[idxCarga].pads = make([]int, len(c.destinos))
+	for k, pc := range c.destinos {
+		p.cargas[idxCarga].pads[k] = -1
+		if pc < 0 || pc >= len(p.m.Code) {
+			continue
+		}
+		p.sitios = append(p.sitios, puntoDeUnion{pila: p.cargas[idxCarga].pila, destino: pc,
+			salto: -1, carga: idxCarga, hueco: k})
+		p.union[pc] = append(p.union[pc], len(p.sitios)-1)
+	}
 	// el «ninguna clave casa» es un `goto` detrás del switch; si el bloque es largo, ese `goto`
 	// tampoco cabe en 10t y se promueve a `goto/16`, con el pc del switch como clave; y si ni 16
 	// bits alcanzan, a `goto/32`
@@ -2982,6 +3064,9 @@ func (p *traduce) cierraCargas() error {
 			if !ok {
 				return &traduceError{pc: pc, nombre: p.m.Name,
 					motivo: "a switch that points at a pc which is not the start of an instruction"}
+			}
+			if k < len(c.pads) && c.pads[k] >= 0 {
+				unidad = p.pads[c.pads[k]].desde
 			}
 			rel := int32(unidad - c.desde)
 			datos[c.enDestino[k]] = uint16(rel)
