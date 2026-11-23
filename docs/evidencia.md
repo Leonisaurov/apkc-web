@@ -10429,9 +10429,11 @@ siguen sin medirse. No se tocó red ni publicación.
 
 ## 237. Inyección de shell y «zip bombs»: los dos arreglos de seguridad
 
-Medido el 2026-11-23 sobre `18af2ae` (`fix(apkc): valida package y actividad antes de adb shell`), con
-el puntero de `studio/` en `6d5c6aa` (`chore(studio): topes de descompresión en el importador`,
-submódulo `e5c6dbf`) y en `30d66ea` (`fix(studio): topa la lectura de clases para autocompletar`).
+Medido el 2026-11-23 sobre `18af2ae` (`fix(apkc): valida package y actividad antes de adb shell`). El
+puntero de `studio/` en ese momento fue `6d5c6aa` (`chore(studio): topes de descompresión en el
+importador`, submódulo `e5c6dbf`) y después `30d66ea` (`fix(studio): topa la lectura de clases para
+autocompletar`); **`6d5c6aa` y su submódulo `e5c6dbf` son estado histórico**: este checkout ya no los
+resuelve (`git -C studio show 6d5c6aa` da `unknown revision`) y el árbol actual apunta a `30d66ea`.
 
 ```sh
 # en apkc/
@@ -10448,8 +10450,11 @@ cualquier guion, en `adb` y en `rish` (`apkc/manifest.go`; la llamada, en `apkc/
 un `x; reboot` escrito en el manifiesto ya no llega a la shell.
 
 **«Zip bombs».** Las tres lecturas se cortan por **bytes producidos**, no por bytes comprimidos, y
-cancelan en cuanto se pasan del tope: `leerZip` (`studio/proyecto.js:119-131`), `extraerJarDeZip`
-(`studio/pestana.js:2727`) y el autocompletado, con 8 MiB por `.class` (`studio/autocompletado.js:37`).
+cancelan en cuanto se pasan del tope: `inflarConTope` (`studio/proyecto.js:121-142`, que es quien
+descomprime y llama a `lector.cancel()`), `extraerJarDeZip` (`studio/pestana.js:2727`, que delega en
+`inflarConTope` con `MAX_JAR`) y el autocompletado, con 8 MiB por `.class`
+(`studio/autocompletado.js:37`). `leerZip` es el que recorre el directorio central
+(`studio/proyecto.js:145`) y corta por entrada con `MAX_ENTRADA` (`studio/proyecto.js:175`).
 
 **Falsificaciones.** Quitar la validación deja que `x; reboot` llegue a la shell; y con
 `if (false && producido > tope)` la bomba pasa entera y la corrida se va a 159 MB de RSS.
