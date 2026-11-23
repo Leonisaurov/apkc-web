@@ -10558,3 +10558,42 @@ JVM**.
 
 **Fronteras de este `§`.** El multidex con la `RecordTag` en `extras` no está medido. No se corrió gate,
 chromium, red ni publicación.
+
+## 240. Los puntos de unión: el reparto de registros reconciliado
+
+Medido el 2026-11-23 sobre `eb680b3` (`fix(dex): reconcilia los registros en los puntos de unión`).
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  GOMAXPROCS=2 GOGC=50 go test -p=1 -count=1 -run TestLosPuntosDeUnionIgualanElReparto -v .
+```
+
+**Resultado**: `PASS` y `ok … 0.006s`; la suite completa del builder, `ok … 81.058s`.
+
+**El defecto era de correctitud, y silencioso.** `ternario(true, 1, 2)` devolvía **2** en ART (javac da
+1): el dexer emitía `if-eqz v0,0003 / goto 0003 / return v2`, con las dos ramas devolviendo `b`, y el
+fichero pasaba `dexdump` sin queja. Lo mismo con `long`, `float`, `String` y el ternario invertido; un
+lote con `&&`, ternario anidado, bucle y `return` antes de la unión llegó a colgarse (`rc=137`).
+
+**El arreglo.** `apkc/dexunion.go` recorre el cuerpo por pc con `comienzosDe` (`apkc/dexunion.go:362`,
+la misma regla que `jvmframes.go:1105-1135`), fija un reparto canónico en cada comienzo y manda los
+saltos que llegan con otro reparto a un bloque **fuera de línea** detrás del cuerpo, con
+`move`/`move-object`/`move-wide` y `goto/32`; los bordes de vuelta se igualan antes de la branquia, y los
+locales no entran porque su registro es estado global (`renom`). El enganche vive en `dexinstr.go`
+(`escribeBranquia`, `parchaSaltos`, `cierraCargas`, `escribePads`).
+
+**Oráculos.** `javac -g`, `d8 --min-api 21`, `dexdump -d` y ART en Droidloom (`10.177.0.2:5555`) con
+siete sondas —los seis tipos y el `inverso`— y un `switch` de Java 17: antes `33,33,33` y `6,6`;
+después `11,22,33` y `5,6`, todo coincidente con `javac` y rc 0 sin `VerifyError`.
+
+**Falsificación.** Desactivar la reconciliación devuelve los seis valores equivocados, con sus registros
+y sus unidades.
+
+**`"" + x`, la frontera del §236.** La hipótesis del `nothing to drop` **no se reproduce** con el binario
+de HEAD en cuatro tipos: el síntoma era el mismo valor equivocado del punto de unión, y lo cerró esta
+misma primitiva.
+
+**Fronteras de este `§`.** Una cabecera de bucle sin borde conocido y con la pila no vacía queda como
+estaba (javac no la emite) y ahora es autoconsistente. No se corrió gate, chromium, red ni publicación;
+**el gate de `§230` es anterior a este arreglo y no lo cubre**.
