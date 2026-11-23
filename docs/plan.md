@@ -703,8 +703,10 @@ la pantalla principal.
   `classes3.dex`), que junto al `classes.dex` de la app dan **tres dex en el apk**, y ninguno supera
   65 536 `method_id` (firma v1/v2/v3 y `zipalign ok`). El **dex de la app** también se reparte desde
   `e05213b`, medido en §228: una app de 70 000 métodos sale en `classes.dex` + `classes2.dex`, las apps
-  pequeñas conservan su dex byte a byte y ningún dex pasa de 65 536 `method_id`. Lo que sigue abierto es
-  el **`.aab` multi-dex**, que no está medido con `bundletool`.
+  pequeñas conservan su dex byte a byte y ningún dex pasa de 65 536 `method_id`. El **`.aab`
+  multi-dex** también está cerrado: `0237e23` ensambla el bundle con `dexEntries`, la misma lista de dex
+  que el APK, y `sh banco/aab-multidex/aab-multidex.sh --dependencias` lo deriva con `bundletool` en los
+  modos `default` y `universal` con `classes.dex`…`classes4.dex`, firma v1/v2/v3 y `zipalign ok` (§229).
 - **`.aab` con `split` por densidad/idioma**: sigue siendo fase propia y abierta, no ítem de ésta.
 - **Interoperabilidad con Gradle**: no está en la ambición.
 - **`d8` como referencia para lo optimizado**: no imitaremos las reescrituras de `d8` (fusiones de cadena,

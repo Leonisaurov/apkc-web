@@ -10132,6 +10132,55 @@ byte**, no aparece `classes2.dex`, y el primer grupo sigue dejando `build/dexcac
 
 **Deudas.** Dos, ninguna medida como cerrada: los `build/dexcache-gN.bin` que sobran cuando el proyecto
 encoge **no se podan** —los borra `apkc clean`, que hace `os.RemoveAll("build")`
-(`apkc/build.go:470-472`)—; y el `.aab` multi-dex no está medido con `bundletool`.
+(`apkc/build.go:470-472`)—; y el `.aab` multi-dex no está medido con `bundletool` (resuelto en
+`0237e23`, medido en el §229).
 
 **Fronteras de este `§`.** No se corrió gate, chromium, red ni publicación.
+
+## 229. El `.aab` multi-dex, derivado por bundletool
+
+Medido el 2026-11-23 sobre `0237e23` (`fix(aab): ensambla los dex del aab desde el plan correcto`) y
+`e3a7c97` (`test(banco): el aab con dex de dependencias pasa los oráculos`), con el caso del banco
+fijado en `f75b42e` (`fix(banco): fija el caso de dependencias del banco aab`).
+
+**El defecto y el arreglo.** El ensamblador del `.aab` recorría `build/` con `ficherosDeArbol` y
+nombraba cada dex por su `filepath.Base`, así que el `classes.dex` que un bucket de dependencias deja
+en `build/dexcache/…` caía encima del de la app: el `.aab` listaba `base/dex/classes.dex` dos veces y
+la firma lo rechazaba con `build/app.aab lists base/dex/classes.dex twice, and a signature cannot say
+which of them the platform is meant to read`. `0237e23` pasa los `depDexes` a `buildAAB`
+(`apkc/aab.go:20`) y numera con `dexEntries` (`apkc/build.go:1490`) la lista que recibe
+`ensamblarAABDesdeGo` (`apkc/aab_go.go:314`), la misma que empaqueta el APK (`apkc/build.go:1744`):
+bundle y APK ya no pueden discrepar.
+
+```sh
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElAABNoRepiteElDexDeLosBuckets' -v .
+sh banco/aab-multidex/aab-multidex.sh --dependencias
+```
+
+**Falsificación.** `TestElAABNoRepiteElDexDeLosBuckets` arma sobre el árbol real del build un bucket
+con su `classes.dex`, distinto del de la app para que se note si se cuela (`apkc/aab_go_test.go:175`), y
+reproduce la lista vieja: el árbol da **dos** entradas `classes.dex` y la firma falla con
+`base/dex/classes.dex twice`. Con `dexEntries`, el mismo árbol produce `classes.dex` +
+`classes2.dex`, y firma y verifica. Es la falsificación del defecto, no la del camino nuevo.
+
+**Caso 1, el dex de la app** (`sh banco/aab-multidex/aab-multidex.sh`, rc 0): 703 clases →
+`703 clases -> 3025352 bytes en 2 dex`; el `.aab` lleva `classes.dex` + `classes2.dex` con **65 459** y
+**5 756** `method_id`, ninguno por encima de 65 536; `bundletool validate` da rc 0 y `bundletool
+build-apks` en `default` y `universal` deriva APK con los mismos dos dex; `apksigner` da `true` en v1,
+v2 y v3, `zipalign` da `ok`, y `classes.dex` invoca `grande/C680;.m0`, que define `classes2.dex`.
+
+**Caso 2, con dependencias** (`--dependencias`, rc 0): 22 jars repartidos en tres buckets → el `.aab`
+lleva `classes.dex`, `classes2.dex`, `classes3.dex` y `classes4.dex`; `bundletool validate` rc 0 y
+`build-apks` en los dos modos con los cuatro; firma v1/v2/v3 `true`, `zipalign ok`, y los tres cruces
+quedan medidos entre ficheros: `Lsaludo/Saludo;` y `Ldep/D0;` los define `classes4.dex`, y `Ldep/D20;`
+lo define `classes2.dex`, invocados los tres desde `classes.dex`. `PROBAR_DEPENDENCIAS=1` da el mismo
+caso en verde, `-h` sale con rc 0 y un argumento desconocido con rc 1.
+
+**El flag, además de la variable.** El caso 2 se activa con `--dependencias` y también con
+`PROBAR_DEPENDENCIAS=1` porque el arnés sanea el entorno al invocar `sh <fichero>`: el hijo arranca con
+la variable fuera (traza `+ '[' 0 = 1 ']'`) y el flag viaja en `argv`
+(`banco/aab-multidex/aab-multidex.sh:56-69`).
+
+**Fronteras de este `§`.** El `bundletool` es el jar local
+`$ANDROID_HOME/bundletool/bundletool-all-1.18.3.jar`, sin red; el `.aab` no se probó en un aparato (ni
+`bundletool install-apks` ni Play). No se corrió gate, chromium, red ni publicación.
