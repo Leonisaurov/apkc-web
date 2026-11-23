@@ -216,6 +216,16 @@ func (t *dexTables) collectCode(cf classFull, m classMethod) error {
 				return fmt.Errorf("ldc without its operand")
 			}
 			t.followConstant(x, int(in.ops[0]))
+		case "ldc_w":
+			// javac cambia a `ldc_w` (0x13) cuando el índice del pool pasa de 255, y el inventario del
+			// jar de soporte lo destapó: `ActionBarDrawerToggleHoneycomb$SetIndicatorInfo.<init>` hace
+			// `ldc_w` de `Landroid/app/ActionBar;` con el pool por encima de 255 y el colector, que solo
+			// seguía `ldc`, no internaba el tipo que ART exige en `type_ids`. El operando son dos bytes
+			// (JVMS 6.5) y lo que interna es lo mismo que un `ldc`.
+			if len(in.ops) < 2 {
+				return fmt.Errorf("ldc_w without its two-byte operand")
+			}
+			t.followConstant(x, dexU16(in.ops))
 		case "getfield", "putfield", "getstatic", "putstatic":
 			// los estaticos tambien: medido el 2026-11-01 con `System.out.println`, donde el campo
 			// vive en otra clase (Ljava/lang/System;) y la pasada de colecta no lo veia, asi que el
