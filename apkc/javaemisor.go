@@ -4680,7 +4680,7 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		// `info.applicationInfo` llega aquí con `base == nil` y dos segmentos, porque `aplanar` no
 		// distingue el campo de una local del nombre cualificado de un tipo. El tipo se resuelve desde
 		// el tipo estático del receptor —la tabla de locales, `this` o la cadena de campos— sin emitirlo
-		// (§242).
+		// (§244).
 		if d, ok := e.tipoSinEmitir(v); ok {
 			return d, nil
 		}
@@ -5151,7 +5151,7 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 			return 0, 0, err
 		}
 		// un arreglo es una referencia: `info.splitSourceDirs == null` compara `[Ljava/lang/String;`
-		// con null y javac branquea con `ifnonnull` sobre el objeto (§242)
+		// con null y javac branquea con `ifnonnull` sobre el objeto (§244)
 		if !esObjeto(d) || (!comparaArregloConNulo && d[0] == '[') {
 			return 0, 0, fmt.Errorf("linea %d: comparar con null algo que no es una referencia (%s) no esta medido", linea, d)
 		}
