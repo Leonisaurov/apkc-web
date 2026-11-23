@@ -2,11 +2,11 @@
 
 **Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
 medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E3 y E4 están
-**cerradas** en §207 y §208; E2 está **cerrada** en §209; E5…E7 están **pendientes** hasta que su
-comando de aceptación pase en verde sobre el árbol final. Este fichero es un plan, no evidencia:
-lo que aquí se afirme sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con
-el que se comprobará. Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla
-de `docs/plan.md` cuando la fase se cierre.
+**cerradas** en §207 y §208; E2 está **cerrada** en §209; E5 está **integrada y en verificación**
+en §210; E6 y E7 siguen **abiertas**. Este fichero es un plan, no evidencia: lo que aquí se afirme
+sobre coste, compatibilidad o formato es una hipótesis y lleva el comando con el que se comprobará.
+Las mediciones reales van a `docs/evidencia.md`; el estado de las fases, a la tabla de `docs/plan.md`
+cuando la fase se cierre.
 
 Fecha: 2026-11-22. Origen de la petición: el usuario quiere **que emule mucho más**, con prioridad
 clara en **diseño de la app, funcionalidad, fidelidad y funcionamiento**. Las APIs externas de
@@ -237,8 +237,12 @@ si hay que mostrarla) y se verifica de la punta al gate: `go test -run …` → 
 - **Abandona.** `RelativeLayout` con reglas, `ConstraintLayout`, fuentes, temas del sistema, sombras,
   `drawable` vectoriales y animaciones de vista.
 
-### E5. Entrada de usuario
+### E5. Entrada de usuario — **EN VERIFICACIÓN**
 
+- **Estado: integrada en `2dd70c8`, en verificación.** Cherry-pick de `993d51b` con 21 conflictos
+  resueltos; la tanda de diez pruebas y el paquete completo están en verde, pero el crítico
+  `ses_df9c6f81effeRKtmnqwkLjBU4s` aún no ha dictaminado. Evidencia y fronteras: §210 de
+  `docs/evidencia.md`. Se cerrará con el follow-up del crítico.
 - **Objetivo.** Probar un formulario: escribir en un `EditText`, marcar una casilla, elegir un
   radio y cambiar un `Switch`, y que la app reaccione por sus oyentes.
 - **Qué se emula.**

@@ -9505,3 +9505,45 @@ quedan fuera `super.getCount()`/`super.getView()`, `ArrayAdapter` con `List`,
 `registerDataSetObserver`, `getViewTypeCount`/`getItemViewType`, `getFilter`, `areAllItemsEnabled`,
 `AdapterView.getItemAtPosition`/`setSelection`/`smoothScrollToPosition` e `inflate(XmlPullParser,…)`.
 (3) No se corrió el gate ni chromium, y el sitio publicado no se ha empaquetado con `a76422d`.
+
+## 210. E5: entrada de usuario, con su medición (crítico en curso)
+
+Medido el 2026-11-22 sobre `2dd70c8`, cherry-pick de `993d51b` con 21 conflictos resueltos, en un
+árbol que ya tenía `f802c0b` (sin topes de clics, capturas ni consola) y `2e3c629`. El crítico de
+E5 (`ses_df9c6f81effeRKtmnqwkLjBU4s`) **aún no ha dictaminado**, así que este `§` deja la fase en
+verificación y se corregirá con el follow-up cuando lo haga.
+
+**Qué emula.** `--escribir id/texto`, `--marcar id` y `--desmarcar id` entran por un solo
+`guionDeEntrada` de `eventoUsuario`, en el mismo orden que los clics y las recreaciones. El modelo
+publica `pista` (el `setHint` de un `EditText`) y `marcado` en el nodo y en las capturas. Teclear
+avisa al `TextWatcher` del proyecto (`addTextChangedListener`) y marcar al
+`OnCheckedChangeListener`; un `RadioGroup` deja una sola opción marcada. Los stubs nuevos son
+`isChecked`, `setChecked`, `toggle`, `getHint` y `getEditableText`, y `append(Z)` imprime
+`true`/`false` como el framework, no `1`/`0`.
+
+```sh
+cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestElTextoNoSeCongelaAlLlegarAlTopeDeCapturas|TestElPreviewMuestraUnDialogoPropio|TestElPreviewEscribeYMarcaLoQueSeLePide|TestElGuionDeEntradaNoTieneTope|TestElPreviewConservaElEstadoAlRecrear|TestElPreviewNoTieneTopeDeClics|TestElPreviewPintaUnaListaConSuAdaptador|TestElPreviewNavegaEntreActividadesPropias|TestElPreviewRespetaVisibilidadTextoColorEImagen|TestElColorRGB8DeAapt2SeLeeComoColor' -v .
+```
+
+**Resultado**: diez `--- PASS` y `ok github.com/ajinasokan/apkc 0.191s`; el paquete completo,
+`ok github.com/ajinasokan/apkc 54.564s`. La prueba de aceptación
+`TestElPreviewEscribeYMarcaLoQueSeLePide` teclea «hola mundo», desmarca y vuelve a marcar la
+casilla, cambia el radio y pulsa el botón: el `EditText` refleja el texto, el eco queda en
+«Enviado: hola mundo», el verde gana el grupo y el rojo queda desmarcado, la captura es de
+`usuario.escribir`, la consola trae `tecleo`, `despues`, `acepto=1`, `acepto=2`, `rojo=1` y
+`verde=1`, y hay tres marcas publicadas. `TestElGuionDeEntradaNoTieneTope` entrega 160 órdenes
+(40 tecleos, 40 marcas, 40 desmarcas y 40 clics) sin aviso de tope, con eco final
+«Enviado: hola 40» y la casilla desmarcada.
+
+**Merge.** Los 21 conflictos se resolvieron conservando las dos partes: el guion de entrada convive
+con `--pulsar` y `--recrear` en el mismo acumulador de órdenes, y el modelo mantiene `Escrituras`,
+`Pulsaciones`, `Marcas`, `Interacciones`, `Bundle` y `Preferencias`. La tanda de diez incluye las
+pruebas de los topes retirados y las de E2, E3, E4 y H4 para comprobar que no se pisaron.
+
+**Fronteras de este `§`.** (1) Se rechazan por nombre: teclear en algo que no es `EditText`, marcar
+algo no marcable (incluido el `RadioGroup`), un id ausente de la tabla y `--escribir` sin la forma
+`id/texto`. (2) Sin IME, cursor, selección, autocompletado, arrastre ni portapapeles. (3) Un
+`setText` dentro de un `TextWatcher` no vuelve a avisar, para no encadenar avisos. (4) Deuda
+apuntada: `String.valueOf(boolean)` sigue dando `1`/`0`. (5) No se corrió el gate ni chromium, y el
+sitio publicado no se ha empaquetado con `2dd70c8`.

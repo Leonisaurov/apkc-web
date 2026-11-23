@@ -85,7 +85,12 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   `ses_df9ecde81ffeVOW5GZ5bA820E6` en **APROBAR**, sin defectos `CONFIRMADO`; el merge de cinco
   puntos está verificado y queda una pregunta `INCIERTA` (sonda `--recrear` más lista). Evidencia:
   §209.
-- La vista previa se reconstruyó con E1.1, E3, E4, E2 y la corrección H4 (`sha256 12ac779b…`).
-- **Activas:** E5 (`ses_df9f49694ffeE3qK56KapEVMkJ`), E6 y E7.
+- E5 **integrada** como `2dd70c8` (cherry-pick de `993d51b`, 21 conflictos resueltos), con la tanda
+  de diez pruebas y el paquete completo en verde; su crítico
+  `ses_df9c6f81effeRKtmnqwkLjBU4s` **aún no ha dictaminado**, así que sigue **en verificación**
+  (§210).
+- La vista previa se reconstruyó con E1.1, E3, E4, E2, H4 y E5 (`sha256 48df84e3…`).
+- **Activas:** E6 (en integración) y E7 (crítico aprobado y corrección cosmética aplicada, sin
+  cierre documental).
 - Los worktrees de E2, E3 y E4 se crearon antes de `def0b85`; sus cambios ya están integrados.
 - Gate final: **no ejecutado**; queda para el cierre, con `PREFIX` y puertos únicos.
