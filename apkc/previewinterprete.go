@@ -51,16 +51,32 @@ const (
 	// filasMaximas acota las filas que se piden al adaptador de un ListView: una lista de cientos
 	// de elementos no es lo que esta fase pinta, y el recorte se avisa en vez de callarse.
 	filasMaximas = 50
+	// tareasMaximas no es un tope de uso: es la salvaguarda de la cola del reloj lógico ante una
+	// tarea que se reprograma a sí misma sin mover el instante. Al llegar se avisa y se deja de
+	// drenar; los `--avanzar` del guion no tienen tope.
+	tareasMaximas = 256
 )
 
-// eventoUsuario es una orden de entrada del guion —un clic, un texto tecleado o una marca— con el
-// nombre del flag que la pidió. Se entregan en el orden de la línea de comandos, dentro de la misma
-// ejecución, así que cada una ve el estado que dejó la anterior.
+// eventoUsuario es una orden de entrada del guion —un clic, un texto tecleado, una marca o un
+// avance del reloj lógico— con el nombre del flag que la pidió. Se entregan en el orden de la línea
+// de comandos, dentro de la misma ejecución, así que cada una ve el estado que dejó la anterior.
 type eventoUsuario struct {
-	// Tipo es el flag que la pidió: "pulsar", "escribir", "marcar" o "desmarcar".
+	// Tipo es el flag que la pidió: "pulsar", "escribir", "marcar", "desmarcar", "recrear" o
+	// "avanzar".
 	Tipo string
-	// Dato lleva el id de la vista y, en «escribir», el texto pegado tras el primer «/».
+	// Dato lleva el id de la vista, el texto pegado tras el primer «/» de «escribir» o los
+	// milisegundos de «avanzar»; en «recrear» va vacío.
 	Dato string
+}
+
+// tareaReloj es una tarea diferida: su instante en milisegundos del reloj lógico, el orden en que se
+// encoló (dos tareas del mismo instante corren en el orden en que se pidieron) y el cuerpo que la
+// ejecuta. No hay hilos: la tarea corre cuando el guion llega a su instante.
+type tareaReloj struct {
+	instante int64
+	orden    int
+	origen   string
+	ejecuta  func() error
 }
 
 // capturaTexto es una escritura que el intérprete pudo ver: qué stub la recibió, sobre qué view (si
@@ -173,6 +189,10 @@ type resultadoEjecucion struct {
 	// Toast es el último aviso efímero que la app mostró (`Toast.show`): no deja vista, pero sí el
 	// texto que se ve y la línea de consola que se anota al mostrarlo.
 	Toast string `json:"toast,omitempty"`
+	// Reloj es el tiempo lógico alcanzado, en milisegundos, y Tareas cuántas tareas diferidas
+	// ejecutó la cola. Los dos son deterministas: salen del guion, no de un reloj de pared.
+	Reloj  int64 `json:"reloj,omitempty"`
+	Tareas int   `json:"tareas,omitempty"`
 
 	// malformado separa dos clases de fallo que no son lo mismo: «la app llama a algo que el MVP no
 	// cubre» (se sigue con el modelo y rc 0) y «estos bytes no son un dex ejecutable», que el comando
@@ -478,6 +498,15 @@ type maquinaDalvik struct {
 	toast string
 	// estadoGuardado es lo que la última `onSaveInstanceState` dejó en el Bundle, para publicarlo
 	estadoGuardado map[string]any
+	// reloj es el tiempo lógico de la app, compartido por todas las pantallas: no hay hilos ni reloj
+	// de pared, y solo el guion (`--avanzar N`) lo mueve
+	reloj *int64
+	// cola son las tareas diferidas que esta pantalla posteó. Al cubrir una actividad sus tareas
+	// dejan de correr, como el Handler de una pantalla que ya no está delante.
+	cola []tareaReloj
+	// tareas es cuántas tareas ejecutó la cola y encoladas el orden de encolado siguiente
+	tareas    int
+	encoladas int
 }
 
 type oyenteRegistrado struct {
@@ -539,11 +568,230 @@ type oyenteItemRegistrado struct {
 }
 
 func nuevaMaquina(p *programaDalvik, tabla *tablaRecursos) *maquinaDalvik {
+	reloj := int64(0)
 	return &maquinaDalvik{prog: p, tabla: tabla, vistos: map[string]bool{},
 		vistas: map[uint32]*objetoDalvik{}, almacen: nuevoAlmacenPreferencias(),
 		tiposVista: map[uint32]string{}, marcas: map[uint32]bool{}, pistas: map[uint32]string{},
 		marcasConocidas: map[uint32]bool{}, gruposRadio: map[uint32][]uint32{},
-		grupoDe: map[uint32]uint32{}}
+		grupoDe: map[uint32]uint32{}, reloj: &reloj}
+}
+
+// ahora lee el reloj lógico en milisegundos. Sin reloj (una máquina armada a mano en una prueba) el
+// tiempo es cero, que es el arranque de la app.
+func (m *maquinaDalvik) ahora() int64 {
+	if m.reloj == nil {
+		return 0
+	}
+	return *m.reloj
+}
+
+// avanza mueve el reloj lógico hacia adelante. Solo lo llama el guion: ninguna tarea puede moverlo
+// por su cuenta, y por eso dos ejecuciones del mismo guion dan el mismo JSON.
+func (m *maquinaDalvik) avanza(ms int64) {
+	if m.reloj != nil {
+		*m.reloj += ms
+	}
+}
+
+// programa encola una tarea para un instante del reloj lógico. No la ejecuta: la cola se drena en
+// `vence`, cuando el reloj llega a ese instante.
+func (m *maquinaDalvik) programa(instante int64, origen string, ejecuta func() error) {
+	m.encoladas++
+	m.cola = append(m.cola, tareaReloj{instante: instante, orden: m.encoladas,
+		origen: origen, ejecuta: ejecuta})
+}
+
+// vence ejecuta, si hay alguna, la tarea que toca de las que vencen hasta `limite`: la de menor
+// instante y, entre las del mismo instante, la que se encoló antes. Mientras corre, el reloj vale el
+// instante de la tarea —no el destino del avance—, porque es la hora que la app lee si vuelve a
+// postear. Devuelve falso cuando no queda ninguna tarea vencida.
+func (m *maquinaDalvik) vence(limite int64) bool {
+	if m.tareas >= tareasMaximas {
+		m.avisa("la cola del reloj lógico se detuvo a las %d tareas ejecutadas", tareasMaximas)
+		return false
+	}
+	i := -1
+	for j := range m.cola {
+		if m.cola[j].instante > limite {
+			continue
+		}
+		if i < 0 || m.cola[j].instante < m.cola[i].instante ||
+			(m.cola[j].instante == m.cola[i].instante && m.cola[j].orden < m.cola[i].orden) {
+			i = j
+		}
+	}
+	if i < 0 {
+		return false
+	}
+	t := m.cola[i]
+	m.cola = append(m.cola[:i], m.cola[i+1:]...)
+	if m.reloj != nil {
+		*m.reloj = t.instante
+	}
+	m.tareas++
+	if t.ejecuta != nil {
+		if err := t.ejecuta(); err != nil {
+			m.avisa("la tarea de %s falló: %v", t.origen, err)
+		}
+	}
+	return true
+}
+
+// difiere encola el `run()` de un Runnable, que es lo que hacen `Handler.post`/`postDelayed` y
+// `View.post`/`postDelayed`: la tarea corre cuando el guion llega a su instante, no antes.
+func (m *maquinaDalvik) difiere(origen string, runnable any, espera int64) any {
+	r, ok := runnable.(*objetoDalvik)
+	if !ok {
+		m.avisa("%s con un Runnable que no es un objeto del dex: no hay código que ejecutar", origen)
+		return nil
+	}
+	m.programa(m.ahora()+espera, origen, func() error { return m.ejecutaRunnable(r, origen) })
+	return nil
+}
+
+// ejecutaRunnable llama al `run()V` de un Runnable del dex. Si el objeto no lo declara, se avisa:
+// no se inventa un cuerpo.
+func (m *maquinaDalvik) ejecutaRunnable(r *objetoDalvik, origen string) error {
+	met := m.buscaMetodo(r.clase, "run", "()V")
+	if met == nil {
+		m.avisa("%s con un %s que no declara run()V", origen, claseCorta(r.clase))
+		return nil
+	}
+	_, err := m.ejecutaCuerpo(r.clase, met, []any{r}, []string{r.clase})
+	return err
+}
+
+// difiereTarea encola las tres fases de un AsyncTask en el mismo instante, en el orden que pide el
+// plan: `onPreExecute`, `doInBackground` y `onPostExecute`. En el aparato la primera y la última
+// corren en el hilo de la interfaz y la del medio en un hilo de trabajo; aquí no hay hilos y el
+// orden es el único dato que se puede medir.
+func (m *maquinaDalvik) difiereTarea(t *objetoDalvik, params any) {
+	m.programa(m.ahora(), "AsyncTask.execute", func() error { return m.ejecutaAsyncTask(t, params) })
+}
+
+// ejecutaAsyncTask corre las fases del AsyncTask sobre la misma instancia, pasando el resultado de
+// `doInBackground` a `onPostExecute`, que es lo que hace la clase del framework.
+func (m *maquinaDalvik) ejecutaAsyncTask(t *objetoDalvik, params any) error {
+	if met := m.metodoPorNombre(t.clase, "onPreExecute"); met != nil {
+		if _, err := m.ejecutaCuerpo(t.clase, met, []any{t}, []string{t.clase}); err != nil {
+			return err
+		}
+	}
+	var resultado any
+	met := m.metodoPorNombre(t.clase, "doInBackground")
+	if met == nil {
+		m.avisa("%s no declara doInBackground: el AsyncTask no hace nada", claseCorta(t.clase))
+	} else {
+		args, ok := m.argumentosDeAsyncTask(t, met, params)
+		if !ok {
+			return nil
+		}
+		res, err := m.ejecutaCuerpo(t.clase, met, args, tiposDeArgumentos(args, met))
+		if err != nil {
+			return err
+		}
+		resultado = res
+	}
+	if met := m.metodoPorNombre(t.clase, "onPostExecute"); met != nil {
+		args, ok := m.argumentosDeAsyncTask(t, met, resultado)
+		if !ok {
+			return nil
+		}
+		if _, err := m.ejecutaCuerpo(t.clase, met, args, tiposDeArgumentos(args, met)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// metodoPorNombre busca un método de la clase del objeto que declare ese nombre, con la firma que
+// sea: `AsyncTask` parametriza sus tres métodos y el tipo borrado de cada proyecto cambia.
+func (m *maquinaDalvik) metodoPorNombre(clase, nombre string) *metodoDalvik {
+	for i := 0; i < 32; i++ {
+		cl, ok := m.prog.clases[clase]
+		if !ok {
+			return nil
+		}
+		claves := make([]string, 0, len(cl.metodos))
+		for k := range cl.metodos {
+			claves = append(claves, k)
+		}
+		sort.Strings(claves)
+		for _, k := range claves {
+			if met := cl.metodos[k]; met.nombre == nombre {
+				return met
+			}
+		}
+		if cl.super == "" || cl.super == clase {
+			return nil
+		}
+		clase = cl.super
+	}
+	return nil
+}
+
+// camposDelProto parte la lista de parámetros de un descriptor: `(Ljava/lang/String;I)V` da
+// `Ljava/lang/String;` e `I`. Es lo que dice cuántos argumentos tiene un método cuyo proto no se
+// conoce de antemano, como el `doInBackground` de un AsyncTask.
+func camposDelProto(proto string) []string {
+	if len(proto) < 2 || proto[0] != '(' {
+		return nil
+	}
+	campos := []string{}
+	for i := 1; i < len(proto) && proto[i] != ')'; {
+		ini := i
+		for i < len(proto) && proto[i] == '[' {
+			i++
+		}
+		if i < len(proto) && proto[i] == 'L' {
+			for i < len(proto) && proto[i] != ';' {
+				i++
+			}
+		}
+		if i < len(proto) {
+			i++
+		}
+		campos = append(campos, proto[ini:i])
+	}
+	return campos
+}
+
+// argumentosDeAsyncTask arma los argumentos de una fase del AsyncTask: el receptor más el valor que
+// le toca (el arreglo de parámetros de `execute` o el resultado de `doInBackground`), si su firma
+// declara uno. Una firma con más de un parámetro es un `AsyncTask` de varios parámetros, que no está
+// en el subconjunto: se avisa y la fase no se ejecuta.
+func (m *maquinaDalvik) argumentosDeAsyncTask(t *objetoDalvik, met *metodoDalvik, valor any) ([]any, bool) {
+	switch len(camposDelProto(met.proto)) {
+	case 0:
+		return []any{t}, true
+	case 1:
+		return []any{t, valor}, true
+	}
+	m.avisa("el %s de %s declara %d parámetros y el subconjunto solo ejecuta AsyncTask de uno",
+		met.nombre, claseCorta(t.clase), len(camposDelProto(met.proto)))
+	return nil, false
+}
+
+// tiposDeArgumentos arma los tipos de los argumentos de una llamada a una fase del AsyncTask: el
+// primero es la clase del objeto y los demás, los del proto del método.
+func tiposDeArgumentos(args []any, met *metodoDalvik) []string {
+	tipos := make([]string, 0, len(args))
+	if len(args) > 0 {
+		if obj, ok := args[0].(*objetoDalvik); ok {
+			tipos = append(tipos, obj.clase)
+		} else {
+			tipos = append(tipos, "")
+		}
+	}
+	campos := camposDelProto(met.proto)
+	for i := 1; i < len(args); i++ {
+		if i-1 < len(campos) {
+			tipos = append(tipos, campos[i-1])
+		} else {
+			tipos = append(tipos, "")
+		}
+	}
+	return tipos
 }
 
 // siembraTextosDelLayout deja en la máquina el `android:text` que el layout declara para cada id y
@@ -978,7 +1226,12 @@ func ejecutaOnCreateNavegando(d *dexFile, tabla *tablaRecursos, actividad string
 }
 
 // ejecutaOnCreateConEventos es el arranque con el guion de entrada completo —clics, texto tecleado,
-// marcas, desmarcas y recreaciones—, en el orden en que se pidieron, con ciclo de vida y navegación.
+// marcas, desmarcas, recreaciones y avances del reloj lógico—, en el orden en que se pidieron, con
+// ciclo de vida y navegación.
+//
+// `eventos` es el guion del emulador, en orden: cada `--pulsar` entrega un clic y cada `--avanzar N`
+// mueve el reloj lógico y drena las tareas diferidas que vencen. El orden entre unos y otros es el
+// de la línea de comandos, para que el mismo guion reproduzca el mismo JSON.
 //
 // La pila de actividades vive aquí y no en el dex: cada pantalla conserva su propia máquina (sus
 // objetos, sus capturas y sus oyentes) mientras está cubierta, y `finish()` la descubre otra vez sin
@@ -1070,6 +1323,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 				nueva.declaradas = m.declaradas
 				nueva.registro = m.registro
 				nueva.almacen = m.almacen
+				nueva.reloj = m.reloj
 				nueva.intent = m.intentoSaliente
 				if err := nueva.abreActividad(destino, preparar, true); err != nil {
 					m.avisa("la actividad %s no arrancó: %v", claseCorta(destino), err)
@@ -1113,6 +1367,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 		nueva.declaradas = m.declaradas
 		nueva.registro = m.registro
 		nueva.almacen = m.almacen
+		nueva.reloj = m.reloj
 		nueva.intent = m.intent
 		nueva.bundleInicial = bundle
 		nueva.estadoGuardado = m.estadoGuardado
@@ -1134,18 +1389,45 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 	// el guion pedido, en orden y solo si la app llegó viva a este punto. El estado que ve cada orden
 	// incluye las anteriores, porque comparten la misma máquina: es lo que hace que
 	// `--pulsar a --pulsar a` deje el contador en 2 y no en 1, y que teclear antes de pulsar cambie lo
-	// que el onClick lee. Entre orden y orden se estabiliza la navegación: la siguiente va a la
-	// pantalla que quedó delante. Ni los clics ni los tecleos ni las marcas tienen tope: los pone el
-	// usuario y el emulador los entrega todos.
+	// que el onClick lee. Entre orden y orden se estabiliza la navegación —la siguiente va a la
+	// pantalla que quedó delante— y se drenan las tareas diferidas que ya vencieron. Ni los clics ni
+	// los tecleos ni las marcas ni los avances del reloj tienen tope: los pone el usuario y el
+	// emulador los entrega todos.
 	var errEventos error
 	if res.Error == "" {
+		// drena corre, por orden de instante, las tareas que vencen hasta `limite`: primero la de
+		// menor instante y, a igual instante, la que se encoló antes. Se repite porque una tarea
+		// puede navegar a otra pantalla: la nueva trae su propia cola y es esa la que sigue. Al
+		// terminar, el reloj queda en el límite, que es la hora que pidió el guion.
+		drena := func(limite int64) {
+			for m.vence(limite) {
+				estabiliza()
+			}
+			if m.ahora() < limite && m.reloj != nil {
+				*m.reloj = limite
+			}
+		}
+		// lo que la app posteó en el arranque sin retraso corre antes de cualquier orden
+		drena(m.ahora())
 		for _, orden := range eventos {
+			if orden.Tipo == ordenAvanzarTipo {
+				ms, err := strconv.ParseInt(orden.Dato, 10, 64)
+				if err != nil || ms < 0 {
+					errEventos = fmt.Errorf("--avanzar %q no son milisegundos enteros no negativos",
+						orden.Dato)
+					break
+				}
+				m.avanza(ms)
+				drena(m.ahora())
+				continue
+			}
 			if orden.Tipo == ordenRecrearTipo {
 				if err := recreaActual(); err != nil {
 					errEventos = err
 					break
 				}
 				estabiliza()
+				drena(m.ahora())
 				continue
 			}
 			pedido := orden.Dato
@@ -1156,6 +1438,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 				}
 				res.Pulsaciones = append(res.Pulsaciones, pedido)
 				estabiliza()
+				drena(m.ahora())
 				continue
 			}
 			// `id/lista:1` es un clic en una fila: la forma lleva la posición después de los dos
@@ -1173,6 +1456,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 				}
 				res.Pulsaciones = append(res.Pulsaciones, pedido)
 				estabiliza()
+				drena(m.ahora())
 				continue
 			}
 			if err := m.entregaEvento(tabla, orden, res); err != nil {
@@ -1180,6 +1464,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 				break
 			}
 			estabiliza()
+			drena(m.ahora())
 		}
 	}
 
@@ -1192,6 +1477,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 	for _, x := range todas {
 		res.Pasos += x.pasos
 		res.Interacciones += x.interaccion
+		res.Tareas += x.tareas
 		res.Consola = append(res.Consola, x.consola...)
 		for _, a := range x.avisos {
 			if !contieneTexto(res.Avisos, a) {
@@ -1199,6 +1485,7 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 			}
 		}
 	}
+	res.Reloj = m.ahora()
 	res.Ciclo = ciclo
 	// el estado que sobrevive a la ejecución se publica tal cual: el Bundle de la última recreación
 	// y el SharedPreferences de toda la ejecución, sin inventar lo que la app no escribió
@@ -2027,6 +2314,22 @@ func eligeClaseLanzadora(p *programaDalvik, preferida string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// jerarquiaDelDex sube por una clase y sus padres mientras estén en el dex, y termina en el primero
+// que no está: el padre del framework. Esa cadena es la que dice qué API de Android hay que emular
+// para un objeto de una clase del proyecto.
+func (m *maquinaDalvik) jerarquiaDelDex(clase string) []string {
+	cadena := []string{}
+	for i := 0; i < 32; i++ {
+		cadena = append(cadena, clase)
+		cl, ok := m.prog.clases[clase]
+		if !ok || cl.super == "" || cl.super == clase {
+			return cadena
+		}
+		clase = cl.super
+	}
+	return cadena
 }
 
 // buscaMetodo sube por la jerarquía de clases del dex hasta encontrar nombre+firma.
@@ -2890,10 +3193,12 @@ func (m *maquinaDalvik) invoca(op byte, idx uint32, palabras []int, regs []any, 
 	}
 
 	// 2) los stubs de framework. La clase que declara el método es la del ref, pero un
-	// `findViewById` invocado sobre MainActivity se declara en Activity: se prueban las dos.
+	// `findViewById` invocado sobre MainActivity se declara en Activity: se prueban las dos, y la
+	// cadena de padres del dex, porque el emisor declara un método heredado en la clase del
+	// receptor (`new Tarea().execute()` llega como `Tarea.execute`, no como `AsyncTask.execute`).
 	candidatos := []string{ref.owner}
 	if obj, ok := receptor.(*objetoDalvik); ok {
-		candidatos = append([]string{obj.clase}, candidatos...)
+		candidatos = append(m.jerarquiaDelDex(obj.clase), candidatos...)
 	}
 	if v, ok, err := m.intentaStub(candidatos, ref.name, proto, vals, receptor); ok || err != nil {
 		return v, err
@@ -3327,6 +3632,47 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				m.oyentes = append(m.oyentes, oyenteRegistrado{oyente: vals[0], vista: o})
 			}
 			return nil, true, nil
+		}
+	case "post", "postDelayed":
+		// el reloj lógico: `Handler.post`/`postDelayed` y `View.post`/`postDelayed` encolan el
+		// `run()` del Runnable con su instante y no lo ejecutan. `post` es un `postDelayed` de cero.
+		if len(vals) >= 1 && (es("Landroid/os/Handler;") || esVista()) {
+			espera := int64(0)
+			if nombre == "postDelayed" {
+				if len(vals) != 2 {
+					return nil, true, fmt.Errorf("%s%s: se esperaban dos argumentos, el Runnable y el retraso",
+						nombre, proto)
+				}
+				if n, err := aInt64(vals[1]); err == nil {
+					espera = n
+				} else {
+					return nil, true, err
+				}
+			}
+			return m.difiere(nombre, vals[0], espera), true, nil
+		}
+	case "runOnUiThread":
+		// `Activity.runOnUiThread` desde el hilo de la interfaz corre en el acto, y aquí no hay otro
+		// hilo: la ejecución es inmediata, sin pasar por la cola
+		if len(vals) == 1 && obj != nil && obj == m.actividad {
+			r, ok := vals[0].(*objetoDalvik)
+			if !ok {
+				return nil, true, fmt.Errorf("runOnUiThread con un Runnable que no es un objeto del dex")
+			}
+			if err := m.ejecutaRunnable(r, nombre); err != nil {
+				return nil, true, err
+			}
+			return nil, true, nil
+		}
+	case "execute":
+		if len(vals) == 1 && obj != nil && es("Landroid/os/AsyncTask;") {
+			m.difiereTarea(obj, vals[0])
+			return obj, true, nil
+		}
+	case "executeOnExecutor":
+		if obj != nil && es("Landroid/os/AsyncTask;") {
+			return m.rechaza(nombre, proto,
+				"los ejecutores no están en el subconjunto: usa execute()", "Landroid/os/AsyncTask;")
 		}
 	case "setOnCheckedChangeListener":
 		// el framework guarda un solo oyente: el último registrado sustituye al anterior

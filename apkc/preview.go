@@ -259,7 +259,7 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
 text, children and an approximate rectangle for every node. The layout is chosen by name (main by
@@ -279,18 +279,23 @@ each node's textoDinamico, the check state in each node's marcado and in ejecuci
 app's own output (print, println, Log.*) in ejecucion.consola. Each --recrear destroys and recreates
 the current activity with its Bundle, as a rotation does, so onSaveInstanceState feeds
 savedInstanceState in the new onCreate and SharedPreferences survives the run; both stores come back
-in ejecucion.bundle and ejecucion.preferencias. --pulsar, --escribir, --marcar, --desmarcar and
---recrear are delivered in the order they are written. A ListView whose adapter is the project's own
-is painted with one child per row, texts included: --pulsar id/lista:1 delivers onItemClick for row 1
-of that list. Repeating the same list reproduces the same screen. No process is started and nothing
-is written, so it runs inside the tab.
+in ejecucion.bundle and ejecucion.preferencias. --avanzar ms moves the logical clock forward and runs
+the tasks the app posted with Handler.post/postDelayed, View.post/postDelayed, runOnUiThread and
+AsyncTask.execute whose time has come: the queue runs the earliest task first and, at the same
+instant, the one queued before, and while a task runs the clock is its instant, not the destination;
+there are no threads and no wall clock, so the clock and the task count come back in ejecucion.reloj
+and ejecucion.tareas and the same command reproduces the same JSON. --pulsar, --escribir, --marcar,
+--desmarcar, --recrear and --avanzar are delivered in the order they are written. A ListView whose
+adapter is the project's own is painted with one child per row, texts included: --pulsar id/lista:1
+delivers onItemClick for row 1 of that list. Repeating the same list reproduces the same screen. No
+process is started and nothing is written, so it runs inside the tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
 	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
 	// el guion conserva el orden de la línea de comandos: flag llama a Set en ese orden, así que
 	// `--pulsar a --escribir b/hola --recrear --pulsar c` se entrega como se escribió, y la lista de
-	// clics, textos, marcas y recreaciones no pierde su sitio
+	// clics, textos, marcas, recreaciones y avances del reloj no pierde su sitio
 	guion := []eventoUsuario{}
 	set.Var(guionDeEntrada{tipo: "pulsar", eventos: &guion}, "pulsar",
 		"id de la vista (o dialogo/positivo|negativo|neutro, o id/lista:fila) cuyo oyente se ejecuta "+
@@ -303,6 +308,8 @@ is written, so it runs inside the tab.
 		"id de la vista que se desmarca (repetible)")
 	set.Var(ordenDeRecrear{eventos: &guion}, "recrear",
 		"recrea la actividad actual con su Bundle, como una rotación (repetible, en orden)")
+	set.Var(guionDeEntrada{tipo: "avanzar", eventos: &guion}, "avanzar",
+		"milisegundos que avanza el reloj lógico y ejecuta las tareas vencidas (repetible, en orden)")
 	if err := set.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
@@ -312,8 +319,8 @@ is written, so it runs inside the tab.
 		os.Exit(2)
 	}
 	if *sinEjecutar && len(guion) > 0 {
-		fmt.Fprintln(os.Stderr, "preview: --pulsar, --escribir, --marcar, --desmarcar y --recrear "+
-			"necesitan ejecutar el dex; quita --sin-ejecutar")
+		fmt.Fprintln(os.Stderr, "preview: --pulsar, --escribir, --marcar, --desmarcar, --recrear y "+
+			"--avanzar necesitan ejecutar el dex; quita --sin-ejecutar")
 		os.Exit(2)
 	}
 	datos, err := os.ReadFile(rutas[0])
@@ -345,11 +352,13 @@ type ordenEjecucion struct {
 const (
 	ordenPulsarTipo  = "pulsar"
 	ordenRecrearTipo = "recrear"
+	ordenAvanzarTipo = "avanzar"
 )
 
 // guionDeEntrada es el flag de una orden de entrada. Todas las órdenes van a la misma lista, en el
 // orden en que se leen de la línea de comandos: es lo que permite intercalar un clic entre dos
-// tecleos y que el estado que ve cada orden sea el que dejó la anterior.
+// tecleos, un avance del reloj entre dos clics, y que el estado que ve cada orden sea el que dejó la
+// anterior.
 type guionDeEntrada struct {
 	tipo    string
 	eventos *[]eventoUsuario
@@ -376,6 +385,13 @@ func (g guionDeEntrada) Set(v string) error {
 		if id, _, ok := strings.Cut(dato, "/"); !ok || strings.TrimSpace(id) == "" {
 			return fmt.Errorf("--escribir necesita id/texto: el id de la vista y el texto, " +
 				"separados por «/»")
+		}
+	}
+	if g.tipo == ordenAvanzarTipo {
+		// el reloj lógico solo va hacia adelante y en milisegundos enteros: un valor que no lo sea se
+		// rechaza al parsear, no a mitad de la ejecución
+		if ms, err := strconv.ParseInt(dato, 10, 64); err != nil || ms < 0 {
+			return fmt.Errorf("--avanzar necesita milisegundos enteros no negativos, no %q", v)
 		}
 	}
 	*g.eventos = append(*g.eventos, eventoUsuario{Tipo: g.tipo, Dato: dato})
@@ -435,8 +451,9 @@ func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, orde
 }
 
 // modeloVistaDeAPKConEventos es el mismo cuerpo con el guion de entrada completo (`--pulsar`,
-// `--escribir`, `--marcar`, `--desmarcar` y `--recrear`), en el orden en que se pidió. Una orden que
-// no se puede entregar devuelve error, por el mismo motivo: no se publica una pantalla a medias.
+// `--escribir`, `--marcar`, `--desmarcar`, `--recrear` y `--avanzar`), en el orden en que se pidió.
+// Una orden que no se puede entregar devuelve error, por el mismo motivo: no se publica una pantalla
+// a medias.
 func modeloVistaDeAPKConEventos(datos []byte, layout string, ejecutar bool, eventos []eventoUsuario) (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(datos), int64(len(datos)))
 	if err != nil {
