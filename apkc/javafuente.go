@@ -482,17 +482,30 @@ type captura struct {
 // el nombre tal como lo escribe el fuente, los corchetes del arreglo y, si a su vez es genérico, sus
 // propios argumentos. Se guarda entero porque la `Signature` genérica de javac los escribe anidados
 // (`List<List<String>>`) y con los corchetes delante (`List<String>[]` es `[Ljava/util/List<…>;`),
-// aunque el descriptor siga siendo el del borrado. Los comodines (`?`, `? extends X`) no están
-// medidos: el `?` ni siquiera es un símbolo de este subconjunto.
+// aunque el descriptor siga siendo el del borrado. Un comodín (`?`, `? extends X`, `? super X`) llega
+// con `comodin` puesto y su cota —si la trae— en `cota` (§241).
 type tipoArgumento struct {
 	nombre   string
 	arreglos int
 	args     []tipoArgumento
+	// comodin es el signo con el que la `Signature` escribe el comodín: `*` para `?`, `+` para
+	// `? extends T` y `-` para `? super T`. Cero quiere decir que el tipo no es un comodín.
+	comodin byte
+	// cota es el tipo de `? extends T` o `? super T`; nil en el `?` a secas.
+	cota *tipoArgumento
 }
 
 // crudo es el nombre tal como lo lee el descriptor: los corchetes pegados y sin argumentos, que el
-// borrado tira (`List<Apk>[]` -> `List[]`, que es `[Ljava/util/List;`).
+// borrado tira (`List<Apk>[]` -> `List[]`, que es `[Ljava/util/List;`). Un comodín borra a
+// `java.lang.Object`, salvo `? extends T`, que borra a su cota (JLS 4.6); solo se llega aquí con uno
+// si se usara como tipo declarado, que Java no admite, pero el descriptor no depende de eso.
 func (t tipoArgumento) crudo() string {
+	if t.comodin != 0 {
+		if t.comodin == '+' && t.cota != nil {
+			return t.cota.crudo()
+		}
+		return "java.lang.Object"
+	}
 	return t.nombre + strings.Repeat("[]", t.arreglos)
 }
 
@@ -529,7 +542,7 @@ var palabrasJava = map[string]bool{
 var simbolesJava = []string{
 	"...", ">>>=", ">>=", "<<=", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=",
 	"&=", "|=", "^=", ">>>", ">>", "<<", "++", "--",
-	"{", "}", "(", ")", "[", "]", ";", ",", ".", "=", ">", "<", "!", "+", "-", "*", "/", "&", "|", "^", ":", "@", "%",
+	"{", "}", "(", ")", "[", "]", ";", ",", ".", "=", ">", "<", "!", "+", "-", "*", "/", "&", "|", "^", ":", "@", "%", "?",
 }
 
 // tokenizarJava parte el fuente. Hay una garantia en el final del bucle: si una vuelta no consumio
@@ -1539,8 +1552,8 @@ func (a *analizadorJava) tipoDeClausula() (string, []tipoArgumento, error) {
 }
 
 // argumentosDeTipo lee `<>` si está: el nombre del fuente, los corchetes del arreglo y los suyos
-// propios, que van anidados (`T<U,V>`, `List<List<String>>`). Los comodines no están medidos y se
-// rechazan al tokenizar el `?`; los tipos primitivos se rechazan en el emisor al resolverlos.
+// propios, que van anidados (`T<U,V>`, `List<List<String>>`). Los comodines entran como argumento
+// desde §241 (`AdapterView<?>`); los tipos primitivos se rechazan en el emisor al resolverlos.
 func (a *analizadorJava) argumentosDeTipo() ([]tipoArgumento, error) {
 	if !a.es('p', "<") {
 		return nil, nil
@@ -1588,8 +1601,50 @@ func (a *analizadorJava) argumentosDeTipoDelNuevo() error {
 	return err
 }
 
-// argumentoDeTipo lee un tipo con sus corchetes y, si los tiene, sus propios argumentos.
+// argumentoDeTipo lee un tipo con sus corchetes y, si los tiene, sus propios argumentos, o un comodín.
 func (a *analizadorJava) argumentoDeTipo() (tipoArgumento, error) {
+	// el comodín solo cabe como argumento de tipo (`AdapterView<?>`); como tipo declarado Java no lo
+	// admite, así que no hace falta leerlo en ningún otro sitio
+	if a.es('p', "?") {
+		return a.comodinDeTipo()
+	}
+	return a.argumentoDeTipoSinComodin()
+}
+
+// leeComodinesDeTipo es el interruptor de la sonda de los comodines: apagado, el parser rechaza el
+// `?` con el mensaje literal que el usuario leyó antes de §241 —«el caracter '?' no es de este
+// subconjunto»—. Lo usa la falsificación de `javaemisor_comodin_test.go`; encendido en el binario que
+// se publica.
+var leeComodinesDeTipo = true
+
+// comodinDeTipo lee `?`, `? extends T` o `? super T`. El signo que se guarda es el que la `Signature`
+// escribe delante de la cota (JVMS 4.7.9.1): `*` sin cota, `+` para `extends` y `-` para `super`.
+func (a *analizadorJava) comodinDeTipo() (tipoArgumento, error) {
+	t := a.actual()
+	a.avanzar()
+	if !leeComodinesDeTipo {
+		return tipoArgumento{}, fmt.Errorf("linea %d: el caracter '?' no es de este subconjunto", t.donde.linea)
+	}
+	arg := tipoArgumento{comodin: '*'}
+	if a.es('k', "extends") || a.es('k', "super") {
+		signo := byte('+')
+		if a.actual().valor == "super" {
+			signo = '-'
+		}
+		a.avanzar()
+		// la cota es un tipo, nunca otro comodín: `? extends ?` no es Java
+		cota, err := a.argumentoDeTipoSinComodin()
+		if err != nil {
+			return tipoArgumento{}, err
+		}
+		arg.comodin = signo
+		arg.cota = &cota
+	}
+	return arg, nil
+}
+
+// argumentoDeTipoSinComodin lee un tipo con sus corchetes y, si los tiene, sus propios argumentos.
+func (a *analizadorJava) argumentoDeTipoSinComodin() (tipoArgumento, error) {
 	nombre, err := a.nombrePunto()
 	if err != nil {
 		return tipoArgumento{}, err
@@ -2309,7 +2364,16 @@ func (a *analizadorJava) pareceDeclaracion() bool {
 
 // expresion lee una expresion con su cadena de accesos y llamadas.
 func (a *analizadorJava) expresion() (jexpr, error) {
-	return a.expresionBinaria(0)
+	e, err := a.expresionBinaria(0)
+	if err != nil {
+		return nil, err
+	}
+	// el `?` que sigue a una expresión es el del ternario, que no es de este subconjunto. El de los
+	// argumentos de tipo no llega aquí: lo consume `argumentoDeTipo` dentro de los `<>` (§241).
+	if t := a.actual(); t.kind == 'p' && t.valor == "?" {
+		return nil, fmt.Errorf("linea %d: el ternario no es de este subconjunto", t.donde.linea)
+	}
+	return e, nil
 }
 
 // precedencias: las que usa este subconjunto, medidas con el emisor. El `%` entra porque su `irem` esta

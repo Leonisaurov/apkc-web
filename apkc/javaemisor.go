@@ -1107,8 +1107,19 @@ func (ctx *contextoJava) firmaDeClausula(nombre string, args []tipoArgumento) (s
 
 // firmaDeArgumento: un tipo declarado o un argumento de tipo. Un arreglo se escribe con sus `[`
 // delante, como en el descriptor (`List<Apk>[]` es `[Ljava/util/List<…>;`); un argumento genérico
-// anida sus propios argumentos (`List<List<String>>`).
+// anida sus propios argumentos (`List<List<String>>`). Un comodín se escribe como manda la JVMS
+// 4.7.9.1: `*` para `?`, `+` delante de la cota de `? extends T` y `-` delante de la de `? super T`.
 func (ctx *contextoJava) firmaDeArgumento(t tipoArgumento) (string, error) {
+	if t.comodin != 0 {
+		if t.cota == nil {
+			return "*", nil
+		}
+		cota, err := ctx.firmaDeArgumento(*t.cota)
+		if err != nil {
+			return "", err
+		}
+		return string(t.comodin) + cota, nil
+	}
 	firma, err := ctx.firmaDeClausula(t.nombre, t.args)
 	if err != nil {
 		return "", err
