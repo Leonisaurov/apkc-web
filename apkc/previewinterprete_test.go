@@ -13,7 +13,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -1517,12 +1516,12 @@ func TestElPreviewOnClickProgramaticoGanaAlDelLayout(t *testing.T) {
 	}
 }
 
-// TestElPreviewClicNumeroTreintaYTresNoSeEntrega fija el tope de `--pulsar` en el lado Go: con 33
-// clics pedidos se entregan 32, el 33 se avisa en vez de recortarse en silencio y el comando no
-// devuelve error ni se cuelga. La pestaña tiene que mandar como mucho el mismo número (D7).
-func TestElPreviewClicNumeroTreintaYTresNoSeEntrega(t *testing.T) {
+// TestElPreviewNoTieneTopeDeClics fija que el emulador se porte como un dispositivo: no hay un
+// número máximo de pulsaciones. Con 100 clics se entregan los 100, el texto llega a «Pulsos: 100»
+// y no se avisa de ningún recorte.
+func TestElPreviewNoTieneTopeDeClics(t *testing.T) {
 	apk := apkDelContador(t, fuentesDelContador(t)...)
-	pedidos := make([]string, pulsacionesMaximas+1)
+	pedidos := make([]string, 100)
 	for i := range pedidos {
 		pedidos[i] = "id/pulsar"
 	}
@@ -1530,17 +1529,16 @@ func TestElPreviewClicNumeroTreintaYTresNoSeEntrega(t *testing.T) {
 	if err != nil {
 		t.Fatalf("los %d clics devolvieron error: %v", len(pedidos), err)
 	}
-	if len(m.Ejecucion.Pulsaciones) != pulsacionesMaximas {
-		t.Errorf("se entregaron %d clics y el tope es %d", len(m.Ejecucion.Pulsaciones), pulsacionesMaximas)
+	if len(m.Ejecucion.Pulsaciones) != len(pedidos) {
+		t.Errorf("se entregaron %d clics de %d", len(m.Ejecucion.Pulsaciones), len(pedidos))
 	}
-	if m.Ejecucion.Interacciones != pulsacionesMaximas {
-		t.Errorf("las interacciones son %d y el tope es %d", m.Ejecucion.Interacciones, pulsacionesMaximas)
+	if m.Ejecucion.Interacciones != len(pedidos) {
+		t.Errorf("las interacciones son %d y debían ser %d", m.Ejecucion.Interacciones, len(pedidos))
 	}
-	tope := fmt.Sprintf("tope de %d", pulsacionesMaximas)
-	if !strings.Contains(strings.Join(m.Ejecucion.Avisos, "\n"), tope) {
-		t.Errorf("el clic que sobra no se avisó con %q: %v", tope, m.Ejecucion.Avisos)
+	if avisos := strings.Join(m.Ejecucion.Avisos, "\n"); strings.Contains(avisos, "tope") {
+		t.Errorf("no debería haber aviso de tope: %v", m.Ejecucion.Avisos)
 	}
-	if got := m.Raiz.Hijos[0].TextoDinamico; got != fmt.Sprintf("Pulsos: %d", pulsacionesMaximas) {
-		t.Errorf("tras el tope el texto es %q", got)
+	if got := m.Raiz.Hijos[0].TextoDinamico; got != "Pulsos: 100" {
+		t.Errorf("tras 100 clics el texto es %q", got)
 	}
 }

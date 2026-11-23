@@ -38,21 +38,12 @@ import (
 
 const (
 	pasosMaximos = 200000
-	// capturasMaximas deja sitio a las tres capturas que genera cada clic del contador del studio
-	// (TextView.setText, Log.d y println, medido con una sonda de 30 clics) más las del arranque:
-	// 32 clics × 3 = 96, que caben en 128. Antes era 64 y el texto se congelaba en el clic 23.
-	capturasMaximas = 4 * pulsacionesMaximas
-	avisosMaximos   = 24
+	avisosMaximos = 24
 	profundidadMaximaDalvik = 48
-	// pulsacionesMaximas acota la lista de `--pulsar`: un clic de más no puede encadenar una
-	// ejecución sin fin, y el tope se avisa en vez de recortar en silencio.
-	pulsacionesMaximas = 32
-	// pantallasMaximas es el tope simétrico del otro bucle: una actividad que en su `onCreate`
-	// lanza a otra y esa a la primera encadenaría pantallas sin fin. Al llegar al tope se avisa y
-	// se deja delante la última que sí arrancó.
-	pantallasMaximas = 32
-	// consolaMaximas acota las líneas de consola, con el mismo criterio que las capturas.
-	consolaMaximas = 128
+	// pantallasMaximas no es un límite de uso: es la única salvaguarda ante una app que se abre a
+	// sí misma en onCreate sin parar. Un dispositivo acabaría agotando memoria; aquí se avisa y se
+	// deja delante la última que arrancó. Los clics del usuario no tienen tope.
+	pantallasMaximas = 1024
 	// filasMaximas acota las filas que se piden al adaptador de un ListView: una lista de cientos
 	// de elementos no es lo que esta fase pinta, y el recorte se avisa en vez de callarse.
 	filasMaximas = 50
@@ -573,13 +564,10 @@ func (m *maquinaDalvik) captura(origen string, obj *objetoDalvik, texto string) 
 		}
 	}
 	if esOrigenDeConsola(origen) {
-		// la consola no se recorta con el tope de las capturas: son dos acotas distintas
 		m.anotaConsola(origen, texto)
 	}
-	if len(m.capturas) >= capturasMaximas {
-		m.avisa("se dejaron capturas sin registrar por el tope de %d", capturasMaximas)
-		return
-	}
+	// Sin tope: cada escritura se conserva, como en un dispositivo. El estado que ve el usuario
+	// siempre es el último, y el registro permite reconstruir toda la ejecución.
 	m.capturas = append(m.capturas, c)
 }
 
@@ -597,9 +585,6 @@ func esOrigenDeConsola(origen string) bool {
 // anotaConsola apila una línea con su secuencia de emisión. No se inventa la hora: el orden es lo
 // que se puede medir dentro de una ejecución y lo que hace determinista el JSON.
 func (m *maquinaDalvik) anotaConsola(origen, texto string) {
-	if len(m.consola) >= consolaMaximas {
-		return
-	}
 	m.consola = append(m.consola, lineaConsola{Origen: origen, Texto: texto, Secuencia: len(m.consola) + 1})
 }
 
@@ -899,19 +884,13 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 	// navegación: la siguiente va a la pantalla que quedó delante.
 	var errPulsos error
 	if res.Error == "" {
-		entregados := 0
 		for _, orden := range ordenes {
-			if entregados >= pulsacionesMaximas {
-				m.avisa("se dejaron órdenes sin entregar por el tope de %d", pulsacionesMaximas)
-				break
-			}
 			pedido := orden.Valor
 			if orden.Tipo == ordenRecrearTipo {
 				if err := recreaActual(); err != nil {
 					errPulsos = err
 					break
 				}
-				entregados++
 				estabiliza()
 				continue
 			}
@@ -921,7 +900,6 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 					break
 				}
 				res.Pulsaciones = append(res.Pulsaciones, pedido)
-				entregados++
 				estabiliza()
 				continue
 			}
@@ -939,7 +917,6 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 					break
 				}
 				res.Pulsaciones = append(res.Pulsaciones, pedido)
-				entregados++
 				estabiliza()
 				continue
 			}
@@ -954,7 +931,6 @@ func ejecutaOnCreateConOrdenes(d *dexFile, tabla *tablaRecursos, actividad strin
 				break
 			}
 			res.Pulsaciones = append(res.Pulsaciones, orden.Valor)
-			entregados++
 			estabiliza()
 		}
 	}
