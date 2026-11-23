@@ -5921,7 +5921,7 @@ func (e *emisor) stm(s jstmt) error {
 				e.cargaDelDuenio(dueño)
 				enPila = 2
 			}
-			dv, err := e.exp(v.valor)
+			dv, err := e.expA(v.valor, cr.desc)
 			if err != nil {
 				e.baja(enPila - 1)
 				return err
@@ -5946,7 +5946,7 @@ func (e *emisor) stm(s jstmt) error {
 			}
 			e.cargaDelDuenio(dueño)
 		}
-		dv, err := e.exp(v.valor)
+		dv, err := e.expA(v.valor, cr.desc)
 		if err != nil {
 			if !esEstatico {
 				e.baja(1) // el receptor que ya se habia contado

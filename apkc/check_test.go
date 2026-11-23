@@ -335,6 +335,33 @@ func TestCheckColumnaEnCaracteres(t *testing.T) {
 // TestCheckBloqueSinCerrarApuntaALaUltimaLinea: una llave sin cerrar se atribuye al fin de fichero, y
 // ese token tiene que estar en la **última línea con contenido**. Antes se contaba la línea que hay
 // tras el salto final, y el usuario veía la marca una línea por debajo del `}` que sí está escrito.
+// fuenteNuloEnCampo: el error del usuario, `icon = null;` donde `icon` es un campo de tipo Drawable.
+// El literal null no tiene tipo propio: en un hueco de referencia debe tomar el del campo, no Object.
+const fuenteNuloEnCampo = `package com.hola.apkcstudio;
+
+import android.graphics.drawable.Drawable;
+
+public class Apk {
+    private Drawable icon;
+
+    public Apk() {
+        icon = null;
+    }
+}
+`
+
+// TestCheckAsignacionNulaAUnCampo fija que asignar null a un campo de referencia no deje error.
+func TestCheckAsignacionNulaAUnCampo(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteNuloEnCampo, "Apk.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("`icon = null;` da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
 func TestCheckBloqueSinCerrarApuntaALaUltimaLinea(t *testing.T) {
 	raiz, _ := proyectoDeCheck(t)
 	// cinco líneas de contenido y un salto final: el `}` de x() está en la 5 y la clase queda abierta
