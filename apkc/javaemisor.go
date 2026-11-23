@@ -26,6 +26,7 @@ import (
 	"archive/zip"
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math"
 	"os"
@@ -347,26 +348,28 @@ type buscadorDeClases struct {
 }
 
 func abrirBuscador(rutaJar string) (*buscadorDeClases, error) {
-	b := &buscadorDeClases{indice: map[string]entradaJar{}, cache: map[string]*classFull{}}
-	indice, cacheado := leerIndiceDelJar(rutaJar)
-	if !cacheado {
-		propio, err := directorioCentralDelJar(rutaJar)
-		if err != nil {
-			// zip64 o un zip con prefijo: lo lee el archive/zip de siempre, que ya sabe de esas formas
-			return abrirBuscadorConZip(rutaJar)
+	// una sola lectura del directorio central: su digest decide si la caché vale, y si no vale sus
+	// bytes son los que se parsean
+	directorio, tamano, cuenta, err := leeDirectorioCentral(rutaJar)
+	if err == nil {
+		huella := crc32.ChecksumIEEE(directorio)
+		indice, cacheado := leerIndiceDelJar(rutaJar, tamano, huella)
+		if !cacheado {
+			propio, err := parseaDirectorioCentral(directorio, cuenta)
+			if err == nil {
+				indice = propio
+				escribirIndiceDelJar(rutaJar, tamano, huella, indice)
+			}
 		}
-		indice = propio
+		if indice != nil {
+			if archivo, err := os.Open(rutaJar); err == nil {
+				return &buscadorDeClases{archivo: archivo, indice: indice, cache: map[string]*classFull{}}, nil
+			}
+		}
 	}
-	archivo, err := os.Open(rutaJar)
-	if err != nil {
-		return abrirBuscadorConZip(rutaJar)
-	}
-	b.archivo = archivo
-	b.indice = indice
-	if !cacheado {
-		escribirIndiceDelJar(rutaJar, indice)
-	}
-	return b, nil
+	// zip64, un zip con prefijo o un directorio central roto: lo lee el archive/zip de siempre, que ya
+	// sabe de esas formas
+	return abrirBuscadorConZip(rutaJar)
 }
 
 // abrirBuscadorConZip es el camino de siempre, el que archive/zip resuelve solo. Se queda como

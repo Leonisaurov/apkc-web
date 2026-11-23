@@ -129,10 +129,13 @@ type Data struct {
 	// that answer (classRosterSHA).
 	ClassRoster string `json:"classRoster,omitempty"`
 	// AndroidJar is the fingerprint of the android.jar the classes were emitted
-	// against: its path, its size and its date (huellaDelJarTexto). The emitter
-	// resolves every name of the project against that jar, so another jar can change
-	// the classes with no source moving, and nothing else in this table notices: the
-	// digest of jar/ is the dex of the dependencies, a different stage. A state
+	// against: its path, its size and the CRC-32 of its central directory
+	// (huellaDelJarTexto), never its date. The emitter resolves every name of the
+	// project against that jar, so another jar can change the classes with no source
+	// moving, and nothing else in this table notices: the digest of jar/ is the dex of
+	// the dependencies, a different stage. The date is left out on purpose: a stat
+	// date is not content, and the browser host used to hand out a synthetic one that
+	// moved on every reload, which cost a full recompilation for nothing. A state
 	// written before this field existed has none, which reads as "another jar" and
 	// costs exactly one recompilation.
 	AndroidJar string `json:"androidJar,omitempty"`

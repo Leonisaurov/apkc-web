@@ -2,7 +2,8 @@
 
 **Estado: I1 e I2 hechas; I3 cerrada en `d3803bb` tras el APROBAR del crítico; I4 hecha en el
 camino nativo (dex idéntico y `dex go` 100 → 45 ms), con el gate pendiente; I5 medida (ahorra
-82-92 ms por build en wasm, por debajo del criterio de ≥100 ms) y no cerrada.** `--inc` está activo
+80-92 ms por build en wasm, por debajo del criterio de ≥100 ms) y no cerrada.** La huella del jar es
+ruta + tamaño + CRC-32 del directorio central, nunca la fecha. `--inc` está activo
 en la pestaña y el ahorro se midió en chromium/OPFS; el cuello que queda está en compilar y dexar.
 Este fichero es un plan con mediciones: cada cifra lleva el comando que la reproduce (regla 1 del
 `AGENTS.md`). Lo que no se pudo medir está en «Lo que no se midió» y no se usa para decidir.
@@ -20,7 +21,7 @@ propio. Las mediciones se hicieron en el worktree `incremental-web` de la rama `
 | I3, reutilizar las clases emitidas por hash | **cerrada en `d3803bb` (APROBAR del crítico)** | gate + `go test -count=1 ./...` con `APKC_ANDROID_JAR=…` | `compile go` 390 ms → 0 y `dex go` 106 → 0 en wasm (criterio: ≥30 %), dex idéntico; en nativo el atajo se paga en parte por el estado más grande (véase I3) |
 | I3, caché de AST por fuente dentro del proceso | **descartada por estructura** | `studio/hospedador.js:240` | cada comando de la página arranca una instancia nueva de Go: ninguna caché en memoria cruza dos builds |
 | I4, dexado por clase | **hecha en nativo, gate pendiente** | `sh banco/incremental.sh` (bloque «dex por clase») y `go test -count=1 -run TestDexadoPorClaseReutilizaYNoCambiaUnByte .` | `cmp` mudo entre la vuelta caliente y el dexado completo del mismo árbol; `dex go` 100 → 45 ms con 244 clases y 1875 `code_item` (1866 reutilizados tras editar un fuente); el dex no cambia ni un byte |
-| I5, índice del `android.jar` entre pasadas | **medida, por debajo del criterio** | `TestIndiceDelJarMideElAhorro` en el shim con el jar montado, tres procesos nuevos | 82-92 ms menos por build (criterio ≥100 ms, abandono <50 ms): el zip cuesta 90-100 ms la primera pasada y 57-75 en régimen, y con la caché puesta son 4,0-7,5 ms |
+| I5, índice del `android.jar` entre pasadas | **medida, por debajo del criterio** | `TestIndiceDelJarMideElAhorro` en el shim con el jar montado, tres procesos nuevos | 80-92 ms menos por build (criterio ≥100 ms, abandono <50 ms): el zip cuesta 88-102 ms la primera pasada y 51-71 en régimen, y con la caché puesta son 4,4-10,2 ms. La huella es ruta + tamaño + CRC-32 del directorio central, no la fecha |
 
 
 ## Estado anterior (lo que el plan encontró)
@@ -306,18 +307,28 @@ mismo banco como comando.
 
 `abrirBuscador` (`apkc/javaemisor.go:349`) recorría el zip del `android.jar` en cada build: 13 968
 entradas de directorio central, 5 720 de ellas clases. Ahora el directorio se lee en una pasada propia
-(`apkc/jarindice.go`) y se deja en `build/jarindice.bin` con la huella del jar —ruta, tamaño y fecha—
-en la cabecera; la vuelta siguiente lee ese fichero de 230 KB y no abre el zip. Si la huella no cuadra,
-si el fichero está truncado o si el zip es zip64 se vuelve a recorrer el directorio, y si el lector
-propio no puede se cae al `archive/zip` de siempre, que es también el oráculo de la prueba
+(`apkc/jarindice.go`) y se deja en `build/jarindice.bin` con la huella del jar en la cabecera; la
+vuelta siguiente lee ese fichero de 230 KB y no parsea el zip. Si la huella no cuadra, si el fichero
+está truncado o si el zip es zip64 se vuelve a recorrer el directorio, y si el lector propio no puede
+se cae al `archive/zip` de siempre, que es también el oráculo de la prueba
 (`TestDirectorioCentralDelJarContraArchiveZip`: mismas 5 720 entradas, método, tamaño y CRC, y una
 muestra de 24 clases byte a byte).
+
+**La huella es ruta + tamaño + CRC-32 del directorio central, nunca la fecha.** El crítico de I5
+encontró que la fecha no es un dato del contenido: el hospedador de la pestaña devolvía una sintética
+que cambiaba en cada recarga, así que con ella se reindexaba y `clasesAlDia()` recompilaba el proyecto
+entero por nada. El directorio central es exactamente lo que el índice guarda —nombres, offsets,
+tamaños, CRC y método de cada entrada—, y su CRC cambia cuando cambia algo de lo que el índice
+depende. Es un CRC-32 y no un SHA-1 porque el SHA-1 del directorio cuesta 8 ms por build en wasm y el
+CRC 1 ms (medido); aquí el digest no autentica, distingue contenido, y una colisión no puede servir
+bytes equivocados porque cada entrada se comprueba contra su CRC al leerla.
 
 La caché se invalida con el jar, no solo con los fuentes. Además de la cabecera de
 `build/jarindice.bin`, la huella entra en `build/incremental.json` (`Data.AndroidJar`) y
 `clasesAlDia()` la exige, así que cambiar el classpath tira también las clases reutilizadas de I3 —
-la pregunta abierta de su crítico. Un estado escrito antes de este campo no lo tiene, lo que se lee
-como «otro jar» y cuesta una recompilación.
+la pregunta abierta de su crítico. El límite que queda, dicho explícito: un jar **reescrito con los
+mismos bytes** no invalida nada, porque no hay nada que recompilar; y la huella no es criptográfica,
+así que una colisión de CRC-32 entre dos jars distintos se leería como «el mismo jar» (una entre cuatro mil millones por cambio, y el dex del proyecto se comprueba por bytes en las pruebas de I3).
 
 Comando, en el hospedador de Node con el jar montado en `/sdk/android.jar`. Tres procesos: cada
 comando de la pestaña arranca una instancia nueva de Go, así que la primera pasada de un proceso es la
@@ -333,26 +344,31 @@ Milisegundos, tres procesos, en el orden en que los imprime la prueba:
 
 | vuelta | `archive/zip` (como antes) | lector propio, caché vacía | caché puesta |
 | --- | --- | --- | --- |
-| 1.ª de un proceso nuevo | 90,4 / 99,9 / 89,6 | 25,7 / 22,7 / 23,0 | 7,5 / 7,5 / 7,6 |
-| mediana de tres vueltas | 65,2 / 74,5 / 70,6 | 12,4 / 13,5 / 11,5 | 4,0 / 4,4 / 4,3 |
+| 1.ª de un proceso nuevo | 102,1 / 88,3 / 92,2 | 25,6 / 21,0 / 23,5 | 10,2 / 8,3 / 10,0 |
+| mediana de tres vueltas | 70,7 / 51,4 / 55,2 | 15,7 / 12,9 / 13,2 | 6,0 / 4,4 / 4,5 |
 
-El proyecto mínimo (la plantilla de `apkc create`, `compilarProyectoJava` entero) pasa de 73,6-79,6 ms
-a 28,8-33,3 ms en la primera vuelta de cada proceso.
+El proyecto mínimo (la plantilla de `apkc create`, `compilarProyectoJava` entero) pasa de 66,4-81,5 ms
+a 25,3-34,3 ms en la primera vuelta de cada proceso.
 
-**Lo que da y lo que no.** El ahorro por build es de **82-92 ms** (mediana 83) en la primera pasada de
-un proceso nuevo, y de **61-70 ms** en régimen. El criterio de aceptación era ≥100 ms y **no se
-alcanza**: el techo es el propio zip, que cuesta 90-100 ms la primera vez y 57-75 en régimen, y la
-caché ya se queda en 4-7,5 ms de eso. El umbral de abandono (<50 ms) no se toca. El criterio se fijó
-antes de medir el coste (la medición 1 lo dejaba abierto), y la medición dice que el techo del ahorro
-es el coste del zip. La vía siguiente es medirla en la pestaña, donde el jar vive en OPFS y el zip lee
-1,29 MB de disco contra los 230 KB de la caché: allí el ahorro debería ser mayor que en el shim, donde
-el fichero está en memoria. Ese es el comando de I2 (`studio/prueba-pestana.js`).
+**Lo que da y lo que no.** El ahorro por build es de **80-92 ms** (mediana 82) en la primera pasada de
+un proceso nuevo, y de **47-65 ms** (mediana 51) en régimen. El criterio de aceptación era ≥100 ms y
+**no se alcanza**: el techo es el propio zip, que cuesta 88-102 ms la primera vez y 51-71 en régimen, y
+la caché ya se queda en 4-10 ms de eso. El umbral de abandono (<50 ms) queda justo en el borde en
+régimen y no se toca en la primera pasada, que es la que paga un build de la pestaña. El criterio se
+fijó antes de medir el coste (la medición 1 lo dejaba abierto), y la medición dice que el techo del
+ahorro es el coste del zip. La vía siguiente es medirla en la pestaña, donde el jar vive en OPFS y el
+zip lee 1,29 MB de disco contra los 230 KB de la caché: allí el ahorro debería ser mayor que en el
+shim, donde el fichero está en memoria. Ese es el comando de I2 (`studio/prueba-pestana.js`).
 
-Lo que la prueba cierra además del cronómetro: `TestIndiceDelJarSeReutilizaYSeInvalida` escribe un jar,
-lo abre (deja la caché), lo cambia (otra entrada) y comprueba que el índice se reescribió; después
-rompe el fin de directorio del zip con el mismo tamaño y la misma fecha y comprueba que la vuelta
-siguiente abre igual y lee las clases por el offset guardado —o sea, que no tocó el zip—, y por último
-le cambia la fecha para comprobar que entonces no reutiliza nada.
+Lo que las pruebas cierran además del cronómetro:
+
+- `TestIndiceDelJarSeReutilizaYSeInvalida`: la vuelta con el mismo jar **no parsea** (lo dice el
+  contador `parseosDelDirectorio`, porque por fuera caché y parseo se comportan igual); moverle la
+  fecha al jar no reindexa; un jar con **el mismo tamaño y otra entrada** sí reindexa, y el índice de
+  disco es el del jar nuevo.
+- `TestClasesAlDiaSigueAlContenidoDelJar`: con el estado que deja una compilación, `clasesAlDia()` es
+  cierto; cambiarle la fecha al jar lo deja cierto —la fecha no es contenido— y cambiarle los bytes
+  con el mismo tamaño lo pone en falso, que es el caso que el crítico echaba en falta.
 
 ## Hallazgo del crítico: un recurso nuevo no reenlazaba (arreglado)
 
@@ -473,7 +489,7 @@ analogía.
   hallazgos `CONFIRMADO`; la pregunta abierta del classpath la resolvió I5 (la huella del jar entra en
   `clasesAlDia()`).
 - **I4, dexado por clase (H2). HECHA EN NATIVO, GATE PENDIENTE.** `cmp build/classes.dex` entre el
-  dexado completo y el de la vuelta que reutiliza: **idéntico** (§200 de `docs/evidencia.md`). El
+  dexado completo y el de la vuelta que reutiliza: **idéntico** (§214 de `docs/evidencia.md`). El
   ensamblado tiene offsets absolutos, así que no se parchea el fichero anterior: se guarda por método
   lo que no nombra ningún offset —el `code_item` y el `debug_info_item`— en `build/dexcache.bin`, y
   solo vale mientras las cinco tablas ordenadas sean las mismas (`huellaTablas`); si entra una cadena
@@ -484,15 +500,16 @@ analogía.
   cuerpo que **crece** —las áreas se desplazan y los offsets se recalculan— y clase nueva que mueve
   las tablas) y `TestCacheDexCorruptaCaeAlDexadoCompleto` (caché truncada, de otra versión, con una
   longitud imposible o con un byte cambiado: cae al dexado completo con aviso y el dex sale
-  idéntico; §201). Lo que aún se paga en esta etapa —`leeClases` 11 ms,
+  idéntico; §215). Lo que aún se paga en esta etapa —`leeClases` 11 ms,
   `collectClasses` 13 ms y el ensamblado de las áreas globales— no es I5: I5 es el índice del
   `android.jar` entre pasadas, que ataca a la compilación, no al dex.
 - **I5, índice del `android.jar` entre pasadas (H3). MEDIDA, POR DEBAJO DEL CRITERIO.** El
   directorio central se lee una pasada y se deja en `build/jarindice.bin`; la vuelta siguiente lee ese
-  fichero y no abre el zip. Ahorro: 82-92 ms por build en wasm (mediana 83) y 61-70 ms en régimen;
+  fichero y no parsea el zip. Ahorro: 80-92 ms por build en wasm (mediana 82) y 47-65 ms en régimen;
   aceptación ≥100 ms, abandono <50 ms, así que se queda en medida y no en cerrada. La huella del jar
-  (ruta, tamaño y fecha) invalida la caché **y** las clases reutilizadas de I3, que era la pregunta
-  abierta de su crítico. Detalle en «I5: el índice del `android.jar` entre pasadas».
+  (ruta, tamaño y CRC-32 del directorio central —la fecha no entra: en OPFS era sintética) invalida la
+  caché **y** las clases reutilizadas de I3, que era la pregunta abierta de su crítico. Detalle en
+  «I5: el índice del `android.jar` entre pasadas».
 
 ## Fronteras (lo que este plan no promete)
 

@@ -65,26 +65,10 @@ func leeEntrada(t *testing.T, b *buscadorDeClases, interno string) []byte {
 	return datos
 }
 
-// rompeElFinDelDirectorio destruye la firma del fin del directorio central sin tocar el tamaño: es la
-// forma de preguntar si un `abrirBuscador` leyó el zip o se creyó la caché.
-func rompeElFinDelDirectorio(t *testing.T, ruta string) {
-	t.Helper()
-	datos, err := os.ReadFile(ruta)
-	if err != nil {
-		t.Fatal(err)
-	}
-	i := bytes.LastIndex(datos, firmaFinDirectorio)
-	if i < 0 {
-		t.Fatal("el jar de la prueba no tiene fin de directorio")
-	}
-	copy(datos[i:i+4], []byte("\x00\x00\x00\x00"))
-	if err := os.WriteFile(ruta, datos, 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestIndiceDelJarSeReutilizaYSeInvalida cierra la mitad de I5 que no es el cronómetro: la vuelta sin
-// cambios lee el índice de build/jarindice.bin, y un jar con otros bytes —u otra fecha— lo tira.
+// cambios lee el índice de build/jarindice.bin sin volver a parsear el directorio central, otra fecha
+// con los mismos bytes no la tira, y un jar con otros bytes sí. El contador del parser es lo único que
+// distingue «salió de la caché» de «volvió a parsear»: por fuera se comportan igual.
 func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 	raiz := t.TempDir()
 	t.Chdir(raiz)
@@ -116,14 +100,95 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 		t.Fatalf("la primera vuelta no dejó el índice en %s: %v", ficheroIndiceDelJar, err)
 	}
 
-	// otro jar con otra entrada: el tamaño cambia, así que la caché no vale y hay que reindexar
+	// la vuelta con el mismo jar no parsea nada: la sirve el fichero, y las clases salen igual
+	antes := parseosDelDirectorio
+	b, err = abrirBuscador(jar)
+	if err != nil {
+		t.Fatalf("la segunda vuelta no abre: %v", err)
+	}
+	if parseosDelDirectorio != antes {
+		t.Fatal("con el mismo jar la vuelta siguiente volvió a parsear el directorio central")
+	}
+	if !b.hayEnElJar("p/A") || !b.hayEnElJar("p/B") {
+		t.Fatalf("el índice cacheado no tiene las clases del jar: %v", b.indice)
+	}
+	if datos := leeEntrada(t, b, "p/A"); !bytes.Equal(datos, []byte{1, 2, 3, 4, 5}) {
+		t.Fatalf("la entrada cacheada no son sus bytes: %v", datos)
+	}
+	b.cerrar()
+
+	// la fecha del jar no es contenido: moverla no puede reindexar ni, menos aún, recompilar
+	fija := time.Unix(1700000000, 0)
+	if err := os.Chtimes(jar, fija, fija); err != nil {
+		t.Fatal(err)
+	}
+	antes = parseosDelDirectorio
+	b, err = abrirBuscador(jar)
+	if err != nil {
+		t.Fatalf("el jar con otra fecha no abre: %v", err)
+	}
+	if parseosDelDirectorio != antes {
+		t.Fatal("otra fecha con los mismos bytes no puede tirar el índice")
+	}
+	b.cerrar()
+
+	// otros bytes con el mismo tamaño sí: se reescribe una entrada con la misma longitud y la caché
+	// no puede valer, porque su CRC vive en el directorio central
+	antesDe, err := os.Stat(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jarDePrueba(t, jar, map[string][]byte{
+		"p/A.class":            {9, 9, 9, 9, 9},
+		"p/B.class":            {6, 7, 8},
+		"META-INF/MANIFEST.MF": []byte("Manifest-Version: 1.0\n"),
+	})
+	despuesDe, err := os.Stat(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if antesDe.Size() != despuesDe.Size() {
+		t.Fatalf("la prueba necesita el mismo tamaño para probar el contenido: %d y %d",
+			antesDe.Size(), despuesDe.Size())
+	}
+	antes = parseosDelDirectorio
+	b, err = abrirBuscador(jar)
+	if err != nil {
+		t.Fatalf("el jar con otros bytes no abre: %v", err)
+	}
+	if parseosDelDirectorio == antes {
+		t.Fatal("un jar con los mismos bytes en tamaño y otra entrada no puede reutilizar el índice")
+	}
+	if datos := leeEntrada(t, b, "p/A"); !bytes.Equal(datos, []byte{9, 9, 9, 9, 9}) {
+		t.Fatalf("la entrada reindexada no son los bytes nuevos: %v", datos)
+	}
+	b.cerrar()
+
+	// y el índice en disco es el del jar nuevo
+	tamano, digest, err := huellaDelJar(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	indice, ok := leerIndiceDelJar(jar, tamano, digest)
+	if !ok {
+		t.Fatal("el índice reindexado no se puede volver a leer")
+	}
+	if len(indice) != 2 {
+		t.Fatalf("el índice en disco no es el del jar nuevo: %v", indice)
+	}
+
+	// otro jar con otra entrada: se ve en el índice y se reindexa
 	jarDePrueba(t, jar, map[string][]byte{
 		"p/A.class": {1, 2, 3, 4, 5},
 		"p/C.class": {9},
 	})
+	antes = parseosDelDirectorio
 	b, err = abrirBuscador(jar)
 	if err != nil {
-		t.Fatalf("el segundo jar no abre: %v", err)
+		t.Fatalf("el tercer jar no abre: %v", err)
+	}
+	if parseosDelDirectorio == antes {
+		t.Fatal("un jar con otras entradas tiene que reindexarse")
 	}
 	if b.hayEnElJar("p/B") {
 		t.Fatal("el índice sigue teniendo una clase que ya no está en el jar")
@@ -132,55 +197,6 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 		t.Fatal("el índice no tiene la clase que se añadió al jar")
 	}
 	b.cerrar()
-	indice, ok := leerIndiceDelJar(jar)
-	if !ok {
-		t.Fatal("el índice reindexado no se puede volver a leer")
-	}
-	if _, hay := indice["p/C"]; !hay {
-		t.Fatalf("el índice en disco no se reescribió con el jar nuevo: %v", indice)
-	}
-	if _, hay := indice["p/B"]; hay {
-		t.Fatal("el índice en disco conserva la clase que se borró del jar")
-	}
-
-	// con la misma huella (mismo tamaño y misma fecha) la vuelta siguiente no necesita el zip: se
-	// rompe su fin de directorio y, aun así, el índice abre y lee las clases. La fecha se fija a un
-	// segundo exacto porque el sistema de ficheros simulado del hospedador guarda milisegundos y un
-	// `Chtimes` con la fecha que él mismo dio no siempre la devuelve igual.
-	fija := time.Unix(1700000000, 0)
-	if err := os.Chtimes(jar, fija, fija); err != nil {
-		t.Fatal(err)
-	}
-	b, err = abrirBuscador(jar)
-	if err != nil {
-		t.Fatalf("el jar con la fecha fija no abre: %v", err)
-	}
-	b.cerrar()
-	rompeElFinDelDirectorio(t, jar)
-	if err := os.Chtimes(jar, fija, fija); err != nil {
-		t.Fatal(err)
-	}
-	b, err = abrirBuscador(jar)
-	if err != nil {
-		t.Fatalf("con la caché buena el jar no debería necesitar su fin de directorio: %v", err)
-	}
-	if !b.hayEnElJar("p/A") || !b.hayEnElJar("p/C") {
-		t.Fatalf("el índice cacheado no tiene las clases del jar: %v", b.indice)
-	}
-	if datos := leeEntrada(t, b, "p/A"); !bytes.Equal(datos, []byte{1, 2, 3, 4, 5}) {
-		t.Fatalf("la entrada cacheada no son sus bytes: %v", datos)
-	}
-	b.cerrar()
-
-	// y la fecha es parte de la huella: el mismo fichero con otra fecha no reutiliza nada, así que
-	// con el zip roto abrir tiene que fallar
-	otra := fija.Add(time.Second)
-	if err := os.Chtimes(jar, otra, otra); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := abrirBuscador(jar); err == nil {
-		t.Fatal("con otra fecha y el zip roto, el índice viejo no puede servir")
-	}
 }
 
 // TestDirectorioCentralDelJarContraArchiveZip comprueba el lector propio contra archive/zip sobre el
@@ -365,6 +381,73 @@ func mediana(v []time.Duration) time.Duration {
 }
 
 func milisegundos(d time.Duration) float64 { return float64(d.Microseconds()) / 1000 }
+
+// TestClasesAlDiaSigueAlContenidoDelJar cierra el defecto del crítico de I5: cambiar el classpath
+// tiene que invalidar las clases reutilizadas de I3 aunque el jar tenga el mismo tamaño, y moverle la
+// fecha no puede invalidarlas, porque la fecha no es contenido y en OPFS la del stat es sintética.
+func TestClasesAlDiaSigueAlContenidoDelJar(t *testing.T) {
+	raiz := t.TempDir()
+	t.Chdir(raiz)
+	jar := filepath.Join(raiz, "android.jar")
+	jarDePrueba(t, jar, map[string][]byte{"p/X.class": {1, 2, 3, 4}})
+	anterior := androidJar
+	androidJar = jar
+	DataTable = Data{}
+	t.Cleanup(func() {
+		androidJar = anterior
+		DataTable = Data{}
+	})
+	// el estado que deja una compilación, sin compilar: un fuente registrado y una clase en
+	// build/classes. Lo que se prueba es la decisión, no el emisor.
+	pon(t, raiz, "src/p/A.java", "package p;\npublic class A {}\n")
+	pon(t, raiz, "build/classes/p/A.class", "\xca\xfe\xba\xbe")
+	updateRecords([]string{"src/p/A.java"})
+	DataTable.ClassRoster = classRosterSHA()
+	DataTable.AndroidJar = huellaDelJarTexto(jar)
+	saveTable()
+	huella := DataTable.AndroidJar
+	if huella == "" {
+		t.Fatal("el jar de la prueba no deja huella")
+	}
+	if !clasesAlDia(huella) {
+		t.Fatal("con el estado que deja una compilación, las clases tienen que estar al día")
+	}
+
+	// la fecha no entra: el mismo jar con otra fecha no puede costar una recompilación entera
+	otra := time.Unix(1700000000, 0)
+	if err := os.Chtimes(jar, otra, otra); err != nil {
+		t.Fatal(err)
+	}
+	if huellaDelJarTexto(jar) != huella {
+		t.Fatal("mover la fecha del jar no puede cambiar su huella")
+	}
+	if !clasesAlDia(huellaDelJarTexto(jar)) {
+		t.Fatal("un jar con los mismos bytes y otra fecha no puede invalidar las clases de I3")
+	}
+
+	// otros bytes con el mismo tamaño sí, que es el caso que faltaba: el CRC de la entrada vive en
+	// el directorio central, así que la huella cambia aunque el fichero mida lo mismo
+	antes, err := os.Stat(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jarDePrueba(t, jar, map[string][]byte{"p/X.class": {9, 9, 9, 9}})
+	despues, err := os.Stat(jar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if antes.Size() != despues.Size() {
+		t.Fatalf("la prueba necesita el mismo tamaño para probar el contenido: %d y %d",
+			antes.Size(), despues.Size())
+	}
+	nueva := huellaDelJarTexto(jar)
+	if nueva == huella {
+		t.Fatal("otra entrada con el mismo tamaño tiene que cambiar la huella del jar")
+	}
+	if clasesAlDia(nueva) {
+		t.Fatal("un jar con otros bytes tiene que invalidar las clases reutilizadas de I3")
+	}
+}
 
 // y que el nombre que se imprime en los fallos del emisor sigue nombrando el jar, no el índice
 func TestIndiceDelJarNombraLaEntradaQueFalta(t *testing.T) {

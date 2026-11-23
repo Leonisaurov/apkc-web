@@ -156,9 +156,15 @@ func revisarCompilerGo(o buildOpts) error {
 // memoria que sobreviva: cada `apkc build` de la página arranca una instancia nueva de Go).
 func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 	defer timeIt("compile go")()
-	if incremental && clasesAlDia() {
-		LogI("build", "ningun fuente cambio: se reutilizan las clases de", filepath.Join("build", "classes"))
-		return nil, false
+	// la huella del jar se calcula una vez por vuelta: es lo que decide si las clases de
+	// build/classes siguen valiendo, y lo que se registra cuando se compilan
+	huellaJar := ""
+	if incremental {
+		huellaJar = huellaDelJarTexto(androidJar)
+		if clasesAlDia(huellaJar) {
+			LogI("build", "ningun fuente cambio: se reutilizan las clases de", filepath.Join("build", "classes"))
+			return nil, false
+		}
 	}
 	fuentes, err := fuentesJava([]string{"src"})
 	if err != nil {
@@ -183,17 +189,18 @@ func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 		// comparar en la vuelta siguiente y el atajo de arriba no se abre nunca
 		updateRecords(nombres)
 		DataTable.ClassRoster = classRosterSHA()
-		DataTable.AndroidJar = huellaDelJarTexto(androidJar)
+		DataTable.AndroidJar = huellaJar
 	}
 	LogI("build", len(nombres), "fuentes de Java en Go ->", len(clases), "clases")
 	return nombres, true
 }
 
 // clasesAlDia responde si las clases de build/classes son exactamente las que el emisor escribiría
-// ahora: cada fuente de src/ conserva los bytes que vio la última compilación y el directorio de clases
-// es el mismo, nombre por nombre y byte por byte, que el que esa compilación dejó. Sin la segunda mitad
-// un build detenido a medias (o un `build/classes` tocado a mano) se creería hecho.
-func clasesAlDia() bool {
+// ahora: cada fuente de src/ conserva los bytes que vio la última compilación, el directorio de clases
+// es el mismo, nombre por nombre y byte por byte, que el que esa compilación dejó, y el classpath es el
+// mismo jar. Sin la segunda mitad un build detenido a medias (o un `build/classes` tocado a mano) se
+// creería hecho. La huella del jar la calcula el llamador porque también la registra al compilar.
+func clasesAlDia(huellaJar string) bool {
 	loadTable()
 	fuentes, _ := getFiles("src", ".java", false)
 	if len(fuentes) == 0 {
@@ -201,8 +208,9 @@ func clasesAlDia() bool {
 	}
 	// el classpath es un dato de la compilación igual que los fuentes: otro jar resuelve los
 	// nombres contra otras clases, así que las de build/classes dejan de estar al día aunque no
-	// haya cambiado ni un byte del proyecto
-	if huellaDelJarTexto(androidJar) != DataTable.AndroidJar {
+	// haya cambiado ni un byte del proyecto. La huella es el tamaño y el digest del directorio
+	// central, no la fecha: una fecha que cambia sola no puede costar una recompilación entera.
+	if huellaJar != DataTable.AndroidJar {
 		return false
 	}
 	for _, fuente := range fuentes {
