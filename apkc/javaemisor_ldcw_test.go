@@ -1,6 +1,6 @@
 package main
 
-// El colector sigue el operando de `ldc_w` (§201). javac cambia a `ldc_w` (0x13) cuando el índice del
+// El colector sigue el operando de `ldc_w`. javac cambia a `ldc_w` (0x13) cuando el índice del
 // pool pasa de 255, y el inventario del jar de soporte destapó dos clases en las que un `ldc_w` de una
 // `CONSTANT_Class` dejaba el tipo sin internar: `ActionBarDrawerToggleHoneycomb$SetIndicatorInfo.<init>`
 // hacía `ldc_w` de `Landroid/app/ActionBar;` y el dexer se paraba con «the type_id … was never
