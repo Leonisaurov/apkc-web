@@ -52,27 +52,35 @@ func empaquetaSinAapt2(ruta string, entradas []entradaDePaquete, keyPath, storeP
 		plan = append(plan, bundleEntry{src: src, name: e.nombre, compress: !e.sinComprimir})
 	}
 
-	tmp := ruta + ".tmp"
-	out, err := os.Create(tmp)
+	out, tmp, err := abrirTemporalDePaquete(ruta)
 	if err != nil {
 		return err
 	}
+	// el temporal se borra salvo que finishSignedPackage llegue a renombrarlo sobre ruta
+	renombrado := false
+	defer func() {
+		if !renombrado {
+			out.Close()
+			os.Remove(tmp)
+		}
+	}()
 	// ninguna entrada se puede copiar de un paquete anterior: esto es un enlace desde cero
 	reuse := make([]bool, len(plan))
 	records, _, digests, err := writePackageEntries(out, plan, reuse, nil, map[string]string{}, true)
 	if err != nil {
-		out.Close()
 		return err
 	}
 	signer, cert, err := signingKey(keyPath, storePass, keyAlias)
 	if err != nil {
-		out.Close()
 		return err
 	}
 	f, err := firmanteDe(signer, cert)
 	if err != nil {
-		out.Close()
 		return err
 	}
-	return finishSignedPackage(out, tmp, ruta, records, plan, digests, f)
+	if err := finishSignedPackage(out, tmp, ruta, records, plan, digests, f); err != nil {
+		return err
+	}
+	renombrado = true
+	return nil
 }

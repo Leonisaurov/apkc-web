@@ -186,12 +186,18 @@ func resignBundleCon(inPath, finalPath string, f *firmante) (int, error) {
 		reuse[i] = true
 	}
 
-	tmpPath := finalPath + ".tmp"
-	out, err := os.Create(tmpPath)
+	out, tmpPath, err := abrirTemporalDePaquete(finalPath)
 	if err != nil {
 		return 0, err
 	}
-	defer out.Close()
+	// el temporal se borra salvo que el rename final lo convierta en el paquete de salida
+	renombrado := false
+	defer func() {
+		if !renombrado {
+			out.Close()
+			os.Remove(tmpPath)
+		}
+	}()
 
 	// El manifiesto va primero: `JarInputStream` lo busca en la primera entrada, y un
 	// bundle que se lee así tiene que encontrarlo. Los datos van detrás, con sus bytes tal
@@ -223,6 +229,7 @@ func resignBundleCon(inPath, finalPath string, f *firmante) (int, error) {
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		return 0, err
 	}
+	renombrado = true
 	return carried, nil
 }
 
@@ -271,12 +278,18 @@ func resignWithFirmante(inPath, finalPath string, f *firmante) (int, error) {
 		reuse[i] = true
 	}
 
-	tmpPath := finalPath + ".tmp"
-	out, err := os.Create(tmpPath)
+	out, tmpPath, err := abrirTemporalDePaquete(finalPath)
 	if err != nil {
 		return 0, err
 	}
-	defer out.Close()
+	// el temporal se borra salvo que finishSignedPackage llegue a renombrarlo sobre finalPath
+	renombrado := false
+	defer func() {
+		if !renombrado {
+			out.Close()
+			os.Remove(tmpPath)
+		}
+	}()
 
 	records, carried, written, err := writePackageEntries(out, plan, reuse, pkg, digests, true)
 	if err != nil {
@@ -285,6 +298,7 @@ func resignWithFirmante(inPath, finalPath string, f *firmante) (int, error) {
 	if err := finishSignedPackage(out, tmpPath, finalPath, records, plan, written, f); err != nil {
 		return 0, err
 	}
+	renombrado = true
 	return carried, nil
 }
 

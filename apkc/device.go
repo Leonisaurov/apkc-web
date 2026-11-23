@@ -550,7 +550,19 @@ func watch() {
 		// run installs an apk, a bundle is not installable as is
 		LogW("watch", "--aab is ignored with --run, building apk instead")
 	}
-	args = append(args, "--keystore", o.keyStore, "--storepass", o.storePass,
+	// La contraseña no viaja en la línea de órdenes del hijo: se deja en un fichero de solo el
+	// dueño y se le pasa la forma file:<ruta> que ya entiende el propio build. El temporal vive
+	// lo que vive el vigilante y se borra al salir.
+	password, err := resolverPassword(o.storePass)
+	if err != nil {
+		LogF("watch", err)
+	}
+	rutaPassword, err := escribirPasswordTemporal("apkc-storepass-*", password)
+	if err != nil {
+		LogF("watch", err)
+	}
+	defer os.Remove(rutaPassword)
+	args = append(args, "--keystore", o.keyStore, "--storepass", "file:"+rutaPassword,
 		"--keyalias", o.keyAlias, "--sigalg", o.sigAlg)
 
 	self, err := os.Executable()

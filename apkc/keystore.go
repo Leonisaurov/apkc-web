@@ -25,6 +25,12 @@ func isJKSHead(head []byte) bool {
 // certificate that has to travel inside the signature block, so the platform can
 // match the package against the signing identity on update.
 func signingKey(path, password, alias string) (crypto.Signer, *x509.Certificate, error) {
+	// la contraseña puede llegar como "file:<ruta>", la forma que usa apksigner y la que deja el
+	// vigilante al hijo para no escribirla en su línea de órdenes
+	password, err := resolverPassword(password)
+	if err != nil {
+		return nil, nil, err
+	}
 	blob, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err

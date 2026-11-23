@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 )
@@ -43,11 +44,34 @@ func signAPK(keyStore, storePass, keyAlias string) {
 	defer timeIt("apksigner")()
 	LogI("build", "signing app")
 
-	cmd := exec.Command(apksignerPath, "sign", "--ks-pass", "pass:"+storePass, "--ks", keyStore, "--ks-key-alias", keyAlias, filepath.Join("build", "app.apk"))
+	args, borrarPassword, err := argumentosDeFirma(keyStore, storePass, keyAlias)
+	if err != nil {
+		LogF("build", err)
+	}
+	defer borrarPassword()
+
+	cmd := exec.Command(apksignerPath, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		LogF("build", toolFailure("apksigner", out, err), apksignerPath)
 	}
 
 	// verify with: zipalign -c -v 4 build/app.apk and apksigner verify build/app.apk
+}
+
+// argumentosDeFirma arma la línea de apksigner con la contraseña en un fichero temporal de solo el
+// dueño y la forma --ks-pass file:, no en --ks-pass pass:. En la línea de órdenes la contraseña la
+// lee cualquiera que liste procesos; en un fichero 0600 solo el dueño. Devuelve también el borrado
+// del fichero, que el llamador difiere.
+func argumentosDeFirma(keyStore, storePass, keyAlias string) ([]string, func(), error) {
+	password, err := resolverPassword(storePass)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	ruta, err := escribirPasswordTemporal("apkc-kspass-*", password)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	args := []string{"sign", "--ks-pass", "file:" + ruta, "--ks", keyStore, "--ks-key-alias", keyAlias, filepath.Join("build", "app.apk")}
+	return args, func() { os.Remove(ruta) }, nil
 }

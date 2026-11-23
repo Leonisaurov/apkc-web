@@ -104,7 +104,7 @@ for cuerpo in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re
     hashes.append("'sha256-" + base64.b64encode(
         hashlib.sha256(cuerpo.encode("utf-8")).digest()).decode("ascii") + "'")
 csp = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + " ".join(hashes) +
-       "; require-trusted-types-for 'script'; " +
+       "; require-trusted-types-for 'script'; trusted-types apkc-studio; " +
        "worker-src 'self'; connect-src 'self'; img-src 'self' data:; " +
        "style-src 'self'; font-src 'self' data:; object-src 'none'; " +
        "base-uri 'none'; frame-ancestors 'none'")
@@ -129,6 +129,15 @@ grep -q 'Cross-Origin-Embedder-Policy' "$DESTINO/sw.js" ||
   { printf 'el service worker no pone COEP\n' >&2; exit 1; }
 [ -f "$DESTINO/index.html" ] || { printf 'el sitio no tiene index.html\n' >&2; exit 1; }
 [ -f "$DESTINO/wasm_exec.js" ] || { printf 'falta wasm_exec.js\n' >&2; exit 1; }
+# La CSP tiene que nombrar la política que crea studio/tt.js. Con require-trusted-types-for y sin
+# trusted-types, el navegador solo admite la política por defecto y la página, que escribe con
+# createPolicy("apkc-studio"), se queda sin poder tocar el DOM. Las dos mitades van juntas.
+grep -q "require-trusted-types-for 'script'" "$DESTINO/index.html" ||
+  { printf 'la CSP del <meta> no exige Trusted Types\n' >&2; exit 1; }
+grep -q 'trusted-types apkc-studio' "$DESTINO/index.html" ||
+  { printf 'la CSP del <meta> no nombra la política trusted-types apkc-studio\n' >&2; exit 1; }
+grep -q 'trusted-types apkc-studio' "$DESTINO/sw.js" ||
+  { printf 'la CSP del service worker no nombra la política trusted-types apkc-studio\n' >&2; exit 1; }
 if grep -R -q -e '__APKC_VERSION__' -e '__APKC_CSP__' "$DESTINO" 2>/dev/null; then
   printf 'quedó un marcador de versión o de CSP sin sustituir\n' >&2
   exit 1
