@@ -27,5 +27,10 @@ directorio de trabajo derivado de la huella del jar. Este fichero es el resumen 
 5. **Dos corridas concurrentes**: dos procesos a la vez sobre el mismo jar terminan con rc 0 y
    dejan `informe.md` y `casos.json` idénticos. Cada proceso usa un directorio privado
    (`trabajo-<huella>-<aleatorio>`), así que el d8 de uno no borra el del otro.
+6. **Dos corridas concurrentes del binario**: dos procesos con copias distintas de `apkc/` (una con
+   un `.go` modificado) y sin `--apkc` terminan con rc 0; cada uno construye `apkc-<huella del
+   código>` en una caché aislada, con su `.huella` correcta, y los informes siguen siendo
+   byte-idénticos. La construcción se serializa con un `flock` por huella y el binario entra con un
+   `rename` atómico.
 
 Cada caso imprime su veredicto; la sonda termina con código distinto de cero si alguno falla.

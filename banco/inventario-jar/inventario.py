@@ -17,6 +17,7 @@ El informe se escribe en `banco/inventario-jar/informe.md` (o en --salida). Los 
 import argparse
 import atexit
 import contextlib
+import fcntl
 import hashlib
 import io
 import json
@@ -76,9 +77,11 @@ def huella_de_apkc(directorio=None):
 def construir_apkc(ruta, directorio=APKC_DIR, destino=None):
     """Devuelve el binario de apkc: el que se le pase, el del entorno o uno construido en caché.
 
-    Un `--apkc` o un `APKC=...` externos se usan tal cual, sin reconstruir: quien los pasa sabe qué
-    binario quiere. El de caché se reconstruye cuando la huella de contenido de `apkc/` no es la que
-    se guardó al construirlo; con solo `destino.exists()` se medía con el dexer de otro commit.
+    Un `--apkc` o un `APKC=...` externos se usan tal cual, sin reconstruir. El binario de caché se
+    llama `apkc-<huella del código>`: dos procesos con el mismo `apkc/` comparten el fichero y dos
+    con códigos distintos no se lo pisan, que era la carrera que mezclaba bytes y dejaba una huella
+    que no correspondía al binario. La construcción se serializa con un `flock` por huella y el
+    resultado entra con un `rename` atómico.
     `directorio` y `destino` existen para la falsificación: así compila una copia en un temporal y
     nunca escribe en el árbol versionado.
     """
@@ -88,16 +91,33 @@ def construir_apkc(ruta, directorio=APKC_DIR, destino=None):
     if del_entorno:
         return del_entorno
     directorio = Path(directorio)
-    destino = Path(destino) if destino else CACHE / "apkc"
-    marca = Path(str(destino) + ".huella")
-    actual = huella_de_apkc(directorio)
-    if destino.exists() and marca.exists() and marca.read_text(encoding="utf-8").strip() == actual:
-        return str(destino)
     CACHE.mkdir(parents=True, exist_ok=True)
-    print(f"[inventario] construyendo apkc en {destino} (huella {actual[:12]})", file=sys.stderr)
-    subprocess.run(["go", "build", "-o", str(destino), "."], cwd=directorio, check=True)
-    marca.write_text(actual + "\n", encoding="utf-8")
-    return str(destino)
+    actual = huella_de_apkc(directorio)
+    destino = Path(destino) if destino else CACHE / f"apkc-{actual}"
+    marca = Path(str(destino) + ".huella")
+
+    def al_dia():
+        return (destino.exists() and marca.exists()
+                and marca.read_text(encoding="utf-8").strip() == actual)
+
+    if al_dia():
+        return str(destino)
+    # el cerrojo es por destino: dos fuentes distintas no se esperan entre sí
+    with open(str(destino) + ".lock", "a+", encoding="utf-8") as cerrojo:
+        fcntl.flock(cerrojo, fcntl.LOCK_EX)
+        try:
+            # otra corrida pudo construirlo mientras este proceso esperaba
+            if al_dia():
+                return str(destino)
+            print(f"[inventario] construyendo apkc en {destino} (huella {actual[:12]})",
+                  file=sys.stderr)
+            temporal = Path(str(destino) + f".{os.getpid()}.tmp")
+            subprocess.run(["go", "build", "-o", str(temporal), "."], cwd=directorio, check=True)
+            os.replace(temporal, destino)
+            marca.write_text(actual + "\n", encoding="utf-8")
+            return str(destino)
+        finally:
+            fcntl.flock(cerrojo, fcntl.LOCK_UN)
 
 
 def extraer_clases(jar, destino):
@@ -776,6 +796,89 @@ def comprobar_concurrencia(apkc, jar, trabajo):
     return lineas, 0 if not fallos else 1
 
 
+def comprobar_concurrencia_binario(trabajo):
+    """Sexto caso: dos procesos con copias distintas de `apkc/` y sin `--apkc` no mezclan binario.
+
+    Cada copia tiene su huella, así que cada una construye `apkc-<huella>` en una caché aislada y
+    no hay un destino compartido que se pueda quedar a medias. Se exige que los dos terminen con
+    rc 0, que el binario de la copia modificada tenga la huella de esa copia y que los informes
+    sigan siendo idénticos.
+    """
+    fallos = []
+    lineas = ["", "## Dos corridas concurrentes del binario", ""]
+    jar = trabajo / "fixture-sana.jar"
+    if not jar.exists():
+        return lineas + ["- Falta el jar del fixture; no se pudo medir."], 1
+    limpia = copia_de_apkc(trabajo / "apkc-bin-limpia")
+    mod = copia_de_apkc(trabajo / "apkc-bin-mod")
+    with open(mod / "create.go", "ab") as f:
+        f.write(b"\n// huella: copia modificada para la carrera del binario\n")
+    h_limpia = huella_de_apkc(limpia)
+    h_mod = huella_de_apkc(mod)
+    cache = trabajo / "cache-bin"
+    env = os.environ.copy()
+    env["XDG_CACHE_HOME"] = str(cache)
+    script = RAIZ / "banco" / "inventario-jar" / "inventario.py"
+    procesos = []
+    for nombre, copia in (("limpia", limpia), ("modificada", mod)):
+        destino = trabajo / "bin" / nombre
+        destino.mkdir(parents=True, exist_ok=True)
+        cmd = [sys.executable, str(script), "--jar", str(jar), "--apkc-dir", str(copia),
+               "--salida", str(destino / "informe.md")]
+        registro = open(destino / "salida.txt", "w", encoding="utf-8")
+        procesos.append((nombre, subprocess.Popen(cmd, cwd=RAIZ, env=env, stdout=registro,
+                                                  stderr=subprocess.STDOUT), registro))
+    codigos = []
+    for _, p, registro in procesos:
+        codigos.append(p.wait())
+        registro.close()
+
+    lineas.append(f"- Dos procesos con copias distintas y sin `--apkc`: rc {codigos[0]} y "
+                  f"rc {codigos[1]}.")
+    if any(codigo != 0 for codigo in codigos):
+        fallos.append(f"alguna corrida concurrente del binario falló: {codigos}")
+        for nombre, codigo in zip(("limpia", "modificada"), codigos):
+            if codigo == 0:
+                continue
+            salida = (trabajo / "bin" / nombre / "salida.txt").read_text(
+                encoding="utf-8", errors="replace")
+            lineas.append(f"- Proceso {nombre} falló; últimas líneas:")
+            lineas.append("```")
+            lineas.extend(salida.strip().splitlines()[-8:])
+            lineas.append("```")
+    else:
+        raiz_cache = cache / "apkc-web" / "inventario-jar"
+        for nombre, huella in (("limpia", h_limpia), ("modificada", h_mod)):
+            binario = raiz_cache / f"apkc-{huella}"
+            marca = Path(str(binario) + ".huella")
+            if not binario.exists():
+                fallos.append(f"no existe el binario de la copia {nombre}: {binario.name}")
+            elif not marca.exists() or marca.read_text(encoding="utf-8").strip() != huella:
+                fallos.append(f"la huella del binario de la copia {nombre} no es la suya")
+            else:
+                lineas.append(f"- `apkc-{huella[:12]}` de la copia {nombre} con su huella.")
+        informe_a = (trabajo / "bin" / "limpia" / "informe.md").read_bytes()
+        informe_b = (trabajo / "bin" / "modificada" / "informe.md").read_bytes()
+        json_a = (trabajo / "bin" / "limpia" / "casos.json").read_bytes()
+        json_b = (trabajo / "bin" / "modificada" / "casos.json").read_bytes()
+        if informe_a != informe_b:
+            fallos.append("las dos corridas del binario no dejan el mismo informe.md")
+        else:
+            lineas.append(f"- `informe.md` idéntico byte a byte "
+                          f"(sha256 `{hashlib.sha256(informe_a).hexdigest()[:16]}…`).")
+        if json_a != json_b:
+            fallos.append("las dos corridas del binario no dejan el mismo casos.json")
+        else:
+            lineas.append(f"- `casos.json` idéntico byte a byte "
+                          f"(sha256 `{hashlib.sha256(json_a).hexdigest()[:16]}…`).")
+    lineas.append("")
+    lineas.append("Veredicto de la concurrencia del binario: "
+                  + ("PASA" if not fallos else "FALLA"))
+    for f in fallos:
+        lineas.append(f"- {f}")
+    return lineas, 0 if not fallos else 1
+
+
 def comprobar_falsificacion(apkc, trabajo):
     """Comprueba que el contador ve cero sin límites y uno cuando el bytecode no está medido."""
     fallos = []
@@ -847,10 +950,12 @@ def comprobar_falsificacion(apkc, trabajo):
     lineas.extend(lineas_repro)
     lineas_conc, rc_conc = comprobar_concurrencia(apkc, trabajo / "fixture-sana.jar", trabajo)
     lineas.extend(lineas_conc)
+    lineas_bin, rc_bin = comprobar_concurrencia_binario(trabajo)
+    lineas.extend(lineas_bin)
     lineas_arbol, rc_arbol = comprobar_arbol_limpio()
     lineas.extend(lineas_arbol)
     return lineas, 0 if (not fallos and rc_recon == 0 and rc_repro == 0 and rc_conc == 0
-                         and rc_arbol == 0) else 1
+                         and rc_bin == 0 and rc_arbol == 0) else 1
 
 
 def huella_del_jar(jar):
@@ -962,6 +1067,8 @@ def main():
     p = argparse.ArgumentParser(description="Inventario de límites del dexer sobre un jar real")
     p.add_argument("--jar", default=str(JAR_POR_DEFECTO))
     p.add_argument("--apkc", default="")
+    p.add_argument("--apkc-dir", default=str(APKC_DIR),
+                   help="código de apkc/ que se compila cuando no se pasa --apkc")
     p.add_argument("--salida", default=str(RAIZ / "banco" / "inventario-jar" / "informe.md"))
     p.add_argument("--android-jar", default=str(ANDROID_JAR_POR_DEFECTO))
     p.add_argument("--sin-oraculo", action="store_true")
@@ -973,7 +1080,7 @@ def main():
     if not jar.exists():
         print(f"[inventario] no existe el jar {jar}", file=sys.stderr)
         return 2
-    apkc = construir_apkc(args.apkc)
+    apkc = construir_apkc(args.apkc, directorio=Path(args.apkc_dir))
     CACHE.mkdir(parents=True, exist_ok=True)
     trabajo = directorio_de_trabajo(jar)
     atexit.register(shutil.rmtree, trabajo, ignore_errors=True)
