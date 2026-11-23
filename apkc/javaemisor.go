@@ -2166,9 +2166,11 @@ type emisor struct {
 	// de la clase, para las lambdas del fuente: los `method_info` sinteticos que se escriben al final
 	// del ClassFile, cuantos van, y la tabla de BootstrapMethods con su indice por clave (un
 	// `invokedynamic` no se puede deduplicar sin ella). `metodo` es el nombre del metodo que se emite
-	// ahora, para nombrar el implementador `lambda$metodo$N` como javac.
-	lambdaMetodos []byte
-	lambdaCuenta  int
+	// ahora, para nombrar el implementador `lambda$metodo$N` como javac. `lambdaN` es el contador del
+	// nombre: javac lo lleva POR CLASE y no por metodo, asi que dos sobrecargas del mismo nombre sacan
+	// `lambda$f$0` y `lambda$f$1` en vez de dos `lambda$f$0` (que serian dos `method_info` identicos,
+	// medido con `javap -p` sobre dos `f` con lambda en la misma clase).
+	lambdaMetodos [][]byte
 	bootstraps    []classBootstrap
 	bootIdx       map[string]int
 	metodo        string
@@ -7168,12 +7170,16 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
-	// los implementadores de las lambdas del fuente, con `ACC_PRIVATE|ACC_SYNTHETIC`, van al final
-	// como los escribe javac (medido con javap 17 --release 8 sobre `lambda$metodo$0`)
-	if len(e.lambdaMetodos) > 0 {
-		metodos = append(metodos, e.lambdaMetodos...)
-		conte += e.lambdaCuenta
+	// los implementadores de las lambdas del fuente, con `ACC_PRIVATE|ACC_SYNTHETIC`. javac los
+	// escribe en el orden INVERSO al que los crea (medido con `javap -p` sobre una clase con seis
+	// lambdas: crea `lambda$f$0`…`lambda$h$5` y el ClassFile los lista `lambda$h$5`…`lambda$f$0`), y
+	// ese orden es el que ven el `class_data_item` del dex y su comparación byte a byte. Lo que no
+	// está medido es cómo se mezclan con los `access$`: una clase que tenga de los dos sale con los
+	// implementadores detrás, y su orden sería otro.
+	for i := len(e.lambdaMetodos) - 1; i >= 0; i-- {
+		metodos = append(metodos, e.lambdaMetodos[i]...)
 	}
+	conte += len(e.lambdaMetodos)
 	// Las filas del InnerClasses van en el orden en que javac las escribe: las anidadas declaradas aqui, al
 	// reves de como se declaran (medido: la R del estudio lista style, layout, id); la propia clase si es
 	// anidada; y despues las que menciona el codigo, en orden de primer uso (medido: R$layout, MainActivity$1
@@ -7673,9 +7679,6 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.maxProf = 0
 	e.maxLoc = 0
 	e.truncado = false
-	// el contador de lambdas del fuente es de cada metodo: javac numera `lambda$metodo$0` desde cero
-	// dentro de cada uno
-	e.lambdaN = 0
 }
 
 // codeAttr: el atributo Code con su LineNumberTable y, si hay ramas, su StackMapTable, en el orden

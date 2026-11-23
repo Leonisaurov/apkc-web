@@ -489,8 +489,7 @@ func (e *emisor) escribeImplementador(l jlambda, nombre, desc string, conRecepto
 		return fmt.Errorf("linea %d: %w", l.donde.linea, err)
 	}
 	metodo := sub.methodInfo(nombre, desc, accPrivate|accSynthetic, attrInfo(e.pool, "Code", codigo), 1)
-	e.lambdaMetodos = append(e.lambdaMetodos, metodo...)
-	e.lambdaCuenta++
+	e.lambdaMetodos = append(e.lambdaMetodos, metodo)
 	e.menciona = append(e.menciona, sub.menciona...)
 	return nil
 }

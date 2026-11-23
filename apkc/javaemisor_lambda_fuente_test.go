@@ -137,6 +137,99 @@ func TestLambdaDeUnParametroContraJavac17(t *testing.T) {
 	if len(nuestra.BootstrapMethods) != 1 {
 		t.Fatalf("%d filas de BootstrapMethods, se esperaba una", len(nuestra.BootstrapMethods))
 	}
+	t.Logf("dex de la clase de la lambda: %d B (javac %d B)",
+		longitudDelDex(t, clasesLeidas(t, nuestras)), longitudDelDex(t, deJavac))
+	if err := comparaDex(t, nuestras, deJavac); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fuenteSobrecargasLambda: dos sobrecargas del mismo nombre con una lambda cada una, y el mismo SAM no
+// genérico en las dos. El implementador de cada una es `(Ljava/lang/Object;)V`, así que si el contador
+// del nombre se reiniciara por método las dos saldrían `lambda$f$0` y el ClassFile llevaría dos
+// `method_info` idénticos, que es inválido. javac 17 numera el implementador con un contador de CLASE:
+// `lambda$f$0` y `lambda$f$1` (medido con `javap -p`).
+const fuenteSobrecargasLambda = `package p;
+
+interface Accion {
+    void haz(Object o);
+}
+
+class H {
+    H(Accion a) {
+    }
+}
+
+class X {
+    void print(Object o) {
+    }
+
+    void f(int n) {
+        new H(x -> print(x));
+    }
+
+    void f(String s) {
+        new H(x -> print(x));
+    }
+}
+`
+
+// TestDosSobrecargasNoCompartenImplementadorDeLambda: el nombre del implementador es único en la
+// clase, no dentro del método. Sin eso, dos sobrecargas del mismo nombre emiten dos
+// `lambda$f$0(Ljava/lang/Object;)V` y el classfile es inválido (el crítico lo destapó).
+func TestDosSobrecargasNoCompartenImplementadorDeLambda(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	raiz := t.TempDir()
+	pon(t, raiz, "X.java", fuenteSobrecargasLambda)
+
+	nuestras, err := compilarProyectoJava([]fuenteJava{{nombre: "X.java", contenido: fuenteSobrecargasLambda}}, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó las dos lambdas: %v", err)
+	}
+	emitida := porInterno(nuestras, "p/X")
+	if emitida == nil {
+		t.Fatalf("no salió p/X (%s)", nombresDe(nuestras))
+	}
+	nuestra := leer(t, emitida)
+
+	// ni un nombre+descriptor repetido: es la condición que un ClassFile no puede incumplir
+	vistos := map[string]int{}
+	for _, m := range nuestra.Methods {
+		vistos[m.Name+m.Desc]++
+	}
+	for firma, n := range vistos {
+		if n > 1 {
+			t.Errorf("metodo %s %d veces", firma, n)
+		}
+	}
+	implantadores := []string{}
+	for _, m := range nuestra.Methods {
+		if strings.HasPrefix(m.Name, "lambda$") {
+			implantadores = append(implantadores, m.Name)
+		}
+	}
+	if len(implantadores) != 2 {
+		t.Fatalf("implementadores de lambda: %v (se esperaban 2)", implantadores)
+	}
+	for _, nombre := range []string{"lambda$f$0", "lambda$f$1"} {
+		if _, ok := buscaMetodo(nuestra, nombre); !ok {
+			t.Errorf("falta %s (%v)", nombre, implantadores)
+		}
+	}
+
+	// y son los de javac: mismo juego de metodos y el dex entero
+	salida := filepath.Join(raiz, "javac-out")
+	cmd := exec.Command(javac, "--release", "8", "-g:lines,source", "-d", salida, filepath.Join(raiz, "X.java"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("javac 17 rechazó el caso: %v\n%s", err, out)
+	}
+	deJavac, err := leeClases([]string{salida})
+	if err != nil {
+		t.Fatalf("leyendo lo de javac: %v", err)
+	}
+	deJavacX := porNombre(t, deJavac, "Lp/X;")
+	comparaMetodos(t, nuestra, deJavacX)
 	if err := comparaDex(t, nuestras, deJavac); err != nil {
 		t.Fatal(err)
 	}
@@ -214,4 +307,41 @@ func nombresDeMetodos(cf classFull) string {
 		out = append(out, m.Name+m.Desc)
 	}
 	return strings.Join(out, " ")
+}
+
+// porNombre: la clase con ese descriptor entre las que leyó el lector de la etapa.
+func porNombre(t *testing.T, clases []classFull, nombre string) classFull {
+	t.Helper()
+	for _, c := range clases {
+		if c.Name == nombre {
+			return c
+		}
+	}
+	t.Fatalf("no está %s entre las clases de javac", nombre)
+	return classFull{}
+}
+
+// clasesLeidas: las clases emitidas, releídas por el lector de la etapa (que es el que ve el dexer).
+func clasesLeidas(t *testing.T, clases []claseEmitida) []classFull {
+	t.Helper()
+	out := make([]classFull, 0, len(clases))
+	for _, c := range clases {
+		cf, err := readClassFull(c.datos)
+		if err != nil {
+			t.Fatalf("%s no se relee: %v", c.interno, err)
+		}
+		out = append(out, cf)
+	}
+	return out
+}
+
+// longitudDelDex: los bytes del dex de un conjunto de clases. Se publica con `t.Logf` para que la
+// cifra del informe salga del test y no de una medición aparte.
+func longitudDelDex(t *testing.T, clases []classFull) int {
+	t.Helper()
+	b, err := dexDeClases(clases)
+	if err != nil {
+		t.Fatalf("dexando: %v", err)
+	}
+	return len(b)
 }
