@@ -819,7 +819,7 @@ func TestCheckDosHelperEnPaquetesDistintos(t *testing.T) {
 	}
 	// el conjunto de hermanos es el que decide: el Helper del otro paquete entra y la copia en disco
 	// del pedido se salta por su nombre cualificado, no solo por el nombre simple
-	otros := otrosFuentesDelProyecto(raiz, "", "Helper.java", fuenteHelperUno)
+	otros := otrosFuentesDelProyecto(raiz, "", "Helper.java", "com.hola.apkcstudio.uno")
 	queridos := map[string]bool{
 		"src/com/hola/apkcstudio/dos/Helper.java":   true,
 		"src/com/hola/apkcstudio/MainActivity.java": true,
@@ -832,6 +832,65 @@ func TestCheckDosHelperEnPaquetesDistintos(t *testing.T) {
 	}
 	if len(queridos) != 0 {
 		t.Fatalf("faltan hermanos: %+v (medidos %+v)", queridos, nombresDeFuentes(otros))
+	}
+}
+
+// fuenteHelperDosComentado declara el paquete de verdad al final, pero antes lleva un `package` dentro
+// de un bloque de comentario: Java lo ignora y una expresión regular línea a línea caza el del
+// comentario. Es el primer disparador del hallazgo del crítico.
+const fuenteHelperDosComentado = `/*
+package com.hola.apkcstudio.uno;
+*/
+package com.hola.apkcstudio.dos;
+
+public class Helper {
+    public static int doble(int x) {
+        return x + x;
+    }
+}
+`
+
+// fuenteHelperDosSalto es el mismo fuente con un salto de línea entre `package` y el nombre, que Java
+// admite y que una expresión regular anclada a `[ \t]+` no reconoce. Segundo disparador.
+const fuenteHelperDosSalto = `package
+com.hola.apkcstudio.dos;
+
+public class Helper {
+    public static int doble(int x) {
+        return x + x;
+    }
+}
+`
+
+// TestCheckPaqueteDelCandidatoVieneDelParser fija que el paquete del candidato se lee con el parser y
+// no con una expresión regular: el `package` de un comentario no declara nada y entre `package` y el
+// nombre cabe un salto de línea. En los dos casos el paquete es el dos, el candidato entra en el
+// conjunto y el pedido —que lo referencia en su firma— no recibe un falso error.
+func TestCheckPaqueteDelCandidatoVieneDelParser(t *testing.T) {
+	casos := []struct {
+		nombre string
+		fuente string
+	}{
+		{"comentario", fuenteHelperDosComentado},
+		{"salto de línea", fuenteHelperDosSalto},
+	}
+	for _, c := range casos {
+		if got := paqueteDelFuente(c.fuente); got != "com.hola.apkcstudio.dos" {
+			t.Errorf("%s: el paquete del candidato es %q, medido \"com.hola.apkcstudio.dos\"", c.nombre, got)
+		}
+		raiz, _ := proyectoDeCheck(t)
+		pon(t, raiz, "src/com/hola/apkcstudio/uno/Helper.java", fuenteHelperUno)
+		pon(t, raiz, "src/com/hola/apkcstudio/dos/Helper.java", c.fuente)
+		r := revisarFuenteJava(fuenteHelperUno, "Helper.java", jarDelSDK(t), raiz)
+		if len(r.Errores) != 0 {
+			t.Errorf("%s: el pedido da %d errores: %+v", c.nombre, len(r.Errores), r.Errores)
+		}
+		if !r.Emisor {
+			t.Errorf("%s: el emisor no corrió: aviso %q", c.nombre, r.Aviso)
+		}
+		if r.Aviso != "" {
+			t.Errorf("%s: aviso inesperado: %q", c.nombre, r.Aviso)
+		}
 	}
 }
 

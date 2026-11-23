@@ -173,8 +173,8 @@ func rDelProyectoEnDisco(raiz string) []fuenteJava {
 // delante o `check` la acusa de no existir (el mismo defecto que ya se corrigió para la R). Se saltan
 // el fuente pedido —por ruta si se conoce y, siempre, por su nombre cualificado— y las clases
 // generadas (R y Manifest), que ya aporta fuentesDeRecursos. Cada fichero se lee una sola vez y no se
-// escribe nada.
-func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme, contenidoPedido string) []fuenteJava {
+// escribe nada. `paquetePedido` es el que declara el fuente pedido, ya parseado por el llamador.
+func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme, paquetePedido string) []fuenteJava {
 	salida := []fuenteJava{}
 	pedida := ""
 	if rutaPedida != "" {
@@ -184,9 +184,8 @@ func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme, contenidoPedid
 	// el nombre simple no basta para reconocer el pedido: dos `.java` con el mismo nombre en paquetes
 	// distintos son dos clases, y saltarse las dos dejaba sin resolver la que el pedido referencia. La
 	// copia en disco del pedido se reconoce por nombre simple **y** paquete, que es su nombre
-	// cualificado; el paquete sale del propio contenido porque la pestaña lo manda como temporal
-	// fuera de `src/` y no hay otra pista de a qué fichero del árbol corresponde.
-	paquetePedido := paqueteDelFuente(contenidoPedido)
+	// cualificado; el paquete del candidato sale del parser porque la pestaña manda el pedido como
+	// temporal fuera de `src/` y no hay otra pista de a qué fichero del árbol corresponde.
 	for _, base := range []string{"src", "gen"} {
 		carpeta := filepath.Join(proyecto, base)
 		_ = filepath.WalkDir(carpeta, func(ruta string, d os.DirEntry, err error) error {
@@ -209,8 +208,8 @@ func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme, contenidoPedid
 			// nombre simple solo no vale — dos `Helper.java` en paquetes distintos son dos clases y
 			// saltarse las dos dejaba sin resolver la que el pedido referencia (§227) — y el paquete
 			// solo tampoco, porque la copia guardada puede estar a medio escribir y no declararlo:
-			// un candidato sin `package` se toma como la misma copia del pedido, que es el caso en
-			// el que el contrato manda diagnosticar el que se pasa y no el guardado.
+			// un candidato sin paquete legible se toma como la misma copia del pedido, que es el caso
+			// en el que el contrato manda diagnosticar el que se pasa y no el guardado.
 			if nombre == informe {
 				paquete := paqueteDelFuente(string(datos))
 				if paquete == "" || paquete == paquetePedido {
@@ -228,18 +227,17 @@ func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme, contenidoPedid
 	return salida
 }
 
-// declaracionDePaquete reconoce la línea `package a.b;` de un fuente.
-var declaracionDePaquete = regexp.MustCompile(`(?m)^[ \t]*package[ \t]+([A-Za-z_$][A-Za-z0-9_$. \t]*)[ \t]*;`)
-
-// paqueteDelFuente devuelve el paquete que declara un fuente, o "" si no declara ninguno (paquete por
-// defecto). No parsea: la línea `package` es lo único que hace falta para distinguir dos clases con el
-// mismo nombre simple, y así un fuente que aún no parsea también se reconoce.
+// paqueteDelFuente devuelve el paquete que declara un fuente, o "" si no se puede saber (paquete por
+// defecto o fuente que todavía no parsea). Usa el parser del proyecto y no una expresión regular: un
+// `package` dentro de un comentario no declara nada y el parser lo salta, y entre `package` y el
+// nombre Java admite cualquier espacio, también un salto de línea. Así el paquete que se compara es
+// exactamente el que el emisor va a ver, sin una segunda gramática que mantener.
 func paqueteDelFuente(contenido string) string {
-	m := declaracionDePaquete.FindStringSubmatch(contenido)
-	if m == nil {
+	a, err := parsearJava(contenido)
+	if err != nil {
 		return ""
 	}
-	return strings.Join(strings.Fields(m[1]), "")
+	return a.paquete
 }
 
 // fuenteDelError devuelve el fichero en el que nació un fallo del emisor, o nil si el error no viene
@@ -293,7 +291,8 @@ func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rut
 		Tipo: "check", Fichero: nombreInforme, Lineas: strings.Count(contenido, "\n") + 1,
 		Errores: []errorDeCheck{},
 	}
-	if _, err := parsearJava(contenido); err != nil {
+	archivo, err := parsearJava(contenido)
+	if err != nil {
 		r.agregar(err)
 		return r
 	}
@@ -320,7 +319,7 @@ func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rut
 		// el resto de fuentes del proyecto va después del pedido: el emisor registra todas las
 		// clases antes de emitir nada, y al emitir el pedido primero su diagnóstico no queda detrás
 		// de un fallo de otro fichero.
-		fuentes = append(fuentes, otrosFuentesDelProyecto(proyecto, rutaFuente, nombreInforme, contenido)...)
+		fuentes = append(fuentes, otrosFuentesDelProyecto(proyecto, rutaFuente, nombreInforme, archivo.paquete)...)
 	}
 	// el classpath es el mismo que el de `compile` y `build`: el `android.jar` y las dependencias del
 	// proyecto (cada `jar/*.jar` y el `classes.jar` de cada `.aar`). Antes se compilaba contra el
