@@ -262,6 +262,12 @@ func (t *dexTables) collectCode(cf classFull, m classMethod) error {
 				t.internConcat(concat)
 				break
 			}
+			if rec, ok := cf.Records[claveSitio(m, in.pc)]; ok {
+				// los auxiliares del record son métodos de la propia clase y su `Code` ya lo
+				// recorre `collectClasses`: aquí solo falta el method_id al que llama el sitio
+				t.internMethod(cf.Name, rec.ayudaDesc, rec.ayuda)
+				break
+			}
 			sitio, ok := cf.Lambdas[claveSitio(m, in.pc)]
 			if !ok {
 				return fmt.Errorf("an invokedynamic at pc %d that the expansion did not cover", in.pc)

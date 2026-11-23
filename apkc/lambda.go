@@ -9,8 +9,9 @@ package main
 // Se cubren las lambdas estáticas con o sin capturas, las que capturan `this`, las referencias a
 // métodos de instancia con receptor fijo (`this::m`), el SAM genérico con su descriptor borrado y
 // `altMetafactory` en su forma medida: el flag serializable, los marcadores de una intersección y
-// cero puentes. Lo que sigue fuera se rechaza por nombre: los puentes de `altMetafactory` y la
-// concatenación de cadenas de JDK 9, que no son el mismo bootstrap.
+// cero puentes. Aquí mismo se reconocen los tres sitios de un record (`ObjectMethods.bootstrap`,
+// record.go) y la concatenación de cadenas de JDK 9 (concat.go), que son otros bootstraps. Lo que
+// sigue fuera se rechaza por nombre: los puentes de `altMetafactory` y cualquier otro bootstrap.
 
 import (
 	"encoding/binary"
@@ -50,6 +51,7 @@ type classLambda struct {
 func expandirLambdas(clases []classFull) ([]classFull, error) {
 	salida := make([]classFull, 0, len(clases))
 	extras := []classFull{}
+	necesitaTag := false
 	for _, cf := range clases {
 		if cf.p == nil {
 			salida = append(salida, cf)
@@ -72,6 +74,7 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 		cf.Methods = sinDeserializar
 		privados := map[methodKey]bool{}
 		contador := 0
+		pendientes := []recordPendiente{}
 		for mi := range cf.Methods {
 			m := &cf.Methods[mi]
 			if !m.HasCode {
@@ -96,6 +99,14 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 					cf.Concats[claveSitio(*m, in.pc)] = concat
 					continue
 				}
+				// El `toString`, el `hashCode` y el `equals` de un record son otro bootstrap: se
+				// anotan y la clase recibe sus auxiliares, sin clase sintética por sitio.
+				if rec, es, err := sitioDeRecord(cf, x, int(binary.BigEndian.Uint16(in.ops))); err != nil {
+					return nil, fmt.Errorf("%s%s pc %d: %w", cf.Name, m.Desc, in.pc, err)
+				} else if es {
+					pendientes = append(pendientes, recordPendiente{clave: claveSitio(*m, in.pc), sitio: rec})
+					continue
+				}
 				sitio, impl, err := sitioDeLambda(cf, x, int(binary.BigEndian.Uint16(in.ops)))
 				if err != nil {
 					return nil, fmt.Errorf("%s%s pc %d: %w", cf.Name, m.Desc, in.pc, err)
@@ -113,6 +124,21 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 				}
 			}
 		}
+		// Los auxiliares del record se añaden cuando la pasada por los métodos ya terminó: así el
+		// recorrido de arriba no ve `Methods` crecer por debajo.
+		if len(pendientes) > 0 {
+			if err := preparaRecord(&cf, pendientes[0].sitio); err != nil {
+				return nil, fmt.Errorf("%s: %w", cf.Name, err)
+			}
+			if cf.Records == nil {
+				cf.Records = map[sitioKey]classRecord{}
+			}
+			for _, p := range pendientes {
+				ayuda, ayudaDesc := ayudaDeRecord(p.sitio.metodo)
+				cf.Records[p.clave] = classRecord{ayuda: ayuda, ayudaDesc: ayudaDesc, desc: p.sitio.desc}
+			}
+			necesitaTag = true
+		}
 		// d8 quita `private` al implementador sintético: la clase de la lambda lo llama desde fuera
 		// y el verificador de ART no acepta un privado ajeno (medido en el §109: `lambda$uno$0`
 		// sale en el dex con 0x1008, sin private).
@@ -129,7 +155,20 @@ func expandirLambdas(clases []classFull) ([]classFull, error) {
 		}
 		salida = append(salida, cf)
 	}
+	if necesitaTag && !tieneRecordTag(clases) {
+		extras = append(extras, claseRecordTag())
+	}
 	return append(salida, extras...), nil
+}
+
+// tieneRecordTag: la lista ya trae la superclase sintética, así que no se añade otra.
+func tieneRecordTag(clases []classFull) bool {
+	for _, cf := range clases {
+		if cf.Name == recordTagDesc {
+			return true
+		}
+	}
+	return false
 }
 
 // lambdaSitio: lo que el bootstrap dice del sitio, ya resuelto. El descriptor SAM **no** es el del
@@ -373,6 +412,11 @@ func (b *poolDeLambda) claseDeDescriptor(desc string) int {
 		return b.clase(desc)
 	}
 	return b.clase(desc[1 : len(desc)-1])
+}
+
+// cadena: una CONSTANT_String, que es lo que pide un `ldc`/`ldc_w` de texto.
+func (b *poolDeLambda) cadena(s string) int {
+	return b.add(cpString, u2be(uint16(b.utf8(s))))
 }
 
 // cargaDeSlot: el `iload`/`lload`/… de un parámetro. El hueco lo cuenta el llamador, que es quien

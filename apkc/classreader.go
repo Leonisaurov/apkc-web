@@ -69,12 +69,13 @@ type classFull struct {
 	Enclosing       classEnclosing
 	Signature       string // el attribute Signature de la clase, en texto MUTF-8
 
-	// BootstrapMethods y los sitios desugrados: las lambdas (lambda.go) y la concatenación
-	// dinámica (concat.go). Los mapas van por pc y solo llevan los invokedynamic que este fork
-	// convierte; los demás se rechazan por nombre.
+	// BootstrapMethods y los sitios desugrados: las lambdas (lambda.go), la concatenación
+	// dinámica (concat.go) y los métodos de un record (record.go). Los mapas van por pc y solo
+	// llevan los invokedynamic que este fork convierte; los demás se rechazan por nombre.
 	BootstrapMethods []classBootstrap
 	Lambdas          map[sitioKey]classLambda
 	Concats          map[sitioKey]classConcat
+	Records          map[sitioKey]classRecord
 
 	// p is the class's own constant pool. The dexer's interning follows operands that name
 	// pool entries, so the pool belongs with the class it came from; it is not part of what

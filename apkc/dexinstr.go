@@ -2632,6 +2632,8 @@ func (p *traduce) recorre() error {
 		case "invokedynamic":
 			if _, ok := p.clase.Concats[claveSitio(p.m, in.pc)]; ok {
 				p.concat(in)
+			} else if _, ok := p.clase.Records[claveSitio(p.m, in.pc)]; ok {
+				p.record(in)
 			} else {
 				p.lambda(in)
 			}

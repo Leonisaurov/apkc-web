@@ -1,16 +1,12 @@
 package main
 
-// Frontera de `invokedynamic`/`condy` medida con nombre y sitio, no supuesta. Los dos casos que
-// quedan fuera del subconjunto se miden aquí con la forma literal del rechazo.
+// Frontera de `invokedynamic`/`condy` medida con nombre y sitio, no supuesta.
 //
-// Un `invokedynamic` con un bootstrap que no es de los medidos lo rechaza `sitioDeLambda`
-// (`lambda.go:164`): `LambdaMetafactory.metafactory` y `altMetafactory` son los únicos que este fork
-// desugra. La sonda es un `record` de Java 17, donde `javac` escribe tres `invokedynamic` con
-// `java/lang/runtime/ObjectMethods.bootstrap` (toString, hashCode y equals). El equivalente medido
-// en el oráculo es el de `d8`: con `--min-api 26` desugra el sitio a llamadas directas y sintetiza
-// `Punto$$ExternalSyntheticRecord0` con `$record$getFieldsAsObjects` y un `m(...)` que arma el
-// texto; no emite `invoke-custom`. Reproducirlo pide implementar el desugrado de records, no una
-// rama más del dexer.
+// Los tres sitios de un record (`java/lang/runtime/ObjectMethods.bootstrap`) se desugran en
+// record.go desde que la variante directa se midió en ART; lo que sigue fuera es el mismo bootstrap
+// sobre una clase que no extiende `java/lang/Record`, y un `invokedynamic` de lambda cuyo bootstrap
+// no es `LambdaMetafactory` (`sitioDeLambda`, `lambda.go:164`). La sonda es el `.class` de un
+// record de Java 17 con el `super` cambiado a `java/lang/Object` en su pool.
 //
 // Una constante dinámica (tag 17) la rechaza `refuseOutsideSubset` (`classreader.go:451`). La sonda
 // es un `.class` mínimo escrito a mano con `ldc` de un `ConstantDynamic` cuyo bootstrap es
@@ -47,10 +43,11 @@ const puntoRecordJavac = "yv66vgAAAD0AOQoAAgADBwAEDAAFAAYBABBqYXZhL2xhbmcvUmVjb3
 // `ConstantBootstraps.nullConstant`.
 const condyJavac = "yv66vgAAADQAFQEABUNvbmR5BwABAQAQamF2YS9sYW5nL09iamVjdAcAAwEAAVgBABJMamF2YS9sYW5nL09iamVjdDsMAAUABgEAI2phdmEvbGFuZy9pbnZva2UvQ29uc3RhbnRCb290c3RyYXBzBwAIAQAMbnVsbENvbnN0YW50AQBeKExqYXZhL2xhbmcvaW52b2tlL01ldGhvZEhhbmRsZXMkTG9va3VwO0xqYXZhL2xhbmcvU3RyaW5nO0xqYXZhL2xhbmcvQ2xhc3M7KUxqYXZhL2xhbmcvT2JqZWN0OwwACgALCgAJAAwPBgANEQAAAAcBAARDb2RlAQAIPGNsaW5pdD4BAAMoKVYBABBCb290c3RyYXBNZXRob2RzCQACAAcAIQACAAQAAAABAAgABQAGAAAAAQAIABEAEgABABAAAAASAAEAAAAAAAYSD7MAFLEAAAAAAAEAEwAAAAYAAQAOAAA="
 
-// TestIndyDeRecordSeRechazaConNombre: el bootstrap de `ObjectMethods` no es de los medidos y el
-// error dice el sitio (`toString`) y el bootstrap exacto. `readClassFull` lo acepta (el
-// `invokedynamic` no se rechaza en el lector); es la expansión la que lo nombra.
-func TestIndyDeRecordSeRechazaConNombre(t *testing.T) {
+// TestIndyDeRecordFueraDeSuClaseSeRechazaConNombre: el bootstrap de `ObjectMethods` solo se
+// desugra sobre la clase que extiende `java/lang/Record` y nombra a sí misma. La sonda es el mismo
+// `.class` del record con el `super` cambiado a `java/lang/Object`: el rechazo dice el sitio y la
+// condición que no se cumple. Los tres sitios que sí se desugran están en record_test.go.
+func TestIndyDeRecordFueraDeSuClaseSeRechazaConNombre(t *testing.T) {
 	datos, err := base64.StdEncoding.DecodeString(puntoRecordJavac)
 	if err != nil {
 		t.Fatalf("el fixture del record no es base64: %v", err)
@@ -62,11 +59,24 @@ func TestIndyDeRecordSeRechazaConNombre(t *testing.T) {
 	if cf.Name != "LPunto;" {
 		t.Fatalf("el fixture no es LPunto;: %s", cf.Name)
 	}
+	// el `super` del `.class` es java/lang/Record; se cambia en el pool y en la clase para que el
+	// sitio quede en una clase que no es un record
+	cambiado := false
+	for _, u := range cf.p.class {
+		if cf.p.utf[u] == "java/lang/Record" {
+			cf.p.utf[u] = "java/lang/Object"
+			cambiado = true
+		}
+	}
+	if !cambiado {
+		t.Fatal("el pool del fixture no nombra java/lang/Record")
+	}
+	cf.Super = "Ljava/lang/Object;"
 	_, err = expandirLambdas([]classFull{cf})
 	if err == nil {
-		t.Fatal("el record pasó la expansión y su bootstrap no está medido")
+		t.Fatal("el sitio de un record pasó la expansión en una clase que no extiende Record")
 	}
-	for _, quiere := range []string{"toString", "ObjectMethods", "LambdaMetafactory.metafactory y altMetafactory"} {
+	for _, quiere := range []string{"toString", "no extiende java/lang/Record"} {
 		if !strings.Contains(err.Error(), quiere) {
 			t.Errorf("el rechazo no nombra %q: %v", quiere, err)
 		}
