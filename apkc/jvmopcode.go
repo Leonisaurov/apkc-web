@@ -175,6 +175,13 @@ var jvmMeasured = map[byte]jvmOpcode{
 	0x30: {"faload", 0},
 	0x31: {"daload", 0},
 	0x32: {"aaload", 0},
+	// los arreglos estrechos que faltaban, medidos con `javac` y `javap` sobre `Arre`: `baload`
+	// 0x33, `saload` 0x35, `bastore` 0x54 y `sastore` 0x56, todos de un byte y sin operandos. El
+	// `baload`/`bastore` los comparte el `byte[]` y el `boolean[]`; el `caload`/`castore` ya estaban.
+	0x33: {"baload", 0},
+	0x35: {"saload", 0},
+	0x54: {"bastore", 0},
+	0x56: {"sastore", 0},
 	0x4f: {"iastore", 0},
 	0x55: {"castore", 0},
 	0x50: {"lastore", 0},

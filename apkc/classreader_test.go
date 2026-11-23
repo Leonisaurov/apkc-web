@@ -284,13 +284,13 @@ func TestReadClassFullRefusesWhatTheForkDoesNotDex(t *testing.T) {
 }
 
 func TestWalkJvmCodeStopsAndNamesTheByteItDoesNotKnow(t *testing.T) {
-	// 0x33 es `baload`, fuera del subconjunto medido (aquí estuvieron `fmul` 0x6a hasta el párrafo
-	// 77, `lcmp` 0x94 hasta el 81 y `monitorenter` 0xc2 hasta que lo destapó el
-	// android-support-v4.jar). El caminante tiene que decir cuál: media instrucción contada como
-	// completa es justo el casi-correcto que llega al dispositivo
-	if _, err := walkJvmCode([]byte{0x2a, 0x33, 0xb1}); err == nil {
+	// 0xc4 es `wide`, fuera del subconjunto medido por su ancho variable (aquí estuvieron `fmul`
+	// 0x6a hasta el párrafo 77, `lcmp` 0x94 hasta el 81, `monitorenter` 0xc2 y `baload` 0x33 hasta
+	// que los destapó el android-support-v4.jar). El caminante tiene que decir cuál: media
+	// instrucción contada como completa es justo el casi-correcto que llega al dispositivo
+	if _, err := walkJvmCode([]byte{0x2a, 0xc4, 0xb1}); err == nil {
 		t.Error("an unmeasured opcode walked as if it were known")
-	} else if !strings.Contains(err.Error(), "0x33") {
+	} else if !strings.Contains(err.Error(), "0xc4") {
 		t.Errorf("the refusal does not name the byte: %v", err)
 	}
 	if _, err := walkJvmCode([]byte{0x12}); err == nil {

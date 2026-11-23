@@ -148,6 +148,18 @@ const (
 	opAput            = 0x4b // 23x aput vAA, vBB, vCC
 	opAputAncho       = 0x4c // 23x aput-wide, medido en `Arr.escribeLargo` (parrafo 84)
 	opAputObjeto      = 0x4d // 23x aput-object vAA, vBB, vCC
+	// los arreglos estrechos, medidos con `d8` y `dexdump` sobre `Arre`: `aget-boolean` 0x47,
+	// `aget-byte` 0x48, `aget-char` 0x49 y `aget-short` 0x4a, con sus `aput-*` 0x4e-0x51. El JVM
+	// usa `baload`/`bastore` para el `byte[]` y el `boolean[]`, así que cuál de los dos sale depende
+	// del tipo del arreglo (`[B` o `[Z`), que este traductor rastrea sobre la pila.
+	opAgetBoolean = 0x47 // 23x aget-boolean vAA, vBB, vCC (`4700 0001`)
+	opAgetByte    = 0x48 // 23x aget-byte (`4800 0001`)
+	opAgetChar    = 0x49 // 23x aget-char (`4900 0001`)
+	opAgetShort   = 0x4a // 23x aget-short (`4a00 0001`)
+	opAputBoolean = 0x4e // 23x aput-boolean (`4e02 0001`)
+	opAputByte    = 0x4f // 23x aput-byte (`4f02 0001`)
+	opAputChar    = 0x50 // 23x aput-char (`5002 0001`)
+	opAputShort   = 0x51 // 23x aput-short (`5102 0001`)
 
 	// las excepciones, medidas en el parrafo 71 sobre `T` dexado por `d8`: `throw v1` sale `2701`
 	// (11x) y el handler empieza con `move-exception vAA` (0x0d, 11x) cuando la excepcion se usa
@@ -202,6 +214,8 @@ type traduce struct {
 	base      int           // primer registro de los locales: cuántos temporales se usan
 	locales   int           // m.LocalCount, medido sobre el .class
 	enPila    []int         // registro de cada entrada de la pila JVM
+	pilaTipo  []byte        // tipo de arreglo primitivo de cada entrada (0 si no lo es o no se sabe)
+	tipoLocal map[int]byte  // por ranura de local JVM: tipo de arreglo primitivo (0 si no)
 	libres    []int         // temporales ya muertos
 	renom     map[int]int   // local JVM -> registro que lo guarda, cuando d8 lo fundió con otro
 	fijos     map[int]bool  // temporal que quedó atado a un local: ya no es reusable
@@ -749,10 +763,63 @@ func (p *traduce) pop(in jvmInstr) int {
 	}
 	r := p.enPila[len(p.enPila)-1]
 	p.enPila = p.enPila[:len(p.enPila)-1]
+	if n := len(p.pilaTipo); n > 0 {
+		p.pilaTipo = p.pilaTipo[:n-1]
+	}
 	return r
 }
 
-func (p *traduce) push(r int) { p.enPila = append(p.enPila, r) }
+func (p *traduce) push(r int) { p.pushTipo(r, 0) }
+
+// pushTipo apila un registro con el tipo de arreglo primitivo que lleva, si es uno: 'B', 'Z', 'C' o
+// 'S', o 0 cuando no es un arreglo de esos. Es lo que permite elegir entre `aget-byte` 0x48 y
+// `aget-boolean` 0x47 para el `baload` y el `bastore` del JVMS, que no distinguen `[B` de `[Z`.
+func (p *traduce) pushTipo(r int, tipo byte) {
+	p.enPila = append(p.enPila, r)
+	p.pilaTipo = append(p.pilaTipo, tipo)
+}
+
+// tipoCima: el tipo de arreglo de la entrada de arriba de la pila, 0 si no se sabe.
+func (p *traduce) tipoCima() byte {
+	if n := len(p.pilaTipo); n > 0 {
+		return p.pilaTipo[n-1]
+	}
+	return 0
+}
+
+// ponTipoCima fija el tipo de arreglo de la entrada de arriba, después de apilarla.
+func (p *traduce) ponTipoCima(tipo byte) {
+	if n := len(p.pilaTipo); n > 0 {
+		p.pilaTipo[n-1] = tipo
+	}
+}
+
+// duplicaCima apila otra vez el registro de arriba con su tipo (el `dup` y el `dup2` no emiten
+// nada: las dos entradas comparten registro).
+func (p *traduce) duplicaCima() {
+	if len(p.enPila) == 0 {
+		return
+	}
+	p.pushTipo(p.enPila[len(p.enPila)-1], p.tipoCima())
+}
+
+// vaciaPila deja la pila JVM vacía (tras un `athrow`), también la de tipos.
+func (p *traduce) vaciaPila() {
+	p.enPila = p.enPila[:0]
+	p.pilaTipo = p.pilaTipo[:0]
+}
+
+// tipoDeArregloPrimitivo: el tipo de elemento de un descriptor `[B`, `[Z`, `[C` o `[S`, que son los
+// que el DEX distingue con opcode propio en el acceso; 0 para cualquier otro descriptor.
+func tipoDeArregloPrimitivo(desc string) byte {
+	if len(desc) == 2 && desc[0] == '[' {
+		switch desc[1] {
+		case 'Z', 'B', 'C', 'S':
+			return desc[1]
+		}
+	}
+	return 0
+}
 
 // guardaLocal: `istore`/`astore`. d8 no copia: funde el registro del valor con el del local, como
 // midió la sonda del parrafo 50 con `int x = a; x = x + 1; return x`, que sale en una sola
@@ -765,7 +832,14 @@ func (p *traduce) guardaLocal(in jvmInstr, n int) {
 // guardaLocalEn: `istore`/`astore`, y con `ancho` los `lstore` (parrafo 74). Un valor ancho vive en un
 // PAR de registros consecutivos, así que la fusion y el `move-wide` atizan los dos.
 func (p *traduce) guardaLocalEn(in jvmInstr, n int, ancho bool) {
+	// el tipo de arreglo del valor, antes de sacarlo de la pila, queda anotado en la ranura del
+	// local: `byte[] b = a; b[i]` tiene que seguir sabiendo que el arreglo es `[B`
+	tipoValor := p.tipoCima()
 	r := p.pop(in)
+	if p.tipoLocal == nil {
+		p.tipoLocal = map[int]byte{}
+	}
+	p.tipoLocal[n] = tipoValor
 	destino := p.local(n)
 	if r == destino {
 		return
@@ -841,6 +915,9 @@ func (p *traduce) cargaLocal(in jvmInstr, n int, op byte) {
 		return
 	}
 	p.push(r)
+	// el tipo de arreglo del local viaja con la entrada que se apila: es lo que decide, más lejos,
+	// entre `aget-byte` y `aget-boolean` para el mismo `baload`
+	p.ponTipoCima(p.tipoLocal[n])
 }
 
 // cargaLocalPar: lo mismo para un `long` o un `double`, cuyo valor ocupa DOS registros: la pareja de
@@ -1115,7 +1192,7 @@ func (p *traduce) accesoEstatico(in jvmInstr, escribe bool) {
 		}
 		return
 	}
-	p.push(r)
+	p.pushTipo(r, tipoDeArregloPrimitivo(desc))
 }
 
 // parcheDEX: una branquia cuyo desplazamiento todavía no se conoce. `desde` es la unidad donde
@@ -1338,27 +1415,42 @@ func (p *traduce) nuevoArreglo(in jvmInstr) {
 	if !p.indice(p.typeIdxDe(desc, in), in, "the type_id of new-array") {
 		return
 	}
-	p.push(r)
+	p.pushTipo(r, tipoDeArregloPrimitivo(desc))
 	p.suelta(largo)
 }
 
-// leeArreglo: `iaload`/`aaload` (23x). La pila JVM trae el arreglo y detrás el índice.
+// leeArreglo: `iaload`/`aaload` y las formas estrechas (23x). La pila JVM trae el arreglo y detrás
+// el índice. El `baload` del JVMS vale igual para `byte[]` que para `boolean[]`: el tipo del arreglo
+// —rastreado sobre la pila— decide entre `aget-byte` 0x48 y `aget-boolean` 0x47, medidos en `Arre`.
 func (p *traduce) leeArreglo(in jvmInstr) {
 	op := byte(opAget)
 	ancho := false
+	// el índice sale primero; debajo queda la entrada del arreglo, con su tipo
+	indice := p.pop(in)
+	tipoArreglo := p.tipoCima()
 	switch in.name {
 	case "aaload":
 		op = opAgetObjeto
 	case "caload":
-		// `aget-char` 0x49, medido en `Letras.lee` sobre el fichero de `d8 --debug`: `4900 0001` es
-		// `aget-char v0, v0, v1` (parrafo 87). El `char` no es una forma ancha: una palabra.
-		op = 0x49
+		// `aget-char` 0x49, medido en `Letras.lee` (parrafo 87) y en `Arre.lc`: una palabra.
+		op = opAgetChar
+	case "saload":
+		op = opAgetShort
+	case "baload":
+		switch tipoArreglo {
+		case 'Z':
+			op = opAgetBoolean
+		case 'B':
+			op = opAgetByte
+		default:
+			p.falla(in, "a baload on an array whose element type (byte or boolean) the fork could not trace")
+			return
+		}
 	case "laload", "daload":
 		// `aget-wide` 0x45: el destino es un PAR y las dos palabras se leen del arreglo (parrafo 84)
 		op = opAgetAncho
 		ancho = true
 	}
-	indice := p.pop(in)
 	arreglo := p.pop(in)
 	r := 0
 	if ancho {
@@ -1377,24 +1469,39 @@ func (p *traduce) leeArreglo(in jvmInstr) {
 	p.suelta(indice)
 }
 
-// escribeArreglo: `iastore`/`aastore` (23x). La pila JVM trae el arreglo, el índice y el valor; el
-// primer registro de la instrucción es el valor (medido: `aput v2, v0, v1` para `v[i] = x`). Un valor
-// ancho se escribe con `aput-wide` 0x4c y se suelta como par.
+// escribeArreglo: `iastore`/`aastore` y las formas estrechas (23x). La pila JVM trae el arreglo, el
+// índice y el valor; el primer registro de la instrucción es el valor (medido: `aput v2, v0, v1` para
+// `v[i] = x`). Un valor ancho se escribe con `aput-wide` 0x4c y se suelta como par. El `bastore` del
+// JVMS elige entre `aput-byte` 0x4f y `aput-boolean` 0x4e por el tipo del arreglo, igual que el
+// `baload`.
 func (p *traduce) escribeArreglo(in jvmInstr) {
 	op := byte(opAput)
 	ancho := false
+	valor := p.pop(in)
+	indice := p.pop(in)
+	tipoArreglo := p.tipoCima()
 	switch in.name {
 	case "aastore":
 		op = opAputObjeto
 	case "castore":
-		// `aput-char` 0x50: medido `5002 0001` = `aput-char v2, v0, v1` en `Letras.escribe` (parrafo 87)
-		op = 0x50
+		// `aput-char` 0x50: medido `5002 0001` en `Letras.escribe` (parrafo 87) y en `Arre.sc`
+		op = opAputChar
+	case "sastore":
+		op = opAputShort
+	case "bastore":
+		switch tipoArreglo {
+		case 'Z':
+			op = opAputBoolean
+		case 'B':
+			op = opAputByte
+		default:
+			p.falla(in, "a bastore on an array whose element type (byte or boolean) the fork could not trace")
+			return
+		}
 	case "lastore", "dastore":
 		op = opAputAncho
 		ancho = true
 	}
-	valor := p.pop(in)
-	indice := p.pop(in)
 	arreglo := p.pop(in)
 	a, b := unidad23x(op, valor, arreglo, indice)
 	p.palabra(a)
@@ -1593,8 +1700,31 @@ func (p *traduce) mueveRegistro(destino, origen int, ancho, ref bool, in jvmInst
 	return true
 }
 
+// siembraLocales: el tipo de arreglo de los parámetros del método, por ranura de local JVM, para que
+// un `baload`/`bastore` sobre `byte[]` o `boolean[]` que llega como argumento sepa cuál de los dos
+// es. Las ranuras de `long`/`double` ocupan dos y `this` va en la 0 de un método de instancia.
+func (p *traduce) siembraLocales() {
+	if p.tipoLocal == nil {
+		p.tipoLocal = map[int]byte{}
+	}
+	ranura := 0
+	if p.m.Access&accStatic == 0 {
+		ranura = 1
+	}
+	_, _, params := splitDescriptor(p.m.Desc)
+	for _, prm := range params {
+		p.tipoLocal[ranura] = tipoDeArregloPrimitivo(prm)
+		if prm == "J" || prm == "D" {
+			ranura += 2
+		} else {
+			ranura++
+		}
+	}
+}
+
 // recorre traduce todo el Code del método. Se usa dos veces seguidas, con bases distintas.
 func (p *traduce) recorre() error {
+	p.siembraLocales()
 	lista, err := walkJvmCode(p.m.Code)
 	if err != nil {
 		return err
@@ -1650,12 +1780,15 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(r)
+			// el tipo del local 0, que en un método estático puede ser un arreglo `[B`/`[Z`
+			p.ponTipoCima(p.tipoLocal[0])
 		case "aload_1":
 			r := p.local(1)
 			if !p.nibble(r, in) {
 				return p.err
 			}
 			p.push(r)
+			p.ponTipoCima(p.tipoLocal[1])
 		case "pop":
 			p.suelta(p.pop(in))
 		case "pop2":
@@ -1673,7 +1806,7 @@ func (p *traduce) recorre() error {
 				p.falla(in, "dup2 with an empty JVM stack")
 				return p.err
 			}
-			p.push(p.enPila[len(p.enPila)-1])
+			p.duplicaCima()
 		case "dup2_x1":
 			// pila [objeto, par] -> [par, objeto, par]: las tres entradas comparten registros y no se
 			// emite nada, igual que el `dup_x1` del parrafo 72. Medido en `D.access$002`, que d8 dexa
@@ -1692,7 +1825,7 @@ func (p *traduce) recorre() error {
 				p.falla(in, "dup with an empty JVM stack")
 				return p.err
 			}
-			p.push(p.enPila[len(p.enPila)-1])
+			p.duplicaCima()
 		case "dup_x1":
 			if len(p.enPila) < 2 {
 				p.falla(in, "dup_x1 with fewer than two values on the JVM stack")
@@ -1850,14 +1983,14 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.palabra(unidad11x(opLanza, r))
-			p.enPila = p.enPila[:0]
+			p.vaciaPila()
 		case "iinc":
 			p.incrementa(in)
 		case "newarray", "anewarray":
 			p.nuevoArreglo(in)
-		case "iaload", "aaload", "laload", "faload", "daload", "caload":
+		case "iaload", "aaload", "laload", "faload", "daload", "caload", "baload", "saload":
 			p.leeArreglo(in)
-		case "iastore", "aastore", "lastore", "fastore", "dastore", "castore":
+		case "iastore", "aastore", "lastore", "fastore", "dastore", "castore", "bastore", "sastore":
 			p.escribeArreglo(in)
 		case "checkcast":
 			desc := p.x.classDescriptor(dexU16(in.ops))
@@ -1867,6 +2000,8 @@ func (p *traduce) recorre() error {
 				return p.err
 			}
 			p.push(r)
+			// un `checkcast` a `[B`, `[Z`, `[C` o `[S` fija el tipo del arreglo para el `baload`/`bastore`
+			p.ponTipoCima(tipoDeArregloPrimitivo(desc))
 		case "instanceof":
 			// medido en el parrafo 79 con `Ins2.f` dexada por `d8`: `4128 2` es
 			// `instance-of v0, v1, type@2` —opcode 0x20, el hueco entre `check-cast` 0x1f (parrafo 50)
@@ -2206,7 +2341,7 @@ func (p *traduce) accesoCampo(in jvmInstr, escribe bool) {
 		}
 		p.palabra(unidad12x(op, r, objeto))
 		p.suelta(objeto)
-		p.push(r)
+		p.pushTipo(r, tipoDeArregloPrimitivo(desc))
 	}
 	p.indice(campo, in, "the field_id of the access")
 }
@@ -2383,7 +2518,8 @@ func (p *traduce) invocaMetodo(in jvmInstr, seTira bool) {
 	case esObjeto(ret):
 		r := p.toma(in)
 		p.palabra(unidad11x(opMueveResultObj, r))
-		p.push(r)
+		// un método que devuelve `[B`/`[Z`/`[C`/`[S` deja el tipo en la entrada del resultado
+		p.pushTipo(r, tipoDeArregloPrimitivo(ret))
 	case ret[0] == 'I' || ret[0] == 'B' || ret[0] == 'C' || ret[0] == 'S' || ret[0] == 'Z' || ret[0] == 'F':
 		r := p.toma(in)
 		if !p.nibble(r, in) {
