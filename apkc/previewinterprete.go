@@ -2475,9 +2475,18 @@ var padresDeExcepcion = map[string]string{
 	"Ljava/lang/StackOverflowError;":              "Ljava/lang/VirtualMachineError;",
 }
 
-// esThrowable dice si un descriptor es una excepción o un error: lo que un `catch` puede nombrar y lo
-// que un `throw` puede lanzar. El sufijo cubre las clases del framework que no están en
-// `padresDeExcepcion`; las del proyecto se resuelven subiendo por el dex.
+// esThrowableDe dice si un descriptor es una excepción o un error: lo que un `catch` puede nombrar y
+// lo que un `throw` puede lanzar. Deciden la jerarquía del dex y la de `padresDeExcepcion`, no el
+// nombre: una excepción propia llamada `MiExcepcion` o `FalloApp` no lleva el sufijo y aun así hereda
+// de `Exception`. El sufijo queda como último recurso para una clase del framework que no esté en la
+// tabla de padres.
+func (m *maquinaDalvik) esThrowableDe(descriptor string) bool {
+	return m.tipoAcepta("Ljava/lang/Throwable;", descriptor) || esThrowable(descriptor)
+}
+
+// esThrowable es el respaldo sin máquina: el sufijo `Exception;`/`Error;` de las clases del framework.
+// No sirve para las del proyecto —`MiExcepcion`, `FalloApp`—, así que dentro del intérprete se usa
+// `esThrowableDe`, que sí sube por el dex.
 func esThrowable(descriptor string) bool {
 	return strings.HasSuffix(descriptor, "Exception;") || strings.HasSuffix(descriptor, "Error;") ||
 		descriptor == "Ljava/lang/Throwable;"
@@ -2960,7 +2969,7 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 					return nil, fmt.Errorf("%s.%s lanza algo que no es un objeto (tipo %T)",
 						claseCorta(clase), met.nombre, regs[aa])
 				}
-				if !esThrowable(obj.clase) && !m.tipoAcepta("Ljava/lang/Throwable;", obj.clase) {
+				if !m.esThrowableDe(obj.clase) {
 					return nil, fmt.Errorf("%s.%s lanza un %s, que no es un Throwable",
 						claseCorta(clase), met.nombre, claseCorta(obj.clase))
 				}
@@ -3667,8 +3676,9 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	}
 	obj, _ := receptor.(*objetoDalvik)
 	// esThrowableObj reconoce una excepción ya construida: su mensaje y su texto son lo que un catch
-	// puede leer del objeto que recibió
-	esThrowableObj := func() bool { return obj != nil && esThrowable(obj.clase) }
+	// puede leer del objeto que recibió. Se decide por la jerarquía real —una excepción del proyecto
+	// como `MiExcepcion` no lleva el sufijo en el descriptor— y no por el nombre de la clase.
+	esThrowableObj := func() bool { return obj != nil && m.esThrowableDe(obj.clase) }
 
 	switch nombre {
 	case "startActivity":

@@ -116,3 +116,112 @@ func TestElInterpretePropagaElThrowNoCapturado(t *testing.T) {
 		t.Errorf("nadie escribió en una vista y hay capturas: %+v", res.Capturas)
 	}
 }
+
+// fuenteMiExcepcion y fuenteFalloApp son excepciones del proyecto cuyos nombres NO llevan el sufijo
+// `Exception` ni `Error`: es lo que destapó que el intérprete decidía «esto es un Throwable» por el
+// nombre del descriptor y les perdía el mensaje.
+const fuenteMiExcepcion = `package com.hola.contador;
+
+public class MiExcepcion extends Exception {
+    MiExcepcion(String m) {
+        super(m);
+    }
+}
+`
+
+const fuenteFalloApp = `package com.hola.contador;
+
+public class FalloApp extends Exception {
+    FalloApp(String m) {
+        super(m);
+    }
+}
+`
+
+// fuenteCapturaPropia lanza y captura una MiExcepcion: el `getMessage` del catch tiene que devolver el
+// texto que recibió el constructor.
+const fuenteCapturaPropia = `package com.hola.contador;
+
+import android.app.Activity;
+import android.os.Bundle;
+import android.widget.TextView;
+
+public class CapturaPropia extends Activity {
+    TextView total;
+
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        total = (TextView) findViewById(R.id.total);
+        try {
+            throw new MiExcepcion("boomcustom");
+        } catch (MiExcepcion e) {
+            total.setText("capturado: " + e.getMessage());
+        }
+    }
+}
+`
+
+// fuenteSueltaPropia lanza una FalloApp que nadie captura: el error del modelo tiene que llevar su
+// tipo y su mensaje.
+const fuenteSueltaPropia = `package com.hola.contador;
+
+import android.app.Activity;
+import android.os.Bundle;
+
+public class SueltaPropia extends Activity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        throw new FalloApp("boomcustom");
+    }
+}
+`
+
+// TestElInterpreteConservaElMensajeDeUnaExcepcionPropia mide la jerarquía real y no el sufijo: una
+// excepción del proyecto que hereda de `Exception` se reconoce por su cadena de padres, guarda el
+// mensaje de su constructor y lo devuelve en `getMessage()`, y también lo enseña cuando nadie la
+// captura. Con la decisión por sufijo, las dos mitades se quedaban sin `boomcustom` y además salía el
+// aviso de que `getMessage` no estaba en los stubs.
+func TestElInterpreteConservaElMensajeDeUnaExcepcionPropia(t *testing.T) {
+	d, err := readDex(dexDeFuentes(t,
+		fuenteJava{nombre: "R.java", contenido: rContador(t)},
+		fuenteJava{nombre: "MiExcepcion.java", contenido: fuenteMiExcepcion},
+		fuenteJava{nombre: "FalloApp.java", contenido: fuenteFalloApp},
+		fuenteJava{nombre: "CapturaPropia.java", contenido: fuenteCapturaPropia},
+		fuenteJava{nombre: "SueltaPropia.java", contenido: fuenteSueltaPropia}))
+	if err != nil {
+		t.Fatalf("el dex de las excepciones propias no se relee: %v", err)
+	}
+
+	// capturada: el mensaje viaja del constructor al getMessage del catch
+	res, _ := ejecutaOnCreate(d, nil, "Lcom/hola/contador/CapturaPropia;")
+	if res.Error != "" {
+		t.Fatalf("el onCreate que captura su MiExcepcion falló: %s", res.Error)
+	}
+	if len(res.Capturas) != 1 {
+		t.Fatalf("se esperaba una sola escritura (la del catch) y hay %+v", res.Capturas)
+	}
+	if res.Capturas[0].Texto != "capturado: boomcustom" {
+		t.Errorf("el catch dejó %q y el mensaje de la MiExcepcion es «boomcustom»",
+			res.Capturas[0].Texto)
+	}
+	if len(res.Avisos) != 0 {
+		t.Errorf("la excepción propia dejó avisos que no debería: %v", res.Avisos)
+	}
+
+	// sin captura: el error del modelo nombra el tipo y el mensaje
+	res, _ = ejecutaOnCreate(d, nil, "Lcom/hola/contador/SueltaPropia;")
+	if res.Error == "" {
+		t.Fatal("el onCreate lanza FalloApp y la ejecución no falló")
+	}
+	for _, parte := range []string{"FalloApp", "boomcustom"} {
+		if !strings.Contains(res.Error, parte) {
+			t.Errorf("el error %q no nombra %q", res.Error, parte)
+		}
+	}
+	if res.malformado {
+		t.Errorf("una excepción de la app no invalida los bytes del dex: %q", res.Error)
+	}
+}
