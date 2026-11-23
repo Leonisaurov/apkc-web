@@ -10463,6 +10463,36 @@ descomprime y llama a `lector.cancel()`), `extraerJarDeZip` (`studio/pestana.js:
 `ReadAll`, el `storepass` en `argv`, el temporal predecible, la CSP con Trusted Types y las Actions por
 tag. No se tocó red ni publicación.
 
+**Actualizado el 2026-11-23 en `d5efe3d`** (`fix: cierra las colas de seguridad de la auditoría`): tres
+de esas fronteras se cerraron **después** de la medición, así que esta nota sustituye a las tres y el
+resto del `§` sigue describiendo el árbol de `18af2ae`.
+
+```sh
+# en apkc/
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestTemporal|TestEmpaquetar|TestSign|TestResuelve|TestArgumentos|TestSigningKeyAcepta' -v .
+sh -n tools/sitio.sh
+```
+
+**Resultado**: 16 tests en verde y `ok … 0.322s`; `sh -n tools/sitio.sh` sale limpio; la suite completa,
+`ok … 85.180s`, y el wasm compila.
+
+**Qué se cerró.** La **CSP con Trusted Types**: `tools/sitio.sh` añade `trusted-types apkc-studio` a la
+cabecera del service worker y al `<meta>`, y falla si falta (`tools/sitio.sh:132-140`). El **temporal
+predecible**: `apkc/paquetetemporal.go:20` lo crea con `os.CreateTemp` junto al destino (`.apkc-*`), y
+`empaquetar.go` y `sign.go` lo borran si el `rename` no llega (`apkc/empaquetar.go:61-64`,
+`apkc/sign.go:195-198`). El **`storepass` en `argv`**: `resolverPassword` acepta `file:<ruta>`
+(`apkc/paquetetemporal.go:30`), `apksigner` recibe `--ks-pass file:` (`apkc/apk.go:75`) y el vigilante
+`--storepass file:` (`apkc/device.go:565`), con el fichero 0600 borrado tras usarlo.
+
+**Falsificaciones.** Quitar la directiva CSP hace fallar `tools/sitio.sh` con rc 1; volver a
+`os.Create(ruta+".tmp")` deja el enlace plantado y escribe en la víctima; y volver a `pass:` devuelve la
+contraseña a la línea de órdenes.
+
+**Sigue abierto.** El SourceStamp truncado, `verify` con `ReadAll`, las Actions por tag y los otros
+`ruta+".tmp"` que quedan en `gopackage.go`, `aab.go`, `aab_go.go` y `build.go`; si otro agente cierra esa
+última cola, se anotará aquí con su medición.
+
 ## 238. Hot swap en el intérprete: identidad, estado y despacho
 
 Medido el 2026-11-23 sobre `e5af669` (`feat(preview): primitiva de hot swap con identidad conservada`).
