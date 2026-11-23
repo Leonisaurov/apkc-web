@@ -261,7 +261,8 @@ func esPresupuesto(err error) bool {
 		return false
 	}
 	return strings.HasPrefix(te.motivo, "it needs more temporaries") ||
-		strings.HasPrefix(te.motivo, "it needs more wide temporaries")
+		strings.HasPrefix(te.motivo, "it needs more wide temporaries") ||
+		strings.HasPrefix(te.motivo, "the /range block needs more temporaries")
 }
 
 // ocupado: el registro no se puede repartir. Está ocupado si es un local (`fijos`), si es la mitad
@@ -2106,6 +2107,11 @@ func (p *traduce) tomaBloque(n int, in jvmInstr) int {
 		}
 	}
 	if p.techo && inicio+n > p.base {
+		// el bloque no cabe en la base: se anota el tamaño que pide para que `codeItemConPc` suba
+		// la base y repita la pasada (el error va clasificado como presupuesto)
+		if inicio+n > p.pico {
+			p.pico = inicio + n
+		}
 		p.falla(in, "the /range block needs more temporaries than the max stack javap measured")
 		return 0
 	}
