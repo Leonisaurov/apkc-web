@@ -2,41 +2,43 @@
 # aab-multidex.sh — el .aab multi-dex, medido con bundletool como oráculo.
 #
 #   sh banco/aab-multidex/aab-multidex.sh
-#   PROBAR_DEPENDENCIAS=1 sh banco/aab-multidex/aab-multidex.sh   # además, el caso con jars
+#   sh banco/aab-multidex/aab-multidex.sh --dependencias
+#   PROBAR_DEPENDENCIAS=1 sh banco/aab-multidex/aab-multidex.sh
 #
-# La frontera que se mide es la última del mapa: un `.aab` con más de un dex, derivado por
-# bundletool a un `base.apk`. `apkc build --linker go --compiler go --signer go --aab` arma el
-# bundle sin bundletool ni aapt2 (apkc/aab_go.go); aquí se comprueba con bundletool, que no
-# comparte código con apkc, que:
+# Cierra la última frontera del mapa: un app bundle con más de un dex, derivado por bundletool a
+# un APK. `apkc build --linker go --compiler go --signer go --aab` arma el bundle sin bundletool
+# ni aapt2 (apkc/aab_go.go); aquí se comprueba con bundletool, que no comparte código con apkc,
+# que:
 #
 #   1. el .aab lleva base/dex/classes.dex…classesN.dex, contiguos y en orden;
 #   2. `bundletool validate` da rc 0;
 #   3. `bundletool build-apks` deriva el base-master.apk (modo default) y el universal.apk, y los
 #      dos llevan los mismos dex que el bundle;
-#   4. `apksigner verify`, `zipalign -c -p 4` y `dexdump` del APK derivado pasan, y un método que
-#      classes.dex invoca está definido en classes2.dex (el reparto se ejerce de verdad).
+#   4. `apksigner verify`, `zipalign -c -p 4` y `dexdump` del APK derivado pasan, ningún dex pasa
+#      de 65 536 `method_id` y un método que classes.dex invoca está definido en otro fichero.
 #
-# El caso es el reparto del dex de la app: 700 clases de 100 métodos en `src/grande`, 70 000
-# métodos que no caben en un dex. Es el mismo proyecto con el que el §228 midió el reparto en el
-# APK; en el bundle los dos dex quedan en `base/dex/` y el número de ficheros no cambia.
+# Hay dos casos, y los dos tienen que salir en verde:
 #
-# `PROBAR_DEPENDENCIAS=1` añade el caso de los jars (veintidós clases de dependencia, tres
-# buckets). Ese caso HOY NO SE PUEDE ENSAMBLAR, y el guion lo ejecuta como expected-fail: recorre
-# `build/` entero con `ficherosDeArbol` (`apkc/aab_go.go:369`) y nombra cada dex con
-# `filepath.Base` (`apkc/aab_go.go:379`) dentro de `ensamblarAABDesdeGo` (`apkc/aab_go.go:311`),
-# así que los `classes.dex` que el dexado de dependencias deja en `build/dexcache/…` colisionan con
-# el `build/classes.dex` de la app y el bundle lista `base/dex/classes.dex` más de una vez: la
-# firma lo rechaza en `apkc/sign.go:309`. El reparto correcto lo sabe `packagePlan`
-# (`apkc/build.go:1676`), que `apkc/aab.go:25` no le pasa. Cuando otro frente lo arregle, este caso
-# tiene que pasar a medirse con bundletool como el caso 1; hasta entonces su verde es un fallo.
+#   1. el reparto del dex de la app: 700 clases de 100 métodos en `src/grande`, 70 000 métodos que
+#      no caben en un dex (es el mismo proyecto con el que el §228 midió el reparto en el APK).
+#      Sale con `classes.dex` + `classes2.dex` en `base/dex/`.
+#   2. el dex de dependencias, con `--dependencias` o `PROBAR_DEPENDENCIAS=1`: veintidós jars de
+#      una clase cada uno, que el dexado reparte en tres buckets. Sale con `classes.dex` y
+#      `classes2.dex`…`classes4.dex` (el de la app más los tres de dependencias).
+#
+# El caso 2 se activa con la variable o con el flag, y el flag existe porque un harness que sanea el
+# entorno al invocar `sh <fichero>` deja la variable fuera del hijo: `--dependencias` viaja en argv.
+# Estuvo bloqueado hasta `0237e23` («fix(aab): ensambla los dex del aab desde el plan correcto»):
+# el ensamblador recorría `build/` entero y los `classes.dex` de `build/dexcache/…` colisionaban
+# con el de la app al nombrarlos con `filepath.Base`. Desde ese parche `buildAAB` recibe los
+# `depDexes` y numera los dex con `dexEntries`, la misma lista que empaqueta el APK.
 #
 # Los artefactos van a $HOME/.cache/apkc-web/aab-multidex: no se versiona ningún binario (regla 2).
 # Variables: APKC (binario), APKC_ANDROID_JAR o ANDROID_JAR, JAVA_HOME, APKC_WEB_CACHE y BUNDLETOOL
 # (jar o ejecutable; si falta se busca en el PATH y en $ANDROID_HOME/bundletool).
 #
 # No usa serial, ni adb, ni aparato: el oráculo es bundletool en local. Códigos de salida: 0 en
-# verde; 1 si un paso o un oráculo falla; 2 si no hay bundletool (la frontera queda abierta con el
-# motivo impreso y el comando que la reproduciría cuando lo haya).
+# verde; 1 si un paso o un oráculo falla; 2 si no hay bundletool.
 set -eu
 
 AQUI=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -49,6 +51,24 @@ falla() {
 	echo "FALLO: $*" >&2
 	exit 1
 }
+
+# ---------------------------------------------------------------- argumentos
+# El flag existe además de la variable: `sh fichero.sh --dependencias` no depende de que el
+# entorno llegue al hijo, y en un harness que lo sanea la variable se queda en el padre.
+DEPENDENCIAS=${PROBAR_DEPENDENCIAS:-0}
+for arg in "$@"; do
+	case $arg in
+	--dependencias) DEPENDENCIAS=1 ;;
+	--sin-dependencias) DEPENDENCIAS=0 ;;
+	-h | --help)
+		echo "uso: sh banco/aab-multidex/aab-multidex.sh [--dependencias]"
+		echo "     PROBAR_DEPENDENCIAS=1 sh banco/aab-multidex/aab-multidex.sh"
+		echo "  --dependencias  mide además el .aab con dex de dependencias (cuatro dex)"
+		exit 0
+		;;
+	*) falla "argumento desconocido: $arg (usa --dependencias o -h)" ;;
+	esac
+done
 
 # ---------------------------------------------------------------- entorno
 APKC=${APKC:-$CACHE/apkc}
@@ -92,7 +112,7 @@ if [ -z "$BUNDLETOOL" ]; then
 	echo "bundletool  AUSENTE (ni en el PATH ni en $ANDROID_HOME/bundletool)"
 	echo "La frontera del .aab multi-dex sigue ABIERTA: sin bundletool no hay oráculo que derive el"
 	echo "base.apk. Con bundletool instalado este mismo guion la cierra:"
-	echo "  sh banco/aab-multidex/aab-multidex.sh"
+	echo "  sh banco/aab-multidex/aab-multidex.sh --dependencias"
 	echo "Para instalarlo (red, decisión de quien lo ejecute):"
 	echo "  curl -O https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar"
 	echo "  mkdir -p \"\$ANDROID_HOME/bundletool\" && mv bundletool-all-1.18.3.jar \"\$ANDROID_HOME/bundletool/\""
@@ -113,7 +133,11 @@ echo "android     $JAR"
 echo "oráculos    $APKSIGNER · $ZIPALIGN · $DEXDUMP"
 echo "bundletool  $BUNDLETOOL"
 echo "javac       $JDK_BIN"
-echo "caso 2      PROBAR_DEPENDENCIAS=1 (expected-fail: aab_go.go:311,369,379 · sign.go:309)"
+if [ "$DEPENDENCIAS" = "1" ]; then
+	echo "caso 2      activo (--dependencias o PROBAR_DEPENDENCIAS=1)"
+else
+	echo "caso 2      inactivo (--dependencias o PROBAR_DEPENDENCIAS=1)"
+fi
 bundletool version
 
 KS=${KEYSTORE:-$CACHE/debug.keystore}
@@ -121,21 +145,79 @@ if [ ! -f "$KS" ]; then
 	"$APKC" debug-keystore --out "$KS" >/dev/null
 fi
 
+# ---------------------------------------------------------------- utilidades
 # lista los dex de un zip como «classes.dex classes2.dex …», en el orden con el que el runtime los
 # abre. `sort -V` respeta que classes2.dex va antes que classes10.dex.
 nombres_dex() {
 	unzip -Z1 "$1" | grep -E "$2" | sed 's#.*/##' | sort -V | tr '\n' ' '
 }
 
-# verifica un APK derivado por bundletool: los mismos dex que el .aab, los tres oráculos y el
-# cruce entre ficheros que hace real el reparto.
+# exige que los nombres de los dex de un bundle o apk sean exactamente los esperados: contiguos
+# desde classes.dex, sin huecos y sin sorpresas.
+exige_dex() {
+	obtenidos=$1
+	esperados=$2
+	que=$3
+	echo "-- dex de $que"
+	echo "   $obtenidos"
+	[ "$obtenidos" = "$esperados" ] ||
+		falla "$que: los dex son «$obtenidos» y se esperaban «$esperados»"
+	n=1
+	for d in $obtenidos; do
+		if [ "$n" -eq 1 ]; then
+			[ "$d" = "classes.dex" ] || falla "$que: el primer dex es $d y no classes.dex"
+		else
+			[ "$d" = "classes$n.dex" ] || falla "$que: falta classes$n.dex (hay $d)"
+		fi
+		n=$((n + 1))
+	done
+	echo "   nombres y orden ok"
+}
+
+# el cruce del caso 1: un método que classes.dex invoca y classes2.dex define. El par se busca en
+# vez de fijar la clase, porque dónde corta el reparto no lo decide el guion.
+cruce_app() {
+	echo "-- el cruce entre classes.dex y classes2.dex"
+	"$DEXDUMP" -f "$DEXDERIV/classes2.dex" |
+		sed -n "s/.*Class descriptor  : '\(Lgrande\/C[0-9]*;\)'/\1/p" | sort -u >"$SALIDA/define2.txt"
+	clase=$(
+		"$DEXDUMP" -d "$DEXDERIV/classes.dex" |
+			sed -n "s/.*invoke-[a-z/]*.*\(Lgrande\/C[0-9]*;\)\.m0:()I.*/\1/p" |
+			grep -F -m1 -f "$SALIDA/define2.txt" || true
+	)
+	[ -n "$clase" ] ||
+		falla "classes.dex no invoca ningún método que defina classes2.dex: el .aab no prueba el reparto"
+	echo "   classes.dex invoca ${clase#L}.m0 y classes2.dex define $clase"
+}
+
+# el cruce del caso 2: la app invoca lo que definen los dex de dependencias, y ninguna de esas
+# clases vive en classes.dex (si viviera, el bundle no probaría el reparto).
+cruce_deps() {
+	echo "-- el cruce entre classes.dex y los dex de dependencias"
+	"$DEXDUMP" -d "$DEXDERIV/classes.dex" | grep -q 'Lsaludo/Saludo;.saludo' ||
+		falla "classes.dex no invoca Lsaludo/Saludo;.saludo"
+	"$DEXDUMP" -d "$DEXDERIV/classes.dex" | grep -q 'Ldep/D20;.valor' ||
+		falla "classes.dex no invoca Ldep/D20;.valor"
+	for clase in 'Lsaludo/Saludo;' 'Ldep/D0;' 'Ldep/D20;'; do
+		definida=no
+		for d in "$DEXDERIV"/classes*.dex; do
+			[ "$(basename "$d")" = classes.dex ] && continue
+			if "$DEXDUMP" -f "$d" | grep -q "'$clase'"; then
+				definida=$(basename "$d")
+				break
+			fi
+		done
+		[ "$definida" != no ] || falla "ningún dex de dependencias define $clase"
+		echo "   classes.dex invoca $clase lo define $definida"
+	done
+}
+
+# verifica un APK derivado por bundletool: los mismos dex que el .aab, los oráculos y el cruce.
 verifica_apk() {
 	apk=$1
-	echo "-- dex de $(basename "$apk")"
-	obtenidos=$(nombres_dex "$apk" '^classes[0-9]*\.dex$')
-	echo "   $obtenidos"
-	[ "$obtenidos" = "$DEX_AAB" ] ||
-		falla "$(basename "$apk"): los dex son «$obtenidos» y el .aab lleva «$DEX_AAB»"
+	esperados=$2
+	cruce=$3
+	exige_dex "$(nombres_dex "$apk" '^classes[0-9]*\.dex$')" "$esperados" "$(basename "$apk")"
 
 	echo "-- apksigner verify --verbose"
 	"$APKSIGNER" verify --verbose "$apk"
@@ -146,11 +228,12 @@ verifica_apk() {
 	"$ZIPALIGN" -c -p 4 "$apk"
 	echo "   zipalign ok"
 
-	rm -rf "$SALIDA/dex-derivados"
-	mkdir -p "$SALIDA/dex-derivados"
-	unzip -o -q "$apk" 'classes*.dex' -d "$SALIDA/dex-derivados"
+	DEXDERIV=$SALIDA/dex-derivados
+	rm -rf "$DEXDERIV"
+	mkdir -p "$DEXDERIV"
+	unzip -o -q "$apk" 'classes*.dex' -d "$DEXDERIV"
 	echo "-- dexdump de cada dex derivado"
-	for d in "$SALIDA"/dex-derivados/classes*.dex; do
+	for d in "$DEXDERIV"/classes*.dex; do
 		printf '   %s (%s B, %s method_id): ' "$(basename "$d")" "$(wc -c <"$d")" \
 			"$("$DEXDUMP" -f "$d" | sed -n 's/.*method_ids_size *: *\([0-9]*\).*/\1/p' | head -1)"
 		"$DEXDUMP" -f "$d" | sed -n "s/.*Class descriptor  : '\(.*\)'/\1/p" | sed '/^$/d' |
@@ -160,7 +243,7 @@ verifica_apk() {
 
 	# el techo de 16 bits se cumple por fichero, que es la propiedad que se mide
 	echo "-- method_id de cada dex (techo 65 536)"
-	for d in "$SALIDA"/dex-derivados/classes*.dex; do
+	for d in "$DEXDERIV"/classes*.dex; do
 		metodos=$("$DEXDUMP" -f "$d" | sed -n 's/.*method_ids_size *: *\([0-9]*\).*/\1/p' | head -1)
 		[ -n "$metodos" ] || falla "dexdump no dice los method_id de $(basename "$d")"
 		[ "$metodos" -le 65536 ] ||
@@ -168,19 +251,48 @@ verifica_apk() {
 		echo "   $(basename "$d"): $metodos"
 	done
 
-	# la frontera del reparto: un método que classes.dex invoca y classes2.dex define. El par se
-	# busca en vez de fijar una clase, porque dónde corta el reparto no lo decide el guion.
-	echo "-- el cruce entre classes.dex y classes2.dex"
-	"$DEXDUMP" -f "$SALIDA/dex-derivados/classes2.dex" |
-		sed -n "s/.*Class descriptor  : '\(Lgrande\/C[0-9]*;\)'/\1/p" | sort -u >"$SALIDA/define2.txt"
-	clase=$(
-		"$DEXDUMP" -d "$SALIDA/dex-derivados/classes.dex" |
-			sed -n "s/.*invoke-[a-z/]*.*\(Lgrande\/C[0-9]*;\)\.m0:()I.*/\1/p" |
-			grep -F -m1 -f "$SALIDA/define2.txt" || true
-	)
-	[ -n "$clase" ] ||
-		falla "classes.dex no invoca ningún método que defina classes2.dex: el .aab no prueba el reparto"
-	echo "   classes.dex invoca ${clase#L}.m0 y classes2.dex define $clase"
+	"$cruce"
+}
+
+# el oráculo entero para un .aab: validate, los dos modos de build-apks y verifica_apk sobre el
+# base-master y el universal. `tag` separa los artefactos de cada caso.
+oracula_aab() {
+	aab=$1
+	tag=$2
+	esperados=$3
+	cruce=$4
+
+	echo
+	echo "== [$tag] bundletool validate --bundle"
+	bundletool validate --bundle "$aab"
+
+	echo
+	echo "== [$tag] bundletool build-apks --mode=default"
+	apks=$SALIDA/apks-$tag.apks
+	bundletool build-apks --bundle "$aab" --output "$apks" \
+		--ks "$KS" --ks-pass pass:android --ks-key-alias androiddebugkey \
+		--mode=default --overwrite
+	rm -rf "$SALIDA/apks-$tag"
+	mkdir -p "$SALIDA/apks-$tag"
+	unzip -o -q "$apks" -d "$SALIDA/apks-$tag"
+	echo "-- contenido del .apks"
+	unzip -Z1 "$apks" | sed 's/^/   /'
+	base=$(ls "$SALIDA/apks-$tag"/splits/base-master*.apk 2>/dev/null | sort -V | head -1)
+	[ -n "${base:-}" ] || falla "bundletool no derivó un base-master.apk para $tag"
+	verifica_apk "$base" "$esperados" "$cruce"
+
+	echo
+	echo "== [$tag] bundletool build-apks --mode=universal"
+	uapks=$SALIDA/universal-$tag.apks
+	bundletool build-apks --bundle "$aab" --output "$uapks" \
+		--ks "$KS" --ks-pass pass:android --ks-key-alias androiddebugkey \
+		--mode=universal --overwrite
+	rm -rf "$SALIDA/universal-$tag"
+	mkdir -p "$SALIDA/universal-$tag"
+	unzip -o -q "$uapks" -d "$SALIDA/universal-$tag"
+	[ -f "$SALIDA/universal-$tag/universal.apk" ] ||
+		falla "bundletool no derivó universal.apk para $tag"
+	verifica_apk "$SALIDA/universal-$tag/universal.apk" "$esperados" "$cruce"
 }
 
 # ================================================================ caso 1: el dex de la app
@@ -214,66 +326,22 @@ printf 'package com.ejemplo.aabmultidex;\n\nimport android.app.Activity;\nimport
 echo "   700 clases, 70 000 métodos"
 ( cd "$P" && "$APKC" build --linker go --compiler go --signer go --aab \
 	--android-jar "$JAR" --sdk-version 34 --codename 14 --keystore "$KS" )
-AAB=$P/build/app.aab
-[ -f "$AAB" ] || falla "$P no dejó $AAB"
-
-echo "-- dex dentro del .aab"
-DEX_AAB=$(nombres_dex "$AAB" '^base/dex/classes[0-9]*\.dex$')
-echo "   $DEX_AAB"
-[ "$(echo "$DEX_AAB" | wc -w)" -ge 2 ] ||
-	falla "el .aab lleva un solo dex: el reparto de la app no llegó al bundle"
-n=1
-for d in $DEX_AAB; do
-	if [ "$n" -eq 1 ]; then
-		[ "$d" = "classes.dex" ] || falla "el primer dex es $d y no classes.dex"
-	else
-		[ "$d" = "classes$n.dex" ] || falla "falta classes$n.dex (hay $d)"
-	fi
-	n=$((n + 1))
-done
-echo "   nombres y orden ok"
-
-echo
-echo "== bundletool validate --bundle"
-bundletool validate --bundle "$AAB"
-
-echo
-echo "== bundletool build-apks --mode=default"
-APKS=$SALIDA/app.apks
-bundletool build-apks --bundle "$AAB" --output "$APKS" \
-	--ks "$KS" --ks-pass pass:android --ks-key-alias androiddebugkey \
-	--mode=default --overwrite
-rm -rf "$SALIDA/apks"
-mkdir -p "$SALIDA/apks"
-unzip -o -q "$APKS" -d "$SALIDA/apks"
-echo "-- contenido del .apks"
-unzip -Z1 "$APKS" | sed 's/^/   /'
-BASE_APK=$(ls "$SALIDA"/apks/splits/base-master*.apk 2>/dev/null | sort -V | head -1)
-[ -n "${BASE_APK:-}" ] || falla "bundletool no derivó un base-master.apk"
-verifica_apk "$BASE_APK"
-
-echo
-echo "== bundletool build-apks --mode=universal"
-UAPKS=$SALIDA/universal.apks
-bundletool build-apks --bundle "$AAB" --output "$UAPKS" \
-	--ks "$KS" --ks-pass pass:android --ks-key-alias androiddebugkey \
-	--mode=universal --overwrite
-rm -rf "$SALIDA/universal"
-mkdir -p "$SALIDA/universal"
-unzip -o -q "$UAPKS" -d "$SALIDA/universal"
-[ -f "$SALIDA/universal/universal.apk" ] || falla "bundletool no derivó universal.apk"
-verifica_apk "$SALIDA/universal/universal.apk"
+[ -f "$P/build/app.aab" ] || falla "$P no dejó build/app.aab"
+exige_dex "$(nombres_dex "$P/build/app.aab" '^base/dex/classes[0-9]*\.dex$')" \
+	"classes.dex classes2.dex " "el .aab"
+oracula_aab "$P/build/app.aab" app "classes.dex classes2.dex " cruce_app
 
 echo
 echo "OK caso 1: el .aab multi-dex (classes.dex + classes2.dex) deriva un base-master.apk y un"
-echo "universal.apk con los dos dex y los tres oráculos pasan."
+echo "universal.apk con los dos dex y los oráculos pasan."
 
-# ================================================================ caso 2: jars (opt-in)
-# El mismo mecanismo con dex de dependencias no llega a ensamblarse. Se mide para dejar la causa
-# escrita con su file:line en vez de una impresión: el ensamblador recorre build/ entero.
-if [ "${PROBAR_DEPENDENCIAS:-0}" = "1" ]; then
+# ================================================================ caso 2: dex de dependencias
+# Veintidós jars de una clase cada uno: el dexado de dependencias parte en tres buckets, así que
+# el bundle lleva el dex de la app más tres de dependencias. Con `0237e23` esto ya se ensambla y
+# se firma; el caso exige lo mismo que el caso 1, no un fallo esperado.
+if [ "$DEPENDENCIAS" = "1" ]; then
 	echo
-	echo "== caso 2 (PROBAR_DEPENDENCIAS=1): dex de dependencias en tres buckets"
+	echo "== caso 2: 22 jars en tres buckets, classes.dex + classes2.dex…classes4.dex"
 	D=$SALIDA/proyecto-deps
 	rm -rf "$D" "$CACHE/jars" "$SALIDA/dep-clases" "$SALIDA/dep-fuentes"
 	mkdir -p "$D/src/com/ejemplo/aabmultidex" "$D/res/values" "$D/jar" "$CACHE/jars" "$SALIDA/dep-clases"
@@ -308,26 +376,19 @@ EOF
 		i=$((i + 1))
 	done
 	cp "$CACHE"/jars/*.jar "$D/jar/"
-	set +e
+	echo "   22 jars de una clase"
 	( cd "$D" && "$APKC" build --linker go --compiler go --signer go --aab \
-		--android-jar "$JAR" --sdk-version 34 --codename 14 --keystore "$KS" ) \
-		>"$SALIDA/deps-build.log" 2>&1
-	rc=$?
-	set -e
-	sed 's/^/   | /' "$SALIDA/deps-build.log"
-	[ "$rc" -ne 0 ] ||
-		falla "el .aab con dex de dependencias salió en verde: el bloqueo de aab_go.go:369 se levantó, y el caso 2 tiene que pasar a medirse con bundletool como el caso 1 antes de dar nada por bueno"
-	[ -f "$D/build/app.aab" ] || falla "el build falló sin dejar build/app.aab"
-	echo "-- el bundle que dejó (antes de firmar)"
-	unzip -Z1 "$D/build/app.aab" | grep '^base/dex/' | sed 's/^/   /'
-	echo "-- expected-fail: el caso 2 no se puede firmar hoy, y este es el motivo"
-	echo "   ensamblarAABDesdeGo (apkc/aab_go.go:311) recorre build/ entero con ficherosDeArbol"
-	echo "   (apkc/aab_go.go:369) y nombra cada dex con filepath.Base (apkc/aab_go.go:379): los"
-	echo "   classes.dex de build/dexcache/… colisionan con el de la app y base/dex/classes.dex"
-	echo "   sale más de una vez. El reparto correcto está en packagePlan (apkc/build.go:1676),"
-	echo "   que apkc/aab.go:25 no le pasa. La firma lo rechaza en apkc/sign.go:309."
-	echo "   El caso con dex de dependencias del .aab sigue ABIERTO."
+		--android-jar "$JAR" --sdk-version 34 --codename 14 --keystore "$KS" )
+	[ -f "$D/build/app.aab" ] || falla "$D no dejó build/app.aab"
+	exige_dex "$(nombres_dex "$D/build/app.aab" '^base/dex/classes[0-9]*\.dex$')" \
+		"classes.dex classes2.dex classes3.dex classes4.dex " "el .aab con dependencias"
+	oracula_aab "$D/build/app.aab" deps \
+		"classes.dex classes2.dex classes3.dex classes4.dex " cruce_deps
+
+	echo
+	echo "OK caso 2: el .aab con dex de dependencias deriva un base-master.apk y un universal.apk"
+	echo "con los cuatro dex, y la firma y los oráculos pasan."
 fi
 
 echo
-echo "OK: la frontera del .aab multi-dex del dex de la app está medida con bundletool."
+echo "OK: la frontera del .aab multi-dex está medida con bundletool (caso 2 activo: $DEPENDENCIAS; argv: «${*:-}»)."
