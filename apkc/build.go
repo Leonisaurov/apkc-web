@@ -1384,9 +1384,12 @@ func dexBucket(api int, coreLibrary, enGo bool, jars []string, digests []string,
 }
 
 // dexarBucketEnGo es el cuerpo del bucket cuando el dexer es el de este fork: lee los
-// `.class` de cada jar en memoria y escribe `classes.dex` en el directorio de staging, con
-// la caché de I4 propia del bucket. No arranca ningún proceso, así que es el camino que
-// puede correr dentro de la pestaña.
+// `.class` de cada jar en memoria y escribe los `classes.dex`, `classes2.dex`, … que hagan
+// falta en el directorio de staging, con la caché de I4 propia de cada dex. No arranca ningún
+// proceso, así que es el camino que puede correr dentro de la pestaña. Un bucket que cabe en
+// un dex escribe un solo fichero y su caché es la de siempre; uno que no cabe se reparte
+// (reparto.go) y cada grupo lleva su caché, porque una caché se cierra contra las tablas de un
+// dex concreto.
 func dexarBucketEnGo(jars []string, staging string) ([]byte, error) {
 	clases := []classFull{}
 	for _, jar := range jars {
@@ -1400,19 +1403,21 @@ func dexarBucketEnGo(jars []string, staging string) ([]byte, error) {
 		// sin clases no hay dex: el publicador deja el marcador .nodex y la caché contesta
 		return nil, nil
 	}
-	cache := cargaCacheDexDe(ficheroCacheDepsGo(jars))
-	dex, err := dexDeClasesConCache(clases, cache)
+	dexes, err := dexDeClasesRepartidas(clases, func(grupo, total int) *cacheDex {
+		return cargaCacheDexDe(ficheroCacheDepsGoDeGrupo(jars, grupo))
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(filepath.Join(staging, "classes.dex"), dex, 0644); err != nil {
-		return nil, err
+	total := 0
+	for i, dex := range dexes {
+		if err := os.WriteFile(filepath.Join(staging, dexEntryName(i+1)), dex, 0644); err != nil {
+			return nil, err
+		}
+		total += len(dex)
 	}
-	cache.guarda()
-	if r := cache.resumen(); r.total > 0 {
-		LogI("build", r.reutilizados, "de", r.total, "code_item reutilizados de", cache.fichero)
-	}
-	LogI("build", len(clases), "clases de", len(jars), "dependencias ->", len(dex), "bytes")
+	LogI("build", len(clases), "clases de", len(jars), "dependencias ->", total, "bytes en",
+		len(dexes), "dex")
 	return nil, nil
 }
 
@@ -1424,10 +1429,23 @@ func ficheroCacheDepsGo(jars []string) string {
 	return filepath.Join("build", "dexcache", "deps-gocache-"+sha1Text(strings.Join(jars, "\n"))[:16]+".bin")
 }
 
+// ficheroCacheDepsGoDeGrupo es la caché del grupo i de un bucket repartido. El primero usa el
+// nombre del bucket entero, así que un bucket que cabe en un dex conserva su caché de siempre y
+// los tests que la cuentan no cambian; los demás llevan su índice detrás. Un reparto distinto
+// deja una caché cuyo resumen de tablas ya no coincide, y esa se tira en vez de reutilizarse.
+func ficheroCacheDepsGoDeGrupo(jars []string, grupo int) string {
+	base := ficheroCacheDepsGo(jars)
+	if grupo == 0 {
+		return base
+	}
+	return strings.TrimSuffix(base, ".bin") + "-g" + strconv.Itoa(grupo+1) + ".bin"
+}
+
 // dexFilesIn lists the dex files of a dexed bucket, ordered by their index: d8
 // names them classes.dex, classes2.dex, ... and the bundle has to continue that
-// numbering after the dex of the project. El dexer de este fork escribe un solo
-// classes.dex; el nombre y el orden son los mismos para los dos.
+// numbering after the dex of the project. Los dos dexers pueden escribir varios
+// ficheros por bucket —d8 porque parte solo por encima del techo de referencias y
+// el de este fork porque reparte (reparto.go)—; el nombre y el orden son los mismos.
 func dexFilesIn(dir string) []string {
 	dexes, err := filepath.Glob(filepath.Join(dir, "classes*.dex"))
 	if err != nil {

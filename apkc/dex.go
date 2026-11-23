@@ -91,6 +91,12 @@ func dexDeClasesConCache(clases []classFull, c *cacheDex) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return dexDeClasesExpandidas(clases, c)
+}
+
+// dexDeClasesExpandidas es la etapa con las lambdas ya expandidas: es la pieza que el reparto de
+// un bucket necesita, porque expandir dos veces añadiría dos veces las clases sintéticas.
+func dexDeClasesExpandidas(clases []classFull, c *cacheDex) ([]byte, error) {
 	td := newDexTables()
 	if err := td.collectClasses(clases); err != nil {
 		return nil, err
@@ -103,6 +109,49 @@ func dexDeClasesConCache(clases []classFull, c *cacheDex) ([]byte, error) {
 		td.cache = c
 	}
 	return td.armaDex(clases)
+}
+
+// dexDeClasesRepartidas es la etapa de un bucket de dependencias: expande las lambdas una sola vez
+// y parte las clases en tantos dex como haga falta para que ninguno pase del techo de los índices
+// de 16 bits (reparto.go). cacheDe da la caché I4 de cada grupo —nil sin caché—, porque una caché
+// se cierra contra las tablas de un dex concreto y un bucket repartido tiene una por fichero.
+// Devuelve los dex en el orden en que el apk los numera: classes.dex, classes2.dex, …
+func dexDeClasesRepartidas(clases []classFull, cacheDe func(grupo, total int) *cacheDex) ([][]byte, error) {
+	clases, err := expandirLambdas(clases)
+	if err != nil {
+		return nil, err
+	}
+	grupos, err := reparteEnDexes(clases, refsPorDex)
+	if err != nil {
+		return nil, err
+	}
+	if len(grupos) == 0 {
+		return nil, fmt.Errorf("there are no classes to dex")
+	}
+	dexes := make([][]byte, 0, len(grupos))
+	for i, g := range grupos {
+		var c *cacheDex
+		if cacheDe != nil {
+			c = cacheDe(i, len(grupos))
+		}
+		b, err := armaGrupo(g, c)
+		if err != nil {
+			if len(grupos) > 1 {
+				// el fichero que no se pudo escribir, para que el rechazo no se lea como el del
+				// bucket entero: con un solo grupo el mensaje es el de siempre, carácter a carácter
+				return nil, fmt.Errorf("el dex %d de %d (%d clases): %w", i+1, len(grupos), len(g.clases), err)
+			}
+			return nil, err
+		}
+		if c != nil {
+			c.guarda()
+			if r := c.resumen(); r.total > 0 {
+				LogI("build", r.reutilizados, "de", r.total, "code_item reutilizados de", c.fichero)
+			}
+		}
+		dexes = append(dexes, b)
+	}
+	return dexes, nil
 }
 
 // leeClases baja todos los .class de los árboles dados, en un orden fijo: el internado depende del
