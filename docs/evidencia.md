@@ -10597,3 +10597,37 @@ misma primitiva.
 **Fronteras de este `§`.** Una cabecera de bucle sin borde conocido y con la pila no vacía queda como
 estaba (javac no la emite) y ahora es autoconsistente. No se corrió gate, chromium, red ni publicación;
 **el gate de `§230` es anterior a este arreglo y no lo cubre**.
+
+## 241. ApkShare desde el zip: diamante, `for` con dos puntos y comodines
+
+Medido el 2026-11-23 sobre `efbf139` (`fix(java): admite new ArrayList sin constructor`), `074e0bc`
+(`fix(java): admite el for Each en la fuente`) y `4c384dd` (`fix(java): admite comodines en argumentos de
+tipo`). El origen es el zip real que el usuario compiló desde `~/Downloads/ApkShare-main`: el `check` se
+paró en `App.java:32` con `un new ArrayList sin constructor no esta medido`.
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  JAVAC17=/home/leonisauro/opt/jdk17/bin/javac GOMAXPROCS=2 GOGC=50 \
+  go test -p=1 -count=1 \
+  -run 'TestDiamanteDelNuevoContraJavac17|TestPorCadaDeAppContraJavac17|TestComodinesDeTipoContraJavac17' -v .
+```
+
+**Resultado**: los tres frentes en verde; la suite completa del árbol final, `ok … 92.102s`.
+
+**Los tres bloqueos, con la fuente exacta.** `new ArrayList<>()` (`src/share/apps/util/App.java:32`) y
+`new ArrayList<Apk>()`: el descriptor sigue siendo el borrado `Ljava/util/ArrayList;` y la construcción
+baja a `new-instance` + `invoke-direct <init>` (`efbf139`). El `for (String path :
+info.splitSourceDirs)` (`App.java:37`), con arreglo e `Iterable` y con `break`/`continue` dentro
+(`074e0bc`). Y `AdapterView<?>` (`src/share/apps/util/MainActivity.java:54`): `?`, `? extends` y `?
+super` bajan a `*`, `+cota` y `-cota` en la `Signature`, con el descriptor del borrado (`4c384dd`).
+
+**Oráculo.** `javac` 17 en los tres frentes, y dex **byte a byte** en los casos planos.
+
+**Falsificaciones.** Apagar cada interruptor devuelve el mensaje literal que vio el usuario: `no esta
+medido`, `se esperaba ";" y hay ":"` y `el caracter '?' no es de este subconjunto`.
+
+**Fronteras de este `§`.** La anónima con comodín difiere **76 B** del dex de `javac`, así que su oráculo
+es solo el `.class`. Siguen abiertos el `final` local de `MainActivity.java:137`, la lambda
+`apk -> shareApp(apk)` de `:156` y `App.java:28`/`:35`. No se corrió gate, chromium, red ni publicación;
+**el gate de `§230` es anterior a estos tres arreglos y no los cubre**.
