@@ -424,6 +424,121 @@ func TestCheckAsignacionNulaAUnCampo(t *testing.T) {
 	}
 }
 
+// fuenteClausulaGenerica es el caso del usuario: `extends ArrayAdapter<Apk>`. El argumento `Apk` no
+// cambia el descriptor de la superclase —es el borrado—, pero antes el analizador se paraba en el `<`
+// con «se esperaba "{"». La clase `Apk` va en el mismo fichero para que se resuelva sin más fuentes.
+const fuenteClausulaGenerica = `package com.hola.apkcstudio;
+
+import android.content.Context;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ArrayAdapter;
+
+public class ApkAdapter extends ArrayAdapter<Apk> {
+    public ApkAdapter(Context contexto) {
+        super(contexto, 0);
+    }
+
+    @Override
+    public View getView(int posicion, View reusada, ViewGroup padre) {
+        return reusada;
+    }
+}
+
+class Apk {
+    private String ruta;
+
+    Apk(String ruta) {
+        this.ruta = ruta;
+    }
+}
+`
+
+// TestCheckClausulaGenericaEnExtends: `extends ArrayAdapter<Apk>` no puede dar ni un error, y el emisor
+// tiene que correr: el `<` de los argumentos de tipo ya no es el final de la cláusula.
+func TestCheckClausulaGenericaEnExtends(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteClausulaGenerica, "ApkAdapter.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("`extends ArrayAdapter<Apk>` da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
+// fuenteClausulaGenericaCualificada: el mismo caso con el tipo cualificado, sin import. El nombre que
+// va al `super_class` es el crudo (`android/widget/ArrayAdapter`) y los argumentos no lo tocan.
+const fuenteClausulaGenericaCualificada = `package com.hola.apkcstudio;
+
+public class ApkAdapter extends android.widget.ArrayAdapter<Apk> {
+    public ApkAdapter() {
+        super(null, 0);
+    }
+}
+
+class Apk {
+}
+`
+
+func TestCheckClausulaGenericaCualificada(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteClausulaGenericaCualificada, "ApkAdapter.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("`extends android.widget.ArrayAdapter<Apk>` da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
+// fuenteClausulaGenericaEnImplements: el mismo `<>` en una interface. `Parcelable.Creator<T>` es la
+// interface genérica del android.jar; una clase abstracta no tiene que implementar sus métodos.
+const fuenteClausulaGenericaEnImplements = `package com.hola.apkcstudio;
+
+import android.os.Parcelable;
+
+public abstract class Creador implements Parcelable.Creator<Creador> {
+}
+`
+
+func TestCheckClausulaGenericaEnImplements(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteClausulaGenericaEnImplements, "Creador.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("`implements Parcelable.Creator<Creador>` da %d errores: %+v", len(r.Errores), r.Errores)
+	}
+	if !r.Emisor {
+		t.Fatalf("el emisor no corrio: aviso %q, recursos %q", r.Aviso, r.Recursos)
+	}
+}
+
+// TestCheckClausulaGenericaNombraElTipoBase: el control negativo. Aceptar el `<>` no puede tapar que
+// la clase base no existe: el error tiene que nombrar `NoExiste`, no el `<`.
+const fuenteClausulaGenericaSinBase = `package com.hola.apkcstudio;
+
+public class Roto extends NoExiste<Apk> {
+}
+
+class Apk {
+}
+`
+
+func TestCheckClausulaGenericaNombraElTipoBase(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	r := revisarFuenteJava(fuenteClausulaGenericaSinBase, "Roto.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 1 {
+		t.Fatalf("%d errores, medido uno: %+v", len(r.Errores), r.Errores)
+	}
+	mensaje := r.Errores[0].Mensaje
+	if !strings.Contains(mensaje, "NoExiste") {
+		t.Errorf("el error no nombra el tipo base que falta: %q", mensaje)
+	}
+	if strings.Contains(mensaje, "se esperaba") {
+		t.Errorf("el error sigue siendo el del parser en el `<`: %q", mensaje)
+	}
+}
+
 func TestCheckBloqueSinCerrarApuntaALaUltimaLinea(t *testing.T) {
 	raiz, _ := proyectoDeCheck(t)
 	// cinco líneas de contenido y un salto final: el `}` de x() está en la 5 y la clase queda abierta

@@ -902,8 +902,28 @@ func (ctx *contextoJava) tipoAInterno(nombre string) (string, error) {
 	if _, ok := descPrimitivo[bits[0]]; ok {
 		return "", fmt.Errorf("el tipo primitivo %q no puede nombrar una clase", bits[0])
 	}
+	// un nombre con su paquete (`android.widget.ArrayAdapter`, `android.os.Parcelable.Creator`) no
+	// llega por resolverSimple: su primer segmento es un paquete, no una clase. Se prueba el prefijo
+	// más largo que sí sea una clase del classpath y los segmentos que quedan como anidadas con `$`.
+	for corte := len(bits) - 1; corte >= 1; corte-- {
+		base := strings.Join(bits[:corte+1], "/")
+		if !ctx.hay(base) {
+			continue
+		}
+		for _, seg := range bits[corte+1:] {
+			if !ctx.hay(base + "$" + seg) {
+				return "", fmt.Errorf("%s no es una clase anidada de %s en este classpath", seg, base)
+			}
+			base += "$" + seg
+		}
+		return base, nil
+	}
 	base, err := ctx.resolverSimple(bits[0])
 	if err != nil {
+		if len(bits) > 1 {
+			// el error tiene que nombrar el tipo entero, no su primer segmento
+			return ctx.resolverSimple(nombre)
+		}
 		return "", err
 	}
 	for _, seg := range bits[1:] {
@@ -944,6 +964,90 @@ func (ctx *contextoJava) descriptorDe(tipo string) (string, error) {
 func (ctx *contextoJava) clasePropia(internal string) (*jclas, bool) {
 	c, ok := ctx.propias[internal]
 	return c, ok
+}
+
+// firmaDeClase escribe la `Signature` genérica de la clase: la del padre y las de sus interfaces, con
+// el `Ljava/lang/Object;` delante cuando el padre declarado no la lleva. Devuelve "" cuando no hay
+// ningún argumento de tipo, que es cuando javac no escribe el atributo.
+//
+// Medido con javac 17 `--release 8` sobre `class ApkAdapter extends ArrayAdapter<Apk>`:
+// `super_class` es el crudo `android/widget/ArrayAdapter` y el atributo es
+// `Signature: Landroid/widget/ArrayAdapter<Lcom/hola/apkcstudio/Apk;>;`. El argumento no toca el
+// descriptor: es el borrado (type erasure), y sólo viaja en esta firma.
+func (ctx *contextoJava) firmaDeClase(c *jclas) (string, error) {
+	generica := len(c.superArgs) > 0
+	for _, args := range c.implementaArgs {
+		if len(args) > 0 {
+			generica = true
+		}
+	}
+	if !generica {
+		return "", nil
+	}
+	// el padre del fuente es un nombre (`Activity`, `android.view.View`); cuando no declara ninguno el
+	// ClassFile dice `java/lang/Object`, que ya está en forma interna y no se resuelve contra el classpath
+	var firma string
+	if c.super == "" {
+		firma = "Ljava/lang/Object;"
+	} else {
+		var err error
+		firma, err = ctx.firmaDeClausula(c.super, c.superArgs)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: el padre %s: %w", c.linea, c.super, err)
+		}
+	}
+	sb := strings.Builder{}
+	sb.WriteString(firma)
+	for i, im := range c.implementa {
+		var args []tipoArgumento
+		if i < len(c.implementaArgs) {
+			args = c.implementaArgs[i]
+		}
+		firma, err := ctx.firmaDeClausula(im, args)
+		if err != nil {
+			return "", fmt.Errorf("linea %d: la interface %s: %w", c.linea, im, err)
+		}
+		sb.WriteString(firma)
+	}
+	return sb.String(), nil
+}
+
+// firmaDeClausula: un tipo con sus argumentos, como se escribe dentro de una `Signature`
+// (`Landroid/widget/ArrayAdapter<Lcom/hola/apkcstudio/Apk;>;`). Sin argumentos es sólo su descriptor
+// de clase, que es lo que la firma pone del padre cuando la parte genérica la trae una interfaz.
+func (ctx *contextoJava) firmaDeClausula(nombre string, args []tipoArgumento) (string, error) {
+	interno, err := ctx.tipoAInterno(nombre)
+	if err != nil {
+		return "", err
+	}
+	if len(args) == 0 {
+		return "L" + interno + ";", nil
+	}
+	sb := strings.Builder{}
+	sb.WriteString("L" + interno + "<")
+	for _, arg := range args {
+		firma, err := ctx.firmaDeArgumento(arg)
+		if err != nil {
+			return "", err
+		}
+		sb.WriteString(firma)
+	}
+	sb.WriteString(">;")
+	return sb.String(), nil
+}
+
+// firmaDeArgumento: un argumento de tipo. Un arreglo se escribe con sus `[` delante, como en el
+// descriptor; un argumento genérico anida sus propios argumentos (`List<List<String>>`).
+func (ctx *contextoJava) firmaDeArgumento(t tipoArgumento) (string, error) {
+	if t.arreglos > 0 && len(t.args) > 0 {
+		// `T<U>[]` no es un tipo válido en Java: un arreglo de un tipo parametrizado no existe
+		return "", fmt.Errorf("un arreglo del tipo genérico %s no es Java", t.nombre)
+	}
+	firma, err := ctx.firmaDeClausula(t.nombre, t.args)
+	if err != nil {
+		return "", err
+	}
+	return strings.Repeat("[", t.arreglos) + firma, nil
 }
 
 // descDeMetodo: el descriptor `(tipos)vuelta` de un metodo declarado en el fuente.
@@ -6501,6 +6605,19 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 
 	attrs := attrInfo(e.pool, "SourceFile", u2be(uint16(e.pool.utf8(ctx.archivo))))
 	conteAttrs := 1
+	if firma, err := ctx.firmaDeClase(c); err != nil {
+		// un argumento de tipo que no está entre los fuentes de esta pasada no impide escribir la clase:
+		// `check` comprueba un fichero suelto y el `Apk` de `ArrayAdapter<Apk>` puede ser otro fuente del
+		// proyecto. El descriptor es el del borrado y no cambia; sólo se pierde la firma genérica.
+		if !strings.Contains(err.Error(), "no se resuelve") {
+			return nil, err
+		}
+	} else if firma != "" {
+		// javac escribe la Signature aunque el borrado no cambie el descriptor; sin ella, el dex de
+		// javac lleva la anotación `dalvik.annotation.Signature` y el nuestro no, y deja de coincidir
+		attrs = append(attrs, attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8(firma))))...)
+		conteAttrs++
+	}
 	if c.anonima {
 		cuerpo, err := e.cuerpoEnclosingMethod()
 		if err != nil {

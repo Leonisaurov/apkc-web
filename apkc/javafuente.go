@@ -398,18 +398,24 @@ type jmetodo struct {
 // jclas es una clase, anidada o no. interior guarda las anidadas en el orden del fuente, y nombreExterno
 // el prefijo con el que javac las nombra en el binario (R y R$layout).
 type jclas struct {
-	nombre      string
-	super       string
-	implementa  []string
-	campos      []jcampo
-	metodos     []jmetodo
-	interior    []*jclas
-	abstracta   bool
-	esInterface bool
-	final       bool
-	esPublica   bool
-	esPrivada   bool
-	esEstatica  bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
+	nombre string
+	super  string
+	// superArgs e implementaArgs son los argumentos de tipo escritos en la cláusula `extends` o
+	// `implements` (`ArrayAdapter<Apk>` deja el crudo en super y el `Apk` aquí). El descriptor de la
+	// superclase no cambia con ellos —el borrado los tira—, pero javac los escribe en la `Signature`
+	// genérica del `.class`, y el dex los lleva como la anotación `dalvik.annotation.Signature`.
+	superArgs      []tipoArgumento
+	implementa     []string
+	implementaArgs [][]tipoArgumento
+	campos         []jcampo
+	metodos        []jmetodo
+	interior       []*jclas
+	abstracta      bool
+	esInterface    bool
+	final          bool
+	esPublica      bool
+	esPrivada      bool
+	esEstatica     bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
 	// esEnum y constantes: un `enum Color { RED, GREEN }` simple. El emisor escribe el andamiaje que
 	// javac genera para el tipo (java/lang/Enum, $VALUES, values, valueOf y <clinit>).
 	esEnum        bool
@@ -439,6 +445,17 @@ type jclas struct {
 type captura struct {
 	nombre string
 	tipo   string
+}
+
+// tipoArgumento es un tipo dentro de unos argumentos de tipo: el nombre tal como lo escribe el fuente,
+// los corchetes del arreglo y, si a su vez es genérico, sus propios argumentos. Se guarda entero
+// porque la `Signature` genérica de javac los escribe anidados (`List<List<String>>`), aunque el
+// descriptor siga siendo el del borrado (`Ljava/util/List;`). Los comodines (`?`, `? extends X`) no
+// están medidos: el `?` ni siquiera es un símbolo de este subconjunto.
+type tipoArgumento struct {
+	nombre   string
+	arreglos int
+	args     []tipoArgumento
 }
 
 // archivoJava es un fuente entero: el paquete, los imports y la clase principal con sus anidadas.
@@ -991,32 +1008,35 @@ nombre:
 		if c.esInterface {
 			// una interface puede extender varias; van en el mismo `interfaces` del ClassFile
 			for {
-				nombre, err := a.nombrePunto()
+				nombre, args, err := a.tipoDeClausula()
 				if err != nil {
 					return nil, err
 				}
 				c.implementa = append(c.implementa, nombre)
+				c.implementaArgs = append(c.implementaArgs, args)
 				if !a.es('p', ",") {
 					break
 				}
 				a.avanzar()
 			}
 		} else {
-			nombre, err := a.nombrePunto()
+			nombre, args, err := a.tipoDeClausula()
 			if err != nil {
 				return nil, err
 			}
 			c.super = nombre
+			c.superArgs = args
 		}
 	}
 	if a.es('k', "implements") {
 		a.avanzar()
 		for {
-			nombre, err := a.nombrePunto()
+			nombre, args, err := a.tipoDeClausula()
 			if err != nil {
 				return nil, err
 			}
 			c.implementa = append(c.implementa, nombre)
+			c.implementaArgs = append(c.implementaArgs, args)
 			if !a.es('p', ",") {
 				break
 			}
@@ -1417,6 +1437,91 @@ func (a *analizadorJava) tipo() (string, error) {
 		nombre += "[]"
 	}
 	return nombre, nil
+}
+
+// tipoDeClausula lee el tipo de un `extends` o un `implements`: el nombre crudo y sus argumentos de
+// tipo. `extends ArrayAdapter<Apk>` deja `android.widget.ArrayAdapter` en el nombre —que es lo que va
+// al `super_class` del `.class` y al descriptor del dex, porque el borrado tira `Apk`— y el argumento
+// aparte, que solo se usa para escribir la `Signature` genérica.
+func (a *analizadorJava) tipoDeClausula() (string, []tipoArgumento, error) {
+	nombre, err := a.nombrePunto()
+	if err != nil {
+		return "", nil, err
+	}
+	args, err := a.argumentosDeTipo()
+	if err != nil {
+		return "", nil, err
+	}
+	return nombre, args, nil
+}
+
+// argumentosDeTipo lee `<>` si está: el nombre del fuente, los corchetes del arreglo y los suyos
+// propios, que van anidados (`T<U,V>`, `List<List<String>>`). Los comodines no están medidos y se
+// rechazan al tokenizar el `?`; los tipos primitivos se rechazan en el emisor al resolverlos.
+func (a *analizadorJava) argumentosDeTipo() ([]tipoArgumento, error) {
+	if !a.es('p', "<") {
+		return nil, nil
+	}
+	a.avanzar()
+	args := []tipoArgumento{}
+	for {
+		arg, err := a.argumentoDeTipo()
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, arg)
+		if !a.es('p', ",") {
+			break
+		}
+		a.avanzar()
+	}
+	if err := a.cierraAngulo(); err != nil {
+		return nil, err
+	}
+	return args, nil
+}
+
+// argumentoDeTipo lee un tipo con sus corchetes y, si los tiene, sus propios argumentos.
+func (a *analizadorJava) argumentoDeTipo() (tipoArgumento, error) {
+	nombre, err := a.nombrePunto()
+	if err != nil {
+		return tipoArgumento{}, err
+	}
+	arg := tipoArgumento{nombre: nombre}
+	if a.es('p', "<") {
+		arg.args, err = a.argumentosDeTipo()
+		if err != nil {
+			return tipoArgumento{}, err
+		}
+	}
+	for a.es('p', "[") {
+		a.avanzar()
+		if err := a.comerSimbolo("]"); err != nil {
+			return tipoArgumento{}, err
+		}
+		arg.arreglos++
+	}
+	if arg.arreglos > 0 && len(arg.args) > 0 {
+		// `T<U>[]` no es un tipo válido en Java: un arreglo de un tipo parametrizado no existe
+		return tipoArgumento{}, fmt.Errorf("linea %d: un arreglo del tipo genérico %s no es Java", a.actual().donde.linea, arg.nombre)
+	}
+	return arg, nil
+}
+
+// cierraAngulo come el `>` que cierra unos argumentos de tipo. El tokenizador junta los `>` seguidos
+// (`List<List<String>>` trae un solo token `>>`), así que se quita un carácter al token en vez de
+// avanzar: el `>` que sobra tiene que verlo el que cierra los argumentos de fuera.
+func (a *analizadorJava) cierraAngulo() error {
+	t := a.actual()
+	if t.kind != 'p' || t.valor == "" || t.valor[0] != '>' {
+		return fmt.Errorf("linea %d: se esperaba «>» y hay %q", t.donde.linea, t.valor)
+	}
+	if t.valor == ">" {
+		a.avanzar()
+		return nil
+	}
+	a.toks[a.i].valor = t.valor[1:]
+	return nil
 }
 
 // bloque lee `{ ... }` y devuelve sus sentencias.
