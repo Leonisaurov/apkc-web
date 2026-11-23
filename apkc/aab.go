@@ -46,12 +46,18 @@ func ensamblarAAB(entrada, salida string) error {
 	}
 	defer zr.Close()
 
-	tmp := salida + ".tmp"
-	out, err := os.Create(tmp)
+	out, tmp, err := abrirTemporalDePaquete(salida)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
+	// el temporal se borra salvo que el rename final lo convierta en la salida
+	renombrado := false
+	defer func() {
+		if !renombrado {
+			out.Close()
+			os.Remove(tmp)
+		}
+	}()
 	zw := zip.NewWriter(out)
 
 	escribe := func(nombre string, datos []byte) error {
@@ -85,7 +91,11 @@ func ensamblarAAB(entrada, salida string) error {
 	if err := out.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, salida)
+	if err := os.Rename(tmp, salida); err != nil {
+		return err
+	}
+	renombrado = true
+	return nil
 }
 
 // bundleConfigPB es el mensaje que escribió bundletool 1.18.3 en el §127: field 1

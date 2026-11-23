@@ -113,11 +113,18 @@ func packageWithGo(plan []bundleEntry, recorded map[string]string, keyPath, stor
 		return 0, err
 	}
 
-	out, err := os.Create(packed + ".tmp")
+	out, tmpPath, err := abrirTemporalDePaquete(packed)
 	if err != nil {
 		return 0, err
 	}
-	defer out.Close()
+	// el temporal se borra salvo que finishSignedPackage llegue a renombrarlo sobre packed
+	renombrado := false
+	defer func() {
+		if !renombrado {
+			out.Close()
+			os.Remove(tmpPath)
+		}
+	}()
 
 	reuse, entries := reusePlan(plan, previous.names, recorded)
 	if v1SHA1 {
@@ -137,9 +144,10 @@ func packageWithGo(plan []bundleEntry, recorded map[string]string, keyPath, stor
 	if err != nil {
 		return 0, err
 	}
-	if err := finishSignedPackage(out, packed+".tmp", packed, records, plan, digests, f); err != nil {
+	if err := finishSignedPackage(out, tmpPath, packed, records, plan, digests, f); err != nil {
 		return 0, err
 	}
+	renombrado = true
 	// the record of what the next build can copy over, kept here so the caller stores
 	// it only when the package really landed
 	DataTable.BundleEntries = entries

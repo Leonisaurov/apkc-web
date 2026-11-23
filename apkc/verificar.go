@@ -66,7 +66,18 @@ const (
 	// el registro final: 22 bytes fijos y el desplazamiento del directorio central en [16:20]
 	tamanoRegistroFinal = 22
 	sitioDesplazamiento = 16
+
+	// topeMetadatosV1 acota los ficheros de firma (MANIFEST.MF, .SF, bloque PKCS#7 y la
+	// huella del certificado de sello). Son pequeños por formato; el tope solo impide que
+	// un paquete hostil dicte cuánta memoria reserva esta verificación al leerlos.
+	topeMetadatosV1 = 64 << 20
 )
+
+// topeEntradaV1 es el máximo que se acepta de una entrada del MANIFEST. El digest se calcula
+// en flujo sobre el hash, así que el tope no protege la memoria de esta ruta: corta el coste
+// de descomprimir un paquete que declare una entrada de varios GiB. Es una variable para que
+// la prueba pueda bajarlo sin fabricar gigabytes.
+var topeEntradaV1 int64 = 1 << 30
 
 // verificacion es el resultado de mirar un paquete: un veredicto por esquema con sus motivos, el
 // número de firmantes y lo que se puede decir del certificado sin prometer confianza.
@@ -284,12 +295,20 @@ func (v *verificacion) verificarV1(zr *zip.Reader) {
 			v.maloV1(nombre + " está en el manifiesto pero no en el paquete")
 			continue
 		}
-		contenido, err := contenidoDe(file)
-		if err != nil {
-			v.maloV1("no se puede leer " + nombre + ": " + err.Error())
+		// el tamaño declarado se mira antes de abrir: un MANIFEST que anuncia una entrada de
+		// varios GiB se rechaza sin descomprimirla, y el motivo dice que fue el tope y no un
+		// digest que no cuadra
+		if file.UncompressedSize64 > uint64(topeEntradaV1) {
+			v.maloV1(fmt.Sprintf("%s declara %d bytes, por encima del tope de %d: no se lee",
+				nombre, file.UncompressedSize64, topeEntradaV1))
 			continue
 		}
-		if obtenido := base64Con(contenido, hashV1); obtenido != dicho {
+		obtenido, err := digestoDeEntrada(file, hashV1)
+		if err != nil {
+			v.maloV1("no se puede digerir " + nombre + ": " + err.Error())
+			continue
+		}
+		if obtenido != dicho {
 			v.maloV1("el " + digestAttr + " de " + nombre + " no es el de sus bytes")
 			continue
 		}
@@ -373,13 +392,44 @@ func buscarEntrada(zr *zip.Reader, nombre string) (*zip.File, error) {
 	return nil, errors.New("no existe")
 }
 
+// contenidoDe materializa un fichero de firma con un tope. El LimitReader pide un byte de más
+// para distinguir "cabe justo" de "se pasó": un fichero de metadatos no puede reservar memoria
+// sin límite solo porque su cabecera ZIP lo diga.
 func contenidoDe(file *zip.File) ([]byte, error) {
 	r, err := file.Open()
 	if err != nil {
 		return nil, err
 	}
 	defer r.Close()
-	return io.ReadAll(r)
+	datos, err := io.ReadAll(io.LimitReader(r, topeMetadatosV1+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(datos)) > topeMetadatosV1 {
+		return nil, fmt.Errorf("%s pasa del tope de %d bytes", file.Name, topeMetadatosV1)
+	}
+	return datos, nil
+}
+
+// digestoDeEntrada calcula el digest de una entrada sin materializarla: copia al hash en flujo
+// y corta en el tope. La comprobación del tamaño declarado ya se hizo antes de abrir; este
+// segundo tope cubre una cabecera que mienta y deje al lector producir más bytes de los que
+// dijo.
+func digestoDeEntrada(file *zip.File, h crypto.Hash) (string, error) {
+	r, err := file.Open()
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	hh := h.New()
+	n, err := io.Copy(hh, io.LimitReader(r, topeEntradaV1+1))
+	if err != nil {
+		return "", err
+	}
+	if n > topeEntradaV1 {
+		return "", fmt.Errorf("%s pasa del tope de %d bytes", file.Name, topeEntradaV1)
+	}
+	return base64.StdEncoding.EncodeToString(hh.Sum(nil)), nil
 }
 
 // atributoDe lee un atributo de una sección que tiene varios. `attrValue` vale para lo que el
@@ -1250,25 +1300,41 @@ func (v *verificacion) verificarSourceStamp(f *os.File, zr *zip.Reader, tamano i
 	if cubiertos == 0 {
 		malo("el SourceStamp no cubre ningún esquema que esta orden sepa verificar")
 	}
-	// después de las firmas por esquema puede venir un bloque de datos del sello con su
-	// propia firma y sus atributos. La firma cubre los bytes íntegros de ese bloque.
-	if len(cola) >= 8 {
-		datosSello, restoCola, errDatos := primerElemento(cola)
-		firmaSelloBytes, _, errFirma := primerElemento(restoCola)
-		if errDatos != nil || errFirma != nil {
-			malo("los datos firmados del SourceStamp no se pueden leer")
-		} else {
-			firmasSello, errPares := leerPares(firmaSelloBytes)
-			if errPares != nil {
-				malo("la firma de los datos del SourceStamp no se puede partir: " + errPares.Error())
-			} else if errVer := verificarFirmaSello(datosSello, firmasSello, cert); errVer != nil {
-				malo("la firma de los datos del SourceStamp no verifica: " + errVer.Error())
-			}
-		}
+	for _, motivo := range motivosDeLaColaDelSello(cola, cert) {
+		malo(motivo)
 	}
 	if len(v.selloMotivos) == 0 {
 		v.sello = true
 	}
+}
+
+// motivosDeLaColaDelSello revisa los datos de sello opcionales que siguen a las firmas por
+// esquema: un bloque con los datos del sello y su propia firma. La cola vacía es un sello sin
+// hora, y no es un motivo. Una cola de 1 a 7 bytes no puede llevar ni un prefijo de longitud
+// completo: es un sello truncado, y `apksigner verify` lo dice como "Malformed SourceStamp
+// signature" (medido con un apk firmado por apksigner al que se le corta la cola). Ignorarla
+// dejaba `v.sello = true` y un verde falso.
+func motivosDeLaColaDelSello(cola []byte, cert *x509.Certificate) []string {
+	if len(cola) == 0 {
+		return nil
+	}
+	if len(cola) < 8 {
+		return []string{fmt.Sprintf(
+			"el SourceStamp deja %d bytes sueltos: el bloque de sello está truncado", len(cola))}
+	}
+	datosSello, restoCola, errDatos := primerElemento(cola)
+	firmaSelloBytes, _, errFirma := primerElemento(restoCola)
+	if errDatos != nil || errFirma != nil {
+		return []string{"los datos firmados del SourceStamp no se pueden leer"}
+	}
+	firmasSello, errPares := leerPares(firmaSelloBytes)
+	if errPares != nil {
+		return []string{"la firma de los datos del SourceStamp no se puede partir: " + errPares.Error()}
+	}
+	if errVer := verificarFirmaSello(datosSello, firmasSello, cert); errVer != nil {
+		return []string{"la firma de los datos del SourceStamp no verifica: " + errVer.Error()}
+	}
+	return nil
 }
 
 // verificarFirmaSello comprueba una lista de pares (id de algoritmo, firma) con la clave

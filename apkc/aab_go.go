@@ -342,8 +342,7 @@ func ensamblarAABDesdeGo(dirBuild string, dexes []bundleEntry, salida string) er
 		return fmt.Errorf("el manifiesto proto: %w", err)
 	}
 
-	tmp := salida + ".tmp"
-	out, err := os.Create(tmp)
+	out, tmp, err := abrirTemporalDePaquete(salida)
 	if err != nil {
 		return err
 	}

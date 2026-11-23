@@ -1802,9 +1802,16 @@ func buildBundle(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	}
 	defer previous.Close()
 
-	outFile, err := os.Create(packed + ".tmp")
+	outFile, tmpPath, err := abrirTemporalDePaquete(packed)
 	if err != nil {
 		LogF("build", err)
+	}
+	// LogF termina el proceso sin correr los defer: el temporal se borra en el mismo sitio
+	// que informa del fallo, no en una limpieza que no llega a ejecutarse.
+	aborta := func(err error, extra ...interface{}) {
+		outFile.Close()
+		os.Remove(tmpPath)
+		LogF("build", append([]interface{}{err}, extra...)...)
 	}
 
 	// the same writer that produces an apk produces this: archive/zip hands every
@@ -1814,7 +1821,7 @@ func buildBundle(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	reuse, entries := reusePlan(plan, previous.names, DataTable.BundleEntries)
 	records, reused, _, err := writePackageEntries(outFile, plan, reuse, previous, DataTable.BundleEntries, false)
 	if err != nil {
-		LogF("build", err, packed)
+		aborta(err, packed)
 	}
 	if reused > 0 {
 		LogD("build", "copied", reused, "entries from the previous package")
@@ -1824,20 +1831,20 @@ func buildBundle(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	// the end record has to point at the directory that follows it and nothing else
 	cdAt, err := outFile.Seek(0, io.SeekCurrent)
 	if err != nil {
-		LogF("build", err)
+		aborta(err)
 	}
 	cd, eocd := centralDirectory(records, uint32(cdAt))
 	if _, err := outFile.Write(cd); err != nil {
-		LogF("build", err)
+		aborta(err)
 	}
 	if _, err := outFile.Write(eocd); err != nil {
-		LogF("build", err)
+		aborta(err)
 	}
 	if err := outFile.Close(); err != nil {
-		LogF("build", err)
+		aborta(err)
 	}
-	if err := os.Rename(packed+".tmp", packed); err != nil {
-		LogF("build", err)
+	if err := os.Rename(tmpPath, packed); err != nil {
+		aborta(err)
 	}
 	DataTable.BundleEntries = entries
 }
