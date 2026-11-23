@@ -96,8 +96,8 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 		t.Fatalf("la entrada leída por offset no son sus bytes: %v", datos)
 	}
 	b.cerrar()
-	if _, err := os.Stat(ficheroIndiceDelJar); err != nil {
-		t.Fatalf("la primera vuelta no dejó el índice en %s: %v", ficheroIndiceDelJar, err)
+	if _, err := os.Stat(ficheroIndiceDelJar(jar)); err != nil {
+		t.Fatalf("la primera vuelta no dejó el índice en %s: %v", ficheroIndiceDelJar(jar), err)
 	}
 
 	// la vuelta con el mismo jar no parsea nada: la sirve el fichero, y las clases salen igual
@@ -302,7 +302,7 @@ func TestIndiceDelJarMideElAhorro(t *testing.T) {
 	}
 	borra := func() {
 		t.Helper()
-		if err := os.Remove(ficheroIndiceDelJar); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(ficheroIndiceDelJar(ruta)); err != nil && !os.IsNotExist(err) {
 			t.Fatal(err)
 		}
 	}

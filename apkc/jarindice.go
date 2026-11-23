@@ -5,7 +5,7 @@ package main
 // Abrir el jar con archive/zip y recorrer su directorio central cuesta 90-100 ms en wasm la primera
 // pasada de un proceso (medido con `TestIndiceDelJarMideElAhorro` en el hospedador de Node), y se
 // pagaba en cada build aunque el proyecto no cambiara: es el coste fijo del jar. Aquí el directorio se
-// lee en una pasada propia, sin un *zip.File por entrada, y se deja en build/jarindice.bin con su
+// lee en una pasada propia, sin un *zip.File por entrada, y se deja en build/jarindice/ con su
 // huella en la cabecera; la vuelta siguiente lee ese fichero y no parsea el zip.
 //
 // La huella es el tamaño del jar y el CRC-32 de su directorio central, **no su fecha**. La fecha no es
@@ -25,18 +25,25 @@ import (
 	"compress/flate"
 	"crypto/sha1"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 )
 
 const (
-	// ficheroIndiceDelJar vive dentro de build/ porque `apkc clean` se lleva el directorio entero y
+	// dirIndiceDelJar vive dentro de build/ porque `apkc clean` se lleva el directorio entero y
 	// porque la pestaña ya guarda ahí el estado del incremental: la caché no sobrevive a un clean, y
 	// no tiene por qué.
-	ficheroIndiceDelJar = "build/jarindice.bin"
+	//
+	// Un fichero por jar, nombrado por el SHA-1 de su ruta: con un solo fichero compartido, abrir el
+	// `android.jar` y después una dependencia dejaba el índice de la dependencia y tiraba el del
+	// `android.jar`, y la vuelta siguiente pagaba otra vez los dos. El nombre no lleva la huella del
+	// contenido porque la cabecera ya la comprueba.
+	dirIndiceDelJar = "build/jarindice"
 
 	// marcaIndiceDelJar dice de qué fichero se trata y con qué forma. El 2 es la forma que lleva el
 	// digest del directorio central en vez de la fecha del jar: una caché de la 1 se ignora entera.
@@ -112,11 +119,19 @@ func huellaDelJarTexto(rutaJar string) string {
 	return fmt.Sprintf("%s|%d|%08x", rutaJar, tamano, directorio)
 }
 
-// leerIndiceDelJar devuelve el índice de build/jarindice.bin cuando su cabecera dice que es el de este
+// ficheroIndiceDelJar es el índice de un jar concreto. La ruta del jar entra en el nombre por su
+// SHA-1, así que dos jars no se pisan la caché; la huella del contenido va en la cabecera y es la
+// que decide si el fichero vale (leerIndiceDelJar).
+func ficheroIndiceDelJar(rutaJar string) string {
+	digest := sha1.Sum([]byte(rutaJar))
+	return filepath.Join(dirIndiceDelJar, hex.EncodeToString(digest[:])+".bin")
+}
+
+// leerIndiceDelJar devuelve el índice de build/jarindice/ cuando su cabecera dice que es el de este
 // jar. Un fichero de otra forma, de otro jar o a medias no se lee: se devuelve false y el llamador
 // parsea el directorio central, que ya tiene en la mano.
 func leerIndiceDelJar(rutaJar string, tamano int64, directorio uint32) (map[string]entradaJar, bool) {
-	datos, err := os.ReadFile(ficheroIndiceDelJar)
+	datos, err := os.ReadFile(ficheroIndiceDelJar(rutaJar))
 	if err != nil || len(datos) < cabeceraIndiceDelJar {
 		return nil, false
 	}
@@ -169,6 +184,9 @@ func escribirIndiceDelJar(rutaJar string, tamano int64, directorio uint32, indic
 	if st, err := os.Stat("build"); err != nil || !st.IsDir() {
 		return
 	}
+	if err := os.MkdirAll(dirIndiceDelJar, 0o755); err != nil {
+		return
+	}
 	nombres := make([]string, 0, len(indice))
 	largoNombres := 0
 	for nombre := range indice {
@@ -201,11 +219,12 @@ func escribirIndiceDelJar(rutaJar string, tamano int64, directorio uint32, indic
 	}
 	// por un temporal y un rename, como el estado del incremental: un build que muere a mitad no
 	// puede dejar un índice corto que la vuelta siguiente lea como bueno (la cabecera lo caza)
-	tmp := ficheroIndiceDelJar + ".tmp"
+	destino := ficheroIndiceDelJar(rutaJar)
+	tmp := destino + ".tmp"
 	if err := os.WriteFile(tmp, datos, 0644); err != nil {
 		return
 	}
-	if err := os.Rename(tmp, ficheroIndiceDelJar); err != nil {
+	if err := os.Rename(tmp, destino); err != nil {
 		_ = os.Remove(tmp)
 	}
 }
@@ -225,7 +244,7 @@ func leeDirectorioCentral(rutaJar string) ([]byte, int64, int, error) {
 	}
 	tamano := st.Size()
 	if tamano < 22 {
-		return nil, 0, 0, fmt.Errorf("el android.jar %s no llega a un zip", rutaJar)
+		return nil, 0, 0, fmt.Errorf("el jar %s no llega a un zip", rutaJar)
 	}
 	cola := int64(colaMaximaDelJar)
 	if cola > tamano {
@@ -253,7 +272,7 @@ func leeDirectorioCentral(rutaJar string) ([]byte, int64, int, error) {
 		hasta = j
 	}
 	if eocd == nil {
-		return nil, 0, 0, fmt.Errorf("el android.jar %s no tiene fin de directorio central", rutaJar)
+		return nil, 0, 0, fmt.Errorf("el jar %s no tiene fin de directorio central", rutaJar)
 	}
 	cuenta := int(binary.LittleEndian.Uint16(eocd[10:12]))
 	largoCD := binary.LittleEndian.Uint32(eocd[12:16])
@@ -261,10 +280,10 @@ func leeDirectorioCentral(rutaJar string) ([]byte, int64, int, error) {
 	// los centinelas del zip64 piden los campos de 64 bits que viven en su propio registro: este
 	// lector no los sigue, y el archive/zip de respaldo sí
 	if cuenta == 0xffff || largoCD == 0xffffffff || offCD == 0xffffffff {
-		return nil, 0, 0, fmt.Errorf("el android.jar %s tiene un directorio central zip64", rutaJar)
+		return nil, 0, 0, fmt.Errorf("el jar %s tiene un directorio central zip64", rutaJar)
 	}
 	if int64(offCD)+int64(largoCD) > tamano {
-		return nil, 0, 0, fmt.Errorf("el directorio central del android.jar %s se sale del fichero", rutaJar)
+		return nil, 0, 0, fmt.Errorf("el directorio central del jar %s se sale del fichero", rutaJar)
 	}
 	cd := make([]byte, largoCD)
 	if _, err := f.ReadAt(cd, int64(offCD)); err != nil {

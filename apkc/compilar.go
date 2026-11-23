@@ -4,15 +4,17 @@ package main
 // fuentes que el editor escribe y dejar los ficheros que `apkc dex` convierte en `classes.dex`, todo dentro
 // del mismo proceso y sin levantar nada.
 //
-// La resolución de tipos se hace contra el `android.jar` que se pase por bandera, y solo se leen las
-// entradas que el fuente nombra: sobre la plantilla del parrafo 40 son cuatro ficheros de unos pocos KB, no
-// los 26 MB del jar.
+// La resolución de tipos se hace contra el `android.jar` que se pase por bandera y contra las
+// dependencias de `jar/` (cada `.jar`, y el `classes.jar` de cada `.aar`), y solo se leen las
+// entradas que el fuente nombra: sobre la plantilla del parrafo 40 son cuatro ficheros de unos pocos
+// KB, no los 26 MB del jar.
 
 import (
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -46,7 +48,8 @@ a return, break or continue leaving a try with finally,
 a nested private class, an annotation other than @Override, a class the classpath does not name -
 stops the command with its line, before writing a single file.
 
-Type names resolve against the android.jar passed in, reading only the entries the sources mention.
+Type names resolve against the android.jar passed in and the .jar/.aar files of jar/ (the
+classes.jar inside an .aar), reading only the entries the sources mention.
 `)
 	}
 	jar := set.String("android-jar", androidJar, "the android.jar whose classes the sources link against")
@@ -71,7 +74,11 @@ Type names resolve against the android.jar passed in, reading only the entries t
 	if len(fuentes) == 0 {
 		LogF("compile", "no .java file under", strings.Join(raices, ", "))
 	}
-	clases, err := compilarProyectoJava(fuentes, *jar)
+	entradas, err := entradasDelClasspath(*jar)
+	if err != nil {
+		LogF("compile", err.Error())
+	}
+	clases, err := compilarProyectoJavaConClasspath(fuentes, rutasDelClasspath(entradas))
 	if err != nil {
 		LogF("compile", err.Error())
 	}
@@ -135,12 +142,21 @@ func fuentesJava(raices []string) ([]fuenteJava, error) {
 
 // revisarCompilerGo nombra lo que `--compiler go` todavia no mide. Se aislo del cuerpo de `build` para
 // poder probarlo: las negaciones de un portero que solo vive dentro de un LogF no se comprueban.
+//
+// Las dependencias de `jar/` ya no son un tope: el emisor las indexa y resuelve sus clases igual que
+// las del `android.jar` (dependencias.go). Lo que sigue sin existir es su dex: el `classes.dex` de
+// cada dependencia lo escribe d8, y un binario para el navegador no arranca procesos. En el escritorio
+// el build sigue entero (compilador propio + d8 para las dependencias); en wasm la frontera se dice
+// aquí, antes de que el fallo salga del exec de un d8 que no puede correr.
 func revisarCompilerGo(o buildOpts) error {
 	if kt, _ := getFiles("src", ".kt", false); len(kt) > 0 {
 		return fmt.Errorf("--compiler go no compila Kotlin: %d fuentes .kt en src", len(kt))
 	}
-	if jars := allJars(); len(jars) > 0 {
-		return fmt.Errorf("--compiler go no dexa dependencias: hay %d jars en jar/ y eso lo hace d8", len(jars))
+	if runtime.GOOS == "js" || runtime.GOOS == "wasip1" {
+		if deps := dependenciasDelProyecto(); len(deps) > 0 {
+			return fmt.Errorf("--compiler go compila contra jar/ (hay %d: %s), pero el dex de las dependencias lo escribe d8 y este build no arranca procesos",
+				len(deps), strings.Join(deps, ", "))
+		}
 	}
 	// El bundle ya no depende de d8: aab_go.go convierte el arsc del enlazador y el dex de
 	// este compilador en resources.pb y en el XmlNode del manifiesto (§186).
@@ -156,12 +172,16 @@ func revisarCompilerGo(o buildOpts) error {
 // memoria que sobreviva: cada `apkc build` de la página arranca una instancia nueva de Go).
 func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 	defer timeIt("compile go")()
-	// la huella del jar se calcula una vez por vuelta: es lo que decide si las clases de
-	// build/classes siguen valiendo, y lo que se registra cuando se compilan
-	huellaJar := ""
+	// el classpath se arma una vez por vuelta: su huella es lo que decide si las clases de
+	// build/classes siguen valiendo, y lo que se registra cuando se compilan. Incluye el
+	// android.jar y cada dependencia de jar/ (un AAR por su classes.jar, con la huella del AAR).
+	entradas, err := entradasDelClasspath(androidJar)
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	huellaClasspath := huellaDelClasspath(entradas)
 	if incremental {
-		huellaJar = huellaDelJarTexto(androidJar)
-		if clasesAlDia(huellaJar) {
+		if clasesAlDia(huellaClasspath) {
 			LogI("build", "ningun fuente cambio: se reutilizan las clases de", filepath.Join("build", "classes"))
 			return nil, false
 		}
@@ -173,7 +193,7 @@ func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 	if len(fuentes) == 0 {
 		return nil, false
 	}
-	clases, err := compilarProyectoJava(fuentes, androidJar)
+	clases, err := compilarProyectoJavaConClasspath(fuentes, rutasDelClasspath(entradas))
 	if err != nil {
 		LogF("build", err.Error())
 	}
@@ -189,7 +209,7 @@ func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 		// comparar en la vuelta siguiente y el atajo de arriba no se abre nunca
 		updateRecords(nombres)
 		DataTable.ClassRoster = classRosterSHA()
-		DataTable.AndroidJar = huellaJar
+		DataTable.AndroidJar = huellaClasspath
 	}
 	LogI("build", len(nombres), "fuentes de Java en Go ->", len(clases), "clases")
 	return nombres, true
@@ -198,8 +218,9 @@ func compilarFuentesEnGo(incremental bool) ([]string, bool) {
 // clasesAlDia responde si las clases de build/classes son exactamente las que el emisor escribiría
 // ahora: cada fuente de src/ conserva los bytes que vio la última compilación, el directorio de clases
 // es el mismo, nombre por nombre y byte por byte, que el que esa compilación dejó, y el classpath es el
-// mismo jar. Sin la segunda mitad un build detenido a medias (o un `build/classes` tocado a mano) se
-// creería hecho. La huella del jar la calcula el llamador porque también la registra al compilar.
+// mismo (el android.jar y cada dependencia de jar/). Sin la segunda mitad un build detenido a medias
+// (o un `build/classes` tocado a mano) se creería hecho. La huella del classpath la calcula el
+// llamador porque también la registra al compilar.
 func clasesAlDia(huellaJar string) bool {
 	loadTable()
 	fuentes, _ := getFiles("src", ".java", false)

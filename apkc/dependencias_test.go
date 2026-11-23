@@ -1,0 +1,360 @@
+package main
+
+// El compilador Go contra las dependencias de `jar/`: que una clase del fuente que nombra un tipo de
+// un jar se resuelva leyendo el jar (y no se invente el descriptor), que un `.aar` aporte su
+// `classes.jar`, que la huella del classpath cubra cada dependencia y que cambiar una de ellas abra
+// el atajo de I3. El oráculo de paridad es javac 17, que se salta si no está en la máquina.
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const (
+	// fuenteDepSuma es la dependencia mínima: una clase pública con un método estático.
+	fuenteDepSuma = `package dep;
+public class Suma {
+    public static int suma(int a, int b) { return a + b; }
+}
+`
+	// fuenteUsoSuma nombra la dependencia por un import y la llama: sin el jar, el emisor no puede
+	// resolver ni el tipo ni el descriptor del método.
+	fuenteUsoSuma = `package com.hola;
+import dep.Suma;
+public class Uso {
+    public int llama() { return Suma.suma(2, 3); }
+}
+`
+)
+
+// clasesDeFuente emite el fuente con el propio emisor y devuelve un mapa entrada-de-jar -> bytes,
+// que es lo que jarDePrueba necesita para montar la dependencia.
+func clasesDeFuente(t *testing.T, jarSDK, nombre, fuente string) map[string][]byte {
+	t.Helper()
+	salida, err := compilarProyectoJava([]fuenteJava{{nombre: nombre, contenido: fuente}}, jarSDK)
+	if err != nil {
+		t.Fatalf("el emisor no compiló la dependencia de la prueba: %v", err)
+	}
+	clases := map[string][]byte{}
+	for _, c := range salida {
+		clases[c.interno+".class"] = c.datos
+	}
+	return clases
+}
+
+// jarDeDependencia monta `jar/dep.jar` con la clase de la dependencia y deja el proyecto con el
+// fuente que la usa. Devuelve la ruta del jar.
+func jarDeDependencia(t *testing.T, raiz string, clases map[string][]byte) string {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(raiz, "jar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ruta := filepath.Join(raiz, "jar", "dep.jar")
+	jarDePrueba(t, ruta, clases)
+	return ruta
+}
+
+// TestCompilarEnGoResuelveUnaClaseDeJar: con el jar en `jar/`, el emisor resuelve `dep.Suma` y el
+// descriptor `(II)I`; sin el jar, el mismo fuente se rechaza. Las dos mitades importan: la primera
+// dice que se leyó el jar, la segunda que no se acepta por casualidad.
+func TestCompilarEnGoResuelveUnaClaseDeJar(t *testing.T) {
+	jarSDK := jarDelSDK(t)
+	raiz := t.TempDir()
+	jarDeDependencia(t, raiz, clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma))
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
+	t.Chdir(raiz)
+
+	fuentes, err := fuentesJava([]string{"src"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entradas, err := entradasDelClasspath(jarSDK)
+	if err != nil {
+		t.Fatalf("armar el classpath: %v", err)
+	}
+	if len(entradas) != 2 {
+		t.Fatalf("%d entradas de classpath, medidas dos (android.jar y jar/dep.jar)", len(entradas))
+	}
+	clases, err := compilarProyectoJavaConClasspath(fuentes, rutasDelClasspath(entradas))
+	if err != nil {
+		t.Fatalf("el emisor no resolvió la dependencia: %v", err)
+	}
+	var uso *claseEmitida
+	for i := range clases {
+		if clases[i].interno == "com/hola/Uso" {
+			uso = &clases[i]
+		}
+	}
+	if uso == nil {
+		t.Fatalf("no se emitió com/hola/Uso: %v", clases)
+	}
+	// el Methodref que javac escribe: el tipo dueño, el nombre y el descriptor del método
+	for _, quiero := range []string{"dep/Suma", "suma", "(II)I"} {
+		if !strings.Contains(string(uso.datos), quiero) {
+			t.Errorf("la clase emitida no nombra %q: la dependencia no se resolvió", quiero)
+		}
+	}
+	cf, err := readClassFull(uso.datos)
+	if err != nil {
+		t.Fatalf("la clase emitida no se relee: %v", err)
+	}
+	if _, err := dexDeClases([]classFull{cf}); err != nil {
+		t.Fatalf("la clase que resolvió una dependencia no se dexa: %v", err)
+	}
+
+	// el control negativo: sin el jar, el mismo fuente no se puede resolver
+	if _, err := compilarProyectoJavaConClasspath(fuentes, []string{jarSDK}); err == nil {
+		t.Fatal("sin el jar el emisor aceptó un tipo que no puede resolver")
+	} else if !strings.Contains(err.Error(), "Suma") || !strings.Contains(err.Error(), "classpath") {
+		t.Errorf("el rechazo no nombra la clase que falta ni el classpath: %v", err)
+	}
+}
+
+// TestCompilarEnGoDexaIgualQueJavacConUnaDependencia: el `.class` que emitimos para un fuente que
+// llama a un jar, dexado, tiene que dar el mismo dex que el `.class` de javac 17 para el mismo fuente
+// contra el mismo jar. Es la prueba de que el descriptor se leyó del jar y no se adivinó.
+func TestCompilarEnGoDexaIgualQueJavacConUnaDependencia(t *testing.T) {
+	jarSDK := jarDelSDK(t)
+	javac := javac17(t)
+	raiz := t.TempDir()
+
+	// la dependencia, compilada por javac 17 con la versión que emite el subconjunto
+	pon(t, raiz, "dep/dep/Suma.java", fuenteDepSuma)
+	depOut := filepath.Join(raiz, "dep-out")
+	if out, err := exec.Command(javac, "--release", "8", "-g:lines,source", "-d", depOut,
+		filepath.Join(raiz, "dep", "dep", "Suma.java")).CombinedOutput(); err != nil {
+		t.Fatalf("javac 17 no compiló la dependencia: %v\n%s", err, out)
+	}
+	datos, err := os.ReadFile(filepath.Join(depOut, "dep", "Suma.class"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jarDep := jarDeDependencia(t, raiz, map[string][]byte{"dep/Suma.class": datos})
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
+	t.Chdir(raiz)
+
+	// lo nuestro, contra el jar de dependencias que está en jar/
+	fuentes, err := fuentesJava([]string{"src"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nuestras, err := compilarProyectoJavaConClasspath(fuentes, []string{jarSDK, jarDep})
+	if err != nil {
+		t.Fatalf("el emisor no resolvió el jar de javac: %v", err)
+	}
+	nuestroDex, err := dexarUnaClase(t, nuestras, "com/hola/Uso")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// lo de javac 17, el mismo fuente contra el mismo jar
+	javacOut := filepath.Join(raiz, "javac-out")
+	if out, err := exec.Command(javac, "--release", "8", "-g:lines,source", "-classpath",
+		classpath([]string{jarSDK, jarDep}), "-d", javacOut,
+		filepath.Join(raiz, "src", "com", "hola", "Uso.java")).CombinedOutput(); err != nil {
+		t.Fatalf("javac 17 no compiló el consumidor: %v\n%s", err, out)
+	}
+	datosJavac, err := os.ReadFile(filepath.Join(javacOut, "com", "hola", "Uso.class"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cf, err := readClassFull(datosJavac)
+	if err != nil {
+		t.Fatal(err)
+	}
+	javacDex, err := dexDeClases([]classFull{cf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nuestroDex) != len(javacDex) {
+		t.Fatalf("el dex del consumidor mide %d bytes y el de javac %d", len(nuestroDex), len(javacDex))
+	}
+	for i := range nuestroDex {
+		if nuestroDex[i] != javacDex[i] {
+			t.Fatalf("el dex difiere de javac en el byte %d: %#02x frente a %#02x", i, nuestroDex[i], javacDex[i])
+		}
+	}
+}
+
+// dexarUnaClase saca del vector la clase pedida, la relee y la dexa.
+func dexarUnaClase(t *testing.T, clases []claseEmitida, interno string) ([]byte, error) {
+	t.Helper()
+	for _, c := range clases {
+		if c.interno != interno {
+			continue
+		}
+		cf, err := readClassFull(c.datos)
+		if err != nil {
+			return nil, err
+		}
+		return dexDeClases([]classFull{cf})
+	}
+	t.Fatalf("%s no está en lo emitido", interno)
+	return nil, nil
+}
+
+// TestCompilarEnGoLeeElClassesJarDeUnAar: un `.aar` no es un jar de clases; lo que el emisor abre es
+// su `classes.jar`, extraído a build/aar/. Se comprueba que la extracción es la que se abre y que el
+// fuente resuelve la clase de dentro.
+func TestCompilarEnGoLeeElClassesJarDeUnAar(t *testing.T) {
+	jarSDK := jarDelSDK(t)
+	raiz := t.TempDir()
+	clases := clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma)
+	jarDePrueba(t, filepath.Join(raiz, "classes.jar"), clases)
+	datos, err := os.ReadFile(filepath.Join(raiz, "classes.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(raiz, "jar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jarDePrueba(t, filepath.Join(raiz, "jar", "dep.aar"), map[string][]byte{
+		"classes.jar":            datos,
+		"AndroidManifest.xml":    []byte("<manifest/>"),
+		"res/values/strings.xml": []byte("<resources/>"),
+	})
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
+	t.Chdir(raiz)
+
+	entradas, err := entradasDelClasspath(jarSDK)
+	if err != nil {
+		t.Fatalf("armar el classpath con un AAR: %v", err)
+	}
+	if len(entradas) != 2 {
+		t.Fatalf("%d entradas, medidas dos (android.jar y el classes.jar del AAR)", len(entradas))
+	}
+	extraido := entradas[1].abrir
+	if !strings.HasPrefix(filepath.ToSlash(extraido), "build/aar/") {
+		t.Fatalf("el AAR no se abrió por su classes.jar extraído: %s", extraido)
+	}
+	if _, err := os.Stat(extraido); err != nil {
+		t.Fatalf("el classes.jar extraído no está en disco: %v", err)
+	}
+	fuentes, err := fuentesJava([]string{"src"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := compilarProyectoJavaConClasspath(fuentes, rutasDelClasspath(entradas)); err != nil {
+		t.Fatalf("el emisor no resolvió la clase del AAR: %v", err)
+	}
+
+	// el mismo AAR no vuelve a extraerse: el nombre sale de su huella
+	otraVez, err := entradasDelClasspath(jarSDK)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if otraVez[1].abrir != extraido {
+		t.Fatalf("el mismo AAR se extrajo en otro sitio: %s frente a %s", otraVez[1].abrir, extraido)
+	}
+}
+
+// TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia cierra I3 con dependencias: la vuelta sin
+// cambios reutiliza, y cambiar un byte de `jar/` —sin tocar ni un fuente— abre la compilación otra
+// vez, porque la huella del classpath entra en el estado.
+func TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia(t *testing.T) {
+	jarSDK := jarDelSDK(t)
+	anterior := androidJar
+	androidJar = jarSDK
+	DataTable = Data{}
+	t.Cleanup(func() {
+		androidJar = anterior
+		DataTable = Data{}
+	})
+	raiz := t.TempDir()
+	clases := clasesDeFuente(t, jarSDK, "src/dep/Suma.java", fuenteDepSuma)
+	jar := jarDeDependencia(t, raiz, clases)
+	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
+	t.Chdir(raiz)
+
+	if _, ran := compilarFuentesEnGo(true); !ran {
+		t.Fatal("con el estado vacío la etapa tiene que compilar")
+	}
+	saveTable()
+	if _, ran := compilarFuentesEnGo(true); ran {
+		t.Fatal("sin fuentes cambiados ni classpath distinto la etapa no puede volver a compilar")
+	}
+
+	// el jar cambia en un byte que no es la clase que se resuelve: la huella cubre el jar entero,
+	// así que el reuse de I3 tiene que abrirse igual
+	clases["META-INF/MANIFEST.MF"] = []byte("Manifest-Version: 1.0\nDependencia: otra\n")
+	jarDePrueba(t, jar, clases)
+	if _, ran := compilarFuentesEnGo(true); !ran {
+		t.Fatal("un jar de dependencias con otros bytes tiene que invalidar las clases reutilizadas")
+	}
+}
+
+// TestHuellaDelClasspathCubreCadaDependencia: la huella no es la del android.jar con las otras
+// rutas: cambiar cualquiera de los dos jars de `jar/` cambia la huella, que es lo que decide el
+// reuse. No necesita el SDK: el android.jar de la prueba es un zip cualquiera.
+func TestHuellaDelClasspathCubreCadaDependencia(t *testing.T) {
+	raiz := t.TempDir()
+	t.Chdir(raiz)
+	jarDePrueba(t, filepath.Join(raiz, "android.jar"), map[string][]byte{"p/A.class": {1}})
+	if err := os.MkdirAll("jar", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jarDePrueba(t, filepath.Join(raiz, "jar", "a.jar"), map[string][]byte{"p/B.class": {2}})
+	jarDePrueba(t, filepath.Join(raiz, "jar", "b.jar"), map[string][]byte{"p/C.class": {3}})
+
+	entradas, err := entradasDelClasspath(filepath.Join(raiz, "android.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entradas) != 3 {
+		t.Fatalf("%d entradas, medidas tres (android.jar, a.jar y b.jar)", len(entradas))
+	}
+	antes := huellaDelClasspath(entradas)
+
+	// cambiar el segundo jar, el que no es el primero del classpath, también cuenta
+	jarDePrueba(t, filepath.Join(raiz, "jar", "b.jar"), map[string][]byte{"p/C.class": {9}})
+	entradas, err = entradasDelClasspath(filepath.Join(raiz, "android.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	despues := huellaDelClasspath(entradas)
+	if antes == despues {
+		t.Fatal("cambiar un jar de jar/ no cambió la huella del classpath")
+	}
+	if !strings.Contains(despues, "jar/b.jar") || !strings.Contains(despues, "jar/a.jar") {
+		t.Fatalf("la huella no nombra cada dependencia: %q", despues)
+	}
+}
+
+// TestIndiceDelJarPorJar: I5 con más de un jar. Abrir el android.jar y después una dependencia no
+// puede tirar el índice del primero: cada jar tiene su fichero en build/jarindice/.
+func TestIndiceDelJarPorJar(t *testing.T) {
+	raiz := t.TempDir()
+	t.Chdir(raiz)
+	if err := os.MkdirAll("build", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a := filepath.Join(raiz, "android.jar")
+	b := filepath.Join(raiz, "dep.jar")
+	jarDePrueba(t, a, map[string][]byte{"p/A.class": {1, 2, 3}})
+	jarDePrueba(t, b, map[string][]byte{"p/B.class": {4, 5, 6}})
+
+	for _, ruta := range []string{a, b} {
+		busc, err := abrirBuscador(ruta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		busc.cerrar()
+	}
+	antes := parseosDelDirectorio
+	for _, ruta := range []string{a, b} {
+		busc, err := abrirBuscador(ruta)
+		if err != nil {
+			t.Fatal(err)
+		}
+		busc.cerrar()
+	}
+	if parseosDelDirectorio != antes {
+		t.Fatalf("con dos jars la vuelta siguiente volvió a parsear %d directorios centrales", parseosDelDirectorio-antes)
+	}
+	if ficheroIndiceDelJar(a) == ficheroIndiceDelJar(b) {
+		t.Fatal("los dos jars comparten fichero de índice")
+	}
+}

@@ -128,16 +128,15 @@ type Data struct {
 	// leaves the record of a compile it never finished. This is the second half of
 	// that answer (classRosterSHA).
 	ClassRoster string `json:"classRoster,omitempty"`
-	// AndroidJar is the fingerprint of the android.jar the classes were emitted
-	// against: its path, its size and the CRC-32 of its central directory
-	// (huellaDelJarTexto), never its date. The emitter resolves every name of the
-	// project against that jar, so another jar can change the classes with no source
-	// moving, and nothing else in this table notices: the digest of jar/ is the dex of
-	// the dependencies, a different stage. The date is left out on purpose: a stat
-	// date is not content, and the browser host used to hand out a synthetic one that
-	// moved on every reload, which cost a full recompilation for nothing. A state
-	// written before this field existed has none, which reads as "another jar" and
-	// costs exactly one recompilation.
+	// AndroidJar is the fingerprint of the classpath the classes were emitted against: the
+	// android.jar and every dependency of jar/, in order, each by its path, size and the CRC-32 of
+	// its central directory (huellaDelJarTexto / huellaDelClasspath), never its date. The emitter
+	// resolves every name of the project against that classpath, so another jar or another AAR can
+	// change the classes with no source moving, and nothing else in this table notices: the digest
+	// of jar/ is the dex of the dependencies, a different stage. The date is left out on purpose: a
+	// stat date is not content, and the browser host used to hand out a synthetic one that moved on
+	// every reload, which cost a full recompilation for nothing. A state written before this field
+	// existed has none, which reads as "another classpath" and costs exactly one recompilation.
 	AndroidJar string `json:"androidJar,omitempty"`
 }
 

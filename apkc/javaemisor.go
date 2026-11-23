@@ -377,7 +377,7 @@ func abrirBuscador(rutaJar string) (*buscadorDeClases, error) {
 func abrirBuscadorConZip(rutaJar string) (*buscadorDeClases, error) {
 	zr, err := zip.OpenReader(rutaJar)
 	if err != nil {
-		return nil, fmt.Errorf("el android.jar %s no abre: %w", rutaJar, err)
+		return nil, fmt.Errorf("el jar %s no abre: %w", rutaJar, err)
 	}
 	b := &buscadorDeClases{zr: zr, indice: map[string]entradaJar{}, cache: map[string]*classFull{}}
 	for _, f := range zr.File {
@@ -406,6 +406,55 @@ func (b *buscadorDeClases) cerrar() {
 	if b.archivo != nil {
 		_ = b.archivo.Close()
 	}
+}
+
+// classpathDeClases es el classpath del emisor: el `android.jar` y las dependencias de `jar/`, en
+// orden. Se pregunta en ese orden y gana el primero que tenga la clase, que es lo que hace javac con
+// `-classpath android.jar:jar/*.jar`. Cada fuente es un buscador con su propio índice y su propia
+// caché, así que abrir seis jars no cuesta más entradas leídas que abrir uno: del jar de dependencias
+// solo se leen las clases que el fuente nombra, igual que del `android.jar`.
+type classpathDeClases struct {
+	fuentes []*buscadorDeClases
+}
+
+func abrirClasspath(rutas []string) (*classpathDeClases, error) {
+	c := &classpathDeClases{fuentes: make([]*buscadorDeClases, 0, len(rutas))}
+	for _, ruta := range rutas {
+		b, err := abrirBuscador(ruta)
+		if err != nil {
+			c.cerrar()
+			return nil, err
+		}
+		c.fuentes = append(c.fuentes, b)
+	}
+	return c, nil
+}
+
+func (c *classpathDeClases) cerrar() {
+	for _, b := range c.fuentes {
+		b.cerrar()
+	}
+}
+
+func (c *classpathDeClases) hayEnElJar(internal string) bool {
+	for _, b := range c.fuentes {
+		if b.hayEnElJar(internal) {
+			return true
+		}
+	}
+	return false
+}
+
+// claseDelJar lee la clase del primer jar que la tenga. El error nombra el classpath entero: la clase
+// puede faltar porque el fuente nombra algo que no está en ninguna dependencia, y decir «no está en el
+// android.jar» cuando hay seis jars detrás esconde dónde mirar.
+func (c *classpathDeClases) claseDelJar(internal string) (*classFull, error) {
+	for _, b := range c.fuentes {
+		if b.hayEnElJar(internal) {
+			return b.claseDelJar(internal)
+		}
+	}
+	return nil, fmt.Errorf("%s no esta en el classpath (android.jar ni jar/)", internal)
 }
 
 func (b *buscadorDeClases) hayEnElJar(internal string) bool {
@@ -487,7 +536,7 @@ func vueltaDe(desc string) string {
 // contextoJava lleva lo que todas las clases del mismo fuente comparten: el buscador del jar, las clases
 // del propio fuente por su nombre internal (para doblar la constante de `R.layout.main`) y el paquete.
 type contextoJava struct {
-	busc    *buscadorDeClases
+	busc    *classpathDeClases
 	paquete string
 	imports []string
 	orden   []*jclas // en el orden del fuente, para resolver sin depender del azar de un mapa
@@ -840,7 +889,7 @@ func (ctx *contextoJava) resolverSimple(nombre string) (string, error) {
 	if ctx.hay("java/lang/" + nombre) {
 		return "java/lang/" + nombre, nil
 	}
-	return "", fmt.Errorf("el tipo %s no se resuelve: ni en el fuente, ni en su paquete, ni en los imports, ni en java.lang, ni en el android.jar", nombre)
+	return "", fmt.Errorf("el tipo %s no se resuelve: ni en el fuente, ni en su paquete, ni en los imports, ni en java.lang, ni en el classpath (android.jar ni jar/)", nombre)
 }
 
 // tipoAInterno resuelve `MenuItem.OnMenuItemClickListener` contra el jar: la cabeza por resolverSimple y
@@ -1437,13 +1486,15 @@ func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarar
 	return sal, nil
 }
 
-// candidatosDelJar: lo mismo sobre las clases del `android.jar`, subiendo por la cadena de padres.
-func (b *buscadorDeClases) candidatosDelJar(interno, nombre string, argc int, conVarargs bool) ([]candidato, error) {
+// candidatosDelJar: lo mismo sobre las clases del classpath, subiendo por la cadena de padres. La
+// cadena puede cruzar de un jar a otro (una dependencia que extiende una clase del `android.jar`), y
+// por eso la búsqueda de la clase siguiente también pasa por el classpath y no por un solo jar.
+func (cp *classpathDeClases) candidatosDelJar(interno, nombre string, argc int, conVarargs bool) ([]candidato, error) {
 	sal := []candidato{}
 	vistas := map[string]bool{}
 	actual := interno
 	for visits := 0; actual != "" && visits < 32; visits++ {
-		c, err := b.claseDelJar(actual)
+		c, err := cp.claseDelJar(actual)
 		if err != nil {
 			return nil, err
 		}
@@ -1633,7 +1684,14 @@ func compilarJava(fuente, archivo, rutaJar string) ([]claseEmitida, error) {
 // declaracion de la R delante, que vive en otro fichero. Cada fichero aporta su paquete y sus imports, que
 // es el alcance con el que se resuelven sus nombres; las clases de todos se registran antes de emitir nada.
 func compilarProyectoJava(fuentes []fuenteJava, rutaJar string) ([]claseEmitida, error) {
-	busc, err := abrirBuscador(rutaJar)
+	return compilarProyectoJavaConClasspath(fuentes, []string{rutaJar})
+}
+
+// compilarProyectoJavaConClasspath es el emisor con el classpath entero: el `android.jar` primero y
+// después las dependencias, en el orden en que se le pasan. El proyecto se registra antes de resolver
+// nada, así que una clase del fuente gana a la del mismo nombre en una dependencia, como en javac.
+func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]claseEmitida, error) {
+	busc, err := abrirClasspath(rutas)
 	if err != nil {
 		return nil, err
 	}
