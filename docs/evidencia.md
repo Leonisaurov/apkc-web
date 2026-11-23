@@ -10397,10 +10397,10 @@ en una lambda mal emitida.
 queda rechazado, no soportado; y la API < 21 sigue documentada como fuera del subconjunto. No se tocó
 red ni publicación.
 
-**Pendiente: el gate no cubre estos `§`.** El gate de `§230` se corrió **antes** de estos cinco
-frentes —la caché del marco, los recursos de AAR y el APK arrastrado, los límites de `check`, `goto_w`
-y el rechazo de `invokedynamic`/`condy`—, así que no se puede leer como su verificación. Repetir
-`tools/entorno.sh gate` tras integrarlos sigue pendiente y lo ejecuta el usuario cuando lo autorice.
+**Nota del gate.** El gate de `§230` se corrió **antes** de estos cinco frentes —la caché del marco, los
+recursos de AAR y el APK arrastrado, los límites de `check`, `goto_w` y el rechazo de
+`invokedynamic`/`condy`—, así que no se puede leer como su verificación; repetido en `§242` sobre el
+árbol final, verde.
 
 ## 236. La verificación de ART, ampliada a ocho casos
 
@@ -10520,10 +10520,9 @@ solo si faltaban. Cada `metodoDalvik` lleva su propio dex para no mezclar los í
 **Fronteras de este `§`.** No se puede cambiar la forma de los campos, y la UI queda pendiente: pasar
 los bytes del dex y pintar `ejecucion.intercambios`. No se tocó red ni publicación.
 
-**Pendiente: el gate no cubre estos tres `§`.** El gate de `§230` se corrió **antes** de estos tres
-frentes —la verificación ampliada de ART, los arreglos de seguridad y el hot swap—, así que no se puede
-leer como su verificación. Repetir `tools/entorno.sh gate` tras integrarlos queda pendiente de
-autorización del usuario.
+**Nota del gate.** El gate de `§230` se corrió **antes** de estos tres frentes —la verificación ampliada
+de ART, los arreglos de seguridad y el hot swap—, así que no se puede leer como su verificación;
+repetido en `§242` sobre el árbol final, verde.
 
 ## 239. Los records: `invokedynamic` desugrado a métodos directos
 
@@ -10602,7 +10601,8 @@ pila** no cambia el plan de registros —no hay registro que inventar ni que tir
 `2940e86` deja de abortar con «stacks of different height» y lo anota como `fronteraUnion` con su
 mensaje, en las dos direcciones; el `istore` de la cabecera se funde con el registro del `const/4` y el
 bucle sale bien en ART (`new Punto(1,2).hashCode()` da 33). No se corrió gate, chromium, red ni
-publicación; **el gate de `§230` es anterior a este arreglo y no lo cubre**.
+publicación en esa medición; **el gate de `§230` es anterior a este arreglo y no lo cubre**, y el
+repetido en `§242` sobre el árbol final salió verde.
 
 ## 241. ApkShare desde el zip: diamante, `for` con dos puntos y comodines
 
@@ -10635,5 +10635,41 @@ medido`, `se esperaba ";" y hay ":"` y `el caracter '?' no es de este subconjunt
 
 **Fronteras de este `§`.** La anónima con comodín difiere **76 B** del dex de `javac`, así que su oráculo
 es solo el `.class`. Siguen abiertos el `final` local de `MainActivity.java:137`, la lambda
-`apk -> shareApp(apk)` de `:156` y `App.java:28`/`:35`. No se corrió gate, chromium, red ni publicación;
-**el gate de `§230` es anterior a estos tres arreglos y no los cubre**.
+`apk -> shareApp(apk)` de `:156` y `App.java:28`/`:35`. No se corrió gate, chromium, red ni publicación
+en esa medición; **el gate de `§230` es anterior a estos tres arreglos y no los cubre**, y el repetido en
+`§242` sobre el árbol final salió verde.
+
+## 242. El gate final sobre el árbol final, en verde
+
+Medido el 2026-11-23 en la raíz sobre `912a2c4` (`chore(studio): clics del emulador llegan al canvas bajo
+el inspector`, con el submódulo en `f2710a1`), autorizado por el usuario con «Preparar y correr gate». Es
+el primer gate que cubre `§235`-`§241`: el de `§230` se corrió antes de esos frentes.
+
+**Preparación.** La capa `test` en verde (`ok … 94.453s`); se borraron los fixtures cacheados del arnés
+(`$PREFIX/tmp/studio-e2e-*`, `pestana-*` y `studio-e46*`); `LD_LIBRARY_PATH` al shim de
+`libsimdutf.so.36`; y `TCR` apuntando a un wrapper local que ejecuta directo
+(`/home/leonisauro/.cache/apkc-web/gate-direct.sh`), porque el guardia de RAM de `tcr` mataba `javac` con
+137.
+
+```sh
+TCR=/home/leonisauro/.cache/apkc-web/gate-direct.sh \
+LD_LIBRARY_PATH=/home/leonisauro/.cache/apkc-web-gate-final/shimlib \
+  sh tools/entorno.sh gate
+```
+
+**Salida.** `e2e: todo en orden`. Cubre: las plantillas Contador, ciclo, menú y traducido firmadas y
+alineadas; la vista previa; crear (36 comprobaciones); la pestaña (229); release con CN=Release y firma
+v1+v2+v3; la v4 con su `.idsig`; el `.aab` con su v1 JAR; la rotación v3.1; la pestaña compilando con
+`apksigner`, `zipalign`, `zipcheck` y `aapt2`; el proyecto generado **byte a byte** igual al nativo; el
+fuente escrito a mano; la app del contador; la firma (bueno, con-v3, bloque-alterado, rotación, EC
+P-256/P-384 y SHA-1); y el icono.
+
+**Los dos intentos que no llegaron.** El primero lo mató el guardia de RAM (`java no compila`, `Killed`);
+el segundo chocó con una regresión de UI —`previa-detalle-modelo` capturaba los clics del canvas— que
+corrigió `f2710a1` en el submódulo, con el puntero `912a2c4` en el padre; la suite de pestaña del agente
+quedó en 215/0. La vista previa final es `8b1e471d…`, verificada por HTTP en `127.0.0.1:8801`.
+
+**Fronteras de este `§`.** La capa `wasm` de `tools/entorno.sh` falla por límites conocidos del shim (sin
+`android.jar` montado, sin los `testdata` y con permisos de `os.CreateTemp` no POSIX), y **el gate no
+ejecuta esa capa**, así que no la cubre. El CI remoto y el push de los commits nuevos siguen pendientes, y
+el sitio publicado (`apkc-studio.surge.sh`) no se actualizó.
