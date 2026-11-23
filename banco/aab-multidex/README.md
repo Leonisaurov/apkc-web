@@ -103,10 +103,23 @@ comprueban porque el reparto del bundle no pasa por ellos.
 
 ## Lo que sigue abierto: el dex de dependencias en el `.aab`
 
+El caso 2 **existe en el guion** y es expected-fail mientras el bloqueo siga abierto. Su presencia
+se comprueba sin ejecutar nada:
+
+```
+$ grep -n 'PROBAR_DEPENDENCIAS' banco/aab-multidex/aab-multidex.sh
+5:#   PROBAR_DEPENDENCIAS=1 sh banco/aab-multidex/aab-multidex.sh   # además, el caso con jars
+23:# `PROBAR_DEPENDENCIAS=1` añade el caso de los jars (veintidós clases de dependencia, tres
+116:echo "caso 2      PROBAR_DEPENDENCIAS=1 (expected-fail: aab_go.go:311,369,379 · sign.go:309)"
+274:if [ "${PROBAR_DEPENDENCIAS:-0}" = "1" ]; then
+276:	echo "== caso 2 (PROBAR_DEPENDENCIAS=1): dex de dependencias en tres buckets"
+```
+
 `PROBAR_DEPENDENCIAS=1` arma el mismo caso de `banco/validar-apk` (veintidós jars, tres buckets) y
 el `.aab` **no se puede firmar**:
 
 ```
+caso 2      PROBAR_DEPENDENCIAS=1 (expected-fail: aab_go.go:311,369,379 · sign.go:309)
 [build] dexed 22 jars in 3 buckets, 3 of them at a time
 [build] build/app.aab ensamblado desde el enlazador Go, sin aapt2 ni bundletool
 [build] signing aab
@@ -132,3 +145,9 @@ solo `"build"`. La firma lo rechaza en `apkc/sign.go:309`. Arreglarlo exige pasa
 El caso del dex de la app no pasa por ese camino —`reparto.go` deja `build/classes.dex` y
 `build/classes2.dex` en la raíz de `build/` y no hay `dexcache/` con dex porque el proyecto no
 tiene jars—, y es el que este guion da por medido.
+
+`PROBAR_DEPENDENCIAS=1` termina con `rc 0` mientras el bloqueo siga abierto: el caso 2 da el fallo
+por esperado y lo imprime. Si algún día el `.aab` con dependencias se ensambla y firma, el guion
+**falla a propósito** (`rc 1`) con «salió en verde: el bloqueo de aab_go.go:369 se levantó»: el
+caso 2 tiene que pasar entonces a medirse con bundletool como el caso 1, y no puede quedar un verde
+sin derivar el `base.apk`.

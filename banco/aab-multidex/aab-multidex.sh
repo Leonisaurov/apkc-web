@@ -21,10 +21,14 @@
 # APK; en el bundle los dos dex quedan en `base/dex/` y el número de ficheros no cambia.
 #
 # `PROBAR_DEPENDENCIAS=1` añade el caso de los jars (veintidós clases de dependencia, tres
-# buckets). Ese caso HOY NO SE PUEDE ENSAMBLAR: aab_go.go recorre `build/` entero y mete también
-# los `classes.dex` de `build/dexcache/…`, así que el bundle lista `base/dex/classes.dex` dos
-# veces y la firma lo rechaza (sign.go:309). El guion lo ejecuta, espera ese fallo y lo reporta
-# como defecto abierto con su `file:line`; no lo da por bueno ni lo esconde.
+# buckets). Ese caso HOY NO SE PUEDE ENSAMBLAR, y el guion lo ejecuta como expected-fail: recorre
+# `build/` entero con `ficherosDeArbol` (`apkc/aab_go.go:369`) y nombra cada dex con
+# `filepath.Base` (`apkc/aab_go.go:379`) dentro de `ensamblarAABDesdeGo` (`apkc/aab_go.go:311`),
+# así que los `classes.dex` que el dexado de dependencias deja en `build/dexcache/…` colisionan con
+# el `build/classes.dex` de la app y el bundle lista `base/dex/classes.dex` más de una vez: la
+# firma lo rechaza en `apkc/sign.go:309`. El reparto correcto lo sabe `packagePlan`
+# (`apkc/build.go:1676`), que `apkc/aab.go:25` no le pasa. Cuando otro frente lo arregle, este caso
+# tiene que pasar a medirse con bundletool como el caso 1; hasta entonces su verde es un fallo.
 #
 # Los artefactos van a $HOME/.cache/apkc-web/aab-multidex: no se versiona ningún binario (regla 2).
 # Variables: APKC (binario), APKC_ANDROID_JAR o ANDROID_JAR, JAVA_HOME, APKC_WEB_CACHE y BUNDLETOOL
@@ -109,6 +113,7 @@ echo "android     $JAR"
 echo "oráculos    $APKSIGNER · $ZIPALIGN · $DEXDUMP"
 echo "bundletool  $BUNDLETOOL"
 echo "javac       $JDK_BIN"
+echo "caso 2      PROBAR_DEPENDENCIAS=1 (expected-fail: aab_go.go:311,369,379 · sign.go:309)"
 bundletool version
 
 KS=${KEYSTORE:-$CACHE/debug.keystore}
@@ -311,15 +316,17 @@ EOF
 	set -e
 	sed 's/^/   | /' "$SALIDA/deps-build.log"
 	[ "$rc" -ne 0 ] ||
-		falla "el .aab con dex de dependencias salió en verde: hay que volver a medir el caso 2"
+		falla "el .aab con dex de dependencias salió en verde: el bloqueo de aab_go.go:369 se levantó, y el caso 2 tiene que pasar a medirse con bundletool como el caso 1 antes de dar nada por bueno"
 	[ -f "$D/build/app.aab" ] || falla "el build falló sin dejar build/app.aab"
 	echo "-- el bundle que dejó (antes de firmar)"
 	unzip -Z1 "$D/build/app.aab" | grep '^base/dex/' | sed 's/^/   /'
-	echo "-- causa"
-	echo "   aab_go.go recorre build/ entero con ficherosDeArbol y nombra cada dex con"
-	echo "   filepath.Base: los classes.dex de build/dexcache/… colisionan con el de la app"
-	echo "   (apkc/aab_go.go:369-382, ensamblarAABDesdeGo en apkc/aab_go.go:308) y la firma lo"
-	echo "   rechaza en apkc/sign.go:309. El caso de dependencias del .aab sigue ABIERTO."
+	echo "-- expected-fail: el caso 2 no se puede firmar hoy, y este es el motivo"
+	echo "   ensamblarAABDesdeGo (apkc/aab_go.go:311) recorre build/ entero con ficherosDeArbol"
+	echo "   (apkc/aab_go.go:369) y nombra cada dex con filepath.Base (apkc/aab_go.go:379): los"
+	echo "   classes.dex de build/dexcache/… colisionan con el de la app y base/dex/classes.dex"
+	echo "   sale más de una vez. El reparto correcto está en packagePlan (apkc/build.go:1676),"
+	echo "   que apkc/aab.go:25 no le pasa. La firma lo rechaza en apkc/sign.go:309."
+	echo "   El caso con dex de dependencias del .aab sigue ABIERTO."
 fi
 
 echo
