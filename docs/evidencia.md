@@ -9965,6 +9965,12 @@ idénticos**.
 guion `banco/validar-apk/validar.sh:253` todavía exige el rechazo viejo con `PROBAR_LIMITE=1` y otro
 agente está invirtiendo esa comprobación. No se corrió gate, chromium ni publicación.
 
+**Actualizado el 2026-11-23 en `e22f10c`** (`test(banco): valida el reparto de 70 000 métodos en
+varios dex`): el guion ya no exige el rechazo, valida el reparto (rc 0,
+`classes.dex`/`classes2.dex`/`classes3.dex`, ningún dex por encima de 65 536 `method_id`) y cierra con
+el `OK` del techo. Esta nota sustituye a la frase de «Fronteras» sobre `validar.sh:253`; el resto de
+este `§` sigue describiendo la medición de `492c3f0`.
+
 ## 224. Clase duplicada entre dependencias
 
 Medido el 2026-11-23 sobre `8be5250` (`fix(jar): nombra la clase duplicada entre dependencias`). La
