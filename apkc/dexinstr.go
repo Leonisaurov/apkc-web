@@ -1278,7 +1278,14 @@ func (p *traduce) liberaRegistro(in jvmInstr, r int) bool {
 		}
 		p.palabra(unidad22v(mueveFrom16(kind), destino))
 		p.palabra(uint16(r))
-		p.renom[n] = destino
+		// una asignación `y = x` fusiona los dos locales al mismo registro: todos los que
+		// comparten `r` tienen el mismo valor y pasan juntos al nuevo. Cambiar solo uno dejaría al
+		// otro nombrando un registro que se va a reutilizar.
+		for n2, r2 := range p.renom {
+			if r2 == r {
+				p.renom[n2] = destino
+			}
+		}
 		delete(p.fijos, r)
 		delete(p.kindFijo, r)
 		p.libres = append(p.libres, r)
