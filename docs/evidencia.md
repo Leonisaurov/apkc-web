@@ -10269,3 +10269,135 @@ genérica va medida en su atributo; `check` queda a cero errores; y el `LineNumb
 **Fronteras de este `§`.** No medidos: los comodines (`?`), los parámetros de tipo declarados en la
 clase (`class C<T>`), `new T<...>()` y los `throws` genéricos. El `goto/32` del emisor de `.class` es
 otro frente (§226 cierra el del dexer). No se corrió gate, chromium, red ni publicación.
+
+## 232. El marco de recursos se cachea entre pasadas de `check`
+
+Medido el 2026-11-23 sobre `9ad60da` (`perf(check): reutiliza el marco de recursos parseado`). El
+`check` inflaba y andaba los bloques del `resources.arsc` del `android.jar` en cada pasada; ahora deja
+el marco —ids, valores y formatos— en una caché junto al proyecto y lo relee.
+
+```sh
+# en apkc/
+ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestMarcoCacheado|TestCheckMarcoCacheadoCorruptoNoFalsifica|TestCheckAprovechaElIndiceDelJar|TestDirectorioCentralDelJarContraArchiveZip' -v .
+```
+
+**Resultado.** 5 tests `PASS` en el paquete y `ok … 1.180s`.
+
+**La sonda.** `TestMarcoCacheadoMideElAhorro` (`apkc/marcocache_test.go:187`) da tres vueltas sobre el
+mismo jar, con la caché apagada y encendida, y compara además los dos marcos pieza a pieza. Sus
+medianas locales: **119,5 ms sin caché frente a 3,4 ms con caché**, medidas con reloj de pared.
+
+**Cifras del builder.** Marco 114,1 → 4,6 ms y `check` con `res/` 125,7 → 9,3 ms en el escritorio; en
+wasm sobre OPFS 408 → 11,6 ms y 338 → 36,2 ms; la caché ocupa 512 004 B por jar.
+
+**Falsificación.** La cabecera rechaza marca, huella, tamaño, CRC y fichero cortado; con la caché
+corrupta `check` enlaza con **0 errores** y la reescribe sana para la pasada siguiente
+(`apkc/marcocache_test.go:260`), y no crea `build/` si no existe.
+
+**Fronteras de este `§`.** Las cifras wasm/OPFS son del informe del builder y no se reejecutaron
+aquí. `jarDelFramework` sigue saltándose dos tests en este escritorio, igual que antes de este
+commit: es una frontera previa, no una regresión. No se tocó red ni publicación.
+
+## 233. Recursos de AAR, dibujo de vista propia y un APK arrastrado
+
+Medido el 2026-11-23 sobre `ee01c9b` (`feat(preview): recursos de AAR y dibujo de vista propia`) y
+`793fc9d` (`feat(preview): carga un apk arrastrado al emulador`).
+
+```sh
+# en apkc/
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'Test.*Preview|Test.*Recurso|Test.*Vista|Test.*Aar' -v .
+```
+
+→ `ok … 1.885s`. La suite completa, `go test -vet=off ./...` en `apkc/`, da `ok … 77.143s`, y
+`node prueba.js` en `studio/` termina en `prueba: todo en orden`.
+
+**Lo que se mide.** Los recursos que llegan por `.aar` (`anim`, `font` y compañía) entran en la vista
+previa; la prioridad del proyecto se respeta por encima de la dependencia; y `<solid>` y `onDraw` de
+una vista propia se interpretan. Un APK de terceros arrastrado al emulador,
+`com.monuk7735.nope.remote`, sale con un `ejecucion.error` honesto en vez de una vista inventada.
+
+**Falsificaciones del builder.** Sin `anim`/`font`, sin la prioridad del proyecto, sin `<solid>`, sin
+`onDraw`, sin el stub de `drawLine`, sin la puerta del zip y sin el lector de bloque complejo, el
+test correspondiente falla.
+
+**Mensajes del rechazo.** Un APK sin layout responde `el apk no lleva ningún res/layout/*.xml`
+(`apkc/preview.go:962`) y un zip roto, `el apk no es un zip` (`apkc/preview.go:465`).
+
+**Fronteras de este `§`.** `onDraw` corre sobre una instancia nueva con un `Canvas` de mentira, no
+sobre el árbol dibujado real. `vista-previa.js` todavía no pinta `nodo.dibujo`. Un APK ofuscado puede
+elegir el primer layout que encuentre, y `ejecucion.error` aparece cuando el dex usa features que el
+intérprete no cubre. No se tocó red ni publicación.
+
+## 234. `check` con varios fuentes: colisiones y hermanos inválidos
+
+Medido el 2026-11-23 sobre `0e440c7` (`fix(check): cubre colisiones de nombres y hermanos inválidos`).
+Cierra los tres límites que dejó abiertos `§227`.
+
+```sh
+# en apkc/
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestCheck|TestIndiceDelJar|TestMarcoCacheado' -v .
+```
+
+→ `ok … 4.949s`; la suite completa, `ok … 87.977s`.
+
+**Caso 1, el nombre simple repetido.** `TestCheckDosHelperEnPaquetesDistintos`
+(`apkc/check_test.go:806`): con `com.hola.apkcstudio.uno.Helper` pedido y
+`com.hola.apkcstudio.dos.Helper` en el proyecto, el conjunto de hermanos lleva el del otro paquete y
+salta la copia en disco del pedido por su nombre cualificado, no por el simple; el informe queda en
+cero errores, `emisor:true` y sin aviso.
+
+**Caso 2, el hermano que no parsea.** `TestCheckHermanoQueNoParseaSeAvisa` (`apkc/check_test.go:850`):
+`Roto.java` con un bloque sin cerrar deja `errores` vacío, `emisor:false` y un aviso que nombra el
+fichero y la causa, sin atribuirla al fuente pedido.
+
+**Caso 3, el tipo de `jar/` en un hermano.** `TestCheckTipoDeJarLocalEnUnHermano`
+(`apkc/check_test.go:932`): el tipo que solo referencia otro fuente del proyecto resuelve porque
+`check` arma el mismo classpath que `build`.
+
+**Falsificaciones.** Tres, y caen en estos mensajes literales del test: `con Helper en dos paquetes el
+pedido da N errores` (`apkc/check_test.go:812`) y `faltan hermanos` (`:834`); `el fallo de Roto.java
+se coló en la lista del pedido` (`:855`) y `se dio por comprobado un fuente cuyo hermano Roto.java no
+parsea` (`:858`); `el tipo de jar/ en un hermano da N errores` (`:938`).
+
+**Fronteras de este `§`.** Siguen fuera una referencia cualificada dentro de una expresión
+(`apkc/javaemisor.go:3260`), un import de un segundo tipo con el mismo nombre simple
+(`apkc/javaemisor.go:875-883`) y un candidato sin `package` con el mismo nombre. No se tocó red ni
+publicación.
+
+## 235. `goto_w` en el emisor de `.class`, y el rechazo nombrado de `invokedynamic` y `condy`
+
+Medido el 2026-11-23 sobre `01d681c` (`fix(apkc): escribe goto_w en la vuelta larga del emisor de
+.class`) y `764e2f1` (`test(apkc): mide el rechazo de invokedynamic y condy fuera del subconjunto`).
+
+```sh
+# en apkc/
+tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestGotoWLargoHaciaAtras|TestIndyDeRecordSeRechazaConNombre|TestCondySeRechazaConNombre|TestDexSaltoLargoSePromueveAGoto32|TestDexGotoWLargoSePromueveAGoto32' -v .
+```
+
+→ `ok … 4.691s`; la suite completa, `ok … 86.916s`. Los dos tests del dexer que entran en ese filtro
+son los de `§226` y vuelven en verde.
+
+**La vuelta larga.** `TestGotoWLargoHaciaAtras` (`apkc/javaemisor_atras_test.go:51`) produce una vuelta
+de 36 009 bytes y el salto hacia atrás sale como `goto_w` en el byte 36 011; el `Code` es **byte a
+byte** el de `javac` 17 y el dex, idéntico al de `d8` (oráculo del builder con `javap`, `d8` y
+`dexdump`; los comandos están en su informe).
+
+**`invokedynamic` de record.** `TestIndyDeRecordSeRechazaConNombre` (`apkc/indy_condy_test.go:53`): el
+rechazo nombra el sitio y el bootstrap `ObjectMethods.bootstrap` (`apkc/lambda.go:164`), en vez de caer
+en una lambda mal emitida.
+
+**`condy`.** `TestCondySeRechazaConNombre` (`apkc/indy_condy_test.go:78`): se rechaza en
+`apkc/classreader.go:451`, y el oráculo `d8` da rc 1, la misma frontera que `d8`.
+
+**Fronteras de este `§`.** Los bootstraps distintos de `LambdaMetafactory` no se midieron; `condy`
+queda rechazado, no soportado; y la API < 21 sigue documentada como fuera del subconjunto. No se tocó
+red ni publicación.
+
+**Pendiente: el gate no cubre estos `§`.** El gate de `§230` se corrió **antes** de estos cinco
+frentes —la caché del marco, los recursos de AAR y el APK arrastrado, los límites de `check`, `goto_w`
+y el rechazo de `invokedynamic`/`condy`—, así que no se puede leer como su verificación. Repetir
+`tools/entorno.sh gate` tras integrarlos sigue pendiente y lo ejecuta el usuario cuando lo autorice.
