@@ -754,6 +754,16 @@ func (p *traduce) convierteEnAncho(in jvmInstr, op byte) {
 	var d int
 	if enSitio {
 		d = fuente
+		// `int-to-long vA, vA` deja un par vivo (vA, vA+1): la mitad alta se marca y se saca de la
+		// bolsa. `toma` devuelve de `libres` sin mirar `altos`, así que si no se quita la reutiliza
+		// y corrompe el `long`; `sueltaPar` devuelve las dos mitades cuando el par muere.
+		p.marcaPar(d)
+		for i, v := range p.libres {
+			if v == d+1 {
+				p.libres = append(p.libres[:i], p.libres[i+1:]...)
+				break
+			}
+		}
 	} else {
 		d = p.tomaParBajo(in, 14)
 		if p.err != nil {
