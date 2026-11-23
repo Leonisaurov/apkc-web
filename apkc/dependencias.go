@@ -111,6 +111,8 @@ func aarsEn(raiz string) []string {
 // AAR entero y no la de su `classes.jar`, para que cambiar un recurso del AAR vuelva a dexar sus
 // clases igual que invalida las del compilador. Es la lista que reciben los dos dexers —d8 en el
 // camino javac y `dexDeClases` en el camino Go—, así que los dos empaquetan el mismo conjunto.
+// Antes de devolverla comprueba que ninguna clase la definan dos entradas: con una colisión d8
+// aborta y el dexer de este fork se quedaba con una de las dos copias sin decirlo.
 func dependenciasDexeables() ([]string, []string) {
 	rutas := []string{}
 	digests := []string{}
@@ -138,7 +140,45 @@ func dependenciasDexeables() ([]string, []string) {
 		rutas = append(rutas, classes)
 		digests = append(digests, digest)
 	}
+	if err := claseDuplicadaEntreJars(rutas); err != nil {
+		LogF("build", err.Error())
+	}
 	return rutas, digests
+}
+
+// claseDuplicadaEntreJars busca una clase que definan dos entradas dexables a la vez. d8 aborta en
+// ese caso con «Type X is defined multiple times»; el dexer de este fork concatenaba las dos listas,
+// así que el build terminaba en verde con una clase ambigua que el runtime resolvía a su gusto. Solo
+// se lee el directorio central, como en `shadowedClass`, y el error nombra la clase y las dos rutas
+// para que el diagnóstico sea el mismo que el de d8.
+func claseDuplicadaEntreJars(rutas []string) error {
+	if len(rutas) < 2 {
+		// un solo jar no puede colisionar consigo mismo: no se abre nada
+		return nil
+	}
+	vista := map[string]string{}
+	for _, ruta := range rutas {
+		clases, err := jarClasses(ruta)
+		if err != nil {
+			// un jar ilegible ya lo reporta el dexer; aquí no puede tapar la colisión del resto
+			LogW("build", "could not read", ruta, err.Error())
+			continue
+		}
+		sort.Strings(clases)
+		for _, clase := range clases {
+			// `jarClasses` ya descarta `META-INF/` y las formas con paquete, pero no el
+			// `module-info.class` de la raíz: dos jars modulares no colisionan por él.
+			if clase == "module-info" || clase == "package-info" {
+				continue
+			}
+			if antes, visto := vista[clase]; visto {
+				return fmt.Errorf("la clase %s está definida más de una vez: %s y %s",
+					strings.ReplaceAll(clase, "/", "."), antes, ruta)
+			}
+			vista[clase] = ruta
+		}
+	}
+	return nil
 }
 
 // clasesDeJar lee los `.class` de un jar o de un `classes.jar` en memoria, en orden de nombre de
