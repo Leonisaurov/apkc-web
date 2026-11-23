@@ -894,6 +894,45 @@ func TestCheckPaqueteDelCandidatoVieneDelParser(t *testing.T) {
 	}
 }
 
+// fuenteHelperDosRoto declara el paquete del otro Helper pero no cierra el cuerpo: el parser lo
+// rechaza y el escáner de la cabecera tiene que reconocer igualmente que no es la copia del pedido.
+const fuenteHelperDosRoto = `package com.hola.apkcstudio.dos;
+
+public class Helper {
+    public static int doble(int x) {
+        return x + x;
+`
+
+// TestCheckHermanoRotoConElMismoNombreSeAvisa cierra la regresión del crítico: un hermano que se llama
+// igual que el pedido pero está en otro paquete y no parsea no puede confundirse con la copia del
+// pedido. Se incluye en el conjunto (su paquete se lee de la cabecera sin parsear) y su fallo llega a
+// `aviso`, no a `errores`, que es el contrato de `check`.
+func TestCheckHermanoRotoConElMismoNombreSeAvisa(t *testing.T) {
+	raiz, _ := proyectoDeCheck(t)
+	pon(t, raiz, "src/com/hola/apkcstudio/uno/Helper.java", fuenteHelperUno)
+	pon(t, raiz, "src/com/hola/apkcstudio/dos/Helper.java", fuenteHelperDosRoto)
+	if got := paqueteDelFuente(fuenteHelperDosRoto); got != "com.hola.apkcstudio.dos" {
+		t.Errorf("el paquete del hermano roto es %q, medido \"com.hola.apkcstudio.dos\"", got)
+	}
+	r := revisarFuenteJava(fuenteHelperUno, "Helper.java", jarDelSDK(t), raiz)
+	if len(r.Errores) != 0 {
+		t.Fatalf("el fallo del hermano roto se coló en la lista del pedido: %+v", r.Errores)
+	}
+	if r.Emisor {
+		t.Fatal("se dio por comprobado un fuente cuyo hermano del otro paquete no parsea")
+	}
+	if !strings.Contains(r.Aviso, "Helper.java") {
+		t.Fatalf("el aviso no nombra el fichero que no parsea: %q", r.Aviso)
+	}
+	// con dos Helper.java el nombre base no basta para saber cuál falla: el aviso lleva la ruta
+	if !strings.Contains(r.Aviso, "src/com/hola/apkcstudio/dos/Helper.java") {
+		t.Fatalf("el aviso no distingue el Helper del otro paquete: %q", r.Aviso)
+	}
+	if !strings.Contains(r.Aviso, "no es una expresion") {
+		t.Fatalf("el aviso no dice la causa del parser: %q", r.Aviso)
+	}
+}
+
 // nombresDeFuentes deja legible un conjunto de fuentes en un fallo de test.
 func nombresDeFuentes(fuentes []fuenteJava) []string {
 	salida := make([]string, 0, len(fuentes))

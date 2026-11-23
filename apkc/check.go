@@ -228,16 +228,83 @@ func otrosFuentesDelProyecto(proyecto, rutaPedida, nombreInforme, paquetePedido 
 }
 
 // paqueteDelFuente devuelve el paquete que declara un fuente, o "" si no se puede saber (paquete por
-// defecto o fuente que todavía no parsea). Usa el parser del proyecto y no una expresión regular: un
-// `package` dentro de un comentario no declara nada y el parser lo salta, y entre `package` y el
-// nombre Java admite cualquier espacio, también un salto de línea. Así el paquete que se compara es
-// exactamente el que el emisor va a ver, sin una segunda gramática que mantener.
+// defecto o fuente que ni siquiera deja leer su cabecera). Usa el parser del proyecto y no una
+// expresión regular: un `package` dentro de un comentario no declara nada y el parser lo salta, y
+// entre `package` y el nombre Java admite cualquier espacio, también un salto de línea. Así el
+// paquete que se compara es exactamente el que el emisor va a ver, sin una segunda gramática que
+// mantener. Si el fuente no parsea —el hermano roto al que hay que dejar llegar a `aviso`— se lee la
+// cabecera con el escáner de abajo, que aplica las mismas dos reglas y ninguna más.
 func paqueteDelFuente(contenido string) string {
-	a, err := parsearJava(contenido)
-	if err != nil {
+	if a, err := parsearJava(contenido); err == nil {
+		return a.paquete
+	}
+	return paqueteSinParsear(contenido)
+}
+
+// paqueteSinParsear lee la declaración `package a.b;` de un fuente que el parser rechaza. Recorre
+// solo la cabecera: salta espacios y comentarios (`//` y `/* */`) y, si encuentra la palabra
+// `package`, se queda con el nombre hasta el `;`. No es un segundo parser: no valida el resto del
+// fichero ni la forma del nombre, solo extrae el paquete para distinguir dos homónimos.
+func paqueteSinParsear(contenido string) string {
+	i := saltarEspaciosYComentarios(contenido, 0)
+	const palabra = "package"
+	if !strings.HasPrefix(contenido[i:], palabra) {
 		return ""
 	}
-	return a.paquete
+	j := i + len(palabra)
+	if j < len(contenido) && parteDeNombre(contenido[j]) {
+		return "" // `packageX` no declara un paquete
+	}
+	nombre := strings.Builder{}
+	for j < len(contenido) {
+		c := contenido[j]
+		switch {
+		case c == ';':
+			return nombre.String()
+		case parteDeNombre(c):
+			nombre.WriteByte(c)
+			j++
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f':
+			j++
+		default:
+			return ""
+		}
+	}
+	return ""
+}
+
+// saltarEspaciosYComentarios avanza desde `i` sobre lo que Java no considera código de la cabecera.
+func saltarEspaciosYComentarios(contenido string, i int) int {
+	for i < len(contenido) {
+		c := contenido[i]
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f':
+			i++
+		case c == '/' && i+1 < len(contenido) && contenido[i+1] == '/':
+			for i < len(contenido) && contenido[i] != '\n' {
+				i++
+			}
+		case c == '/' && i+1 < len(contenido) && contenido[i+1] == '*':
+			i += 2
+			for i+1 < len(contenido) && !(contenido[i] == '*' && contenido[i+1] == '/') {
+				i++
+			}
+			if i+1 < len(contenido) {
+				i += 2
+			} else {
+				i = len(contenido)
+			}
+		default:
+			return i
+		}
+	}
+	return i
+}
+
+// parteDeNombre: los caracteres de un identificador Java o del punto que separa los segmentos.
+func parteDeNombre(c byte) bool {
+	return c == '_' || c == '$' || c == '.' ||
+		(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
 }
 
 // fuenteDelError devuelve el fichero en el que nació un fallo del emisor, o nil si el error no viene
@@ -343,15 +410,30 @@ func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rut
 	// el fuente pedido es el que se diagnostica. Si el primer fallo es de otro `.java` del proyecto,
 	// no se cuela en su lista: se dice en `aviso` y no se da el pedido por comprobado, salvo que el
 	// fallo sea de emisión, porque entonces el pedido —que va primero— ya se emitió sin error.
-	if de := fuenteDelError(err); de != nil && baseDeNombre(de.fuente) != baseDeNombre(nombreFuente) {
+	if de := fuenteDelError(err); de != nil && !esDelFuentePedido(de, nombreFuente) {
 		if de.etapa == "emisor" {
 			r.Emisor = true
 		}
-		r.Aviso = "otro fuente del proyecto no compila: " + baseDeNombre(de.fuente) + ": " + de.err.Error()
+		r.Aviso = "otro fuente del proyecto no compila: " + de.fuente + ": " + de.err.Error()
 		return r
 	}
 	r.agregar(err)
 	return r
+}
+
+// esDelFuentePedido decide si un error del proyecto nació en el fuente pedido. Un fallo de parser trae
+// el nombre con el que entró el fichero, así que se compara tal cual: dos `Helper.java` de paquetes
+// distintos comparten el nombre base, y compararlos por él atribuía al pedido el fallo del hermano. Los
+// de la etapa de emisión solo traen el nombre base —es lo que el emisor pone en el SourceFile— y ahí
+// esa comparación sigue siendo la única disponible.
+func esDelFuentePedido(de *errorDeFuente, nombreFuente string) bool {
+	if de.fuente == nombreFuente || filepath.Clean(de.fuente) == filepath.Clean(nombreFuente) {
+		return true
+	}
+	if de.etapa == "parser" {
+		return false
+	}
+	return baseDeNombre(de.fuente) == baseDeNombre(nombreFuente)
 }
 
 func check() {
