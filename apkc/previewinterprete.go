@@ -4076,9 +4076,17 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		}
 	case "createRfcommSocketToServiceRecord", "listenUsingRfcommWithServiceRecord", "getRemoteDevice":
 		if obj != nil && es("Landroid/bluetooth/BluetoothAdapter;") {
+			// el cero que se devuelve es el del tipo de retorno de cada método: un socket, un
+			// servidor de sockets o un dispositivo, no siempre el mismo
+			retorno := "Landroid/bluetooth/BluetoothSocket;"
+			if nombre == "listenUsingRfcommWithServiceRecord" {
+				retorno = "Landroid/bluetooth/BluetoothServerSocket;"
+			} else if nombre == "getRemoteDevice" {
+				retorno = "Landroid/bluetooth/BluetoothDevice;"
+			}
 			return m.rechaza(nombre, proto,
 				"los sockets y los dispositivos Bluetooth reales no están en el subconjunto: no hay "+
-					"radio ni red", "Landroid/bluetooth/BluetoothSocket;")
+					"radio ni red", retorno)
 		}
 	case "iterator":
 		if len(vals) == 0 && esConjunto() {

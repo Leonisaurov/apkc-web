@@ -379,3 +379,147 @@ func TestPreviewRemoveCallbacksAndMessagesVaciaLaCola(t *testing.T) {
 	sinAvisoDeStub(t, m)
 	mismaEjecucion(t, apk, guion)
 }
+
+// fuenteBluetoothSinRadio llama a las dos APIs que android-34 deja invocar sobre el adaptador:
+// `listenUsingRfcommWithServiceRecord` y `getRemoteDevice`. `createRfcommSocketToServiceRecord` se
+// mudó a `BluetoothDevice` en el SDK, así que esa la cubre la llamada directa al stub.
+const fuenteBluetoothSinRadio = `package com.hola.reloj;
+
+import android.app.*;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothServerSocket;
+import android.os.*;
+import android.widget.*;
+import java.util.*;
+
+public class Casos extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        TextView total = (TextView) findViewById(R.id.total);
+        BluetoothAdapter adaptador = BluetoothAdapter.getDefaultAdapter();
+        UUID uuid = null;
+        BluetoothServerSocket servidor = adaptador.listenUsingRfcommWithServiceRecord("eco", uuid);
+        BluetoothDevice equipo = adaptador.getRemoteDevice("00:11:22:33:44:55");
+        String texto = "";
+        if (servidor == null) {
+            texto = texto + "servidor nulo";
+        }
+        if (equipo == null) {
+            texto = texto + ",equipo nulo";
+        }
+        total.setText(texto);
+    }
+}
+`
+
+// TestPreviewRechazaBluetoothSinRadio: las tres APIs sin radio se rechazan por su nombre con el
+// motivo de la frontera y devuelven el cero de SU tipo de retorno (socket, servidor de sockets y
+// dispositivo), no el de un BluetoothSocket para todas. `createRfcommSocketToServiceRecord` se
+// cubre con una llamada directa porque android-34 la expone en `BluetoothDevice`, no en el
+// adaptador; las otras dos se ejecutan además dentro de una app.
+func TestPreviewRechazaBluetoothSinRadio(t *testing.T) {
+	m := &maquinaDalvik{vistos: map[string]bool{}}
+	adaptador := &objetoDalvik{clase: "Landroid/bluetooth/BluetoothAdapter;",
+		campos: map[string]any{}}
+	casos := []struct{ nombre, proto, cero string }{
+		{"createRfcommSocketToServiceRecord",
+			"(Ljava/util/UUID;)Landroid/bluetooth/BluetoothSocket;", "Landroid/bluetooth/BluetoothSocket;"},
+		{"listenUsingRfcommWithServiceRecord",
+			"(Ljava/lang/String;Ljava/util/UUID;)Landroid/bluetooth/BluetoothServerSocket;",
+			"Landroid/bluetooth/BluetoothServerSocket;"},
+		{"getRemoteDevice",
+			"(Ljava/lang/String;)Landroid/bluetooth/BluetoothDevice;", "Landroid/bluetooth/BluetoothDevice;"},
+	}
+	for _, c := range casos {
+		v, ok, err := m.intentaStub([]string{"Landroid/bluetooth/BluetoothAdapter;"},
+			c.nombre, c.proto, nil, adaptador)
+		if err != nil {
+			t.Fatalf("%s devolvió error: %v", c.nombre, err)
+		}
+		if !ok {
+			t.Fatalf("%s no llegó al stub de Bluetooth", c.nombre)
+		}
+		if v != nil {
+			t.Errorf("%s devolvió %v y se esperaba el cero de %s", c.nombre, v, c.cero)
+		}
+	}
+	avisos := strings.Join(m.avisos, "\n")
+	if strings.Contains(avisos, "no está en el dex ni en los stubs") {
+		t.Errorf("alguna API cayó en el aviso de stub ausente: %s", avisos)
+	}
+	for _, c := range casos {
+		if !strings.Contains(avisos, c.nombre) {
+			t.Errorf("falta el aviso por nombre de %s: %v", c.nombre, m.avisos)
+		}
+		if !strings.Contains(avisos, "se devuelve el cero de "+c.cero) {
+			t.Errorf("falta el cero de %s: %v", c.cero, m.avisos)
+		}
+	}
+	if !strings.Contains(avisos, "no hay radio ni red") {
+		t.Errorf("el aviso no dice el motivo de la frontera: %v", m.avisos)
+	}
+
+	// y las dos que android-34 deja invocar sobre el adaptador, dentro de una app de verdad
+	apk := apkConFuentes(t, fuenteJava{nombre: "Casos.java", contenido: fuenteBluetoothSinRadio})
+	vista, err := modeloVistaDeAPKConEventos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk no se ejecuta: %v", err)
+	}
+	if got := textoDeNodo(t, vista, idTotal); got != "servidor nulo,equipo nulo" {
+		t.Errorf("los rechazos dejaron %q y se esperaba «servidor nulo,equipo nulo»; avisos %v",
+			got, vista.Ejecucion.Avisos)
+	}
+	if !strings.Contains(strings.Join(vista.Ejecucion.Avisos, "\n"), "no hay radio ni red") {
+		t.Errorf("la app no recibió el motivo de la frontera: %v", vista.Ejecucion.Avisos)
+	}
+	sinAvisoDeStub(t, vista)
+	mismaEjecucion(t, apk, nil)
+}
+
+// fuenteListaFueraDeRango pide el índice 9 de una lista de dos dentro de un try: la excepción que
+// lanza el stub tiene que llegar al catch del preview como cualquier excepción del dex.
+const fuenteListaFueraDeRango = `package com.hola.reloj;
+
+import android.app.*;
+import android.os.*;
+import android.widget.*;
+import java.util.*;
+
+public class Casos extends Activity {
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        TextView total = (TextView) findViewById(R.id.total);
+        ArrayList lista = new ArrayList();
+        lista.add("uno");
+        lista.add("dos");
+        String texto = "sin excepcion";
+        try {
+            Object cual = lista.get(9);
+            texto = "no salto";
+        } catch (IndexOutOfBoundsException e) {
+            texto = "capturada";
+        }
+        total.setText(texto);
+    }
+}
+`
+
+// TestPreviewCapturaIndexOutOfBoundsDeArrayList: el get(9) de una lista de dos no es un fallo del
+// intérprete, es una IndexOutOfBoundsException que el catch del proyecto captura y convierte en
+// texto.
+func TestPreviewCapturaIndexOutOfBoundsDeArrayList(t *testing.T) {
+	apk := apkConFuentes(t, fuenteJava{nombre: "Casos.java", contenido: fuenteListaFueraDeRango})
+	m, err := modeloVistaDeAPKConEventos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk no se ejecuta: %v", err)
+	}
+	if got := textoDeNodo(t, m, idTotal); got != "capturada" {
+		t.Errorf("el catch dejó %q y se esperaba «capturada»; avisos %v",
+			got, m.Ejecucion.Avisos)
+	}
+	sinAvisoDeStub(t, m)
+	mismaEjecucion(t, apk, nil)
+}
