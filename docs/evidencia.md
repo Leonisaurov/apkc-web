@@ -10706,3 +10706,75 @@ y el desborde se midió con un fixture sintético, porque dexar el `android.jar`
 **Cita corregida.** `§235` decía `apkc/classreader.go:451` para este rechazo; la línea vigente es
 `:590`, y ya está cambiada allí. El comentario de `apkc/indy_condy_test.go:11` sigue nombrando la antigua
 y no se toca: la cita buena es la de este `§`.
+
+## 244. Los campos de locales y el null de un arreglo: las dos falsificaciones
+
+Medido el 2026-11-23 sobre `8d25b64`, con el frente en `9422cc9` (`fix(java): resuelve campos de
+locales como valor`), los interruptores en `6aa7808` (`refactor(java): interruptores de las dos ramas
+del campo de local`) y los tests en `96f5a1f` (`test(java): falsifica los campos de locales y el null
+de arreglo`). El crítico aprobó el arreglo con una condición —le faltaban las dos falsificaciones
+prometidas—, y este `§` registra esa condición cerrada.
+
+**Las dos ramas del arreglo.** `info.applicationInfo` como argumento (`App.java:28`) se estima desde el
+tipo estático del receptor, sin emitir su `aload`/`getfield`; `info.splitSourceDirs == null`
+(`App.java:34`) cuenta el `[` como referencia y branquea con `ifnonnull`, igual que javac. Los dos
+interruptores son `var` de paquete encendidos por defecto: `resuelveCampoDeLocal`, declarado en
+`apkc/javaemisor.go:4551` y leído una sola vez en `:4587`, y `comparaArregloConNulo`, declarado en
+`:5043` y leído una sola vez en `:5153`. Encendidos, las dos ramas se comportan como en `9422cc9`;
+apagados, cada rama vuelve al rechazo de antes.
+
+**Las citas de línea, sobre el árbol final.** El frente daba `:4467`/`:4503` y `:4955`/`:5065`, que son
+las líneas de `96f5a1f`: los cuatro commits posteriores (`2b44c94`, `0ee8200`, `e05b646`, `8d25b64`) las
+corrieron a las de arriba, y esas son las que hay que leer hoy.
+
+**Falsificación 1, el campo de la local.** Con `resuelveCampoDeLocal` apagado, el fuente que con la rama
+encendida compila se rechaza con el mensaje que vio el usuario, literal:
+
+```
+Argumento.java: linea 6: linea 9: linea 10: linea 10, columna 23: al estimar el tipo de info.applicationInfo, el tipo info.applicationInfo no se resuelve: ni en el fuente, ni en su paquete, ni en los imports, ni en java.lang, ni en el classpath (android.jar ni jar/)
+```
+
+**Falsificación 2, el null del arreglo.** Con `comparaArregloConNulo` apagado:
+
+```
+Nulo.java: linea 5: linea 6: linea 7: comparar con null algo que no es una referencia ([Ljava/lang/String;) no esta medido
+```
+
+**Meta-falsificación.** Con los interruptores inertes —las dos condiciones forzadas a `false` en una
+copia de `javaemisor.go` montada con `go test -overlay`, sin tocar el árbol— los dos tests de
+falsificación fallan, en vez de pasar por el camino del caso verde, con:
+
+```
+con la rama apagada el fuente fue aceptado: la falsificación no falsifica
+```
+
+**Los casos verdes.** `TestCampoDeLocalComoArgumentoContraJavac17` y
+`TestArregloComparadoConNullContraJavac17` comparan el dex **byte a byte** con el de javac 17
+(`--release 8 -g:lines,source`) sobre las fuentes de `App.java:28` y `:34`; el caso completo compila
+`src/share/apps/util/App.java` y `Apk.java` del zip de ApkShare y compara la clase `App` sola.
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-34/android.jar \
+  JAVAC17=/home/leonisauro/opt/jdk17/bin/javac GOMAXPROCS=2 GOGC=50 \
+  go test -p=1 -count=1 \
+  -run 'TestCampoDeLocalComoArgumentoContraJavac17|TestArregloComparadoConNullContraJavac17|TestCampoDeLocalFalsificacion|TestArregloNuloFalsificacion' -v .
+```
+
+**Resultado**: los cuatro en `PASS`, `ok … 1.923s`, con los dos mensajes literales en el log
+(`apkc/javaemisor_campo_local_test.go:265` y `:301`). El frente dejó además la corrida enfocada de nueve
+tests en la raíz (`ok … 1.883s`) y la suite del árbol (`ok … 98.134s`), y los críticos corrieron tests
+enfocados propios (`ok … 2.937s` y `ok … 1.732s`); esas tres cifras no se re-corrieron aquí.
+
+**La re-auditoría.** Sin hallazgos: interruptores reales —declarados y leídos una vez—, encendidos por
+defecto sin cambiar lo que el emisor ya escribía; los dos tests devuelven el interruptor antes de
+terminar y no usan `t.Parallel`, así que no queda estado sucio para el test siguiente.
+
+**Cita cruzada.** El comentario de `apkc/javaemisor.go:4578` y la cabecera de
+`apkc/javaemisor_campo_local_test.go:3` nombran `§242`, que es el gate del árbol final; el frente es este
+`§244` y el código no se toca.
+
+**Fronteras de este `§`.** No se corrió gate, chromium, red ni publicación: los cuatro tests y la
+meta-falsificación son lo único medido en esta entrada, y las tres corridas del frente se citan sin
+repetir. No hay medición de runtime en ART para estas dos ramas: el oráculo es javac 17 más el dex byte
+a byte.
