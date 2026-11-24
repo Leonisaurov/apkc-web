@@ -10079,9 +10079,11 @@ form at pc 3`; restaurado el código, vuelven a verde.
 
 **Suite y wasm.** La suite completa da `ok … 69.558s` y el wasm compila.
 
-**Frontera de este `§`.** `apkc/javaemisor.go:5154` sigue rechazando un `goto` hacia atrás de más de
-32 767 **bytes** en el emisor de `.class`; el arreglo de este commit es del dexer, no del emisor de
-`.class`. No se corrió gate, chromium, red ni publicación.
+**Frontera de este `§`, cerrada en `§235`.** El emisor de `.class` rechazaba un `goto` hacia atrás de
+más de 32 767 **bytes** —el arreglo de este commit es del dexer, no del emisor de `.class`—; ya no:
+`resuelveAtras` (`apkc/javaemisor.go:7059-7065`) delega en `resuelveSaltos`, que ensancha a `goto_w`
+(`:2619-2622`), y `TestGotoWLargoHaciaAtras` (`apkc/javaemisor_atras_test.go:51`) lo mide con una
+vuelta de 36 009 B. No se corrió gate, chromium, red ni publicación.
 
 ## 227. `check` compila todos los fuentes del proyecto
 
@@ -11387,7 +11389,8 @@ acepta el dex, el cast se ejecuta, el nulo pasa y un elemento ajeno del `List` r
 
 **Sin `check-cast`, la falsificación no es vacua.** El binario se compiló desde una copia de `apkc`
 hecha con `git archive HEAD`, con el interruptor apagado
-(`apkc-sin-cast/apkc/javaemisor.go:5214`, `var insertaCheckcast = false`), y el dex
+(`apkc-sin-cast/apkc/javaemisor.go:5214`, `var insertaCheckcast = false`; ruta histórica de otro
+checkout, no verificable en este árbol, y no se corrigió el número), y el dex
 `p_sin_cast/sin.dex` deja el mismo `getItem` sin el `check-cast` del offset `0x6`. ART lo rechaza
 antes de ejecutar:
 
@@ -11866,8 +11869,8 @@ primer `WebSocket`, y las listas exactas ahora deduplican por URL porque un mism
 vez por sesión.
 
 **Las correcciones documentales (`c072831`, `867d3fa`).** `c072831` corrige en `§260` la cita del
-interruptor `booleanEnsanchaEnArgumentos` (`apkc/javaemisor.go:4716` pasa a `:4715`), y `867d3fa`
-es el `§261`, que ya quedó escrito.
+interruptor `booleanEnsanchaEnArgumentos` (`apkc/javaemisor.go:4716` pasa a `:4715`; en el árbol
+actual el interruptor está en `:4764`, `§260`), y `867d3fa` es el `§261`, que ya quedó escrito.
 
 **Fronteras de este `§`.** 1) ApkShare **no** compila: en el momento de la medición se paraba en
 `MainActivity.java:179`, columna 103, en `apk.name + ".apk"` como argumento (concatenación,
