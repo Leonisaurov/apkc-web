@@ -14,6 +14,10 @@ package main
 //
 // Lo pequeño no cambia: el dex de una app que cabe en un fichero es el mismo byte a byte que el
 // de la etapa de un solo dex, y su caché sigue siendo `build/dexcache.bin`.
+//
+// El aborto del build por exceso de clases fijas tiene dos mitades: la del proceso, que conduce
+// `_build` en un hijo y vive en `multidex_app_proceso_test.go` (`//go:build !js`), y la que se mide
+// sin hijo aquí: el manifiesto y el rechazo de `dexarAppEnGo` con el mismo mensaje.
 
 import (
 	"archive/zip"
@@ -326,130 +330,74 @@ func TestCompilaAppConVariosDexEnElApk(t *testing.T) {
 	}
 }
 
-// construirAppGrandeEnHijo arma el proyecto de 70×1000 métodos con el manifiesto dado y conduce
-// `_build` en un hijo de la propia prueba, porque `LogF` termina el proceso. Devuelve la raíz del
-// proyecto (donde el padre ya está situado), la salida combinada del hijo y si esta ejecución es
-// el hijo. En el hijo, un `_build` que **vuelve** (la guarda no abortó) termina la prueba en verde
-// y el padre lo lee como «no abortó»; el `return` con `esHijo` de cada prueba corta ahí.
-func construirAppGrandeEnHijo(t *testing.T, nombreTest, manifiesto string) (raiz string, salida []byte, esHijo bool) {
-	t.Helper()
-	const (
-		envDir = "APKC_APP_GRANDE_DIR"
-		envJar = "APKC_APP_GRANDE_JAR"
-		envKS  = "APKC_APP_GRANDE_KS"
-	)
-	if dir := os.Getenv(envDir); dir != "" {
-		if err := os.Chdir(dir); err != nil {
-			t.Fatal(err)
-		}
-		androidJar = os.Getenv(envJar)
-		if androidJar == "" {
-			t.Fatalf("el hijo no recibió %s", envJar)
-		}
-		_build(buildOpts{
-			incremental: true,
-			linker:      linkerGo,
-			compiler:    compilerGo,
-			signer:      signerGo,
-			keyStore:    os.Getenv(envKS),
-			storePass:   "android",
-			keyAlias:    "androiddebugkey",
-			jar:         androidJar,
-			sdkVersion:  34,
-			codename:    "14",
-			v4:          true,
-		})
-		return "", nil, true
-	}
-
-	const clases, metodos = 70, 1000
-	androidJar = jarDelSDK(t)
+// La contrapartida en proceso de las dos pruebas del aborto que viven en
+// `multidex_app_proceso_test.go` (`//go:build !js`): allí el `_build` corre en un hijo de la propia
+// prueba porque `LogF` termina el proceso, y bajo `GOOS=js` no hay proceso que lanzar. Lo que sí se
+// puede medir dentro del proceso —y por eso estas pruebas no llevan tag ni se saltan— es lo que
+// decide y lo que rechaza: el manifiesto da la API que el build pasa al reparto (`manifestMinAPI`)
+// y `dexarAppEnGo` rechaza el mismo conjunto de clases con el mismo mensaje que el build imprime al
+// abortar. La falsificación —quitar la fijación de las clases del proyecto— se nota en que el
+// reparto saldría sin error y con dexes.
+func TestDexPrimarioPre21QueNoCabeSeRechazaEnGo(t *testing.T) {
 	setupProject(t)
-	raiz, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	keystore := filepath.Join(raiz, "debug.keystore")
-	if err := escribirDebugKeystore(keystore, "android", "androiddebugkey", 10000); err != nil {
-		t.Fatalf("escribirDebugKeystore: %v", err)
-	}
-	writeManifest(t, manifiesto)
-	pon(t, raiz, "res/values/strings.xml", `<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Grande</string>
-</resources>`)
-	for i := 0; i < clases; i++ {
-		pon(t, raiz, fmt.Sprintf("src/grande/C%d.java", i), fuenteDeMetodos(fmt.Sprintf("C%d", i), metodos))
-	}
-	pon(t, raiz, "src/grande/Uso.java", fuenteLlamadora(clases, metodos))
-
-	cmd := exec.Command(os.Args[0], "-test.run=^"+nombreTest+"$")
-	cmd.Env = append(os.Environ(), envDir+"="+raiz, envJar+"="+androidJar, envKS+"="+keystore)
-	salida, err = cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("el build con 70 000 referencias y este manifiesto no abortó; salida:\n%s", salida)
-	}
-	return raiz, salida, false
-}
-
-// TestCompilaAppPre21ConDemasiadasClasesAborta es la guarda del otro lado de la frontera: con
-// `minSdkVersion` 19 las clases del proyecto son fijas al dex primario y aquí no caben —70 clases y
-// su llamadora piden más de 65 536 referencias—, así que el reparto no puede existir: el build
-// tiene que abortar con el motivo de main-dex, el techo y la API en el mensaje, y no dejar ningún
-// apk. La falsificación —quitar la fijación— se nota en el código de salida y en el `app.apk` que
-// entonces sí aparece con las clases del proyecto repartidas.
-func TestCompilaAppPre21ConDemasiadasClasesAborta(t *testing.T) {
-	raiz, salida, esHijo := construirAppGrandeEnHijo(t, "TestCompilaAppPre21ConDemasiadasClasesAborta",
-		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
+	writeManifest(t, `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
 	<uses-sdk android:minSdkVersion="19" android:targetSdkVersion="34"/>
 	<application android:label="@string/app_name"/>
 </manifest>`)
-	if esHijo {
-		return
+	if got := manifestMinAPI(); got != 19 {
+		t.Fatalf("el manifiesto de la prueba da minSdkVersion %d, y el build tiene que repartir para 19", got)
+	}
+	dexes, err := dexarAppEnGo(clasesDeLaAppSonGrandes(), manifestMinAPI())
+	if err == nil {
+		t.Fatalf("con API 19 y 70 000 referencias el reparto salió en %d dex: la guarda del dex primario no existe", len(dexes))
 	}
 	for _, quiero := range []string{"main-dex", "65536", "API 19", "classes2.dex"} {
-		if !bytes.Contains(salida, []byte(quiero)) {
-			t.Errorf("el aborto no nombra %q; salida:\n%s", quiero, salida)
+		if !strings.Contains(err.Error(), quiero) {
+			t.Errorf("el rechazo no nombra %q: %v", quiero, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(raiz, "build", "app.apk")); err == nil {
-		t.Fatal("el build abortado dejó build/app.apk: el paquete no puede existir")
+	if len(dexes) != 0 {
+		t.Fatalf("el reparto rechazado devolvió %d dex: no se escribe un dex que ese runtime no abre", len(dexes))
 	}
-	if _, err := os.Stat(filepath.Join(raiz, "build", "classes2.dex")); err == nil {
-		t.Fatal("el build abortado dejó build/classes2.dex: no se escribe un dex que ese runtime no abre")
+	for _, nombre := range []string{dexEntryName(1), dexEntryName(2)} {
+		if _, err := os.Stat(filepath.Join("build", nombre)); err == nil {
+			t.Fatalf("el reparto rechazado dejó build/%s: el paquete no puede existir", nombre)
+		}
 	}
-	t.Logf("aborto con rc != 0; salida del build:\n%s", salida)
+	t.Logf("rechazo del dex primario para API 19: %v", err)
 }
 
-// TestCompilaAppSinUsesSdkConDemasiadasClasesAborta cubre el hueco de la guarda: sin `<uses-sdk>`
-// `manifestMinAPI` devuelve 0, y el build trata ese 0 como API 1 (`manifest.go`: d8 asume API 1
-// cuando no está declarada). Por eso el cero también fija todas las clases del proyecto, y como no
-// caben aborta, igual que en la llamada directa `dexarAppEnGo(…, 0)` con la que el crítico destapó
-// que la guarda se eludía.
-func TestCompilaAppSinUsesSdkConDemasiadasClasesAborta(t *testing.T) {
-	raiz, salida, esHijo := construirAppGrandeEnHijo(t, "TestCompilaAppSinUsesSdkConDemasiadasClasesAborta",
-		`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
+// TestDexPrimarioSinUsesSdkQueNoCabeSeRechazaEnGo cubre el hueco de la guarda sin build: sin
+// `<uses-sdk>` `manifestMinAPI` devuelve 0 y el build lo trata como API 1 (`manifest.go`: d8 asume
+// API 1 cuando no está declarada). Ese cero no es «sin proyecto»: pasa tal cual a `dexarAppEnGo`,
+// que lo normaliza a 1 y fija todas las clases del proyecto, así que el mismo conjunto no cabe y
+// se rechaza igual. Es la sonda que el crítico usó para destapar que la guarda se eludía.
+func TestDexPrimarioSinUsesSdkQueNoCabeSeRechazaEnGo(t *testing.T) {
+	setupProject(t)
+	writeManifest(t, `<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.myapp">
 	<application android:label="@string/app_name"/>
 </manifest>`)
-	if esHijo {
-		return
+	if got := manifestMinAPI(); got != 0 {
+		t.Fatalf("un manifiesto sin <uses-sdk> dio minSdkVersion %d, y el build lo lee como 0", got)
+	}
+	dexes, err := dexarAppEnGo(clasesDeLaAppSonGrandes(), manifestMinAPI())
+	if err == nil {
+		t.Fatalf("con api cero y 70 000 referencias el reparto salió en %d dex: el cero se leyó como «sin proyecto»", len(dexes))
 	}
 	for _, quiero := range []string{"main-dex", "65536", "API 1", "classes2.dex"} {
-		if !bytes.Contains(salida, []byte(quiero)) {
-			t.Errorf("el aborto no nombra %q; salida:\n%s", quiero, salida)
+		if !strings.Contains(err.Error(), quiero) {
+			t.Errorf("el rechazo no nombra %q: %v", quiero, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(raiz, "build", "app.apk")); err == nil {
-		t.Fatal("el build sin <uses-sdk> dejó build/app.apk: el paquete no puede existir")
+	if len(dexes) != 0 {
+		t.Fatalf("el reparto rechazado devolvió %d dex: la guarda se eludió con api cero", len(dexes))
 	}
-	if _, err := os.Stat(filepath.Join(raiz, "build", "classes2.dex")); err == nil {
-		t.Fatal("el build sin <uses-sdk> dejó build/classes2.dex: la guarda se eludió con api cero")
+	for _, nombre := range []string{dexEntryName(1), dexEntryName(2)} {
+		if _, err := os.Stat(filepath.Join("build", nombre)); err == nil {
+			t.Fatalf("el reparto rechazado dejó build/%s: la guarda se eludió con api cero", nombre)
+		}
 	}
-	// la sonda exacta del crítico, en proceso: api cero es API 1 y tiene que rechazar el reparto
-	if _, err := dexarAppEnGo(clasesDeLaAppSonGrandes(), 0); err == nil {
-		t.Fatal("dexarAppEnGo(…, 0) repartió: api cero no es «sin proyecto», es API 1")
-	}
-	t.Logf("aborto con rc != 0; salida del build:\n%s", salida)
+	t.Logf("rechazo del dex primario para api cero (API 1): %v", err)
 }
 
 func leerArchivo(t *testing.T, ruta string) []byte {
