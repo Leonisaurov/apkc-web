@@ -13719,10 +13719,10 @@ analogía:
    `int`→`long` del `postDelayed`.
 2. **Asignación como valor sobre campo o arreglo**, rechazada por nombre, pendiente del
    `dup_x1`/`dup2_x1` (y del `dup_x2` del elemento).
-3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual sin
-   lambda, así que no hay defecto atribuible todavía.
-4. **Dependencias y runtime viejo:** el AAR de `androidx.multidex`, `Application.attachBaseContext` y un
-   Dalvik de API ≤ 20 donde arrancar; hoy el oráculo es el contrato de bytes.
+3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual
+   sin lambda, así que no hay defecto atribuible todavía.
+4. **Dependencias y runtime viejo:** el AAR de `androidx.multidex`, `Application.attachBaseContext`
+   y un Dalvik de API ≤ 20 donde arrancar; hoy el oráculo es el contrato de bytes.
 5. **CI remoto y publicación:** los commits nuevos no se empujaron y `apkc-studio.surge.sh` no se
    actualizó; las Actions fijadas por SHA no se miden sin red.
 
