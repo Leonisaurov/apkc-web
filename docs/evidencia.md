@@ -13958,6 +13958,21 @@ python3 -c 'import json,os;f=lambda p:len(json.load(open(os.path.expanduser(p)))
 ~/.cache/apkc-web/apkc-preview-base preview --pulsar id/lienzo ~/.cache/apkc-web/emular/lienzo/final/com.hola.lienzo/build/app.apk > ~/.cache/apkc-web/lienzo-antes.json
 ~/.cache/apkc-web/apkc-stubs preview --pulsar id/lienzo ~/.cache/apkc-web/emular/lienzo/final/com.hola.lienzo/build/app.apk > ~/.cache/apkc-web/lienzo-despues.json
 python3 -c 'import json,os;f=lambda p:len(json.load(open(os.path.expanduser(p)))["ejecucion"].get("avisos",[]));print(f("~/.cache/apkc-web/lienzo-antes.json"),f("~/.cache/apkc-web/lienzo-despues.json"))'  # 1 0
+# los efectos no cambian: mismo guion de chatbt con ambos binarios
+~/.cache/apkc-web/apkc-preview-base preview --escribir id/entrada/hola --pulsar id/enviar ~/.cache/apkc-web/emular/chatbt/proyecto/build/app.apk > ~/.cache/apkc-web/chatbt-g-base.json
+~/.cache/apkc-web/apkc-stubs preview --escribir id/entrada/hola --pulsar id/enviar ~/.cache/apkc-web/emular/chatbt/proyecto/build/app.apk > ~/.cache/apkc-web/chatbt-g-stubs.json
+python3 - <<'PY'
+import json, os
+c = lambda p: json.load(open(os.path.expanduser(p)))["ejecucion"]["capturas"]
+a, b = c("~/.cache/apkc-web/chatbt-g-base.json"), c("~/.cache/apkc-web/chatbt-g-stubs.json")
+print("chatbt capturas:", len(a), len(b), [x.get("texto") for x in a] == [x.get("texto") for x in b])
+print("chatbt ultima:", a[-1].get("texto"))
+l = lambda p: json.load(open(os.path.expanduser(p)))["raiz"]["dibujo"]["operaciones"]
+x, y = l("~/.cache/apkc-web/lienzo-antes.json"), l("~/.cache/apkc-web/lienzo-despues.json")
+print("lienzo operaciones:", len(x), len(y), [o.get("texto") for o in x if o.get("operacion") == "texto"])
+PY
+# chatbt capturas: 5 5 True ; chatbt ultima: Bluetooth listo - 0 vinculos - 2 mensajes
+# lienzo operaciones: 17 17 ['fotograma 0', 'toques 0']
 ```
 
 ## Fronteras del bloque, sin cerrar
