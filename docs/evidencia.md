@@ -14011,7 +14011,7 @@ convergente con javac— o se extiende el gating a la emisión?
 cd apkc && go test -overlay=<overlay.json> -run TestAuditoriaCruce -count=1 -v .
 ```
 
-## 289. `apkc preview --locale`: idioma en los valores, sin cambiar la identidad de los recursos
+## 290. `apkc preview --locale`: idioma en los valores, sin cambiar la identidad de los recursos
 
 Medición previa, en `46a9a792`: la APK de `traducido` (`string/saludo`) mostraba `Hello!` en el
 modelo de `apkc preview` mientras `aapt2 dump resources` ya veía `(es) "Hola!"`. El lector elegía
