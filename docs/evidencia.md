@@ -13625,8 +13625,8 @@ nuevos; nativo `ok … 184.524s` con los dos tests movidos en `PASS`.
 **Cierre.** La capa wasm final quedó con 0 `FAIL`, 29 `SKIP` y 805 `PASS`, `rc=0`, medidos por el
 QA `ses_df1f12649ffeGtpp1o1HfFooeh` sobre `fe64417` (log `~/.cache/apkc-web/wasm-cierre-final-v.log`).
 Antes de `0d8df36` el binario ni compilaba: el test del `else/goto` llamaba a un ayudante de un
-fichero `!js`; movido ese test a `javaemisor_else_goto_paridad_test.go`, `GOOS=js GOARCH=wasm go vet .`
-está limpio. Este `§` queda auditado con los dos veredictos de crítica recibidos y el recuento final.
+fichero `!js`; movido ese test a `javaemisor_else_goto_paridad_test.go`, el vet wasm está limpio.
+Este `§` queda auditado con los dos veredictos de crítica recibidos y el recuento final.
 
 **Deuda por diseño del tag.** Que el hijo real aborta el build solo se prueba en nativo; está
 registrada en el mensaje del commit y en los comentarios del fichero, no como medición nueva.
