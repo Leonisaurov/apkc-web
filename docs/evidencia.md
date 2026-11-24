@@ -11970,10 +11970,11 @@ to String` o `no suitable constructor`).
 **La suite.** `ok github.com/ajinasokan/apkc 174.637s` del commit —medición del builder, salida
 transferida, no versionada; la reproduce `cd apkc && go test -count=1 .` sobre `f064e5f`.
 
-**Frontera del momento de la medición (superada por `§265`).** Con `f064e5f` la 179 pasaba y ApkShare
-se detenía en `MainActivity.java:198`, columna 50, en `Intent.ACTION_SEND` (constante `String` del
-`android.jar`) como argumento del constructor `new Intent(...)`; la midió el builder y aquí se
-transfiere sin re-ejecutarse. `§265` cerró esa parada y `§269` registra el build completo con `rc=0`;
+**Frontera del momento de la medición (superada por `§265`).** Con `f064e5f` la 179 pasaba y
+ApkShare se detenía en `MainActivity.java:198`, columna 50, en `Intent.ACTION_SEND` (constante
+`String` del `android.jar`) como argumento del constructor `new Intent(...)`; la midió el builder y
+aquí se transfiere sin re-ejecutarse. `§265` cerró esa parada y `§269` registra el build completo
+con `rc=0`;
 las demás fronteras de `§262` (WISP inerte y sin cablear, y la publicación) siguen sin cambios.
 
 ```sh
