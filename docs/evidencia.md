@@ -13426,8 +13426,8 @@ Registrado el 2026-11-24 sobre `52eac29` (`4af5740` en este worktree), con la me
 **El defecto era el orden del pool, no su tamaño.** En el `MainActivity` de ApkShare las dos
 constantes `Integer` de `R.layout.*` (`2130903043` y `2130837511`) caían en las entradas #268 y #273
 y se escribían con `ldc_w`; javac las pone en la #249 y la #254 y escribe `ldc`. No sobraban
-entradas —nuestro pool cierra en la #328 y el de javac en la #330, cifra transferida del builder y no
-re-ejecutada aquí—: lo que fallaba era el orden. Con
+entradas —nuestro pool cierra en la #328 y el de javac en la #330, cifra transferida del builder y
+no re-ejecutada aquí—: lo que fallaba era el orden. Con
 el índice 268, `ldc_w` era la forma **correcta** según el JVMS 6.5: lo incorrecto era que el índice
 no fuese el de javac.
 
