@@ -12547,6 +12547,82 @@ node studio/prueba-wisp-gates.mjs
 node studio/prueba.js
 ```
 
+## 271. El hospedador de wasm propaga el código de salida sin cortar la salida
+
+Registrado el 2026-11-24 sobre `f07b11c`. La corrección viene del builder
+`ses_df3dd2a56ffeOr4xU7Hdu9nQXN`, con las críticas de `ses_df3d6e48fffeBzUhikJmJMhYLq`, y este `§`
+la **transfiere**: aquí se re-ejecutó `shim/prueba-salida.js` contra el shim del árbol y contra las
+dos copias viejas; las cifras de la recrítica —socket abierto, stderr saturado, `create /miapp`— son
+suyas y se citan sin re-ejecutar.
+
+**El síntoma.** Un programa Go que hacía `os.Exit(1)` dentro de `shim/navegador-sim.js` terminaba
+con rc 0, y si además quedaba un handle vivo —el binario de tests de apkc dejaba uno— node no
+terminaba: se quedaba en `do_epoll_wait` con «(apkc devolvio 1)» ya impreso hasta que alguien lo
+mataba con SIGTERM (rc 143; 124 si el que mataba era el `timeout`). La causa era el orden: el exit
+falso resolvía `process` en el momento de llamarlo, ya sustituido por `globalThis.process`, así que
+solo anotaba el código y no salía nadie.
+
+**La primera corrección (`bb0f622`).** `shim/navegador-sim.js:17-24` captura `procesoReal`,
+`salirReal` y un `procReal` con los flujos reales **antes** de sustituir `globalThis.process`;
+`salirCon` —`:113-126` en `bb0f622`, ampliado luego a `:113-149`— fija el código y sale por el exit
+real, y `exportarYResumir` lo usa al exportar (`:449`) en vez de dejar que el proceso muriera por su
+cuenta. Un `go.exit` aparte (`:420-431`) sigue anotando el código y resolviendo `_exitPromise` para
+que `wasm_exec` no se quede con un promise sin terminar.
+
+**La segunda corrección (`f07b11c`).** La primera versión esperaba la salida con un temporizador de
+1 s que además iba con `unref()`: con un pipe moroso el proceso se vaciaba antes de que stdio
+acabara de drenar y se perdía el final. La sonda de 200 KB con lector lento (512 B cada 4 ms) dio
+`137216/204810` bytes y sin `(apkc devolvio 1)`. El `write("")` de barrera tampoco servía: node
+llama a su callback sin esperar a los trozos anteriores —medido, salía a los 300 ms con dos tercios
+del buffer todavía dentro—. El arreglo (`:113-149`) sondea cada 20 ms
+`stdout.writableLength + stderr.writableLength` y solo sale cuando **los dos** están a 0; el sondeo
+va **sin** `unref()`, con referencia a propósito, y hay un plazo de 120 s para el consumidor muerto
+que avisa por `fs.writeSync(2)` —sincrónico, para que el aviso salga aunque el pipe no drene— y
+sale igualmente con el código de Go.
+
+**La prueba.** `shim/prueba-salida.js` compila cuatro sondas fuera del repo, en
+`~/.cache/apkc-web/prueba-salida/`: una que sale con 1, la misma con un `setInterval` vivo, una que
+copia un fichero montado a otro exportado y una que escribe 200 KB con `FIN-200KB` al final. Corre
+el shim con `spawnSync` y 20 s de límite (120 s para la lenta) y hace 10 comprobaciones: rc 1 y
+aviso del código; rc 1 **sin** SIGTERM con el handle vivo; rc 0 y contenido exportado idéntico;
+rc 1, los 200 KB enteros, `FIN-200KB` y el aviso final por un pipe moroso. El caso 4 lanza el lector
+**en otro proceso** y le pasa el stdout del shim como stdin: con el lector en el mismo proceso, sus
+buffers de 64 KB se quedaban con casi toda la salida y el defecto no se veía. La variable `SHIM=`
+permite apuntar el guion a otra copia del hospedador.
+
+**Lo ejecutado aquí.** En este worktree, con `tcr -c 4 -m 3G node shim/prueba-salida.js`: las 10
+comprobaciones en verde, con `201067` bytes en el caso 4. La falsificación, con las dos copias
+viejas extraídas con `git show`: el shim de `bb0f622` deja **3 fallos** —`133752` bytes,
+`FIN-200KB` y el aviso final ausentes—; el shim original (`4e2f8ec`) deja **4 fallos**: rc 0 en el
+caso 1, `SIGTERM` en el caso 2 —el cuelgue en `epoll_wait`— y rc 0 otra vez en el caso 4, donde los
+200 KB sí llegan porque el `process.exit` falso no esperaba nada. `node --check` sale limpio en
+`shim/navegador-sim.js` y en `shim/prueba-salida.js`.
+
+**La recrítica, transferida.** Sobre la sonda original de 200 KB: `204867/204810` bytes,
+`FIN-200KB: True`, aviso final `True`, rc 1. Con un consumidor muerto y un socket abierto: rc 1 a
+los 120.1 s con el aviso de `fs.writeSync(2)`. Con stderr saturado: aviso entregado a los 120.2 s.
+`create /miapp` deja sus 5 ficheros, `node --check` limpio y la regla 5 limpia.
+
+**Frontera viva, no bloqueante.** Un productor que altere `writableLength` cada menos de 120 s con
+el consumidor muerto mantendría vivo el plazo indefinidamente; el plazo se midió con pipes, no con
+un socket TCP real. Y la capa `wasm` sigue en rojo por causas ajenas a este frente (§ de cabecera):
+lo que este `§` garantiza es que el hospedador termine con el código real en vez de colgarse o
+truncar la salida, no que la suite pase.
+
+```sh
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" shim/wasm_exec.js
+node shim/prueba-salida.js
+mkdir -p "$HOME/.cache/apkc-web/falsif/bb0f622" "$HOME/.cache/apkc-web/falsif/original"
+git show bb0f622:shim/navegador-sim.js > "$HOME/.cache/apkc-web/falsif/bb0f622/navegador-sim.js"
+git show 4e2f8ec:shim/navegador-sim.js > "$HOME/.cache/apkc-web/falsif/original/navegador-sim.js"
+cp shim/wasm_exec.js "$HOME/.cache/apkc-web/falsif/bb0f622/"
+cp shim/wasm_exec.js "$HOME/.cache/apkc-web/falsif/original/"
+SHIM="$HOME/.cache/apkc-web/falsif/bb0f622/navegador-sim.js" node shim/prueba-salida.js
+SHIM="$HOME/.cache/apkc-web/falsif/original/navegador-sim.js" node shim/prueba-salida.js
+node --check shim/navegador-sim.js
+node --check shim/prueba-salida.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
