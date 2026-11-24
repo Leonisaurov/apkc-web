@@ -112,28 +112,41 @@ func (ctx *contextoJava) samDeParametro(c candidato, pos int) (samSitio, error) 
 	if pos < 0 || pos >= len(ps) {
 		return samSitio{}, fmt.Errorf("el parametro %d no esta en %s", pos, c.desc)
 	}
+	var args []string
 	if c.decl == nil {
 		// una clase del classpath no trae la declaracion del fuente: solo se pueden rellenar los
 		// argumentos de tipo si el parametro formal ya es el tipo instanciado (una interface no
 		// generica, `Runnable`)
-		return ctx.samDe(ps[pos], nil)
-	}
-	i := pos - (len(ps) - len(c.decl.params))
-	if i < 0 || i >= len(c.decl.params) {
-		return samSitio{}, fmt.Errorf("el parametro %d de %s no viene de la declaracion del fuente", pos, c.desc)
-	}
-	args := []string{}
-	if g := c.decl.params[i].generico; g != nil {
-		for _, a := range g.args {
-			d, err := ctx.descriptorDe(a.crudo())
-			if err != nil {
-				return samSitio{}, fmt.Errorf("linea %d: el argumento de tipo de %s no se resuelve: %w",
-					c.decl.params[i].donde.linea, c.decl.params[i].tipo, err)
+		args = nil
+	} else {
+		i := pos - (len(ps) - len(c.decl.params))
+		if i < 0 || i >= len(c.decl.params) {
+			return samSitio{}, fmt.Errorf("el parametro %d de %s no viene de la declaracion del fuente", pos, c.desc)
+		}
+		if g := c.decl.params[i].generico; g != nil {
+			args = []string{}
+			for _, a := range g.args {
+				d, err := ctx.descriptorDe(a.crudo())
+				if err != nil {
+					return samSitio{}, fmt.Errorf("linea %d: el argumento de tipo de %s no se resuelve: %w",
+						c.decl.params[i].donde.linea, c.decl.params[i].tipo, err)
+				}
+				args = append(args, d)
 			}
-			args = append(args, d)
 		}
 	}
-	return ctx.samDe(ps[pos], args)
+	sam, err := ctx.samDe(ps[pos], args)
+	if err != nil {
+		return samSitio{}, err
+	}
+	// Este subconjunto solo escribe lambdas de un parámetro: pedirlo aquí, antes de aceptar la
+	// candidata en la sobrecarga, evita elegir una interfaz funcional cuyo SAM no puede cuadrar
+	// con la expresión. `lamda` repite la guarda al emitir.
+	if _, _, formales := splitDescriptor(sam.inst); len(formales) != 1 {
+		return samSitio{}, fmt.Errorf("%s.%s toma %d parametros y la lambda del fuente solo escribe uno",
+			sam.interfaz, sam.nombre, len(formales))
+	}
+	return sam, nil
 }
 
 // samDe: la interface funcional `borrado` y su metodo abstracto unico, ya instanciado con `args` (un
@@ -180,11 +193,19 @@ func (ctx *contextoJava) samDe(borrado string, args []string) (samSitio, error) 
 		if cf.Access&accInterface == 0 {
 			return samSitio{}, fmt.Errorf("%s no es una interface y no puede ser el tipo de una lambda", interno)
 		}
+		stub := esStubSinFirma(cf)
 		for _, m := range cf.Methods {
-			if m.Access&accAbstract == 0 || m.Access&accStatic != 0 {
+			// Un método con `Code` no es abstracto aunque el classfile diga otra cosa: los jars
+			// de verdad escriben los `default` con cuerpo y sin el bit `ACC_ABSTRACT`. En el stub
+			// no hay `Code` y los `default` de la API se leen como abstractos; se excluyen por la
+			// convención del jar documentada en `defaultsDeStub`.
+			if m.Access&accAbstract == 0 || m.Access&accStatic != 0 || m.HasCode {
 				continue
 			}
 			if esMetodoDeObject(m.Name, m.Desc) {
+				continue
+			}
+			if esDefaultDeStub(interno, m.Name, m.Desc, stub) {
 				continue
 			}
 			metodos = append(metodos, abstracto{nombre: m.Name, desc: m.Desc, firma: m.Signature})
@@ -201,21 +222,188 @@ func (ctx *contextoJava) samDe(borrado string, args []string) (samSitio, error) 
 	}
 	m := metodos[0]
 	inst := m.desc
+	descBorrado := m.desc
 	parametros := parametrosDeFirma(firmaClase)
 	if len(parametros) > 0 || len(args) > 0 {
-		if len(parametros) != len(args) {
-			return samSitio{}, fmt.Errorf("%s tiene %d parametros de tipo y el parametro formal del sitio da %d argumentos",
-				interno, len(parametros), len(args))
-		}
-		if m.firma != "" {
+		if len(parametros) > 0 && m.firma != "" {
+			if len(parametros) != len(args) {
+				return samSitio{}, fmt.Errorf("%s tiene %d parametros de tipo y el parametro formal del sitio da %d argumentos",
+					interno, len(parametros), len(args))
+			}
 			d, err := descriptorDeFirma(m.firma, parametros, args)
 			if err != nil {
 				return samSitio{}, fmt.Errorf("%s.%s: %w", interno, m.nombre, err)
 			}
 			inst = d
+		} else if len(parametros) == 0 && m.firma == "" {
+			// El jar de stubs no escribe la `Signature` de la clase ni del método: las variables
+			// de tipo van en el propio descriptor (`accept` es `(LT;)V`). Se levantan en orden
+			// de aparición y se sustituyen por los argumentos del sitio. El descriptor borrado
+			// del bootstrap se obtiene borrando cada variable a `Object`, que es la cota que el
+			// escritor de stubs no guardó. Sin variables no hay nada que instanciar y el
+			// descriptor se usa tal cual (interfaz no genérica, `Runnable`).
+			vars := variablesDeDescriptor(m.desc)
+			if len(vars) > 0 && len(args) > 0 && len(vars) != len(args) {
+				return samSitio{}, fmt.Errorf("%s.%s tiene %d variables de tipo en el descriptor y el parametro formal del sitio da %d argumentos",
+					interno, m.nombre, len(vars), len(args))
+			}
+			d, err := instanciaDescriptorStub(m.desc, vars, args, false)
+			if err != nil {
+				return samSitio{}, fmt.Errorf("%s.%s: %w", interno, m.nombre, err)
+			}
+			inst = d
+			descBorrado, err = instanciaDescriptorStub(m.desc, vars, args, true)
+			if err != nil {
+				return samSitio{}, fmt.Errorf("%s.%s: %w", interno, m.nombre, err)
+			}
+		} else {
+			// Una parte trae `Signature` y la otra no: no hay forma segura de decidir el tipo
+			// instanciado, así que se conserva el rechazo en vez de inventar un descriptor.
+			return samSitio{}, fmt.Errorf("%s.%s no trae informacion de tipos suficiente para instanciar la lambda (Signature de clase %q, de metodo %q)",
+				interno, m.nombre, firmaClase, m.firma)
 		}
 	}
-	return samSitio{interfaz: interno, nombre: m.nombre, borrado: m.desc, inst: inst}, nil
+	return samSitio{interfaz: interno, nombre: m.nombre, borrado: descBorrado, inst: inst}, nil
+}
+
+// esStubSinFirma reconoce el jar de stubs publicado en la página: sus interfaces no tienen ni
+// `Signature` ni `Code` y escriben las variables de tipo dentro del descriptor (`(LT;)V`). Es la
+// convención del generador anterior, que marcaba los `default` con `ACC_ABSTRACT`. Sin esta marca
+// no se aplica ninguna excepción a los métodos abstractos.
+func esStubSinFirma(cf *classFull) bool {
+	if cf.Signature != "" {
+		return false
+	}
+	conVariable := false
+	for _, m := range cf.Methods {
+		if m.HasCode || m.Signature != "" {
+			return false
+		}
+		if len(variablesDeDescriptor(m.Desc)) > 0 {
+			conVariable = true
+		}
+	}
+	return conVariable
+}
+
+// defaultsDeStub: métodos que AOSP declara `default` y el escritor de stubs antiguo emitió como
+// abstractos. La lista es corta a propósito: lo que no esté aquí se queda abstracto y la interfaz
+// se rechaza, nunca se elige una sobrecarga por orden. Solo se consulta en una clase ya reconocida
+// como stub.
+var defaultsDeStub = map[string]map[string]bool{
+	"java/util/function/BiConsumer": {"andThen": true},
+	"java/util/function/Consumer":   {"andThen": true},
+	"java/util/function/Function":   {"andThen": true, "compose": true},
+	"java/util/function/Predicate":  {"and": true, "negate": true, "or": true},
+	"java/util/Comparator":          {"reversed": true, "thenComparing": true, "thenComparingDouble": true, "thenComparingInt": true, "thenComparingLong": true},
+}
+
+// tratarDefaultsDeStubComoAbstractos es el interruptor de la falsificación: encendido, el lector
+// conserva el defecto del jar publicado y `Consumer` vuelve a tener dos métodos abstractos. Lo usa
+// lambda_fuente_stub_test.go para reproducir el rechazo literal de la página.
+var tratarDefaultsDeStubComoAbstractos = false
+
+// esDefaultDeStub: un `default` del stub se reconoce por el nombre que AOSP le da en la interfaz y
+// porque devuelve la propia interfaz (los métodos de encadenamiento). En un jar de verdad esta
+// función nunca se llama: sus `default` llevan `Code` y no el bit `ACC_ABSTRACT`.
+func esDefaultDeStub(interno, nombre, desc string, stub bool) bool {
+	if !stub || tratarDefaultsDeStubComoAbstractos || !defaultsDeStub[interno][nombre] {
+		return false
+	}
+	return strings.HasSuffix(desc, "L"+interno+";")
+}
+
+// variableDeDescriptorStub: el escritor de stubs pone la variable de tipo dentro del descriptor
+// como `LT;`, `LR;` o `LU;`: una `L` seguida de una sola letra mayúscula y del `;`. Un tipo real
+// siempre lleva `/` o más de una letra (`Ljava/lang/Object;`, `LApk;`), así que no se confunde. En
+// una `Signature`, en cambio, la variable es `TT;`; las dos formas se aceptan.
+func variableDeDescriptorStub(desc string, i int) (nombre string, fin int, ok bool) {
+	if i >= len(desc) {
+		return "", i, false
+	}
+	if desc[i] == 'T' {
+		j := strings.IndexByte(desc[i:], ';')
+		if j <= 1 {
+			return "", i, false
+		}
+		return desc[i+1 : i+j], i + j + 1, true
+	}
+	if desc[i] != 'L' {
+		return "", i, false
+	}
+	j := strings.IndexByte(desc[i:], ';')
+	if j < 0 {
+		return "", len(desc), false
+	}
+	if j == 2 && desc[i+1] >= 'A' && desc[i+1] <= 'Z' {
+		return desc[i+1 : i+2], i + j + 1, true
+	}
+	return "", i + j + 1, false
+}
+
+// variablesDeDescriptor: nombres de las variables de tipo que el stub escribe en un descriptor,
+// como `T` en `(LT;)V`, en orden de aparición y sin repetir. Al no haber `Signature`, es la única
+// pista del orden de los parámetros formales de la interfaz.
+func variablesDeDescriptor(desc string) []string {
+	out := []string{}
+	vistos := map[string]bool{}
+	for i := 0; i < len(desc); {
+		if desc[i] == 'L' || desc[i] == 'T' {
+			nombre, fin, ok := variableDeDescriptorStub(desc, i)
+			if ok && !vistos[nombre] {
+				vistos[nombre] = true
+				out = append(out, nombre)
+			}
+			i = fin
+			continue
+		}
+		i++
+	}
+	return out
+}
+
+// instanciaDescriptorStub: sustituye las variables `TX;` del descriptor del SAM del stub. Con
+// `args` pone el argumento de tipo del sitio; con `borrar` las borra a `Object`, que es lo que javac
+// escribe en el `MethodType` del bootstrap para una variable sin cota guardada. Una variable sin
+// argumento, o un descriptor cortado, se rechaza con su nombre en vez de inventarse un tipo.
+func instanciaDescriptorStub(desc string, vars, args []string, borrar bool) (string, error) {
+	var sb strings.Builder
+	for i := 0; i < len(desc); {
+		if nombre, fin, ok := variableDeDescriptorStub(desc, i); ok {
+			k := -1
+			for n, v := range vars {
+				if v == nombre {
+					k = n
+					break
+				}
+			}
+			if k < 0 {
+				return "", fmt.Errorf("la variable %s de %q no tiene argumento en el sitio", nombre, desc)
+			}
+			if borrar {
+				sb.WriteString("Ljava/lang/Object;")
+			} else {
+				if k >= len(args) {
+					return "", fmt.Errorf("la variable %s de %q no tiene argumento en el sitio", nombre, desc)
+				}
+				sb.WriteString(args[k])
+			}
+			i = fin
+			continue
+		}
+		if desc[i] == 'L' {
+			j := strings.IndexByte(desc[i:], ';')
+			if j < 0 {
+				return "", fmt.Errorf("el descriptor %q corta un tipo", desc)
+			}
+			sb.WriteString(desc[i : i+j+1])
+			i += j + 1
+			continue
+		}
+		sb.WriteByte(desc[i])
+		i++
+	}
+	return sb.String(), nil
 }
 
 // parametrosDeFirma: los nombres de los parametros de tipo formales al principio de una Signature
