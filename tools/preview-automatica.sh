@@ -31,9 +31,18 @@ while :; do
       echo "[$(date -u +%FT%TZ)] HEAD $corto: reconstruyendo wasm" >> "$LOG"
       if git -C "$REPO" archive "$head_estable" apkc -o "$TEMPORAL/apkc.tar" 2>>"$LOG" \
          && tar -x -f "$TEMPORAL/apkc.tar" -C "$TEMPORAL" 2>>"$LOG" \
-         && tcr -c 2 -m 2G -r 256M -- sh "$REPO/tools/preview-local.sh" "$TEMPORAL" >>"$LOG" 2>&1; then
-        printf '%s\n' "$head_estable" > "$ESTADO"
-        echo "[$(date -u +%FT%TZ)] HEAD $corto: wasm actualizado" >> "$LOG"
+         && APKC_PREVIEW_WASM="$DEST" HOME="$HOME_DIR" \
+            tcr -c 2 -m 2G -r 256M -- sh "$REPO/tools/preview-local.sh" "$TEMPORAL" >>"$LOG" 2>&1; then
+        # Revalida HEAD tras el mv atomico: si hubo un commit durante el build, NO escribas
+        # el estado (así el siguiente ciclo vuelve a construir ese HEAD) y sirve solo el nuevo.
+        head_tras=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "")
+        if [ "$head_tras" = "$head_estable" ]; then
+          printf '%s\n' "$head_estable" > "$ESTADO"
+          echo "[$(date -u +%FT%TZ)] HEAD $corto: wasm actualizado" >> "$LOG"
+        else
+          echo "[$(date -u +%FT%TZ)] HEAD $corto: HEAD cambio a $(echo "$head_tras" | cut -c1-8) durante el build; " \
+               "wasm servido, estado sin fijar para reconstruir" >> "$LOG"
+        fi
       else
         echo "[$(date -u +%FT%TZ)] HEAD $corto: FALLO al reconstruir; se reintentara" >> "$LOG"
       fi
