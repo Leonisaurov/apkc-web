@@ -100,7 +100,8 @@ func TestElContextoDevueltoEncadena(t *testing.T) {
 	if pm == nil {
 		t.Error("getPackageManager sobre el Application devolvió el cero")
 	}
-	if avisos := strings.Join(m.avisos, "\n"); strings.Contains(avisos, "no está en el dex ni en los stubs") {
+	avisos := strings.Join(m.avisos, "\n")
+	if strings.Contains(avisos, "no está en el dex ni en los stubs") {
 		t.Errorf("el encadenamiento cayó en el aviso de stub ausente: %s", avisos)
 	}
 }

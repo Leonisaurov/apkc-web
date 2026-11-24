@@ -13820,8 +13820,8 @@ cambiado a `Math.max(alto, …)` y con escala 0,5 el alto no escalaba (48 en vez
 `prueba: todo en orden`. Corregido en `173c6bb`/`3dc1ed0`.
 
 **Deuda del emulador.** Radio de ~2 dp, acento de 1 px, sin barra de estado ni de navegación y sin
-densidad 213 real, tema claro fijo; `prueba-navegador.js:862-880` y `:967-970` aún no cubren escala <1
-ni bordes (las citas anteriores `:780-795`/`:927-930` estaban desplazadas).
+densidad 213 real, tema claro fijo; `prueba-navegador.js:862-880` y `:967-970` aún no cubrían
+escala <1 ni bordes (las citas `:780-795`/`:927-930` estaban desplazadas).
 El CDP no se ejecutó por temperatura.
 
 **B. Hot swap sin selector (`12e065a`/`1547b76`).** Builder `ses_df1ac57c5ffeNSAdj8huY0JjNj`,
