@@ -6,6 +6,12 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
+**Numeración de este registro.** Los encabezados van del `§1` al `§252`, pero la secuencia tiene un
+hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
+después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
+dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
+la entrada, no su orden en el fichero.
+
 ## 1. El código puro de apkc corre en un hospedador con forma de navegador
 
 **Comando**
@@ -10646,6 +10652,10 @@ Medido el 2026-11-23 en la raíz sobre `912a2c4` (`chore(studio): clics del emul
 el inspector`, con el submódulo en `f2710a1`), autorizado por el usuario con «Preparar y correr gate». Es
 el primer gate que cubre `§235`-`§241`: el de `§230` se corrió antes de esos frentes.
 
+**Matiz posterior.** «Árbol final» lo era **en ese momento**: hoy el HEAD lleva más de veinte commits por
+delante de `912a2c4`, así que las cifras de este `§` describen ese commit y no el HEAD. El gate que ahora
+corre sobre el HEAD se registrará en su propio `§` cuando se mida.
+
 **Preparación.** La capa `test` en verde (`ok … 94.453s`); se borraron los fixtures cacheados del arnés
 (`$PREFIX/tmp/studio-e2e-*`, `pestana-*` y `studio-e46*`); `LD_LIBRARY_PATH` al shim de
 `libsimdutf.so.36`; y `TCR` apuntando a un wrapper local que ejecuta directo
@@ -10770,9 +10780,9 @@ enfocados propios (`ok … 2.937s` y `ok … 1.732s`); esas tres cifras no se re
 defecto sin cambiar lo que el emisor ya escribía; los dos tests devuelven el interruptor antes de
 terminar y no usan `t.Parallel`, así que no queda estado sucio para el test siguiente.
 
-**Cita cruzada.** El comentario de `apkc/javaemisor.go:4578` y la cabecera de
-`apkc/javaemisor_campo_local_test.go:3` nombran `§242`, que es el gate del árbol final; el frente es este
-`§244` y el código no se toca.
+**Cita cruzada.** El comentario de `apkc/javaemisor.go:4591` y la cabecera de
+`apkc/javaemisor_campo_local_test.go:3` nombran `§244`, que es esta entrada, tras corregirse las líneas
+viejas en `c81a0c8` y `131e701`; el frente es este `§244` y el código no se toca.
 
 **Fronteras de este `§`.** No se corrió gate, chromium, red ni publicación: los cuatro tests y la
 meta-falsificación son lo único medido en esta entrada, y las tres corridas del frente se citan sin
