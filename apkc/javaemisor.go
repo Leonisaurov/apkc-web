@@ -2510,10 +2510,13 @@ type emisor struct {
 	// `lambda$f$0` y `lambda$f$1` en vez de dos `lambda$f$0` (que serian dos `method_info` identicos,
 	// medido con `javap -p` sobre dos `f` con lambda en la misma clase).
 	lambdaMetodos [][]byte
-	bootstraps    []classBootstrap
-	bootIdx       map[string]int
-	metodo        string
-	lambdaN       int
+	// lambdaPendientes son los implementadores que aún no se han emitido: se vacían al cerrar la
+	// clase, detrás del código de todos los métodos, como javac (ver `escribeImplementador`).
+	lambdaPendientes []implementadorPendiente
+	bootstraps       []classBootstrap
+	bootIdx          map[string]int
+	metodo           string
+	lambdaN          int
 }
 
 type parcheSalto struct {
@@ -8743,7 +8746,10 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 	e := &emisor{ctx: ctx, pool: nuevoPool(), c: c, interno: interno, vistas: map[string]bool{}}
 
 	thisIdx := e.pool.clase(interno)
-	superIdx := e.pool.clase("java/lang/Object")
+	// el `Object` por defecto solo se añade cuando el fuente no declara padre: javac no deja la
+	// entrada en el pool de una clase que extiende algo (medido en `MainActivity`, donde es el
+	// único par `Utf8`/`Class` de `java/lang/Object` que sobraba y desplazaba las constantes).
+	superIdx := 0
 	if c.super != "" {
 		s, err := ctx.tipoAInterno(c.super)
 		if err != nil {
@@ -8751,6 +8757,8 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		}
 		e.usar(s)
 		superIdx = e.pool.clase(s)
+	} else {
+		superIdx = e.pool.clase("java/lang/Object")
 	}
 	iface := []int{}
 	for _, im := range c.implementa {
@@ -8912,6 +8920,28 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		}
 		metodos = append(metodos, b...)
 		conte++
+	}
+	// Los implementadores de las lambdas, ahora que el código de todos los métodos está escrito: es
+	// el punto en el que javac los genera, y por eso sus constantes caen al final del pool. Cada
+	// vaciado puede encolar otros (una lambda dentro de otra), de ahí el bucle.
+	for len(e.lambdaPendientes) > 0 {
+		p := e.lambdaPendientes[0]
+		e.lambdaPendientes = e.lambdaPendientes[1:]
+		if err := e.escribeImplementador(p); err != nil {
+			return nil, err
+		}
+	}
+	// y las filas del BootstrapMethods, cuyos MethodHandle y MethodType se acaban de añadir. El
+	// índice de la fila ya estaba reservado en el sitio del `invokedynamic`.
+	for i := range e.bootstraps {
+		if f := e.bootstraps[i].pendiente; f != nil {
+			e.bootstraps[i].handle, e.bootstraps[i].args = f(e.pool)
+			e.bootstraps[i].pendiente = nil
+			// el descriptor del bootstrap nombra `MethodHandles$Lookup`, y javac lo anota al escribir
+			// el atributo, con el código ya cerrado: por eso su fila del InnerClasses va la última,
+			// detrás de las clases que mencionan los métodos posteriores al sitio de la lambda.
+			e.usar("java/lang/invoke/MethodHandles$Lookup")
+		}
 	}
 	// los implementadores de las lambdas del fuente, con `ACC_PRIVATE|ACC_SYNTHETIC`. javac los
 	// escribe en el orden INVERSO al que los crea (medido con `javap -p` sobre una clase con seis

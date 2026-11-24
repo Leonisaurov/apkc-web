@@ -24,6 +24,11 @@ import (
 type classBootstrap struct {
 	handle int
 	args   []int
+	// pendiente, cuando no es nil, calcula el handle y los argumentos con el pool ya cerrado. Los
+	// operandos del bootstrap solo los referencia este atributo y el MethodHandle del implementador,
+	// así que javac los escribe al final; aplazarlos es lo que mantiene los índices de las
+	// constantes de los métodos por debajo de 255 cuando javac las deja ahí.
+	pendiente func(*poolBuilder) (int, []int)
 }
 
 // classLambda es el sitio desugrado: qué clase sintética construye el llamador, con qué constructor

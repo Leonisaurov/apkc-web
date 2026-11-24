@@ -422,20 +422,44 @@ func (e *emisor) lamda(l jlambda, sam samSitio) (string, error) {
 	}
 	implNombre := "lambda$" + base + "$" + itoa(e.lambdaN)
 	e.lambdaN++
-	if err := e.escribeImplementador(l, implNombre, implDesc, len(capturas) > 0, paramsInst[0], retInst); err != nil {
-		return "", err
+	// El implementador no se escribe aquí: se encola y se emite al cerrar la clase, que es donde
+	// javac lo genera. Así sus constantes —el Methodref del método que llama el cuerpo, los
+	// MethodType y los MethodHandle del bootstrap— entran al final del pool y no desplazan las que
+	// ya escribió el resto de la clase. Sin esto, un `ldc` de una constante posterior al sitio de
+	// la lambda sube de 255 y sale `ldc_w` donde javac escribe `ldc` (`MainActivity` de ApkShare).
+	e.lambdaPendientes = append(e.lambdaPendientes, implementadorPendiente{
+		l: l, nombre: implNombre, desc: implDesc, conReceptor: len(capturas) > 0,
+		param: paramsInst[0], vuelta: retInst, metodo: e.metodo,
+	})
+	if implementadorEnElSitio {
+		p := e.lambdaPendientes[len(e.lambdaPendientes)-1]
+		e.lambdaPendientes = e.lambdaPendientes[:len(e.lambdaPendientes)-1]
+		if err := e.escribeImplementador(p); err != nil {
+			return "", err
+		}
 	}
 
-	// el sitio: descriptor de fabrica con las capturas y la vuelta de la interface borrada
+	// el sitio: descriptor de fabrica con las capturas y la vuelta de la interface borrada. Los
+	// operandos del bootstrap (MethodHandle y MethodType) también se aplazan: javac los escribe en
+	// el atributo BootstrapMethods, con el pool ya cerrado, y por eso salen detrás de todo.
 	indyDesc := "(" + strings.Join(capturas, "") + ")" + target
-	mtSam := e.pool.metodoTipo(sam.borrado)
-	mtInst := e.pool.metodoTipo(sam.inst)
-	mhImpl := e.pool.metodoManejador(refKind, e.pool.metodo(e.interno, implNombre, implDesc))
-	mhBoot := e.pool.metodoManejador(6, e.pool.metodo("java/lang/invoke/LambdaMetafactory", "metafactory", descriptorMetafactory))
-	boot := e.registraBootstrap(mhBoot, []int{mtSam, mhImpl, mtInst})
-	// javac lista `MethodHandles$Lookup` en el InnerClasses porque el descriptor del bootstrap la
-	// nombra: el mismo aviso que `usarDescriptor` da para cualquier otro descriptor
-	e.usar("java/lang/invoke/MethodHandles$Lookup")
+	interno := e.interno
+	clave := implNombre + "|" + implDesc + "|" + sam.borrado + "|" + sam.inst + "|" + itoa(int(refKind))
+	calcular := func(p *poolBuilder) (int, []int) {
+		mtSam := p.metodoTipo(sam.borrado)
+		mtInst := p.metodoTipo(sam.inst)
+		mhImpl := p.metodoManejador(refKind, p.metodo(interno, implNombre, implDesc))
+		mhBoot := p.metodoManejador(6, p.metodo("java/lang/invoke/LambdaMetafactory", "metafactory", descriptorMetafactory))
+		return mhBoot, []int{mtSam, mhImpl, mtInst}
+	}
+	var boot int
+	if implementadorEnElSitio {
+		handle, args := calcular(e.pool)
+		boot = e.registraBootstrap(handle, args)
+		e.usar("java/lang/invoke/MethodHandles$Lookup")
+	} else {
+		boot = e.registraBootstrapDiferido(clave, calcular)
+	}
 	idx := e.pool.invocaDinamico(boot, sam.nombre, indyDesc)
 	// los valores capturados se bajan al pico antes del sitio: javac escribe `aload_0` y detrás el
 	// `invokedynamic`, que los consume como argumentos de su descriptor de fabrica. Hoy el único valor
@@ -457,14 +481,35 @@ const descriptorMetafactory = "(Ljava/lang/invoke/MethodHandles$Lookup;Ljava/lan
 	"Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodType;Ljava/lang/invoke/MethodHandle;" +
 	"Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/CallSite;"
 
+// implementadorEnElSitio es el interruptor de la falsificación del aplazamiento. Apagado (el binario
+// que se publica), el implementador de una lambda y las constantes de su bootstrap se emiten al cerrar
+// la clase, que es donde javac los escribe. Encendido, se emiten en el sitio y el pool crece antes de
+// tiempo: es el defecto que hacía salir `ldc_w` donde javac escribe `ldc` —el `MainActivity` de
+// ApkShare—, porque una constante posterior al sitio se desplaza por encima de 255. Lo usa
+// `javaemisor_ldc_pool_largo_test.go`.
+var implementadorEnElSitio = false
+
+// implementadorPendiente es una lambda cuyo `method_info` falta: se emite al cerrar la clase, con el
+// pool ya cargado con las constantes de todos los métodos. `metodo` es el nombre del método que
+// contiene el sitio, que es lo que nombra al implementador (`lambda$<metodo>$N`).
+type implementadorPendiente struct {
+	l            jlambda
+	nombre, desc string
+	conReceptor  bool
+	param        string
+	vuelta       string
+	metodo       string
+}
+
 // escribeImplementador: el metodo `lambda$metodo$N` con el cuerpo de la lambda. Se emite en un emisor
-// aparte que comparte el pool y las clases vistas, y su `method_info` se guarda para el final de la
-// clase, que es donde javac lo escribe. La LineNumberTable lleva la linea del cuerpo: la de la
-// expresion, que en `MainActivity.java:156` es la de la declaracion entera.
-func (e *emisor) escribeImplementador(l jlambda, nombre, desc string, conReceptor bool, param, vuelta string) error {
+// aparte que comparte el pool y las clases vistas, y se llama al cerrar la clase. La LineNumberTable
+// lleva la linea del cuerpo: la de la expresion, que en `MainActivity.java:156` es la de la
+// declaracion entera.
+func (e *emisor) escribeImplementador(p implementadorPendiente) error {
+	l, nombre, desc, conReceptor, param, vuelta := p.l, p.nombre, p.desc, p.conReceptor, p.param, p.vuelta
 	sub := &emisor{ctx: e.ctx, pool: e.pool, c: e.c, interno: e.interno, vistas: e.vistas}
 	sub.preparaMetodo(desc, !conReceptor)
-	sub.metodo = e.metodo
+	sub.metodo = p.metodo
 	if conReceptor {
 		// el `this` capturado es el hueco 0 del implementador de instancia, que no viaja en el
 		// descriptor: lo que cuenta es que el metodo sea de instancia
@@ -508,6 +553,23 @@ func (e *emisor) registraBootstrap(handle int, args []int) int {
 	}
 	i := len(e.bootstraps)
 	e.bootstraps = append(e.bootstraps, classBootstrap{handle: handle, args: args})
+	e.bootIdx[clave] = i
+	return i
+}
+
+// registraBootstrapDiferido: la misma fila, pero con los índices del pool sin calcular. Se reserva la
+// posición ahora —el `invokedynamic` la necesita en su operando— y `calcular` la rellena cuando el
+// código de la clase está cerrado. La clave es simbólica (nombre, descriptores y ref_kind), porque
+// los índices todavía no existen para deduplicar por ellos.
+func (e *emisor) registraBootstrapDiferido(clave string, calcular func(*poolBuilder) (int, []int)) int {
+	if e.bootIdx == nil {
+		e.bootIdx = map[string]int{}
+	}
+	if i, ok := e.bootIdx[clave]; ok {
+		return i
+	}
+	i := len(e.bootstraps)
+	e.bootstraps = append(e.bootstraps, classBootstrap{pendiente: calcular})
 	e.bootIdx[clave] = i
 	return i
 }
