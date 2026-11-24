@@ -1,10 +1,12 @@
 package main
 
-// Pruebas de paquete hostil en el verificador. Las dos nacieron de la auditoría de seguridad:
+// Pruebas de paquete hostil en el verificador. Nacieron de la auditoría de seguridad:
 //   - un bloque de firmas que anuncia un tamaño imposible hacía que `largo-24` desbordara y `make`
 //     muriera con un pánico (rc=2 y traza), en vez de con un motivo y rc=1;
 //   - el barrido de la v1 se quedaba con el último `.SF` y el último `.RSA`, así que un paquete con
-//     una firma buena y un segundo `.SF` se aprobaba sin haber mirado al segundo firmante.
+//     una firma buena y un segundo `.SF` se aprobaba sin haber mirado al segundo firmante;
+//   - el fuzz daba por bueno cualquier error, y verificarApk convierte los pánicos en un error: medía
+//     «no se cae el test», no «no hay pánico». Ahora el prefijo del pánico recuperado es un fallo.
 //
 // El paquete se arma en el test con archive/zip y bytes: no se versiona ningún binario (regla 2).
 
@@ -12,9 +14,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -154,21 +158,86 @@ func paqueteConFirmaExtra(t *testing.T, origen, nombre string, datos []byte) str
 // FuzzVerificarApkNoMuere: cualquier cosa que se llame paquete tiene que salir por un veredicto o
 // por un error con nombre, nunca por una traza. Las semillas son el bloque de 16 bytes de la
 // auditoría y su variante enorme; el resto lo pone el fuzz cuando se le invoca con -fuzz.
+//
+// Un error no es un veredicto: verificarApk atrapa los pánicos y devuelve un error con el prefijo
+// «paquete hostil:», así que el `return` que había aquí convertía el fuzz en una prueba de «no se
+// cae el test». El prefijo se mira ahora en cada corrida, y el detector se prueba con un pánico
+// de sonda en la primera línea: un fuzz verde significa que no hubo pánico, no que hubo salida.
 func FuzzVerificarApkNoMuere(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(apkConBloqueDeFirmas(f, 16))
 	f.Add(apkConBloqueDeFirmas(f, 1<<40))
 	f.Fuzz(func(t *testing.T, datos []byte) {
+		sonda := conLaGuardiaDeVerificarApk(func() { panic("sonda del fuzz") })
+		if fallo := falloDelPaquete(nil, sonda); fallo == "" {
+			t.Fatalf("el detector no ve un pánico recuperado: %v", sonda)
+		}
 		ruta := filepath.Join(t.TempDir(), "paquete.apk")
 		if err := os.WriteFile(ruta, datos, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		v, err := verificarApk(ruta)
-		if err != nil {
-			return
-		}
-		if v == nil {
-			t.Fatal("el verificador no devolvió verificación ni error")
+		if fallo := falloDelPaquete(v, err); fallo != "" {
+			t.Fatal(fallo)
 		}
 	})
+}
+
+// prefijoPanico es lo que verificarApk antepone al error que deja un pánico recuperado: un error
+// con este prefijo no es un veredicto, es la traza de pila que no llegó a imprimirse.
+const prefijoPanico = "paquete hostil:"
+
+// falloDelPaquete dice qué tiene de malo lo que el verificador devolvió, o "" si no hay nada que
+// reprocharle. Un error sin el prefijo es una salida legítima (un paquete que no se puede listar);
+// el prefijo significa que el recover() de verificarApk atrapó un pánico, y eso el fuzz no lo
+// puede dar por bueno.
+func falloDelPaquete(v *verificacion, err error) string {
+	if err != nil {
+		if strings.HasPrefix(err.Error(), prefijoPanico) {
+			return "el verificador recuperó un pánico: " + err.Error()
+		}
+		return ""
+	}
+	if v == nil {
+		return "el verificador no devolvió verificación ni error"
+	}
+	return ""
+}
+
+// conLaGuardiaDeVerificarApk reproduce el recover() de verificarApk —el mismo prefijo, con el
+// pánico dentro— para poder fabricar un pánico recuperado sin un paquete que lo provoque. Es una
+// copia porque verificar.go no entra en este cambio; si allí cambia el prefijo, la prueba del
+// detector falla y obliga a poner esta al día.
+func conLaGuardiaDeVerificarApk(f func()) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%s%v", prefijoPanico, r)
+		}
+	}()
+	f()
+	return nil
+}
+
+// TestElDetectorDePanicosDelFuzz: un pánico recuperado, que antes se contaba como «error y
+// adelante», ahora falla con nombre. Es la prueba de que `falloDelPaquete` no es decorado, y de
+// que el prefijo de verificar.go es el que este test vigila.
+func TestElDetectorDePanicosDelFuzz(t *testing.T) {
+	err := conLaGuardiaDeVerificarApk(func() {
+		var nada []byte
+		_ = nada[1]
+	})
+	if err == nil || !strings.HasPrefix(err.Error(), prefijoPanico) {
+		t.Fatalf("la guardia del test no devolvió el prefijo de pánico: %v", err)
+	}
+	if fallo := falloDelPaquete(nil, err); fallo == "" {
+		t.Fatal("el detector dejó pasar un pánico recuperado como si fuera un veredicto")
+	}
+	// un error corriente sigue siendo una salida legítima: el fuzz no reprocha un paquete ilegible
+	if fallo := falloDelPaquete(nil, fmt.Errorf("el paquete no se puede listar")); fallo != "" {
+		t.Errorf("el detector reprocha un error normal: %q", fallo)
+	}
+	// y una verificación con error nulo y sin resultado tampoco es una salida válida
+	if fallo := falloDelPaquete(nil, nil); fallo == "" {
+		t.Error("el detector aceptó un veredicto nulo y un error nulo")
+	}
 }

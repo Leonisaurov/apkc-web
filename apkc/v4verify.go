@@ -14,8 +14,44 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"os"
 )
+
+// topeApkParaV4 es lo máximo que se lee entero para recalcular el árbol de verity. La v2, la v3
+// y el SourceStamp leen tramos por `ReadAt`; esta ruta, no: necesita el fichero completo. Un
+// apk de más de 1 GiB no es lo que esta herramienta produce (un apk de cierre ronda decenas de
+// MB) ni lo que la pestaña puede tener a la vez en memoria, así que por encima el veredicto es
+// un motivo con nombre, no un OOM de Go —que no es un pánico y el `recover` no atrapa—. Es una
+// variable para que la prueba pueda bajarlo sin fabricar un zip de un GiB que además sea válido.
+var topeApkParaV4 int64 = 1 << 30
+
+// topeIdsigParaV4 acota el `.idsig` que acompaña a un apk de `tamanoAPK` bytes. El árbol de
+// verity ocupa una digesta SHA-256 (32 B) por bloque de 4096 B en cada nivel, o sea ~tamano/128
+// y un nivel más por cada 128 veces que crece; los metadatos que lo envuelven (HashingInfo,
+// certificados y firmas) son pequeños por formato y llevan el mismo tope de 64 MiB que la v1 da
+// a los ficheros de firma. Para el apk más grande que pasa el tope son ~8 MiB de árbol.
+func topeIdsigParaV4(tamanoAPK int64) int64 {
+	return topeMetadatosV1 + tamanoAPK/128 + 64<<10
+}
+
+// leerConTope lee el fichero entero sin pasar de `tope` bytes. El Stat de `verificarV4` ya dio
+// el motivo con nombre; este corte cubre además un fichero que cambie entre el Stat y la lectura.
+func leerConTope(ruta string, tope int64) ([]byte, error) {
+	f, err := os.Open(ruta)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	datos, err := io.ReadAll(io.LimitReader(f, tope+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(datos)) > tope {
+		return nil, fmt.Errorf("%s pasa del tope de %d bytes: no se lee", ruta, tope)
+	}
+	return datos, nil
+}
 
 type lectorV4 struct {
 	b []byte
@@ -93,18 +129,42 @@ func (v *verificacion) maloV4(motivo string) {
 // verificarV4 mira el `.idsig` que acompaña al apk. Su ausencia es una nota, no un
 // fallo: hay apks antiguos sin v4. Si está, tiene que cuadrar con el fichero entero.
 func (v *verificacion) verificarV4(ruta string) {
-	idsig, err := os.ReadFile(ruta + ".idsig")
+	rutaIdsig := ruta + ".idsig"
+	// el `.idsig` y el apk son entrada de fuera: se miran sus tamaños antes de leerlos, porque un
+	// fichero de gigabytes agota la memoria del worker y eso no es un pánico recuperable
+	infoIdsig, err := os.Stat(rutaIdsig)
 	if err != nil {
 		if os.IsNotExist(err) {
 			v.notas = append(v.notas, "no hay .idsig al lado del apk: la firma v4 no se verifica")
 			return
 		}
-		v.maloV4("el .idsig no se puede leer: " + err.Error())
+		v.maloV4(rutaIdsig + " no se puede mirar: " + err.Error())
 		v.v4Presente = true
 		return
 	}
 	v.v4Presente = true
-	apk, err := os.ReadFile(ruta)
+	infoApk, err := os.Stat(ruta)
+	if err != nil {
+		v.maloV4("el apk no se puede mirar para el árbol de verity: " + err.Error())
+		return
+	}
+	if infoApk.Size() > topeApkParaV4 {
+		v.maloV4(fmt.Sprintf("%s mide %d bytes y el tope para recalcular el árbol de verity es %d: no se lee",
+			ruta, infoApk.Size(), topeApkParaV4))
+		return
+	}
+	topeIdsig := topeIdsigParaV4(infoApk.Size())
+	if infoIdsig.Size() > topeIdsig {
+		v.maloV4(fmt.Sprintf("%s mide %d bytes y el tope para su árbol de verity y sus metadatos es %d: no se lee",
+			rutaIdsig, infoIdsig.Size(), topeIdsig))
+		return
+	}
+	idsig, err := leerConTope(rutaIdsig, topeIdsig)
+	if err != nil {
+		v.maloV4("el .idsig no se puede leer: " + err.Error())
+		return
+	}
+	apk, err := leerConTope(ruta, topeApkParaV4)
 	if err != nil {
 		v.maloV4("el apk no se puede releer para el árbol de verity: " + err.Error())
 		return
