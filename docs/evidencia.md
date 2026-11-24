@@ -12,6 +12,29 @@ después del `§81`; junto a los 212-215, el `§213` se escribió después del `
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
 la entrada, no su orden en el fichero.
 
+**Estado de la capa `wasm` (2026-11-23).** Las cifras `PASS` y `rc 0` de los primeros `§` —`§1`
+(88 tests, `:47`), `§8` (`:217`, 98) y el recuento de `:444-445` (105)— **están desfasadas**: son el
+registro de cuando se midieron, no el estado de este árbol. Se dejan como se publicaron. Lo medido
+hoy por el QA de la capa `wasm`, con `TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm`, es que
+la compilación a wasm pasa y **la ejecución en el hospedador simulado falla**: su salida, resumida,
+da 32 tests y 38 líneas `--- FAIL`, sin `rc 0`. El shim no propaga el código de salida —hubo que
+matar `node` con SIGTERM— y otro frente lo corrige; no se da por cerrado. Las causas son
+ambientales y preexistentes al último cambio: 25 por «sin android.jar que abrir: exporta
+APKC_ANDROID_JAR» (`apkc/dependencias_test.go:32`, el guard de `8d6ee67`; el fs simulado no tiene
+`/android`), 5 por `pipe: not implemented on js`, 2 por salida de hijo vacía, 1 por
+`testdata/vista-propia/main.xml` sin montar, 1 por permisos `644` y 1 por
+`apkc/wisp_endurecimiento_test.go:283` (bajo `GOOS=js`, `AbrirWebSocketWISP` sí funciona y el test
+espera que falle). Los 8 tests nuevos de `45ec24a`, `445f7fb` y `f064e5f` **no aparecen entre los
+fallos**: pasaron en el hospedador. Se reproduce con
+
+```sh
+sed -n '47p;217p;444,445p' docs/evidencia.md
+grep -n 'APKC_ANDROID_JAR' apkc/dependencias_test.go
+sed -n '280,286p' apkc/wisp_endurecimiento_test.go
+git log --oneline -1 8d6ee67
+TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
+```
+
 ## 1. El código puro de apkc corre en un hospedador con forma de navegador
 
 **Comando**
