@@ -8,7 +8,8 @@ package main
 // no es `LambdaMetafactory` (`sitioDeLambda`, `lambda.go:164`). La sonda es el `.class` de un
 // record de Java 17 con el `super` cambiado a `java/lang/Object` en su pool.
 //
-// Una constante dinámica (tag 17) la rechaza `refuseOutsideSubset` (`classreader.go:451`). La sonda
+// Una constante dinámica (tag 17) la rechaza `refuseOutsideSubset` (`classreader.go:590`; la cita
+// antigua decía `:451`). La sonda
 // es un `.class` mínimo escrito a mano con `ldc` de un `ConstantDynamic` cuyo bootstrap es
 // `ConstantBootstraps.nullConstant`; `javap -v -p` lo lee sin queja y lo imprime como
 // `Dynamic #0:X:Ljava/lang/Object;`. El oráculo `d8` lo rechaza también: «Unsupported dynamic
