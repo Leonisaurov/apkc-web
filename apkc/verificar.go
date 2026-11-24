@@ -187,7 +187,14 @@ func verificar() {
 
 // verificarApk abre el paquete como lo abriría cualquier lector: archive/zip para listar y leer las
 // entradas, y el descriptor del fichero para los tramos crudos que necesita el digest de la v2.
-func verificarApk(ruta string) (*verificacion, error) {
+func verificarApk(ruta string) (v *verificacion, err error) {
+	// el paquete es entrada de fuera: si un tramo que se cree acotado tumba el proceso, lo que se
+	// devuelve es un motivo con nombre y no una traza de pila
+	defer func() {
+		if r := recover(); r != nil {
+			v, err = nil, fmt.Errorf("paquete hostil: %v", r)
+		}
+	}()
 	f, err := os.Open(ruta)
 	if err != nil {
 		return nil, err
@@ -203,7 +210,7 @@ func verificarApk(ruta string) (*verificacion, error) {
 		return nil, fmt.Errorf("el paquete no se puede listar: %w", err)
 	}
 
-	v := &verificacion{entradas: len(zr.File)}
+	v = &verificacion{entradas: len(zr.File)}
 	// un .aab es un zip firmado como JAR: no tiene bloque v2/v3, y pedirle uno sería
 	// reprocharle el formato que le corresponde.
 	if strings.HasSuffix(strings.ToLower(ruta), ".aab") {
@@ -223,24 +230,32 @@ func verificarApk(ruta string) (*verificacion, error) {
 // --- v1: manifiesto, fichero de firma y bloque PKCS#7 ---------------------------------------------
 
 func (v *verificacion) verificarV1(zr *zip.Reader) {
-	var mani, sf, bloque *zip.File
+	var mani *zip.File
+	var sfs, bloques []*zip.File
 	for _, file := range zr.File {
 		name := file.Name
 		switch {
 		case name == v1ManifestEntry:
 			mani = file
 		case strings.HasPrefix(name, "META-INF/") && strings.HasSuffix(name, ".SF"):
-			sf = file
+			sfs = append(sfs, file)
 		case strings.HasPrefix(name, "META-INF/") && strings.HasSuffix(name, ".RSA"):
-			bloque = file
+			bloques = append(bloques, file)
 		case strings.HasPrefix(name, "META-INF/") && (strings.HasSuffix(name, ".DSA") || strings.HasSuffix(name, ".EC")):
 			v.maloV1(name + " no es un bloque RSA: aquí solo se verifica RSASSA-PKCS1-v1_5")
 		}
 	}
-	if mani == nil || sf == nil || bloque == nil {
+	// dos .SF o dos bloques PKCS#7 son dos firmantes v1, y aquí solo se verifica uno: quedarse con
+	// el último aprobaría un paquete cuyo otro firmante no se miró.
+	if len(sfs) > 1 || len(bloques) > 1 {
+		v.maloV1("varios firmantes v1: no medido")
+		return
+	}
+	if mani == nil || len(sfs) == 0 || len(bloques) == 0 {
 		v.maloV1("faltan piezas de la firma v1 dentro del paquete")
 		return
 	}
+	sf, bloque := sfs[0], bloques[0]
 
 	manifesto, err := contenidoDe(mani)
 	if err != nil {
@@ -1114,6 +1129,16 @@ func leerBloqueDeFirmas(f *os.File, eocd *registroFinal) (*bloqueDeFirmas, error
 	}
 	// cada campo de tamaño dice cuántos bytes hay desde él hasta la magia, sin contarse a sí mismo
 	largo := binary.LittleEndian.Uint64(trasero[:8])
+	// el tamaño se mira antes de reservar: un bloque que anuncie menos de 24 bytes haría que
+	// largo-24 desbordara y `make` muriera con un pánico en vez de con un motivo, y uno mayor
+	// que el propio fichero no puede caber por mucho que el registro final lo coloque.
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if largo < 24 || largo > uint64(info.Size()) {
+		return nil, errors.New("el bloque de firmas no tiene tamaño válido")
+	}
 	inicio := eocd.cdOffset - int64(largo) - 8
 	if inicio < 0 {
 		return nil, errors.New("el bloque de firmas apunta antes del principio del fichero")

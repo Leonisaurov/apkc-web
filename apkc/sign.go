@@ -316,7 +316,16 @@ func carryPlan(pkg *previousPackage, inPath string) ([]bundleEntry, map[string]s
 
 	for _, file := range pkg.reader.File {
 		name := file.Name
+		// el nombre viene del paquete que se vuelve a firmar, que es entrada de fuera: un ".." o
+		// una barra inicial saldrían del directorio al que se extraiga, y este plan los copia tal
+		// cual. La misma regla que `empaquetaSinAapt2` aplica a lo que sale del proyecto.
+		if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
+			return nil, nil, fmt.Errorf("%s carries the entry %q, whose name cannot start with a slash or contain ..", inPath, name)
+		}
 		if oldSignatureEntry(name) {
+			if !ownSignatureEntry(name) {
+				LogW("sign", inPath, "drops", name, "because it looks like a JAR signature file, and a re-sign cannot keep it")
+			}
 			continue
 		}
 		if seen[name] {
@@ -371,6 +380,27 @@ func oldSignatureEntry(name string) bool {
 	}
 	for _, ext := range []string{".SF", ".RSA", ".DSA", ".EC", ".MF"} {
 		if strings.HasSuffix(strings.ToUpper(name), ext) {
+			return true
+		}
+	}
+	return false
+}
+
+// ownSignatureEntry says whether a name is one a JAR signature puts directly under
+// META-INF: MANIFEST.MF and the signer's .SF with its .RSA/.DSA/.EC block. Those are
+// the ones a re-sign rewrites on purpose. A deeper entry that happens to end in .MF,
+// like META-INF/services/x.MF, is content that a suffix rule would eat, so carryPlan
+// warns before dropping it.
+func ownSignatureEntry(name string) bool {
+	if !strings.HasPrefix(name, "META-INF/") {
+		return false
+	}
+	resto := name[len("META-INF/"):]
+	if strings.Contains(resto, "/") {
+		return false
+	}
+	for _, ext := range []string{".SF", ".RSA", ".DSA", ".EC", ".MF"} {
+		if strings.HasSuffix(strings.ToUpper(resto), ext) {
 			return true
 		}
 	}
