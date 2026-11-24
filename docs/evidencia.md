@@ -12387,7 +12387,7 @@ esta medido» sino «el indice no cabe en el `ldc` que se escribio».
 
 **Sin pasada extra.** El índice es definitivo al emitir porque el pool crece por el final, y las
 posiciones que se anotan después —filas de línea, etiquetas, `exception_table`— se toman de
-`len(e.codigo)` en ese momento; los saltos se resuelven luego en `resuelveSaltos` (`:2619`).
+`len(e.codigo)` en ese momento; los saltos se resuelven luego en `resuelveSaltos` (`:2628`).
 `max_stack` no cambia: `ldc_w` empuja un valor igual que `ldc`.
 
 **El oráculo.** `apkc/javaemisor_ldcw_escritor_test.go` arma una clase con 200 cadenas y 80 enteros
