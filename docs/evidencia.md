@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§260`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§261`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11748,6 +11748,52 @@ cd apkc && go test -run 'Interfaz|Anonima|Acces|Captura' -count=1 .
 cd apkc && go test -run 'Ensanchamiento|Boolean|PostDelayed' -count=1 .
 cd apkc && go test -run 'LlamadaEncadenada' -count=1 .
 cd apkc && go test -run 'AarEnJar|AvisoDeColision|ApkConDosAars' -count=1 .
+tools/entorno.sh wisp
+APKC_WISP_EXTERNO=1 tools/entorno.sh wisp-externo
+```
+
+## 261. El receptor heredado y los cierres finales de WISP
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `58aaaed`, `b79f8ac` (que sube el
+submódulo `studio` de `76c647c` a `ef738c9`) y las auditorías finales de WISP; aquí no se
+re-ejecutó nada: sin gate, sin chromium, sin red, sin push y sin publicación. Los cierres de
+`3d74b2e` (`boolean` no ensancha), `b59d95f`, `27b379a` y `b64e731` ya quedaron en `§260` y no se
+repiten; lo de abajo es el delta posterior y el estado final consolidado.
+
+**El receptor heredado sin receptor escrito (`58aaaed`).** `tipoPrevisto` y `tipoEstimado` solo
+miraban la clase actual, así que dentro de la anónima de `Runnable` de `MainActivity.java:179`
+`getApplicationContext()` no tenía candidatas y la línea paraba. `candidatasSinReceptor`
+(`apkc/javaemisor.go:5379`) busca entonces el nombre en las clases que la encierran, de dentro
+afuera (`clasesEnAlcance`, `:8671`), solo dentro de una anónima o una inner no estática (`:5384`),
+y sin escribir ninguna instrucción. La vuelta de `getExternalFilesDir(String)` queda en
+`Ljava/io/File;` y `File(File, String)` encaja. El oráculo es `javac 17 --release 8` instrucción a
+instrucción y el dex byte a byte salvo el constructor de la anónima (§100)
+(`javaemisor_receptor_heredado_test.go:81`); la falsificación apaga `estimaMetodoDeExterior`
+(`apkc/javaemisor.go:5369`, sonda en `javaemisor_receptor_heredado_test.go:110`) y el control fija
+que un nombre inexistente sigue rechazando con el mensaje anterior (`:138`). ApkShare pasa la línea
+179 y se para ahora en la columna 103, en `apk.name + ".apk"` como argumento (concatenación,
+`joperador`), frente en curso.
+
+**Los dos gates y la allowlist, cierre final (`76c647c`, `ef738c9`, `b79f8ac`).** El gate por
+defecto exige cero peticiones y cero websockets ajenos al origen, y el modo externo se abre solo
+con `APKC_WISP_EXTERNO=1`. `76c647c` clasifica el origen incrustado en `blob:`/`data:` y `ef738c9`
+documenta el **rc 2** de `wisp-externo` en `studio/DEPS.md`; `b79f8ac` actualiza el puntero del
+submódulo. `tools/entorno.sh` expone las tareas en `:123-145`: `wisp` corre la falsificación sin
+navegador ni red y `wisp-externo`, sin la variable a 1, sale con rc 2 y su propio texto
+(`:131-134`). El filtro grueso de `studio/prueba-pestana.js` queda etiquetado como **no
+autoritativo**: la regla que manda es la del módulo. Las auditorías finales dan **APROBAR** sin
+contradicciones entre `studio/DEPS.md`, `tools/entorno.sh`, el módulo WISP y su prueba; el módulo
+sigue **inerte**, fuera del wasm, sin puente y sin llamadores.
+
+**Fronteras de este `§`.** 1) ApkShare **no** compila: `MainActivity.java:179`, columna 103, en
+`apk.name + ".apk"` como argumento (concatenación, `joperador`); ese frente sigue en curso. 2) Falta
+el cableado del núcleo WISP a la página. 3) Queda la publicación. 4) No hubo gate final, ni push,
+ni CI, ni publicación, por orden del usuario. Nada de esto se re-ejecutó aquí; los oráculos citados
+son los de cada commit (`javac 17` y las pruebas de `apkc` y `studio/`). Los selectores que
+reproducen lo citado:
+
+```sh
+cd apkc && go test -run 'ReceptorHeredado|ReceptorInexistente' -count=1 .
 tools/entorno.sh wisp
 APKC_WISP_EXTERNO=1 tools/entorno.sh wisp-externo
 ```
