@@ -5361,6 +5361,39 @@ func (e *emisor) tipoSinEmitirCompleto(x jexpr) (string, *tipoArgumento, bool) {
 	return d, nil, ok
 }
 
+// estimaMetodoDeExterior es el interruptor de la sonda del método heredado sin receptor escrito dentro
+// de una anónima: apagado, `tipoPrevisto` y `tipoEstimado` solo miran la clase actual y vuelven al
+// rechazo de antes («no se puede estimar el tipo de getExternalFilesDir() sin emitir el receptor de la
+// llamada»). Lo usa la falsificación de `javaemisor_receptor_heredado_test.go`; encendido en el binario
+// que se publica.
+var estimaMetodoDeExterior = true
+
+// candidatasSinReceptor: las candidatas de una llamada sin receptor escrito. Primero la clase actual —y
+// su cadena de padres, que `candidatos` ya recorre— y, si ahí no hay ninguna, las clases que la encierran,
+// de dentro afuera, que es el mismo orden con el que la emisión resuelve el nombre suelto (parágrafo 72).
+// Dentro de la anónima de `Runnable` de `MainActivity.java:179` ni `getApplicationContext()` ni
+// `getExternalFilesDir(null)` están en la anónima: son métodos de `Context`/`Activity` que javac alcanza
+// por el campo `this$0`, y su descriptor se resuelve aquí leyendo la jerarquía, sin escribir ninguna
+// instrucción. Mientras la clase actual traiga candidatas se devuelve su lista y nada cambia para los
+// casos que ya se medían; el error de `candidatos` se conserva para que el llamador lo nombre.
+func (e *emisor) candidatasSinReceptor(nombre string, argc int) ([]candidato, error) {
+	cands, err := e.ctx.candidatos(e.interno, nombre, argc)
+	if err != nil || len(cands) > 0 {
+		return cands, err
+	}
+	if !estimaMetodoDeExterior || !(e.c.anonima || e.esInnerNoEstatica()) {
+		return cands, err
+	}
+	for _, c := range clasesEnAlcance(e.c) {
+		cs, err := e.ctx.candidatos(internoDe(c.paquete, c.nombre), nombre, argc)
+		if err != nil || len(cs) == 0 {
+			continue
+		}
+		return cs, nil
+	}
+	return cands, err
+}
+
 // vueltaSinEmitir: el descriptor de lo que deja en la pila una llamada cuyo receptor **no se emite**.
 // Es el caso de `shareApp(app.apks.get(0))` de ApkShare (`MainActivity.java:163`), donde el argumento
 // de una llamada es otra llamada encadenada: para resolver la sobrecarga de `shareApp` hace falta el
@@ -5713,11 +5746,14 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			return d, err
 		}
 		// una llamada sin receptor escrito: la vuelta de su unica candidata en esa aridad (medido al
-		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74)
+		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74).
+		// Dentro de una anonima la candidata puede ser un metodo heredado del exterior
+		// (`getApplicationContext()` en `MainActivity.java:179`), que se busca en la cadena de clases
+		// que la encierran sin emitir nada (`candidatasSinReceptor`).
 		if v.base != nil || v.super {
 			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s() sin emitir el receptor de la llamada", v.donde.sitio(), v.nombre)
 		}
-		cands, err := e.ctx.candidatos(e.interno, v.nombre, len(v.args))
+		cands, err := e.candidatasSinReceptor(v.nombre, len(v.args))
 		if err != nil {
 			return "", fmt.Errorf("%s: al estimar el tipo de %s(), %w", v.donde.sitio(), v.nombre, err)
 		}
@@ -5868,7 +5904,7 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 		if v.base != nil || v.super {
 			return "", false
 		}
-		cands, err := e.ctx.candidatos(e.interno, v.nombre, len(v.args))
+		cands, err := e.candidatasSinReceptor(v.nombre, len(v.args))
 		if err != nil || len(cands) != 1 {
 			return "", false
 		}
