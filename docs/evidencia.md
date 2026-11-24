@@ -11803,6 +11803,9 @@ APKC_WISP_EXTERNO=1 tools/entorno.sh wisp-externo
 Registrado el 2026-11-23. Este `§` transfiere la salida de `45ec24a`, `445f7fb` y `ee19eb6` (que
 sube el submódulo `studio` de `ef738c9` a `f34c79d`), más las correcciones documentales `c072831`
 y `867d3fa`; aquí no se re-ejecutó nada: sin gate, sin chromium, sin red, sin push ni publicación.
+Las citas `archivo:línea` corresponden al commit que se indica en cada párrafo y pueden estar
+desplazadas en el árbol actual; para localizar el símbolo, busca su nombre (`grep -n`) en vez de la
+línea.
 
 **El genérico del local en la llamada encadenada (`45ec24a`).** `c0b40e9` emitía el borrado en
 silencio para `void dame(List<Apk> m) { usa(m.get(0)); }`: elegía `usa(Object)` y perdía el
@@ -11836,9 +11839,11 @@ estimar o las fases no dejan una sola candidata: el fail-safe es no elegir, nunc
 `filtraCandidatasPorTipos` (`:5470`) es el interruptor de la falsificación, que reproduce el rechazo
 previo. `javac 17` elige `f:(Ljava/lang/String;)Ljava/lang/String;` y
 `usa:(Ljava/lang/String;)V`, y el `onClick` sale instrucción a instrucción y en dex byte a byte
-(`javaemisor_receptor_heredado_test.go:169`, falsificación en `:197`). La suite `ok … 153.997s` y
-`go vet` queda limpio en nativo y en wasm. Deuda pactada: la sobrecarga varargs de igual nombre y
-los argumentos no estimables siguen en el rechazo conservador.
+(`javaemisor_receptor_heredado_test.go:169`, falsificación en `:197`). La suite del commit sale
+`ok … 153.997s` —medición del builder, salida transferida, no versionada; la reproduce
+`cd apkc && go test -count=1 .` sobre `445f7fb`— y `go vet` queda limpio en nativo y en wasm. Deuda
+pactada: la sobrecarga varargs de igual nombre y los argumentos no estimables siguen en el rechazo
+conservador.
 
 **El gate de red con workers (`ee19eb6`, `studio` `f34c79d`).** El `Network.enable` iba solo a la
 sesión de la página, así que un `WebSocket` abierto en un worker no aparecía en ninguna lista y se
@@ -11847,20 +11852,30 @@ escapaba al gate. `studio/prueba-pestana.js:222` engancha con `Target.setAutoAtt
 habilita la red en cada sesión `Target.attachedToTarget` (`:198-205`);
 `studio/wisp-gates.js:116` suma los eventos con `sessionId` sin filtrar por sesión
 (`acumularRed`). La sonda abre en un worker `wss://sonda-ajena-del-gate.invalid/relay` y exige
-verlo (`:6341`); sin auto-attach (`APKC_GATE_SIN_WORKERS=1`, `:19`) se escapa: **247 bien, 2 mal**;
-con él, **249 bien, 0 mal**. El recuento base es el del árbol con `KS_RELEASE`, `AAB_EJEMPLO` y el
-`android.jar` de `ANDROID_JAR`, no el de una corrida recortada. La cobertura se comprueba aparte
-(`:6417`: 1 `page`, 1 `service_worker` y 2 `worker` con `Network.enable`), y la falsificación sin
-navegador queda en `studio/prueba-wisp-gates.mjs:110`. Deuda: `waitForDebuggerOnStart:false` deja
-una carrera teórica entre el enganche del worker y su primer `WebSocket`, y las listas exactas ahora
-deduplican por URL porque un mismo recurso llega una vez por sesión.
+verlo (`prueba-pestana.js:6341` en `studio` `f34c79d`; el símbolo es
+`sonda-ajena-del-gate.invalid`); sin auto-attach (`APKC_GATE_SIN_WORKERS=1`, `:19`) se escapa:
+**247 bien, 2 mal**; con él, **249 bien, 0 mal**. Las dos cifras son medición del builder, salida
+transferida, no versionada; las reproducen
+`APKC_WASM=… APKC_GATE_SIN_WORKERS=1 node studio/prueba-pestana.js` y
+`APKC_WASM=… node studio/prueba-pestana.js`. El recuento base es el del árbol con `KS_RELEASE`,
+`AAB_EJEMPLO` y el `android.jar` de `ANDROID_JAR`, no el de una corrida recortada. La cobertura se
+comprueba aparte (`:6417`: 1 `page`, 1 `service_worker` y 2 `worker` con `Network.enable`), y la
+falsificación sin navegador queda en `studio/prueba-wisp-gates.mjs:110`.
+Deuda: `waitForDebuggerOnStart:false` deja una carrera teórica entre el enganche del worker y su
+primer `WebSocket`, y las listas exactas ahora deduplican por URL porque un mismo recurso llega una
+vez por sesión.
 
 **Las correcciones documentales (`c072831`, `867d3fa`).** `c072831` corrige en `§260` la cita del
 interruptor `booleanEnsanchaEnArgumentos` (`apkc/javaemisor.go:4716` pasa a `:4715`), y `867d3fa`
 es el `§261`, que ya quedó escrito.
 
-**Fronteras de este `§`.** 1) ApkShare **no** compila: se para en `MainActivity.java:179`, columna
-103, en `apk.name + ".apk"` como argumento (concatenación, `joperador`); ese frente sigue en curso.
+**Fronteras de este `§`.** 1) ApkShare **no** compila: en el momento de la medición se paraba en
+`MainActivity.java:179`, columna 103, en `apk.name + ".apk"` como argumento (concatenación,
+`joperador`), y `§263` mide ese cierre. Tras `f064e5f` la parada verificada es
+`MainActivity.java:198`, columna 50, en `Intent.ACTION_SEND` (constante `String` del `android.jar`)
+como argumento del constructor; la midió el builder con el `check --proyecto` del fuente real
+(`apkc check --android-jar … --proyecto ~/Downloads/ApkShare-main …/util/MainActivity.java`) y aquí
+se transfiere sin re-ejecutarse; otro frente la corrige y no se da por cerrada.
 2) WISP sigue **inerte**, fuera del wasm, sin puente y sin llamadores. 3) Falta el cableado del
 núcleo WISP a la página. 4) Queda la publicación. 5) No hubo gate final, ni push, ni CI, ni
 publicación, por orden del usuario. Nada de esto se re-ejecutó aquí; los oráculos citados son los de
@@ -11871,7 +11886,61 @@ cada commit (`javac 17`, `go vet`, chromium por `prueba-pestana.js` y las prueba
 cd apkc && go test -run 'LlamadaEncadenada' -count=1 .
 cd apkc && go test -run 'SobrecargaExterior' -count=1 .
 node studio/prueba-wisp-gates.mjs
+grep -n 'sonda-ajena-del-gate' studio/prueba-pestana.js
 APKC_WASM=… APKC_GATE_SIN_WORKERS=1 node studio/prueba-pestana.js
+```
+
+## 263. La concatenación como argumento de `File` (`f064e5f`)
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `f064e5f`, que añade el caso a
+`tipoEstimado` y su prueba; aquí no se re-ejecutó nada: sin gate, sin chromium, sin red, sin push ni
+publicación. Las citas `archivo:línea` corresponden a `f064e5f` y pueden estar desplazadas en el
+árbol actual; para localizar el símbolo, busca su nombre. El inventario de la Fase 5 registró la
+fila 5.51 en `56c31c7`.
+
+**El defecto.** La línea 179 de `src/share/apps/util/MainActivity.java` del zip de ApkShare pasa
+`apk.name + ".apk"`, un `joperador` de `+`, como segundo argumento de `File(File,String)`.
+`tipoEstimado` no tenía el caso, la sobrecarga no se resolvía y el `check` paraba con el mensaje
+literal que leyó el usuario, reproducido por la falsificación del binario:
+
+```
+[build] MainActivity.java: linea 175: linea 176: linea 179: linea 179, columna 103: el tipo de una
+expresion main.joperador no se puede estimar sin emitirla
+```
+
+**La corrección.** `tipoEstimado` (`apkc/javaemisor.go:5910`) añade `case joperador`: si
+`estimaConcatEnArgumento` (`:5322`) está encendido, `v.op == "+"` y `esConcatenacion(v)` (`:3485`)
+—un lado devuelve cadena (JLS 15.18.1)—, devuelve `Ljava/lang/String;` (`:5917`) sin emitir nada; si
+no, el rechazo de siempre (`:5920`). Estimar y emitir coinciden: `exp` manda el nodo a `concatenar`,
+que devuelve el mismo descriptor y no cambia el orden de evaluación. `estimaConcatEnArgumento` es el
+interruptor de la falsificación y va encendido en el binario que se publica.
+
+**El oráculo.** `TestConcatComoArgumentoContraJavac17`
+(`apkc/javaemisor_concat_argumento_test.go:103`) compila las líneas 171-179 reales, con la anónima
+que captura `apk`, contra `javac 17 --release 8 -g:lines,source`: `javac` elige `File(File,String)`
+(`(Ljava/io/File;Ljava/lang/String;)V`), el `run()V` sale instrucción a instrucción igual y el dex
+entero byte a byte salvo `MethodParameters` del constructor de la anónima, que se normaliza (§100).
+`TestConcatStringEnteroContraJavac17` (`:141`) fija que `int + String` (`i + ".apk"`) también se
+estima como `String` y que el dex sale byte a byte, con el `append(I)` del entero.
+`TestConcatComoArgumentoFalsificacion` (`:170`) apaga el interruptor y comprueba que reaparece el
+literal «el tipo de una expresion main.joperador no se puede estimar sin emitirla» nombrando el
+fuente y la línea (`MainActivity.java: ` y `linea 26` del fuente sintético, que reproduce la 179).
+`TestCuentaEnteraEnFileSigueRechazando` (`:198`) fija el control negativo: `1 + 2` en esa posición
+no se estima como cadena y se rechaza, y `javac` también rechaza el fuente (`int cannot be converted
+to String` o `no suitable constructor`).
+
+**La suite.** `ok github.com/ajinasokan/apkc 174.637s` del commit —medición del builder, salida
+transferida, no versionada; la reproduce `cd apkc && go test -count=1 .` sobre `f064e5f`.
+
+**Frontera viva.** Con `f064e5f` la 179 pasa y ApkShare se detiene en `MainActivity.java:198`,
+columna 50, en `Intent.ACTION_SEND` (constante `String` del `android.jar`) como argumento del
+constructor `new Intent(...)`; la midió el builder y aquí se transfiere sin re-ejecutarse. Otro
+frente la está corrigiendo, así que no se da por cerrada; las demás fronteras de `§262` (WISP
+inerte y sin cablear, y la publicación) siguen sin cambios.
+
+```sh
+cd apkc && go test -run 'ConcatComoArgumento|ConcatStringEntero|CuentaEnteraEnFile' -count=1 .
+grep -n 'func Test' apkc/javaemisor_concat_argumento_test.go
 ```
 
 ## Fronteras del bloque, sin cerrar
