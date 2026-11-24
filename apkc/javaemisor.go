@@ -1447,6 +1447,10 @@ func (e *emisor) usarDescriptor(desc string) {
 type candidato struct {
 	desc   string
 	acceso int
+	// dueño es el tipo interno que declara la sobrecarga; se toma del recorrido que la encontró. Sin
+	// él no se puede probar que una vuelta concreta es el redefinido covariante de una genérica
+	// heredada, así que el desempate de `masEstrictaSobreGenerica` se niega a decidir (fail-safe).
+	dueño string
 	// varargs: la declaracion trae `...` (en el fuente) o ACC_VARARGS (en el jar). empaquetar: esta
 	// llamada concreta baja los argumentos sobrantes a un arreglo nuevo, que es la forma que escribe
 	// javac; una llamada varargs con un arreglo del tipo declarado no empaqueta y se pasa tal cual.
@@ -1627,9 +1631,23 @@ func (ctx *contextoJava) masEspecificaDe(cands []candidato) (candidato, bool) {
 		if unica, ok := ctx.masEstrictaPorVuelta(mas); ok {
 			return unica, true
 		}
+		// El jar que sirve la pestaña (`/sdk/android.jar`, armado desde fuentes AOSP) no aplica el
+		// borrado y escribe la vuelta genérica como `LT;`; ahí `masEstrictaPorVuelta` no puede
+		// comparar y hace falta el desempate que comprueba la jerarquía de las declaraciones.
+		if desempataGenerica && len(mas) == 2 {
+			if unica, ok := ctx.masEstrictaSobreGenerica(mas); ok {
+				return unica, true
+			}
+		}
 	}
 	return candidato{}, false
 }
+
+// desempataGenerica es el interruptor de la sonda del desempate contra una vuelta con variable de
+// tipo sin sustituir. Apagado, `ListView.getAdapter()` sobre el jar sin borrado vuelve al error
+// literal «2 sobrecargas aplicables en la fase estricta a (()Landroid/widget/ListAdapter; ()LT;)»;
+// lo usa la falsificación de `javaemisor_vuelta_generica_test.go`. Encendido en el binario publicado.
+var desempataGenerica = true
 
 // desempataPorVuelta es el interruptor de la sonda del desempate por retorno covariante. Apagado, dos
 // máximas de parámetros iguales vuelven a ser ambiguas y el emisor devuelve el error literal de
@@ -1687,6 +1705,120 @@ func (ctx *contextoJava) masEstrictaPorVuelta(cands []candidato) (candidato, boo
 		return mas[0], true
 	}
 	return candidato{}, false
+}
+
+// esNombreDeVariable: ¿`nombre` tiene la forma de una variable de tipo (`T`, `E`, `K`, `V`, `T1`)?
+// Se limita a una mayúscula con dígitos detrás para no confundir una variable con una clase real del
+// paquete por defecto; el llamador además comprueba que el nombre no esté en el classpath.
+func esNombreDeVariable(nombre string) bool {
+	if len(nombre) < 1 || len(nombre) > 4 || nombre[0] < 'A' || nombre[0] > 'Z' {
+		return false
+	}
+	for _, r := range nombre[1:] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// esVueltaVariable: ¿la vuelta es una variable de tipo sin sustituir? El `/sdk/android.jar` de la
+// pestaña, armado desde fuentes AOSP sin aplicar el borrado, escribe `AdapterView.getAdapter` como
+// `()LT;`: la variable `T` va como descriptor de clase en vez de como `()Ljava/lang/Adapter;`. Se
+// reconocen las dos formas —`LT;` y la canónica `TT;`— porque ninguna de las dos es una vuelta
+// concreta comparable con `asignableEstricto`, y por eso hace falta este desempate aparte.
+func esVueltaVariable(vuelta string) bool {
+	if len(vuelta) < 3 || vuelta[len(vuelta)-1] != ';' {
+		return false
+	}
+	switch vuelta[0] {
+	case 'T':
+		return esNombreDeVariable(vuelta[1 : len(vuelta)-1])
+	case 'L':
+		interno := vuelta[1 : len(vuelta)-1]
+		return esNombreDeVariable(interno)
+	}
+	return false
+}
+
+// masEstrictaSobreGenerica desempata entre la declaración covariante de una subclase y la genérica
+// heredada cuya vuelta sigue siendo una variable (`TT;`). Es el caso de `ListView.getAdapter` sobre
+// el jar sin borrado: javac elige la declaración concreta —`()Landroid/widget/ListAdapter;`— y con
+// ese descriptor escribe el `invokevirtual`; la genérica solo gana cuando el receptor es la propia
+// `AdapterView<T>`. Solo se decide con la jerarquía completa: tiene que haber exactamente una vuelta
+// concreta y una variable, ambas con dueño conocido, y la dueña de la concreta tiene que ser una
+// subclase de la dueña de la genérica. Si falta el dueño o el parentesco no se prueba, no se elige
+// nada y la llamada conserva su rechazo explícito (fail-safe), nunca la primera por orden.
+func (ctx *contextoJava) masEstrictaSobreGenerica(cands []candidato) (candidato, bool) {
+	var concreta, generica candidato
+	nConcretas, nVariables := 0, 0
+	for _, c := range cands {
+		vuelta := vueltaDe(c.desc)
+		switch {
+		case esVueltaVariable(vuelta):
+			// `LT;` tiene forma de descriptor de clase: solo es una variable si ningún fuente ni
+			// jar define esa clase, para no tomar por variable una clase real del paquete por defecto.
+			if vuelta[0] == 'L' && ctx.claseConocida(vuelta[1:len(vuelta)-1]) {
+				return candidato{}, false
+			}
+			nVariables++
+			generica = c
+		case esTipoDeReferencia(vuelta):
+			nConcretas++
+			concreta = c
+		default:
+			return candidato{}, false
+		}
+	}
+	if nConcretas != 1 || nVariables != 1 {
+		return candidato{}, false
+	}
+	if concreta.dueño == "" || generica.dueño == "" || concreta.dueño == generica.dueño {
+		return candidato{}, false
+	}
+	if !ctx.subclaseDe(concreta.dueño, generica.dueño) {
+		return candidato{}, false
+	}
+	return concreta, true
+}
+
+// claseConocida: si el nombre interno pertenece a una clase del fuente o del classpath. Con esto se
+// distingue una vuelta `LT;` —la variable `T` escrita como clase por el generador de stubs— de una
+// clase real que se llame así; en ese caso el desempate se abstiene.
+func (ctx *contextoJava) claseConocida(interno string) bool {
+	if _, ok := ctx.clasePropia(interno); ok {
+		return true
+	}
+	return ctx.busc.hayEnElJar(interno)
+}
+
+// subclaseDe: si `hija` alcanza a `padre` subiendo por superclases y superinterfaces, vengan del
+// fuente o del classpath. Es la prueba de que las dos candidatas son un redefinido y su original y no
+// dos métodos sin relación que coinciden en nombre y aridad; una clase que no se pueda leer corta el
+// recorrido y deja el desempate sin decidir.
+func (ctx *contextoJava) subclaseDe(hija, padre string) bool {
+	pendientes := []string{hija}
+	visitadas := map[string]bool{}
+	for len(pendientes) > 0 {
+		actual := pendientes[0]
+		pendientes = pendientes[1:]
+		if visitadas[actual] {
+			continue
+		}
+		visitadas[actual] = true
+		if actual == padre {
+			return true
+		}
+		subpadre, interfaces, err := ctx.superEInterfaces(actual)
+		if err != nil {
+			continue
+		}
+		if subpadre != "" {
+			pendientes = append(pendientes, subpadre)
+		}
+		pendientes = append(pendientes, interfaces...)
+	}
+	return false
 }
 
 // masEspecifico: si cada parametro de `a` cabe en el de `b` (JVMS 15.12.2.5: `Si <: Ti`, sin boxing;
@@ -1986,7 +2118,7 @@ func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarar
 			if m.esFinal {
 				acceso |= accFinal
 			}
-			poner(candidato{desc: d, acceso: acceso, varargs: m.varargs, decl: m})
+			poner(candidato{desc: d, acceso: acceso, dueño: actual, varargs: m.varargs, decl: m})
 		}
 		if nombre == "<init>" && propia.encierre != nil && !propia.anonima {
 			// el constructor de una anidada no estatica lo sintetiza el emisor con el exterior delante;
@@ -2051,7 +2183,7 @@ func (cp *classpathDeClases) candidatosDelJar(interno, nombre string, argc int, 
 				continue
 			}
 			vistas[m.Desc] = true
-			sal = append(sal, candidato{desc: m.Desc, acceso: m.Access, varargs: varargs})
+			sal = append(sal, candidato{desc: m.Desc, acceso: m.Access, dueño: actual, varargs: varargs})
 		}
 		for _, i := range c.Interfaces {
 			interfaces = append(interfaces, internoDeDescriptor(i))
