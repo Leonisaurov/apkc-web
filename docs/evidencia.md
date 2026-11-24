@@ -12452,6 +12452,101 @@ apksigner verify --verbose --v4-signature-file build/app.apk.idsig build/app.apk
 jarsigner -verify build/app.apk | grep 'jar verified'
 ```
 
+## 270. El gate de red suelta los workers con la red ya encendida
+
+Registrado el 2026-11-24 sobre `3380703` (`studio` `54167e6`). La medición es del builder
+`ses_df3d9799effePOwHA4oqRVECcH`, aprobada por la crítica `ses_df3c97c3fffe77WoAfvYegHmst`; este `§`
+la **transfiere** con sus comandos y **no** re-ejecuta el gate, chromium ni la red. Las cifras de
+`prueba-pestana.js` y de la sonda son salida de esas sesiones, no de este registro; aquí solo se
+re-ejecutaron las pruebas sin navegador (final del `§`).
+
+**Lo que fijaba `§262` era el estado, no el contrato.** Ese `§` describe
+`waitForDebuggerOnStart:false` en `Target.setAutoAttach`; eso era la configuración en el momento de
+esa medición, y su propia deuda anotaba «una carrera teórica entre el enganche del worker y su
+primer `WebSocket`» (`docs/evidencia.md:11893-11895`). Este `§` mide la carrera, la corrige y cierra
+esa deuda para el gate.
+
+**La medición de la carrera, fuera del repo.** La sonda es
+`~/.cache/apkc-web/carrera-cdp/sonda-carrera.mjs`: corre el mismo algoritmo que `prueba-pestana.js`
+con una sola diferencia conmutable (`SONDA_MODO`, `:8-12`), crea N workers por ronda y cada uno abre
+un `wss://` único **en su primer tick** (`:217-222`; `SONDA_RETARDO` existe pero vale 0 por defecto,
+`:31-33`). Antes del arreglo (`waitForDebuggerOnStart:false` + `Network.enable` al enganchar), en
+4 rondas de 20 workers: **28 vistos de 80, 52 pérdidas (65,0 %)** —`antes-estudio.log`; las rondas
+sueltas dan 29/40 (`antes-1.log`) y 41/80 (`antes-2.log`)—. Con el arreglo, 4 rondas: **80/80, 0
+pérdidas** (`despues-estudio.log`), y 6 rondas más: **120/120, 0 pérdidas**
+(`despues-estudio-2.log`). En las rondas con contador **se enganchan los 20 workers**; lo que se
+pierde no es el enganche sino el `webSocketCreated`, porque el script del worker corría antes de que
+llegara la respuesta de la habilitación.
+
+**El `setTimeout(400)` de la prueba escondía la carrera, no la evitaba.** Con ese retardo —el que
+usa la sonda de `prueba-pestana.js`— y 1 worker por ronda, el builder midió **28/28 en los dos
+modos**: el margen temporal tapa el hueco en vez de cerrarlo, así que no sirve como falsificación.
+El hueco es de orden: `attachedToTarget → Network.enable` tarda una mediana de 11-15 ms y hasta
+48 ms (`antes-2.log`, `despues-estudio-2.log`), mientras el socket sale en el primer tick.
+
+**El cambio (`studio` `54167e6`).** `Target.setAutoAttach` pasa a `waitForDebuggerOnStart:true`
+(`studio/prueba-pestana.js:246-253`), plano y antes de navegar: cada target nace pausado. En
+`Target.attachedToTarget` (`:198-237`) se encadena, **por sesión**, `Network.enable` y, cuando
+responde, `Runtime.runIfWaitingForDebugger` (`:212-236`): primero la red, después soltar el target.
+La acumulación sigue sin filtrar por `sessionId` (`:244-245`) y la limpieza sigue en
+`Target.detachedFromTarget` (`:239-243`).
+
+**El `service_worker` es la excepción deliberada.** Pausado no contesta `Network.enable` hasta que
+arranca; esperarlo lo dejaba congelado y rompía «el service worker queda listo». Se le manda la red
+y se le suelta sin esperar, y la respuesta se anota cuando llega (`:219-224`). Una corrida ingenua,
+esperándolo como a un `worker`, dio **231 bien, 12 mal** (medición del builder).
+
+**El plazo de 2000 ms.** Alrededor de `Network.enable` hay un `Promise.race` con `esperar(2000)`
+(`:226-229`): son 100 veces el máximo medido en la sonda (52 ms, `antes-2.log`) y es red de
+seguridad, no margen de la carrera. Si no responde, se suelta el target igual y su sesión cuenta
+como «sin red» en la cobertura (`:216-217`, `:231-235`), en vez de colgar la página.
+
+**La cobertura solo dice «sí» con respuesta sin error.** `anotar` (`:213-218`) marca `red: "sí"`
+únicamente cuando llega la respuesta y no trae `error`; un plazo vencido o un error dejan
+`"no: …"` y la sesión no cuenta como cubierta.
+
+**El gate, con Brave y los fixtures completos.** **249 comprobaciones bien, 0 mal**, y la cobertura
+dice `1 page, 1 service_worker, 2 worker` (`gate-despues-2.log`; el contador, `:6449` en el árbol
+del builder). La falsificación `APKC_GATE_SIN_WORKERS=1` da **247 bien, 2 mal**: fallan
+exactamente la sonda del worker —«no se vio ningún WebSocket del worker: … escapó al gate
+(auto-attach apagado a propósito)»— y la cobertura, que se queda en `1 page`
+(`gate-sin-workers-2.log`). El gate por defecto sigue en cero ajenos: **488 peticiones, 0
+websockets**, todas locales.
+
+**La falsificación de Node.** `studio/prueba-wisp-gates.mjs:145-153` reproduce la regla vieja —mirar
+solo los mensajes sin `sessionId`—: deja **1 websocket visto y 0 ajenos**, es decir, el `wss://` del
+worker escapa del registro; es justo lo que se quiere falsificar. Con la regla actual el `wss://`
+entra y se clasifica ajeno.
+
+**Lo ejecutado aquí, sin navegador.** En la copia del builder sobre este puntero: `node --check
+studio/prueba-pestana.js` sin salida; `node studio/prueba-wisp-gates.mjs` termina con
+`falsificación: los dos gates rechazan lo que tienen que rechazar`; y `node studio/prueba.js` con
+`prueba: todo en orden`. La suite Go no se toca: no hay cambio en `apkc/`.
+
+**Preguntas abiertas, no bloqueantes.** (1) La anotación asíncrona del `service_worker` no tiene
+plazo: un `Network.enable` que no conteste nunca dejaría su entrada en `"pendiente"` y la cobertura
+la contaría igual; es **INCIERTO sin chromium**. (2) Los recuentos 249/0 y 247/2 se remiten a las
+corridas del builder sobre este puntero y no se repiten aquí. (3) El oráculo completo
+(`tools/entorno.sh gate`) sigue **sin ejecutar por orden del usuario**; tampoco hubo `apksigner` ni
+ART nuevos.
+
+```sh
+cd ~/.cache/apkc-web/carrera-cdp
+SONDA_MODO=antes   SONDA_RONDAS=4 SONDA_WORKERS=20 CHROME_BIN=/usr/bin/brave \
+  node sonda-carrera.mjs                     # antes: 28/80 vistos, 52 pérdidas (65,0 %)
+SONDA_MODO=despues SONDA_RONDAS=6 SONDA_WORKERS=20 CHROME_BIN=/usr/bin/brave \
+  node sonda-carrera.mjs                     # después: 120/120, 0 pérdidas
+# el gate, sobre studio/ con los fixtures, en dos corridas
+STUDIO_SERVIDOR_PORT=… STUDIO_PORT=… CHROME_BIN=/usr/bin/brave \
+  node studio/prueba-pestana.js              # 249 bien, 0 mal
+APKC_GATE_SIN_WORKERS=1 STUDIO_SERVIDOR_PORT=… STUDIO_PORT=… \
+  CHROME_BIN=/usr/bin/brave node studio/prueba-pestana.js   # 247 bien, 2 mal
+# las que sí se re-ejecutaron aquí, sin navegador
+node --check studio/prueba-pestana.js
+node studio/prueba-wisp-gates.mjs
+node studio/prueba.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
