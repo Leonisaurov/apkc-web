@@ -50,10 +50,18 @@ for (let i = 0; i < argvOpciones.length; ) {
 const raiz = new Map();
 const modoDir = 0o040000 | 0o755;
 const modoFile = 0o100644;
-function nuevoNodo(calle, esDir) {
+// el mismo valor que publica el `process` falso de más abajo: el kernel aplica la umask al crear y
+// hasta ahora el shim no la aplicaba porque tampoco aplicaba el modo que Go le pasa
+const umask = 0o022;
+// `permiso` es el modo con el que Go pide crear (os.OpenFile, os.CreateTemp, os.WriteFile). Se tiraba
+// a la basura: todo nodo nuevo nacía 0644 y un os.CreateTemp(dir, patrón, 0600) salía legible por
+// otros. Solo se aplica al crear; un fichero que ya existe conserva su modo, como en Linux.
+function nuevoNodo(calle, esDir, permiso) {
   const ahora = Date.now();
+  const base = esDir ? modoDir : modoFile;
   const n = {
-    dir: esDir, data: esDir ? null : new Uint8Array(0), mode: esDir ? modoDir : modoFile,
+    dir: esDir, data: esDir ? null : new Uint8Array(0),
+    mode: permiso === undefined ? base : (base & 0o170000) | ((permiso & 0o7777) & ~umask),
     mtimeMs: ahora, atimeMs: ahora, ctimeMs: ahora, uid: 1000, gid: 1000, hijos: esDir ? new Set() : null,
   };
   raiz.set(calle, n);
@@ -200,7 +208,10 @@ const fsSim = {
     if (existente && (flags & N.O_EXCL) && (flags & N.O_CREAT)) return void llamar(r)(err("EEXIST", a));
     if (!existente) {
       if (!(flags & N.O_CREAT)) return void llamar(r)(err("ENOENT", a));
-      nuevoNodo(a, false);
+      // el modo es el de la creación: por defecto 0666 (el kernel lo recorta con la umask, así que
+      // sin modo explícito sigue saliendo 0644). Con O_CREAT sobre un fichero que ya existe, Linux
+      // ignora el modo: aquí no se toca, que la rama de arriba ya lo dejó intacto.
+      nuevoNodo(a, false, modo === undefined ? 0o666 : modo);
     }
     const n = raiz.get(a);
     if (n.dir && (flags & (N.O_WRONLY | N.O_RDWR))) return void llamar(r)(err("EISDIR", a));
@@ -377,7 +388,7 @@ globalThis.process = {
   argv: [],
   env: {},
   getuid: () => 1000, getgid: () => 1000, geteuid: () => 1000, getegid: () => 1000,
-  getgroups: () => [], umask: () => 0o22,
+  getgroups: () => [], umask: () => umask,   // una sola definición: la que aplica nuevoNodo al crear
   platform: "browser", arch: "wasm",
   on: () => {}, exit: (c) => { anotarSalida(c); },   // la anota; exportarYResumir decide cuándo se va node
 };
