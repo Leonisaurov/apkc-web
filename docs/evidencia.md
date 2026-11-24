@@ -13895,11 +13895,12 @@ acoplar y redimensionar en navegador no está verificado (CDP no ejecutada por t
 `ses_df1a60ad7ffeZM2piCQa6kqw7T`; crítica `ses_df19b08d1ffePGFWQT6U6OEgpS` APROBAR.
 `apkc preview` ya acepta `--escribir id/texto` (`apkc/preview.go:267`, `:319-320`, `:869-897`);
 la página añade `editableEnPunto` (`previa-panel.js:475`), `textosEscritos` (`:748`), campo
-real (`:749-750`), foco y cierre (`:2749-2762`, `:4876`), y reenvía el guion (`:741-756`). No muta el
-documento ni OPFS (contrato `AGENTS.md:188`). `node --check` ×4 y `node prueba.js` sin fallos.
+real (`:749-750`), foco y cierre (`:2749-2762`, `:4876`), y reenvía el guion (`:741-756`). No
+muta el documento ni OPFS (contrato `AGENTS.md:188`). `node --check` ×4 y `node prueba.js` sin fallos.
 
 **Deuda del teclado.** La CDP no se ejecutó; el parser recorta los espacios al principio y al
-final del texto; la salida duplicada al acoplar la consola tampoco está aseverada en `prueba-navegador.js`.
+final del texto; la salida duplicada al acoplar la consola tampoco está aseverada en
+`prueba-navegador.js`.
 
 **Fronteras de este `§`.** Ni la consola ni el teclado se dan por verificados en navegador:
 la CDP no se ejecutó en A ni en B por temperatura (medida en `§287`). La crítica de A RECHAZÓ
