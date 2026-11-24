@@ -1,3 +1,5 @@
+//go:build !js
+
 package main
 
 // La última divergencia de paridad de ApkShare: en `MainActivity.openAppDetailsDialog` nuestro dex de
