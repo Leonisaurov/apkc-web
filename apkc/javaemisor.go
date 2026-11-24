@@ -5315,6 +5315,12 @@ var estimaLlamadaEncadenada = true
 // falsificación de `javaemisor_llamada_argumento_test.go`; encendido en el binario que se publica.
 var propagaGenericoDeLocal = true
 
+// estimaConcatEnArgumento es el interruptor de la sonda de la concatenación como argumento: apagado,
+// `tipoEstimado` no reconoce un `joperador` de `+` con cadena y devuelve el rechazo de antes («el tipo
+// de una expresion main.joperador no se puede estimar sin emitirla»). Lo usa la falsificación de
+// `javaemisor_concat_argumento_test.go`; encendido en el binario que se publica.
+var estimaConcatEnArgumento = true
+
 // descDeCampos: el descriptor del último campo de una cadena `a.b.c` sobre un receptor cuyo tipo ya se
 // conoce, sin escribir el `aload`/`getfield` que emitiría `cadenaDeCampos`. `length` sobre un arreglo da
 // `I`, como el `arraylength` de 0xbe. Devuelve además el tipo declarado del último campo cuando trae
@@ -5901,6 +5907,17 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 			return "I", nil
 		}
 		return "", fmt.Errorf("linea %d: la negacion de un %s no esta medida (solo los numeros)", v.donde.linea, d)
+	case joperador:
+		// `new File(dir, apk.name + ".apk")`: el `+` es concatenación en cuanto uno de sus lados es
+		// cadena (JLS 15.18.1), y el tipo del resultado es `Ljava/lang/String;`, que es lo que necesita
+		// la sobrecarga `File(File,String)`. Estimar y emitir coinciden: `exp` manda el nodo a
+		// `concatenar`, que devuelve el mismo descriptor y no cambia el orden de evaluación. Una cuenta
+		// sin cadena (`int + int`) no se estima: sigue cayendo en el rechazo de siempre, que es lo que
+		// hace javac al no compilarla donde se espera una cadena.
+		if estimaConcatEnArgumento && v.op == "+" && e.esConcatenacion(v) {
+			return "Ljava/lang/String;", nil
+		}
+		return "", fmt.Errorf("%s: el tipo de una expresion %T no se puede estimar sin emitirla", posDeExpr(x).sitio(), x)
 	case jllamada:
 		// una llamada encadenada (`app.apks.get(0)`) como argumento de otra: la vuelta sale del tipo
 		// estático del receptor, sin emitirlo (`vueltaSinEmitir`)
