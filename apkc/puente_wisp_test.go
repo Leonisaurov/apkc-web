@@ -92,7 +92,8 @@ func TestPuenteWispObtenerConConn(t *testing.T) {
 		peticion <- servirUnaPuente(servidor, "200 OK", "hola!")
 	}()
 
-	respuesta, err := obtenerConConn(func() (net.Conn, error) { return cliente, nil }, coordPuentePrueba)
+	abrir := func() (net.Conn, error) { return cliente, nil }
+	respuesta, err := obtenerConConn(abrir, coordPuentePrueba)
 	cliente.Close()
 	if err != nil {
 		t.Fatalf("obtenerConConn falló: %v", err)

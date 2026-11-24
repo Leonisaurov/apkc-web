@@ -186,10 +186,12 @@ func getHTTPPuente(conn net.Conn, lector *bufio.Reader, rutaWeb string) ([]byte,
 		return nil, fmt.Errorf("puente wisp: no se pudo leer el cuerpo: %w", err)
 	}
 	if len(cuerpo) > topeCuerpoPuente {
-		return nil, fmt.Errorf("puente wisp: cuerpo de %d bytes supera el tope de %d", len(cuerpo), topeCuerpoPuente)
+		return nil, fmt.Errorf("puente wisp: cuerpo de %d bytes supera el tope de %d",
+			len(cuerpo), topeCuerpoPuente)
 	}
 	if len(cuerpo) != largo {
-		return nil, fmt.Errorf("puente wisp: cuerpo de %d bytes no coincide con Content-Length %d", len(cuerpo), largo)
+		return nil, fmt.Errorf("puente wisp: cuerpo de %d bytes no coincide con Content-Length %d",
+			len(cuerpo), largo)
 	}
 	if estado != 200 {
 		return nil, nil
