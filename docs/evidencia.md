@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§256`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§257`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11511,6 +11511,60 @@ sigue sin compilar y el build se para en `MainActivity.java:74`, en la captura d
 de una anónima anidada; ese frente sigue en curso. El dedupe de `styleables` sí queda cerrado por
 `56fb021`, con su falsificación y su suite. No se re-ejecutó nada aquí ni hubo gate, chromium, red,
 push ni publicación; el oráculo del dex es javac 17 y el de los recursos, la suite de `apkc`.
+
+## 257. El avance de ApkShare hasta la anónima anidada, y WISP entre el contrato y el núcleo
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `cdcf9e8`, `0ad4128`, `3794daf`,
+`c726329`, `682759e` y `ae6bc0e`; aquí no se re-ejecutó nada: sin gate, sin chromium, sin red, sin
+push y sin publicación. **Ninguna frontera de las de abajo se cierra**: ApkShare sigue sin compilar
+y el núcleo WISP sigue inerte, fuera del wasm.
+
+**ApkShare: la captura de una local en la anónima anidada (`cdcf9e8`).** La fuente
+`MainActivity.java` declara una anónima dentro de otra y captura `adapter` en la exterior. El emisor
+baja `val$adapter` a la anónima exterior y deja `this$1`/`this$0` en la interior; el oráculo
+`javap` confirma los campos y el dex sale byte a byte salvo el constructor de la anónima. Con eso el
+build avanza y se para ahora en `MainActivity.java:99`:
+
+```text
+runnable es Ljava/lang/Runnable; y se le asigna un Lshare/apps/util/MainActivity$4$1;
+```
+
+`superEInterfaces` (`apkc/javaemisor.go:1803-1806`) devuelve el padre de una clase propia pero deja
+`nil` como interfaces: descarta `propia.implementa`, así que `MainActivity$4$1` no consta como
+`Runnable` y la asignación se rechaza. Ese frente sigue en curso; **no** se afirma que ApkShare
+compile entero.
+
+**Numeración de las anónimas (`0ad4128`).** El contador es por clase exterior y en orden de
+creación; una anónima anidada no gasta número del exterior (`Exterior$1$1`, y su hermana `$2`). Los
+**10 de 10** nombres coinciden con `javac 17` leídos con `javap`. La falsificación vuelve al
+contador viejo y da un dex divergente, así que el arreglo no es vacuo. Queda una deuda medida: una
+anónima dentro de una clase anidada **con nombre** sigue rechazada (`apkc/javafuente.go:3049`).
+
+**WISP en la página: las CAs de un `File` local (`3794daf`, `c726329`).** El bundle de CAs se lee
+de un `File` del dispositivo, **nunca** por `fetch`: un bundle que llegara por el relay convertiría
+al relay en una CA. Se valida la extensión (`.pem`/`.crt`), que el nombre no sea una URL, el tope de
+**64 KiB** (`MAX_CAS_BYTES`), que solo haya bloques `CERTIFICATE` y una huella sha256 opcional; y se
+pasa al núcleo como `{pem, huella}` por `apkcWispCargarCAs` **antes** de `obtener`
+(`studio/wisp.js:204-207`). Las tres falsificaciones fallan como se espera. Un fallo **ajeno** a
+esto queda en `prueba-pestana.js`, en la sección de SW/offline con el wasm de fixture.
+
+**El núcleo WISP sigue inerte (`ae6bc0e`).** El arreglo de la cola, los plazos y las CAs está
+aprobado, pero el módulo queda **fuera del wasm**: el linker lo elimina al no tener llamadores y
+`nucleoDisponible` (`studio/wisp.js:173-176`) falla cerrado sin abrir ningún socket. Antes de
+cablearlo, el auditor exigió dos condiciones: rechazar la trama por tamaño **antes de copiar**
+(hallazgo A: 48 MiB rechazados dejaban 48 MiB de `TotalAlloc`) y una allowlist con el PEM y su
+huella (F).
+
+**La vista previa local se mantiene sola (`682759e`).** `tools/preview-automatica.sh` vigila `HEAD`
+y reconstruye `apkc.wasm` de forma atómica (`git archive` del árbol del commit y `mv -f`); el
+servidor lee el fichero en cada petición (`studio/servidor.js:264`, `readFileSync`), así que no hay
+que reiniciarlo. Se comprobó con dos `HEAD` distintos: `682759e9` y `3794daf4`.
+
+**Fronteras de este `§`.** 1) ApkShare **no** compila: se para en el `Runnable` de
+`MainActivity.java:99`. 2) WISP **no** está cableado a la página: faltan los frentes A-E y la
+condición F. 3) Quedan **dos gates** por pasar. 4) El sitio publicado no se actualizó. 5) Los
+commits no se empujaron y el CI no se midió. Nada de esto se re-ejecutó aquí; los oráculos citados
+son los de cada commit (`javap`, el dex de `javac 17` y las pruebas de `studio/`).
 
 ## Fronteras del bloque, sin cerrar
 
