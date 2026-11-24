@@ -65,6 +65,8 @@ comprobaciones` sobre el árbol reconciliado). No se porta WineDroid (GPL): impl
 
 **Fuera de este cierre**: el gate final sobre el árbol integrado, la CI remota y la publicación. Los commits de estos frentes no se han empujado y `apkc-studio.surge.sh` sigue sirviendo la build anterior, así que ni el push ni el sitio publicado se cuentan como hechos.
 
+**Riesgos latentes abiertos, no bloqueantes** (auditoría de seguridad: veredicto **SEGURO**, modo por defecto con 0 sockets y `APKC_WISP_EXTERNO=1` como opt-in). No son explotables hoy porque `nucleoDisponible()` es `false`, pero conviene endurecerlos antes de cablear el núcleo. (1) **Alto**: `studio/wisp.js:25-36,192-214` valida la forma del relay pero no su allowlist; `apkc/depswisp.go:329-396` sí la aplica. Con un núcleo cableado que confiara en el campo `relay`, un `wss://evil@…` o un `ws://` ajeno pasaría antes de `ConfigWISP.validarRelayAutorizado`. Arreglo propuesto: aplicar en `wisp.js` la misma forma y allowlist que en Go. (2) **Medio**: la rama WISP (`deps.js:480-493,522-527`) acepta la respuesta del núcleo sin verificar tamaño, SHA-256 ni que `ruta` empiece por `/deps/`. Arreglo propuesto: comprobar esos tres campos en `wisp.js:207-214` antes de pintar. Se dejan como **INCIERTO** y riesgo abierto: no son hechos ni tareas cerradas, y no cambian el veredicto **SEGURO** de la interfaz actual.
+
 **Fronteras del emulador, dichas en §203.** (a) `android:onClick` se enlaza **solo** en el layout
 de la actividad lanzadora: no se siguen `include`, ni `menu`, ni el contexto de un Fragment o un
 servicio. (b) La firma tiene que ser `(Landroid/view/View;)V`; si el método no existe o la vista no
