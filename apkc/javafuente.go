@@ -848,7 +848,8 @@ func escapeJava(fuente string, i int, linea int) (int32, int, error) {
 }
 
 // analizadorJava lleva la posicion de lectura y el archivo que va armando. anonima cuenta las clases
-// internas anonimas del fuente, que javac numera por orden de aparicion (MainActivity$1).
+// internas anonimas de la clase exterior, que javac numera por orden de creacion (MainActivity$1); una
+// anonima creada dentro de otra no entra en esta cuenta, sino en el `siguienteAnonima` de su exterior.
 type analizadorJava struct {
 	toks     []tokenJava
 	i        int
@@ -2895,9 +2896,10 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 		}
 		cuerpo := (*jclas)(nil)
 		if a.es('p', "{") {
-			// la clase anonima: javac la emite como Tipo$N y aqui se nombra igual, con el indice
-			// que le toca en el orden de aparicion (parrafo 41)
-			a.anonima++
+			// la clase anónima: javac la emite como Tipo$N y aquí se nombra igual, con el índice que le
+			// toca en el orden de creación (párrafo 41). El número lo asigna `claseAnonima`, que es
+			// quien sabe si la clase que la crea ya es anónima: entonces el número no sale del contador
+			// de la clase exterior, sino del de esa anónima (Tipo$1$1).
 			cuerpo, err = a.claseAnonima(tipo)
 			if err != nil {
 				return nil, err
@@ -3018,20 +3020,36 @@ func (a *analizadorJava) registraCaptura(nombre string) bool {
 	return true
 }
 
+// anonimaAnidadaGastaNumeroDelExterior es el interruptor de la falsificación de
+// `javaemisor_anonima_numeracion_test.go`. Apagado —el binario que se publica—, una anónima creada
+// dentro de otra no consume un número del contador de la clase exterior, como javac; encendido
+// reproduce el contador viejo, que las contaba todas: Sonda$1, Sonda$1$1, Sonda$3, Sonda$4, Sonda$8,
+// Sonda$9 donde javac deja Sonda$1, Sonda$1$1, Sonda$2, Sonda$3, Sonda$4, Sonda$5.
+var anonimaAnidadaGastaNumeroDelExterior = false
+
 // claseAnonima lee el cuerpo de un `new Interface() { ... }`. Lo que no sea implementar metodos no esta
 // medido: javac le pone el campo this$0 y el constructor con la captura, y eso se comprueba aparte.
 func (a *analizadorJava) claseAnonima(nombre string) (*jclas, error) {
 	if a.claseActual == nil {
 		return nil, fmt.Errorf("linea %d: una clase anonima fuera de una declaracion de clase no es Java", a.actual().donde.linea)
 	}
-	nombreAnonima := a.exterior + "$" + strconv.Itoa(a.anonima)
+	var nombreAnonima string
 	if a.claseActual.anonima {
-		// una anonima dentro de otra lleva el nombre de la que la crea y su propio contador:
-		// Capa$1$1, no Capa$2 (medido con javac 17 --release 8 sobre Capa.java)
-		nombreAnonima = a.claseActual.nombre + "$" + strconv.Itoa(a.claseActual.siguienteAnonima+1)
+		// una anónima dentro de otra lleva el nombre de la que la crea y su propio contador:
+		// Capa$1$1, no Capa$2 (medido con javac 17 --release 8 sobre Capa.java), y no gasta número del
+		// contador de la clase exterior: javac numera por clase exterior y en orden de creación, así
+		// que las hermanas de Capa$1 son Capa$2 y Capa$3 aunque sus cuerpos aniden anónimas (§ en
+		// `javaemisor_anonima_numeracion_test.go`).
 		a.claseActual.siguienteAnonima++
+		nombreAnonima = a.claseActual.nombre + "$" + strconv.Itoa(a.claseActual.siguienteAnonima)
+		if anonimaAnidadaGastaNumeroDelExterior {
+			a.anonima++
+		}
 	} else if a.claseActual.nombre != a.exterior {
 		return nil, fmt.Errorf("linea %d: una anonima creada dentro de una clase anidada no esta medida (javac la nombra Exterior$Anidada$1)", a.actual().donde.linea)
+	} else {
+		a.anonima++
+		nombreAnonima = a.exterior + "$" + strconv.Itoa(a.anonima)
 	}
 	c := &jclas{
 		nombre:         nombreAnonima,
