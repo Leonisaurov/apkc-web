@@ -13416,6 +13416,76 @@ IPS="$IPS"'|104\.21\.34\.165|172\.67\.163\.20|104\.21\.1\.217|172\.67\.128\.22|1
 grep -nE "$IPS" "$LOG"   # debe salir vacío
 ```
 
+## 282. El implementador de la lambda se emite al cerrar la clase, no en el sitio
+
+Registrado el 2026-11-24 sobre `52eac29` (`4af5740` en este worktree), con la medición del builder
+`ses_df2821e86ffeUJp8AeEVvtn4C3`. La crítica `ses_df262b905ffevNGBm3S6zk7wXL` lo **aprobó** con
+**20 de 21** clases byte a byte; la única divergente es el `MainActivity` por la fila
+`line 159: 155`. La integración del árbol combinado queda al orquestador.
+
+**El defecto era el orden del pool, no su tamaño.** En el `MainActivity` de ApkShare las dos
+constantes `Integer` de `R.layout.*` (`2130903043` y `2130837511`) caían en las entradas #268 y #273
+y se escribían con `ldc_w`; javac las pone en la #249 y la #254 y escribe `ldc`. No sobraban
+entradas —nuestro pool cierra en la #328 y el de javac en la #330—: lo que fallaba era el orden. Con
+el índice 268, `ldc_w` era la forma **correcta** según el JVMS 6.5: lo incorrecto era que el índice
+no fuese el de javac.
+
+**La causa.** El emisor compilaba el implementador `lambda$…` y las constantes de su bootstrap
+dentro del método que declara la lambda; javac los genera al cerrar la clase, detrás del código de
+todos los métodos. Ahora `lamda` encola el implementador (`apkc/lambda_fuente.go:495`, la cola
+`lambdaPendientes`) y `emmitirClase` la vacía al cerrar (`apkc/javaemisor.go:8929`); la fila de
+`BootstrapMethods` reserva su índice en el sitio y calcula MethodHandle y MethodType con el pool ya
+cerrado (`registraBootstrapDiferido`, `apkc/lambda_fuente.go:564`, y `classBootstrap.pendiente`,
+`apkc/lambda.go:31`); `MethodHandles$Lookup` para el `InnerClasses` se anota en ese mismo cierre
+(`apkc/javaemisor.go:8943`), que es donde javac la escribe; y el `Object` por defecto de
+`super_class` solo entra si el fuente no declara padre (`:8755-8761`). El interruptor de la
+falsificación es `implementadorEnElSitio` (`apkc/lambda_fuente.go:490`). Con el arreglo las dos
+constantes quedan en la #250 y la #255 (javac #249 y #254), las dos con `ldc`.
+
+**La sonda.** `apkc/javaemisor_ldc_pool_largo_test.go` compila una lambda en un constructor ajeno
+(`new Ayuda(s -> usa(s.length()))`) y `k` métodos de relleno, y vigila la forma del primer `ldc` de
+`limite`. Con `k=114` el índice cae en #254 y sale `ldc`; con el interruptor encendido vuelve a
+`ldc_w` con un índice por encima de 255 —el #274 concreto no lo asevera el test: queda INCIERTO—;
+con `k=116` es #258 y toca `ldc_w`. El test asevera la forma y el lado del límite, no el número
+exacto. El oráculo es javac 17 `--release 8 -g:lines,source` en los tres casos, y el dex de la
+sonda entera coincide byte a byte en el caso arreglado. En este worktree los tres tests pasan:
+
+**Lo que midió el builder (medición transferida, no versionada).** Cuerpo del `.class` de
+`MainActivity` idéntico al de javac salvo una fila `line 159: 155`; dex por clase 6108 B frente a
+6112; dex de la app 16516 B frente a 16504 del oráculo (brecha de 12 B de otras clases); APK
+305509 B con `apksigner verify` v1/v2/v3 en `true`; y la suite completa en `ok … 177.115s`.
+
+**Deuda abierta, no cerrada.** La fila `line 159: 155` de `openAppDetailsDialog` es la única
+diferencia de `MainActivity` y no es del pool. Por qué javac anota esa línea no está documentado
+como hecho; una hipótesis, no verificada, es que anota la línea del `} else {` en el `goto` cuando
+la rama `then` declara una local con lambda. La supuesta diferencia entre `access$000` y `lambda$…`
+**no se reproduce** con el oráculo de este repo: javac 17 produce el mismo juego. Deuda sin
+reproducir, no hecho.
+
+**Veredicto.** El emisor ya respeta el orden de javac en este caso y la forma del `ldc` la decide el
+índice, no el interruptor; lo que resta del `.class` es la tabla de líneas del `if`/`else`.
+
+```sh
+# la sonda puntual: los tres casos del límite 255, con el android.jar del SDK de escritorio
+sh -c 'cd apkc && \
+  APKC_ANDROID_JAR="$HOME/opt/android-sdk/platforms/android-34/android.jar" \
+  JAVAC17="$HOME/opt/jdk17/bin/javac" \
+  GOTMPDIR="$HOME/.cache/apkc-web/gotmp" \
+  tcr go test -run "TestElPoolDeLaLambda|TestElLdcDelPool|TestElInterruptorRestaura" \
+  -count=1 -v .'
+# salida: los tres PASS con `ok`; el tiempo depende de la máquina
+```
+
+```sh
+# los símbolos que sostienen cada afirmación
+grep -n 'implementadorEnElSitio\|implementadorPendiente\|registraBootstrapDiferido' \
+  apkc/lambda_fuente.go
+grep -n 'lambdaPendientes = e.lambdaPendientes\[1:\]\|bootstraps\[i\].pendiente' \
+  apkc/javaemisor.go
+grep -n 'MethodHandles\$Lookup\|superIdx = e.pool.clase("java/lang/Object")' apkc/javaemisor.go
+grep -n 'pendiente func' apkc/lambda.go
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
