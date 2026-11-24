@@ -13155,6 +13155,83 @@ W=/usr/lib/go/lib/wasm/go_js_wasm_exec
 GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .
 ```
 
+## 279. La capa wasm llega al final sin aborto y deja 15 fallos ambientales
+
+Registrado el 2026-11-24 sobre `9f29d88`, con la QA `ses_df28bc63effeOwlMQM6jzhJ1Rw`. La suite
+wasm ya no muere a mitad: recorre la suite entera y termina con `RC=1` por quince
+fallos que no dependen del cambio. Este `§` deja la cifra, la comparación con el rojo anterior y el
+`file:line` de cada causa, para que el siguiente run no confunda un ambiente incompleto con una
+regresión.
+
+**El run.** Con `TMP`, `PREFIX` y `GOTMPDIR` bajo `$HOME/.cache/apkc-web/` (regla 12, nada en
+`/tmp`), `tcr -- sh tools/entorno.sh wasm` sale `RC=1` y deja
+`~/.cache/apkc-web/wasm-final.log` (18636 B, 233 líneas). El log no abrevia: hay **15** `--- FAIL`
+de nivel superior —más 6 subtests dentro de los dos `Dedupe*`— y ningún `panic` ni `os.Exit`: el
+`(apkc devolvio 1)` de la última línea es la propagación del rc del propio test.
+
+**La comparación.** El log previo de 20 fallos (`~/.cache/apkc-web/despues-verboso.txt`) contiene
+exactamente estos 15 más cinco que ahora pasan:
+`TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase`,
+`TestCompilarEnGoDexaIgualQueJavacConUnaDependencia`,
+`TestRunRechazaManifiestoInyectadoAntesDeLaShell`,
+`TestArgumentosDeFirmaNoLlevanLaPassword` y
+`TestAbrirWebSocketWISPExigeConfigValidada`. Es una reducción estricta: ningún test que antes
+pasara está ahora en rojo.
+
+**Lo dirigido.** Ejecutar a mano las dos pruebas de recursos y firma con el `android.jar` y el
+layout montados da `--- PASS` en ambas y `RC=0`; en particular ya no aparece el ENOENT de
+`build/res/layout/deps_fila.xml` que abortaba el run del `§278`.
+
+**Las causas de los 15.** Once son el oráculo de `javac 17`: `javac17Exigido`
+(`dependencias_test.go:41-47`) llama a `exec.Command` y el binario `js` no puede lanzarlo. Son
+`TestNewDeOtraClaseContraJavac17` (`javaemisor_alcance_test.go:65`), `TestNewConTipoDeJar`
+(`:178`), `TestHerenciaDeOtraClaseSubePorSuPadre` (`:348`),
+`TestElPostDelayedDeApkShareLlevaSuI2L` (`javaemisor_ancho_argumento_test.go:146`),
+`TestGotoWLargoHaciaAtras` (`javaemisor_atras_test.go:95`; su aserción del `goto_w` pasa en `:86`
+con el desplazamiento `-36009`), `TestElBooleanNoEnsanchaEnElArgumento`
+(`javaemisor_boolean_ensancha_test.go:42`), `TestEmisorReferenciaCualificadaContraJavac17`
+(`javaemisor_cualificado_test.go:81`), `TestEmisorImportExplicitoContraJavac17`
+(`javaemisor_import_test.go:126`), `TestEmisorImportExplicitoMismoPaqueteContraJavac17` (`:169`),
+`TestSobrecargaExteriorContraJavac17` (`javaemisor_receptor_heredado_test.go:170`) y
+`TestTipoCualificadoLocalContraJavac17` (`javaemisor_tipo_cualificado_local_test.go:89`).
+
+Dos más son `os.Pipe`, que `js` no implementa: `avisosDurante` (`linker_dedupe_clave_test.go:60-63`)
+lo usa para capturar `LogW`, y fallan `TestDedupeDeValuesPorClave`
+(`linker_dedupe_clave_test.go:222`, con 3 subtests) y `TestDedupeDeStyleablesPorClave` (`:414`, con
+3 subtests). Los dos últimos re-ejecutan el propio binario con `exec.Command(os.Args[0])`
+(`multidex_app_test.go:386`): `TestCompilaAppPre21ConDemasiadasClasesAborta` (fallo en `:412`) y
+`TestCompilaAppSinUsesSdkConDemasiadasClasesAborta` (`:439`); el hijo no arranca bajo `js` y la
+salida sale vacía.
+
+**Veredicto.** Pasa en lo pedido: la capa wasm llega al final sin aborto. El `RC=1` se debe a los 15
+fallos ambientales de arriba, ninguno imputable al cambio medido. Queda deuda declarada: `os.Pipe`
+en `avisosDurante` y los tests de oráculo `javac`/re-ejecución; la vía es `capturarSalida` con
+fichero —ya aplicado en `sign_hostil_test.go`— y build tags —ya aplicados a otros cuatro grupos en
+el `§278`—, respectivamente.
+
+**Nota de HEAD.** Durante la medición el `HEAD` avanzó a `b7c86cd` con cambios **solo** en `docs/`;
+el código Go medido es idéntico al de `9f29d88`.
+
+```sh
+export TMP="$HOME/.cache/apkc-web/tmp279"
+export PREFIX="$HOME/.cache/apkc-web/prefix279"
+export GOTMPDIR="$HOME/.cache/apkc-web/gotmp"
+mkdir -p "$TMP" "$PREFIX" "$GOTMPDIR"
+tcr -- sh tools/entorno.sh wasm > "$HOME/.cache/apkc-web/wasm-final.log" 2>&1; echo "RC=$?"
+wc -c -l "$HOME/.cache/apkc-web/wasm-final.log"
+grep -c '^--- FAIL' "$HOME/.cache/apkc-web/wasm-final.log"
+grep -c '^--- FAIL' "$HOME/.cache/apkc-web/despues-verboso.txt"
+```
+
+```sh
+J="$HOME/Android/platforms/android-34/android.jar"
+node shim/navegador-sim.js \
+  --montar "$J:/android/platforms/android-34/android.jar" \
+  --montar apkc/testdata/vista-propia/main.xml:/testdata/vista-propia/main.xml \
+  "$HOME/.cache/apkc-web/wasm-final/apkc-test.wasm" -test.v \
+  -test.run '^(TestArgumentosDeFirmaNoLlevanLaPassword|TestRecursosDeDependenciaEnElApk)$'
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
