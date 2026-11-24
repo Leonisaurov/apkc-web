@@ -12117,6 +12117,74 @@ sed -n '212p' \
 sed -n '24,32p' apkc/main.go
 ```
 
+## 266. El keystore ausente ya no se anuncia como formato ilegible (`0e65ac1`)
+
+Registrado el 2026-11-23. Transfiere la medición del builder sobre `8eae949`, integrada aquí como
+`0e65ac1`; lo que solo viene de ese informe va marcado como **transferido, no versionado**, y las
+citas `archivo:línea` son de este árbol. Aquí se re-ejecutó solo la prueba puntual del bloque
+«Comandos»: sin suite completa, sin `go vet`, sin binario real, sin gate, sin chromium, sin red,
+sin push y sin publicación.
+
+**Lo que decía antes.** Con `--keystore /nonexistent/keystore.p12` el build dejaba primero la línea
+del formato (partida aquí para no pasar de 100 columnas; en el registro es una sola):
+
+```
+[sign] --signer=auto: /nonexistent/keystore.p12 is neither a PKCS#12 nor a JKS keystore,
+and only the jvm backend reads the rest
+```
+
+Y después `there is no keystore at …`, que sí nombraba la causa. El fallback a `jvm` era el correcto
+y benigno (`§264`), pero el diagnóstico culpaba al formato de un fichero que no existía: el mismo
+defecto que `§264` dejó escrito como «en curso, otro frente».
+
+**La corrección.** `keystoreAbsentMessage` (`apkc/keystore.go:101`) es ahora el único texto con que
+el paquete dice que un keystore no está; `requireKeystore` (`:125`) lo usa en vez de repetir el
+`LogF`, y `keystoreRefusal` (`:110`) elige entre ese texto y el de formato con un `os.Stat`
+(`:111`): si la ruta no existe, ausente; si existe y la cabecera no encaja, formato.
+`resolveSigner` no cambia de forma: `apkc/gopackage.go:87-90` sigue avisando por `LogD` y
+devolviendo `signerJVM`; solo cambia el texto, que pasa a escribirlo `keystoreRefusal`.
+
+**Los tests.** `TestResolveSigner` (`apkc/keystore_test.go:383`) gana dos casos que capturan la
+salida real de `resolveSigner` con `capturarSalida` (`:428`), no un helper: `:420` da `absent.p12` y
+exige «there is no keystore at» a la vez que prohíbe «neither a PKCS#12»; `:422` da `old.jceks`
+—magic `CE CE CE CE`, `:390`— y exige lo contrario. Se conservan los casos anteriores, incluido
+`:417`, que solo mira el backend elegido.
+
+**La falsificación.** Reponer el `LogD` viejo en `gopackage.go:90` hace fallar `TestResolveSigner`
+en los dos asertos —`:433` para el aviso exigido y `:436` para el prohibido— y el mensaje literal
+vuelve a ser el del formato. Medición del builder, **transferida, no versionada**.
+
+**La verificación.** Del builder, el bloque de tests: `go test -run TestResolveSigner -v .` en
+`PASS`, la suite completa `ok github.com/ajinasokan/apkc 185.645s`, `go vet .` con rc 0
+y `gofmt -l` sin salida —**medición transferida, no versionada**. Aquí se repitió la prueba
+puntual:
+
+```
+$ cd apkc && go test -run TestResolveSigner -count=1 -v .
+=== RUN   TestResolveSigner
+--- PASS: TestResolveSigner (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.011s
+```
+
+Con el binario real el builder vio el texto nuevo con la ruta ausente, el de formato con `old.jceks`
+y ningún aviso con `~/.android/debug.keystore`, donde `auto` elige el backend `go` (**transferido,
+no versionado**).
+
+**La deuda de `§264`.** `§264` cerró que el fallback era benigno y dejó la corrección «en curso,
+otro frente», pidiendo separar los dos casos en `gopackage.go` y añadir a `TestResolveSigner` un
+caso de ruta ausente que exigiera el texto de ausencia. Este `§266`, sobre `0e65ac1`, hace
+exactamente esas dos cosas y no reescribe `§264`: lo que allí era defecto de diagnóstico aquí es una
+prueba en verde. La observación de `§264` sobre el build sin `--keystore`, que no llama a `findSDKs`
+(`apkc/main.go:28-30`), sigue siendo de otro frente y no se toca.
+
+```sh
+cd apkc && go test -run TestResolveSigner -count=1 -v .
+grep -n 'keystoreAbsentMessage\|keystoreRefusal' apkc/keystore.go apkc/gopackage.go
+sed -n '383,438p' apkc/keystore_test.go
+git show --stat 0e65ac1
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
