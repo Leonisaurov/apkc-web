@@ -224,6 +224,9 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 		if err != nil {
 			return nil, nil, nil, manifiesto, err
 		}
+		marcarOrigen(v, "el proyecto", 0)
+		marcarOrigen(l, "el proyecto", 0)
+		marcarOrigen(f, "el proyecto", 0)
 		valores = append(valores, v...)
 		layouts = append(layouts, l...)
 		ficheros = append(ficheros, f...)
@@ -231,7 +234,9 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 	// lo que cada `.aar` de `jar/` trae bajo `res/` entra con las mismas reglas que una isla de
 	// `res/__deps/`: su ruta de paquete tampoco lleva la isla. Un layout o un fichero que el
 	// proyecto (o una isla) ya aporta con el mismo nombre se queda con el suyo, así que un recurso
-	// no viaja dos veces y la prioridad no depende del orden en que se leyeron los artefactos.
+	// no viaja dos veces y la prioridad no depende del orden en que se leyeron los artefactos. Los
+	// `values` no se deduplican por fichero: el enlace resuelve cada clave por su prioridad
+	// (proyecto > isla > AAR) y avisa de la que se descarta.
 	aares, err := aarsExtraidos(raiz)
 	if err != nil {
 		return nil, nil, nil, manifiesto, err
@@ -244,7 +249,8 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 		vistos[f.nombre] = true
 	}
 	// dos copias byte a byte del mismo `values` (el importador deja una isla y el `.aar` sigue en
-	// `jar/`) declaran los mismos recursos: se lee una vez
+	// `jar/`) declaran los mismos recursos: se lee una vez. Dos `values` distintos que repiten una
+	// clave no se descartan aquí: los resuelve `enlazarProyecto` por clave y avisa.
 	contenidos := map[string]bool{}
 	for _, f := range valores {
 		contenidos[string(f.contenido)] = true
@@ -266,6 +272,9 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 			if err != nil {
 				return nil, nil, nil, manifiesto, err
 			}
+			marcarOrigen(v, "el AAR "+filepath.Base(aar.aar), 2)
+			marcarOrigen(l, "el AAR "+filepath.Base(aar.aar), 2)
+			marcarOrigen(f, "el AAR "+filepath.Base(aar.aar), 2)
 			for _, fuente := range l {
 				if vistos[fuente.nombre] {
 					LogW("build", "el recurso", fuente.nombre, "del AAR", filepath.Base(aar.aar),
@@ -296,6 +305,16 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 	return valores, layouts, ficheros, manifiesto, nil
 }
 
+// marcarOrigen pone en cada fuente de dónde salió y con qué prioridad compite una clave repetida.
+// Se hace en el lector, que es quien sabe si el fichero es del proyecto, de una isla de `res/__deps`
+// o del `res/` de un `.aar` de `jar/`; el enlace resuelve después por clave, no por fichero.
+func marcarOrigen(fuentes []fuenteXML, origen string, prioridad int) {
+	for i := range fuentes {
+		fuentes[i].origen = origen
+		fuentes[i].prioridad = prioridad
+	}
+}
+
 // fuentesDeIslasDeDependencias recorre `res/__deps/`: una carpeta por artefacto y, dentro, las
 // mismas carpetas de tipo que en res/. La isla en sí no viaja al paquete: se usa para que dos AAR no
 // compartan fichero en disco, y su rastro queda en el nombre de los values, que el importador ya
@@ -322,6 +341,9 @@ func fuentesDeIslasDeDependencias(disco string) (valores, layouts, ficheros []fu
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			marcarOrigen(v, "la isla "+isla.Name(), 1)
+			marcarOrigen(l, "la isla "+isla.Name(), 1)
+			marcarOrigen(f, "la isla "+isla.Name(), 1)
 			valores = append(valores, v...)
 			layouts = append(layouts, l...)
 			ficheros = append(ficheros, f...)

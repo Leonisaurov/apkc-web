@@ -33,6 +33,12 @@ type fuenteXML struct {
 	// resolver por prioridad: un value del proyecto gana al de la dependencia con el mismo tipo,
 	// nombre y configuración, sin depender del orden en que se leyeron las carpetas.
 	deDependencia bool
+	// origen nombra la fuente para el aviso de una clave declarada dos veces: «el proyecto», «la isla
+	// <isla>» o «el AAR <fichero>.aar». Vacío se lee como el nombre del fichero.
+	origen string
+	// prioridad desempata la misma clave: 0 el proyecto, 1 la isla de `res/__deps` y 2 el `res/` de
+	// un `.aar` que sigue en `jar/`. Un fuenteXML de dependencia sin marca vale como isla.
+	prioridad int
 }
 
 // recursoEntabla es una entrada de la tabla antes de ordenar: su tipo, su clave y el valor ya resuelto

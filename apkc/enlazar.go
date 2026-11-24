@@ -300,44 +300,56 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 			texto:  f.nombre,
 		})
 	}
-	// Un value del proyecto gana al de un AAR con el mismo tipo, nombre y configuración, y el
-	// resultado no depende del orden de lectura: se recogen primero las claves del proyecto y se
-	// descartan las de la dependencia que choquen. aapt2 rechaza dos valores duplicados; aquí el
-	// importador deja los dos ficheros en el árbol y la prioridad del dueño del proyecto es la
-	// decisión determinista (dos valores con el mismo tipo, nombre y configuración no caben).
-	delProyecto := map[string]bool{}
-	for _, f := range valores {
-		if f.deDependencia {
-			continue
-		}
-		nuevos, _, err := recursosYStyleables(f, m)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", f.nombre, err)
-		}
-		for _, r := range nuevos {
-			delProyecto[r.tipo+"\x00"+r.clave+"\x00"+f.config] = true
-		}
+	// Una clave la pueden declarar el proyecto, la isla de una dependencia y el propio `.aar` que
+	// sigue en `jar/`. No se descarta por fichero: se resuelve por clave (tipo, nombre y
+	// configuración) con una prioridad fija —proyecto, luego isla, luego AAR— y, a igual prioridad,
+	// por el nombre de la fuente y el del fichero, que no dependen del orden de lectura: dos
+	// corridas con el orden invertido eligen la misma. aapt2 rechaza dos valores duplicados; aquí
+	// el importador deja los dos ficheros en el árbol, así que la elección se avisa.
+	type declaracion struct {
+		fichero int
+		entrada int
 	}
-	for _, f := range valores {
+	declaradas := make([][]recursoEntabla, len(valores))
+	estilosDe := make([][]styleableEscribir, len(valores))
+	gana := map[string]declaracion{}
+	for i, f := range valores {
 		nuevos, estilos, err := recursosYStyleables(f, m)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", f.nombre, err)
 		}
-		for i := range nuevos {
-			nuevos[i].config = f.config
+		for j := range nuevos {
+			nuevos[j].config = f.config
 		}
-		if f.deDependencia {
-			filtrados := nuevos[:0]
-			for _, r := range nuevos {
-				if delProyecto[r.tipo+"\x00"+r.clave+"\x00"+f.config] {
-					continue
-				}
-				filtrados = append(filtrados, r)
+		declaradas[i], estilosDe[i] = nuevos, estilos
+		for j, r := range nuevos {
+			k := r.tipo + "\x00" + r.clave + "\x00" + f.config
+			antes, yaHay := gana[k]
+			if !yaHay {
+				gana[k] = declaracion{fichero: i, entrada: j}
+				continue
 			}
-			nuevos = filtrados
+			if antes.fichero == i {
+				// la misma clave repetida dentro de un fichero: se queda la última, sin aviso
+				gana[k] = declaracion{fichero: i, entrada: j}
+				continue
+			}
+			if !prefiereA(f, valores[antes.fichero]) {
+				avisarClaveRepetida(r, valores[antes.fichero], f)
+				continue
+			}
+			avisarClaveRepetida(r, f, valores[antes.fichero])
+			gana[k] = declaracion{fichero: i, entrada: j}
 		}
-		recursos = append(recursos, nuevos...)
-		styleables = append(styleables, estilos...)
+	}
+	for i, f := range valores {
+		for j, r := range declaradas[i] {
+			if gana[r.tipo+"\x00"+r.clave+"\x00"+f.config] != (declaracion{fichero: i, entrada: j}) {
+				continue
+			}
+			recursos = append(recursos, r)
+		}
+		styleables = append(styleables, estilosDe[i]...)
 	}
 	// primera pasada por los arboles: descubrir los ids que declaran
 	arbolManifesto, err := leerArbolDe(manifiesto)
@@ -398,6 +410,52 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 	salida.r = r
 	salida.manifestJava = manifestJavaDe(arbolManifesto, paquete)
 	return salida, nil
+}
+
+// prioridadDe ordena las fuentes de una misma clave: el proyecto manda sobre la isla y la isla sobre
+// el `.aar` que sigue en `jar/`. Un `fuenteXML` de dependencia sin marca se lee como isla.
+func prioridadDe(f fuenteXML) int {
+	if f.prioridad > 0 {
+		return f.prioridad
+	}
+	if f.deDependencia {
+		return 1
+	}
+	return 0
+}
+
+// prefiereA dice si `nueva` gana a `actual` cuando las dos declaran la misma clave: primero la
+// prioridad y después el nombre de la fuente y el del fichero. Ninguno de los dos depende del orden
+// de lectura, así que la misma pareja de fuentes elige siempre la misma ganadora.
+func prefiereA(nueva, actual fuenteXML) bool {
+	pn, pa := prioridadDe(nueva), prioridadDe(actual)
+	if pn != pa {
+		return pn < pa
+	}
+	if nueva.origen != actual.origen {
+		return nueva.origen < actual.origen
+	}
+	return nueva.nombre < actual.nombre
+}
+
+// origenDe nombra una fuente en el aviso. Si el lector no la marcó (un `fuenteXML` armado a mano),
+// vale el nombre del fichero.
+func origenDe(f fuenteXML) string {
+	if f.origen != "" {
+		return f.origen
+	}
+	return f.nombre
+}
+
+// avisarClaveRepetida nombra la clave, las dos fuentes y la que se queda: sin esto, un valor que el
+// AAR declara y no aparece en el apk no tiene explicación a la vista.
+func avisarClaveRepetida(r recursoEntabla, gana, pierde fuenteXML) {
+	clave := r.tipo + "/" + r.clave
+	if r.config != "" {
+		clave += " (" + r.config + ")"
+	}
+	LogW("build", "la clave", clave, "la declaran", origenDe(pierde), "("+pierde.nombre+") y",
+		origenDe(gana), "("+gana.nombre+"): gana", origenDe(gana))
 }
 
 // manifestJavaDe: el `Manifest.java` que aapt2 escribe cuando el manifiesto declara `<permission>`.
