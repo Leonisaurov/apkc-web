@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§259`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§260`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11669,6 +11669,88 @@ fichero en cada petición, así que no hay que reiniciar el servidor.
 3) Quedan **dos gates** de WISP por pasar. 4) El sitio publicado no se actualizó. 5) Los commits no
 se empujaron y el CI no se midió. Nada de esto se re-ejecutó aquí; los oráculos citados son los de
 cada commit.
+
+## 260. Los cierres del emisor, el AAR con `jni/` y los dos gates de WISP
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `8af90c2`, `af73a8a`, `3d74b2e`,
+`c0b40e9`, `3cc7fe7`, `b6b11c5`/`50aa19e`, `b7d08ae`, `6a79ff5` y `b64e731`; aquí no se
+re-ejecutó nada: sin gate, sin chromium, sin red, sin push y sin publicación. Los cuatro primeros
+cierran defectos del emisor que destapó ApkShare; el quinto, la deuda de los AAR; los demás, el
+endurecimiento de WISP. **ApkShare sigue sin compilar**: se para en `MainActivity.java:179`, y el
+núcleo WISP sigue **inerte**, fuera del wasm.
+
+**La interfaz implícita de la anónima (`8af90c2`).** Cierra la condición de `§258` sobre la fuente
+que de verdad compila. `superEInterfaces` (`apkc/javaemisor.go:1816`) ya no descarta
+`propia.implementa`: la clase propia devuelve también sus interfaces, así que `MainActivity$4$1`
+consta como `Runnable` y la anónima se asigna a su interfaz aunque el campo sea del exterior.
+`check` sobre `src/share/apps/util/MainActivity.java` ya no emite el error de la línea 99, y
+ApkShare avanza a la 97. Aprobado con las condiciones cerradas: el crítico dio `ok … 5.293s` sobre
+`Interfaz|Anonima|Acces|Captura` y confirmó el paso 99→97. El interruptor
+`interfacesDeLaPropiaEnAsignable` (`:1806`) es la falsificación: apagado, la clase propia vuelve a
+devolver solo el padre (`javaemisor_interfaz_anonima_test.go:110`).
+
+**El `int`→`long` en argumentos (`af73a8a`, corregido en `3d74b2e`).** `necesitaConversionEn`
+(`apkc/javaemisor.go:4670`) y `conversionPrimitiva` (`:4759`) emiten `i2l` en el sitio de javac
+cuando el parámetro pide un ensanchamiento, en vez de descontar el ancho después de emitir el
+argumento: las 15 sondas contra javac 17 coinciden byte a byte, y el `postDelayed` de ApkShare
+lleva el `i2l` en el pc 37 (`javaemisor_ancho_argumento_test.go:143`). La app pasa la línea 97. El
+auditor encontró un **CONFIRMADO**: `boolean` se trataba como `int` y ensanchaba. `3d74b2e` lo
+rechaza con la línea y nombra el tipo y el parámetro (JLS 5.1.2) en `apkc/javaemisor.go:4811`, con
+el control de los anchos que sí ensanchan (`javaemisor_boolean_ensancha_test.go:88`) y la
+falsificación con el interruptor `booleanEnsanchaEnArgumentos`
+(`apkc/javaemisor.go:4716`). Aprobado.
+
+**La llamada encadenada como argumento (`c0b40e9`).** `tipoSinEmitirCompleto`
+(`apkc/javaemisor.go:5303`) y `vueltaGenerica` (`:5410`) estiman el tipo de `app.apks.get(0)` sin
+emitir el receptor; el genérico (`Apk`) se prefiere al borrado (`Object`). El dex de la sonda y el
+de la forma exacta de la línea 163 salen byte a byte contra `javac 17`
+(`javaemisor_llamada_argumento_test.go:161` y `:190`). ApkShare pasa la 163 y se para ahora en la
+179.
+
+**El AAR con `jni/<abi>/` (`3cc7fe7`).** Un AAR real trae sus nativos en `jni/<abi>/`, no en
+`lib/<abi>/`; `nativosDeAars` (`apkc/build.go:1955`) junta las dos rutas y los empaqueta bajo el
+nombre canónico `lib/<abi>/<fichero>.so`, el que busca `System.loadLibrary`. Se verificó con
+`unzip -l`, `apksigner verify` y `zipalign -c -p 4`. El aviso de colisión (`apkc/build.go:1906`)
+nombra ahora al **ganador real** —proyecto, primer AAR o el mismo AAR— en vez de suponer que fue el
+proyecto (`:1922` y `:1926`). Las falsificaciones salen en rojo y la suite `ok … 180.810s`
+(`aar_real_test.go:425` y `:462`).
+
+**Los dos gates de WISP (`b6b11c5`, que sube el submódulo `studio` a `50aa19e`; `b59d95f` y
+`27b379a`).** El gate por defecto escucha
+`requestWillBeSent` y `Network.webSocketCreated`, y exige **cero** peticiones y **cero** websockets
+ajenos al origen; el modo externo se abre solo con `APKC_WISP_EXTERNO=1`. `tools/entorno.sh` tiene
+las tareas `wisp` y `wisp-externo` (`tools/entorno.sh:123-145`): la segunda, sin la variable a 1,
+sale con **rc 2** y su propio texto, para que «omitido» no se lea como verde. La clasificación de
+`blob:`/`data:` es estricta con el origen incrustado. El resultado son **233/0** comprobaciones. La
+auditoría encontró que el claim de las tareas era falso —`rc 127` por el `case` incompleto—, que
+corrige `b59d95f`, y que `blob:`/`data:` no eran estrictos, que corrige `27b379a`. Queda abierta,
+como otro frente en curso, la pregunta de los WebSockets dentro de workers.
+
+**La allowlist de WISP, cerrada (`b7d08ae`, `6a79ff5`, `b64e731`).** Solo valen los **6** relays
+verificados y los destinos `repo1.maven.org:443` y `repo.maven.apache.org:443`
+(`apkc/depswisp.go:63-70` y `:90-93`); la coordenada Maven se exige `grupo:artefacto:version` sin
+traversal (`:452` y `:474`). `relayCanonico` compara la ruta con `EscapedPath` (`:400`), de modo que
+`/%77isp/` no se cuela; se rechazan `#`, `?` y userinfo (`:356` y `:370`), y el host de un destino
+extra no puede ser una IPv4 corta, octal, hexadecimal ni entera (`:164`). `abrirTCPCrudo` es privada
+(`apkc/wisp.go:424`) y solo `AbrirTCPAutorizado` la usa. Las 6 notas de la auditoría y el último
+**CONFIRMADO** quedan cerrados y aprobados. El módulo sigue **inerte**: fuera del wasm, sin puente y
+sin llamadores, así que `nucleoDisponible` falla cerrado.
+
+**Fronteras de este `§`.** 1) ApkShare **no** compila: se para en `MainActivity.java:179`, en
+`getExternalFilesDir()` sin receptor escrito; ese frente sigue en curso. 2) Falta el cableado del
+núcleo WISP a la página. 3) Queda la publicación. 4) No hubo gate final, ni push, ni CI, ni
+publicación, por orden del usuario. Nada de esto se re-ejecutó aquí; los oráculos citados son los de
+cada commit (`javac 17`, `javap`, `unzip -l`, `apksigner`, `zipalign` y las pruebas de `apkc` y
+`studio/`). Los selectores que reproducen las suites citadas:
+
+```sh
+cd apkc && go test -run 'Interfaz|Anonima|Acces|Captura' -count=1 .
+cd apkc && go test -run 'Ensanchamiento|Boolean|PostDelayed' -count=1 .
+cd apkc && go test -run 'LlamadaEncadenada' -count=1 .
+cd apkc && go test -run 'AarEnJar|AvisoDeColision|ApkConDosAars' -count=1 .
+tools/entorno.sh wisp
+APKC_WISP_EXTERNO=1 tools/entorno.sh wisp-externo
+```
 
 ## Fronteras del bloque, sin cerrar
 
