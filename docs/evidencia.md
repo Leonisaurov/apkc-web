@@ -13240,6 +13240,115 @@ node shim/navegador-sim.js \
   -test.run '^(TestArgumentosDeFirmaNoLlevanLaPassword|TestRecursosDeDependenciaEnElApk)$'
 ```
 
+## 280. Un método de `Object` sobre interfaz, el hueco del `try` y la captura del dedupe
+
+Registrado el 2026-11-24 sobre `50952c0`. Transfiere tres frentes ya integrados (`e96df44`,
+`27f1340` y `50952c0`): el primero llega con crítica emitida
+(`ses_df272ffdfffeejda4CdNKbyDT2`, APROBAR) y los otros dos con la crítica en curso. Aquí se
+re-ejecutaron solo los cinco tests puntuales de los dos primeros frentes, los dos del dedupe y los
+`grep` del bloque de comandos: sin suite, sin build de APK, sin capa wasm, sin gate, sin chromium,
+sin red, sin push y sin publicación. Las cifras de suite, de APK y de la capa wasm son del builder
+y van marcadas como **transferidas, no versionadas**.
+
+**A. Un método de `Object` sobre un receptor de interfaz es `invokevirtual` (`e96df44`).** La regla,
+medida con `javac 17 --release 8 -g:lines,source` y `javap -c`, es que javac solo se queda en la
+interfaz cuando el **tipo estático del receptor declara el método él mismo**; si lo hereda, javac
+usa `invokevirtual java/lang/Object.toString`. Se verificó sobre seis interfaces, entre ellas
+`ConHash`, que declara `hashCode` y sale `invokeinterface`; `ConToString`, que redeclara `toString`
+y sale `invokeinterface`; y `HeredaCS extends CharSequence`, que sale `Object`. Antes, el emisor
+elegía el opcode por el `ACC_INTERFACE` del receptor y escribía `invokeinterface` también en los
+casos heredados.
+
+**Los cambios de A.** `llamada` (`apkc/javaemisor.go:4470`) decide el opcode en `:4748-4764` y
+cambia a `invokevirt` con dueño `java/lang/Object` cuando el método está en `Object` y el tipo
+estático no lo declara (`:4760`). La tabla de qué declara `Object` está en `metodoDeObject`
+(`:1343`), la pregunta de si el tipo lo declara él mismo en `declaraElMismo` (`:1360`), y el
+interruptor de la falsificación en `objetoEnInterfazVirtual` (`:1337`). El campo `objeto`
+(`:617-620`) se llena en pereza en `:1344-1351` y retrocede sin ruido si el jar no trae
+`java/lang/Object` (`err == nil`).
+
+**El test de A.** `apkc/javaemisor_objeto_interfaz_test.go:99`, `:136` y `:156`: dex byte a byte
+de la anónima con la captura (`1336 B`); la falsificación da `1512` frente a `1496` del oráculo,
+con el primer byte distinto en `8`.
+
+**La medición de A, transferida.** De 17 a **19 de 21** clases byte a byte; APK de `305505 B` con
+`apksigner verify --verbose` v1/v2/v3 `true` y `zipalign -c -p 4` OK; suite `ok … 228.560s`. La
+crítica solo re-ejecutó los tres tests puntuales y la sonda de la regla.
+
+**Cómo se cuenta.** El recuento es **dex por clase**: se saca el dex de cada `.class` con el
+subcomando `dex` de apkc y se compara con `cmp` contra el dex de javac 17 de la misma clase. El
+`.class` crudo no vale para contar: además de las diferencias de código, difiere por el orden del
+pool. Con esa precisión, las cifras viejas de 12 de 21 eran `.class` crudo, y de 16 de 21 en
+adelante son dex por clase.
+
+**B. La excepción del `try` reutiliza el hueco al cerrarlo (`27f1340`).** En `MainActivity$6` el
+emisor guardaba la excepción en `astore 4`/`astore 5` y partía la tabla en dos filas (`59 107 122`
+y `110 119 122`); ahora usa `astore_3`/`astore 4` y una sola fila `59 119 122`, que es la de
+`javac 17`.
+
+**Los cambios de B.** `intenta` (`apkc/javaemisor.go:7881`) abre el ámbito como bloque (`:7932`) y
+lo cierra al final (`:8107`). `trozosDelCuerpo` (`:8123`) solo corta el rango si el salto sale de
+él, con el interruptor `cortaRangoEnTodoGoto` de `:8114` aplicado en `:8141`. La poda de marcos usa
+`muerteAmbito` (`:2570`), que se anota al cerrar el ámbito (`:2990`) y que `podaHuecos` aplica
+(`apkc/jvmframes.go:318`, `:1290` y `:1308`); el reparto de huecos queda tras `reutilizaHuecos`
+(`:2977`, comprobado en `:2992`).
+
+**El test de B.** `apkc/javaemisor_astore_try_test.go:107` y `:158`: dex byte a byte, más las dos
+falsificaciones. Con `reutilizaHuecos=false` el dex mide `1492` frente a `1492` de javac pero
+`copia` queda con 6 huecos y `vivos` con 4 (`:176`); con `cortaRangoEnTodoGoto=true` salen dos
+filas, `[0,46)` y `[49,57)`, frente a la única de javac (`:192`).
+
+**La medición de B, transferida.** 18 de 21 clases en su worktree, sin el frente A; dex de
+`16504 B`, igual al oráculo; APK con v1/v2/v3 `true`; suite `ok … 226.704s`.
+
+**El recuento final, medido.** El auditor `ses_df2710b6affetFQsreOOwjObLc` mide **20 de 21** clases
+byte a byte en dex por clase sobre el árbol combinado, con javac 17 compilando contra
+`-cp android.jar:android-support-v4.jar`; solo difiere `MainActivity.class`. El dex del build mide
+`16504 B`, igual al del oráculo. La interacción de A con B queda así cerrada por medición, no por
+analogía.
+
+**C. La captura del dedupe va a fichero, no por tubería (`50952c0`).** `avisosDurante`
+(`apkc/linker_dedupe_clave_test.go:62-64`) pasa a `capturarSalida(t, hacer)`
+(`apkc/sign_hostil_test.go:91-110`), que desvía `os.Stdout` a un fichero de `t.TempDir()` y lo
+restaura con `defer`, también si `hacer` revienta; se retira el import `io`, que era el de
+`os.Pipe`. No se relajó ninguna aserción: las cuatro llamadas a `avisosDurante` (tres directas y
+la de `enlazaConAvisos`, `:158-170`) y los seis `strings.Contains` sobre el aviso siguen iguales.
+
+**La medición de C, transferida.** En la capa wasm los fallos de nivel superior bajan de 15 a
+**13** sin aborto, y los dos `Dedupe` pasan con sus 7 subtests. Quedan 11 por `sin javac 17` y 2
+`multidex` que se re-ejecutan con `os.Args[0]` (`apkc/multidex_app_test.go:386`). La suite nativa
+da `ok … 210.640s` solo con `JAVAC17` exportado; sin esa variable hay 11 fallos ambientales
+previos.
+
+**Lo re-ejecutado aquí.** Los cinco tests de A y B pasan sobre el árbol combinado (`ok … 4.695s`)
+y los dos del dedupe también (`ok … 0.629s`, siete subtests), ya con la captura a fichero: el
+síntoma de C no reaparece en nativo. No se re-ejecutaron la suite, el APK ni la capa wasm; esas
+cifras quedan como transferidas, incluido el recuento de 20 de 21 en dex por clase, que es medición
+del auditor y no se repite aquí.
+
+```sh
+# A y B, tests puntuales sobre el árbol combinado; PASS en 4.695s
+T='TestElToStringSobreUnaInterfaz|TestElToStringDeUnaEditableCapturada|'
+T="$T"'TestFalsificacionDelToString|TestElTrySeDexa|TestFalsificacionDelHuecoDelTry'
+GOTMPDIR=$HOME/.cache/apkc-web/gotmp tcr -- go test -run "^($T)" -v .
+```
+
+```sh
+# el dedupe, con la captura a fichero; PASS en 0.629s con siete subtests
+GOTMPDIR=$HOME/.cache/apkc-web/gotmp tcr -- \
+  go test -run '^(TestDedupeDeValuesPorClave|TestDedupeDeStyleablesPorClave)$' -v .
+```
+
+```sh
+# los símbolos que sostienen cada afirmación
+grep -n 'objetoEnInterfazVirtual\|metodoDeObject\|declaraElMismo' apkc/javaemisor.go
+grep -n 'reutilizaHuecos\|cortaRangoEnTodoGoto\|muerteAmbito' apkc/javaemisor.go
+grep -n 'podaHuecos' apkc/jvmframes.go
+grep -n 'avisosDurante\|capturarSalida' apkc/linker_dedupe_clave_test.go \
+  apkc/sign_hostil_test.go
+grep -n 'os.Pipe\|"io"' apkc/linker_dedupe_clave_test.go   # sin resultados
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
