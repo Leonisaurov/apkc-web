@@ -28,7 +28,7 @@ jobs:
   prefetch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4  # TODO(sha): requiere red; gh api repos/actions/checkout/git/ref/tags/v4 --jq .object.sha
 
       - name: Normalizar las coordenadas
         env:
@@ -225,7 +225,7 @@ jobs:
             echo '`studio/` y publica con `tools/entorno.sh sitio`. No se versiona ningún binario.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4  # TODO(sha): requiere red; gh api repos/actions/upload-artifact/git/ref/tags/v4 --jq .object.sha
         with:
           name: deps-maven
           path: dist/

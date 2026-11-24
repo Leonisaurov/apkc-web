@@ -2,16 +2,31 @@
 
 Los tres workflows usan `uses: owner/action@vN`, que es una etiqueta móvil: quien controle el
 repositorio de la action puede reapuntarla a un commit distinto sin que cambie una línea de este
-repo. `gate.yml` además descarga `bundletool-all-1.18.3.jar` sin comprobar su suma.
+repo. `gate.yml` además descargaba `bundletool-all-1.18.3.jar` sin comprobar su suma.
 
-Esto quedó **pendiente por falta de red** en la sesión que cerró la cola de seguridad. Los
-comandos de abajo son los que hay que ejecutar cuando haya red; hasta entonces los workflows se
-dejan como están.
+## Estado (2026-11-23): lo que quedó hecho y lo que sigue pendiente por red
+
+Hecho, sin necesitar red:
+
+- **bundletool con suma**: el paso «oráculo bundletool» de `gate.yml` ejecuta `sha256sum -c -`
+  contra la suma medida en local (abajo) y aborta el job si el jar descargado no coincide.
+- **Permisos mínimos**: los cinco jobs de `gate.yml` que solo leen el repo (`rapido`, `pesado`,
+  `webkit`, `safari`, `art`) declaran `permissions: contents: read`. `publicar` conserva
+  `contents: write`. `android-jar.yml` y `deps-maven.yml` ya lo declaraban a nivel de workflow.
+- **CSP con `form-action 'none'`** en la política que genera `tools/sitio.sh` (la que se inyecta en
+  `studio/sw.js` y en el `<meta>` de `index.html`). El chequeo que aborta si queda el marcador
+  `__APKC_CSP__` sin sustituir sigue intacto (`tools/sitio.sh:141-144`).
+
+Pendiente por red: **ninguna `uses:` está fijada a un SHA**. No hay ningún SHA de action en la
+documentación local y esta sesión no tuvo red; adivinarlo sería peor que dejar la etiqueta visible.
+Cada `uses:` lleva ahora el comentario `# TODO(sha): requiere red; gh api repos/<owner>/<repo>/git/ref/tags/vN --jq .object.sha`.
+Para auditarlo, `grep -c "@v[0-9]" .github/workflows/*.yml` debe devolver exactamente las líneas
+marcadas con `TODO(sha)` (hoy, 30 en los tres `.yml`).
 
 ## Fijar cada action por SHA
 
-`gh api repos/{owner}/{repo}/commits/{ref} --jq .sha` resuelve una etiqueta o una rama al commit
-al que apunta hoy. Para las actions que aparecen en los workflows:
+`gh api repos/{owner}/{repo}/git/ref/tags/{tag} --jq .object.sha` resuelve una etiqueta al SHA de
+su objeto. Las actions que aparecen en los workflows:
 
 ```sh
 for ref in \
@@ -26,7 +41,7 @@ for ref in \
 do
   repo=${ref%@*}
   tag=${ref#*@}
-  sha=$(gh api "repos/$repo/commits/$tag" --jq .sha)
+  sha=$(gh api "repos/$repo/git/ref/tags/$tag" --jq .object.sha)
   printf '%s -> %s\n' "$ref" "$sha"
 done
 ```
@@ -38,9 +53,10 @@ comentario, que es lo que GitHub recomienda para que un lector sepa qué versió
 - uses: actions/checkout@<sha>  # v4
 ```
 
-Una etiqueta anotada necesita un paso más: `commits/{ref}` ya devuelve el commit, pero si se usa
-`git/tags/{sha}` hay que resolver el objeto `tag` a su `commit` con
-`gh api repos/{owner}/{repo}/git/tags/{sha} --jq .object.sha`.
+Una etiqueta anotada necesita un paso más: si `git/ref/tags/{tag}` devuelve un objeto `tag`
+(comprobable con `--jq .object.type`), su SHA no es el del commit; se resuelve con
+`gh api repos/{owner}/{repo}/git/tags/{sha} --jq .object.sha`. `git/ref/tags` ya devuelve el
+commit cuando la etiqueta es ligera.
 
 ## bundletool con suma
 
@@ -51,7 +67,7 @@ La suma del jar que usa `gate.yml`, medida en local sobre las dos copias disponi
 a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  bundletool-all-1.18.3.jar
 ```
 
-Cuando haya red, el paso de descarga de `gate.yml` debe comprobarla antes de usar el jar:
+El paso de descarga de `gate.yml` la comprueba antes de usar el jar:
 
 ```sh
 echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool/bundletool-all-1.18.3.jar" | sha256sum -c -

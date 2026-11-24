@@ -107,7 +107,7 @@ csp = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + " ".join(ha
        "; require-trusted-types-for 'script'; trusted-types apkc-studio; " +
        "worker-src 'self'; connect-src 'self'; img-src 'self' data:; " +
        "style-src 'self'; font-src 'self' data:; object-src 'none'; " +
-       "base-uri 'none'; frame-ancestors 'none'")
+       "form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
 sw = raiz / "sw.js"
 sw.write_text(sw.read_text().replace("__APKC_CSP__", csp))
 # B1: mientras el SW no controla, la primera navegación no tiene cabeceras. Un <meta> con la
