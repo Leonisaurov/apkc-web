@@ -290,7 +290,8 @@ Fase 0 y deja la Fase 1 como trabajo activo; la Fase J está cerrada y la Fase K
 nativo.
 
 La pregunta de red en runtime **no se reabre**: la regla 4 sigue vigente y la respuesta es no.
-Proxy y Wisp siguen descartados.
+WISP como módulo opcional opt-in en implementación (§254); el modo por defecto sigue sin
+peticiones ajenas.
 
 ## 6. Registro de estado
 
@@ -319,6 +320,7 @@ hot swap** (§249, `9a61a23`). Quedan abiertas las **Actions por tag**, pendient
   fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
 - Opción A (importar desde disco u OPFS) es la vía.
 - Vendorizar un catálogo curado queda detrás.
-- Proxy y Wisp siguen descartados.
+- WISP como módulo opcional opt-in en implementación (§254); el modo por defecto sigue sin
+  peticiones ajenas.
 - Sigue prohibido cualquier acceso de red en runtime; la carga inicial y la compilación sin
   dependencias nuevas conservan el gate de cero peticiones fuera del origen.

@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§253`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§254`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11273,6 +11273,77 @@ cd apkc && go test -run 'TestVerificarV4NoLeeUnIdsigEnorme|TestVerificarV4NoLeeU
 cd apkc && go test -run 'TestCheckAbortaConDosJarsQueDefinenLaMismaClase|TestCheckAbortaConAarYJarQueDefinenLaMismaClase|TestCheckRechazaDosFuentesConLaMismaClase|TestCheckAbortaConUnFuenteQueRedefineUnaClaseDelJarReal' -v .
 cd apkc && go test -run 'TestLaLlamadaConArgumentosDeMasSeRechazaPorContrato|TestTipoCualificadoLocalContraJavac17|TestMoldeDeArgumentoContraJavac17|TestAppAdapterDeApkShareCompilaContraJavac17|TestLaSubidaDeUnaReferenciaAlEscribirUnCampoDexaComoJavac17' -v .
 cd studio && node prueba.js
+```
+
+## 254. WISP: la spec, el TLS que no llega en JS y los relays que responden
+
+Medido el 2026-11-23 por el investigador `ses_df473bdbfffelKQp8juy4AI5Jp`. Este `§` transfiere su
+salida y los comandos que la reproducen; no se re-ejecutó nada aquí: sin gate, sin chromium y sin
+red desde este árbol. WISP es el proxy de sockets TCP/UDP sobre un WebSocket que `§253` deja como
+módulo opt-in, no como camino por defecto; lo que sigue registra qué dice la spec, por qué un
+cliente en JS puro no sirve para Maven y qué relays contestan.
+
+**La spec, v1.2.** Fuente `github.com/MercuryWorkshop/wisp-protocol`, rama `v1`, **CC-BY-4.0**,
+atribuida a **@ading2210**; no hay copia en el repo, como ya decía `§253`. Cada paquete es
+`[type u8][streamID u32 LE][payload]` y todo va en **little-endian**. Los tipos:
+
+| tipo | nombre | payload |
+| --- | --- | --- |
+| `0x01` | `CONNECT` | `[streamType u8 (1 = TCP)][dstPort u16 LE][hostname UTF-8...]` |
+| `0x02` | `DATA` | los bytes del flujo |
+| `0x03` | `CONTINUE` | `[bufferRemaining u32 LE]`, en **paquetes** |
+| `0x04` | `CLOSE` | razón: `0x41`-`0x49` del servidor, `0x81` del cliente |
+
+Dos trampas del contrato: el servidor manda un `CONTINUE` **inicial con `streamID` 0** que hay que
+esperar antes de considerarse conectado, y la URL del endpoint **tiene que acabar en `/`**. El
+`bufferPackets` de ese `CONTINUE` inicial se observó entre **128 y 2147483647**, así que **no se
+asume 128**: el cliente lo lee y se gobierna por él. Todo lo anterior sale de leer los ficheros de
+la rama `v1`, sin copia local.
+
+**HTTPS por WISP: no viable con JS puro.** `curl http://repo1.maven.org/maven2/` responde un 301 a
+`501-https-required.html`, así que Maven Central hoy exige TLS. Por un WISP real,
+`wss://wisp.mercurywork.shop/wisp/`, `example.com:80` devuelve `HTTP/1.1 200 OK`: el passthrough de
+TCP funciona. Pero `repo1.maven.org:443` devuelve **HTTP en claro** —414 B y ni un `ServerHello`—:
+el flujo TLS viaja tal cual por el WebSocket, así que el relay puede leerlo y sustituirlo, o sea,
+queda en posición de MITM. Con JS puro no hay forma de cerrar TLS de extremo a extremo sin que el
+relay vea el contenido.
+
+**La vía que queda: `crypto/tls` de Go sobre un `net.Conn` que habla WISP.** El módulo se compila a
+`GOOS=js` y Go hace el handshake TLS encima del `net.Conn`, de modo que el relay solo transporta
+bytes cifrados. Coste estimado **~2-3 MB más de wasm**, y las CAs hay que **embeberlas**, porque en
+`js/wasm` no existe `SystemCertPool`. Es **HIPÓTESIS sin compilar** —no se midió el tamaño real ni
+el handshake— y su núcleo está en implementación.
+
+**Relays.** El gist `CompactAIOfficial/bedf67779c2afd8bbd0225328ac210c9` lista **98** entradas; un
+handshake WISP real con Node 26 hizo contestar a **54 (27 hosts únicos)**. Las mejores latencias de
+ese handshake, en ms:
+
+| endpoint | ms |
+| --- | --- |
+| `wisp.mercurywork.shop/wisp/` | 400 |
+| `terbiumon.top/wisp/` | 430 |
+| `anura.pro/wisp/` | 447 |
+| `lichology.com/wisp/` | 509 |
+| `wisp.waved.site/w/` | 515 |
+| `gointospace.app/wisp/` | 519 |
+
+42 fallaron, 1 agotó el tiempo y 1 se anunció como **v2** mandando un `INFO` primero, que este
+cliente no espera. Son **pruebas, no auditoría**: nadie revisó quién opera esos relays, y por eso el
+`wisp-relays.json` y el aviso al usuario siguen pendientes.
+
+**Licencias.** Spec **CC-BY-4.0**; `wisp-js` **LGPL-3.0**; `wisp-server-python` **AGPL-3.0**;
+`epoxy-tls` **sin `LICENSE`**; `libcurl.js` sin verificar. Con un cliente propio solo queda la
+atribución **CC-BY** a la spec.
+
+**Fronteras de este `§`.** El módulo **no está implementado** ni se probó en la pestaña: no se
+afirma que funcione. Quedan abiertos el núcleo WISP+TLS (en curso), la UI y el aviso, el
+`wisp-relays.json`, los dos gates —el de por defecto con **cero peticiones ajenas** y el del modo
+externo— y la publicación. El sitio público no está actualizado y el push y el CI siguen pendientes
+de orden. El sondeo de relays no se versionó: se hizo con un cliente mínimo en Node 26 sobre el
+gist citado, y versionarlo sigue pendiente para que el número se reproduzca sin él.
+
+```sh
+curl http://repo1.maven.org/maven2/
 ```
 
 ## Fronteras del bloque, sin cerrar
