@@ -26,6 +26,17 @@ import (
 // plazoAperturaWISP acota la espera del evento `open`.
 const plazoAperturaWISP = 30 * time.Second
 
+// umbralBufferWISP es el máximo de bytes que se dejan encolados en el propio
+// WebSocket (`bufferedAmount`) antes de esperar a que drenen. `ws.send` nunca
+// falla por tamaño: el navegador acepta el mensaje y lo guarda en memoria, así
+// que sin esta espera un Write grande crece el heap de la pestaña sin que nadie
+// lo acote. 1 MiB son 64 mensajes del tamaño máximo de DATA.
+const umbralBufferWISP = 1 << 20
+
+// plazoDrenajeWISP acota la espera de drenaje: si el socket lleva este tiempo
+// sin bajar del umbral, el envío falla en vez de bloquear al flujo para siempre.
+const plazoDrenajeWISP = 10 * time.Second
+
 type transporteWebSocket struct {
 	ws js.Value
 
@@ -33,6 +44,8 @@ type transporteWebSocket struct {
 
 	colaMu sync.Mutex
 	cola   [][]byte
+
+	plazoDrenaje time.Duration
 
 	mu      sync.Mutex
 	err     error
@@ -49,8 +62,9 @@ func AbrirWebSocketWISP(direccion string) (TransporteWISP, error) {
 		return nil, errors.New("wisp: URL de WebSocket vacía")
 	}
 	t := &transporteWebSocket{
-		cerrada: make(chan struct{}),
-		aviso:   make(chan struct{}, 1),
+		cerrada:      make(chan struct{}),
+		aviso:        make(chan struct{}, 1),
+		plazoDrenaje: plazoDrenajeWISP,
 	}
 	abierto := make(chan error, 1)
 
@@ -148,9 +162,43 @@ func (t *transporteWebSocket) Enviar(b []byte) error {
 	if t.ws.Get("readyState").Int() != 1 {
 		return net.ErrClosed
 	}
+	if err := t.esperarDrenaje(); err != nil {
+		return err
+	}
 	arreglo := js.Global().Get("Uint8Array").New(len(b))
 	js.CopyBytesToJS(arreglo, b)
 	return t.enviarSeguro(arreglo)
+}
+
+// esperarDrenaje espera a que `bufferedAmount` baje del umbral antes de mandar
+// otro mensaje. En wasm, `time.Sleep` devuelve el control al bucle de eventos de
+// JavaScript, que es quien vacía el búfer del socket; no es una espera activa.
+func (t *transporteWebSocket) esperarDrenaje() error {
+	plazo := t.plazoDrenaje
+	if plazo <= 0 {
+		plazo = plazoDrenajeWISP
+	}
+	limite := time.Now().Add(plazo)
+	for {
+		pendiente := t.ws.Get("bufferedAmount")
+		if pendiente.IsUndefined() || pendiente.IsNull() {
+			return nil
+		}
+		enCola := pendiente.Float()
+		if enCola <= float64(umbralBufferWISP) {
+			return nil
+		}
+		select {
+		case <-t.cerrada:
+			return t.error()
+		default:
+		}
+		if time.Now().After(limite) {
+			return fmt.Errorf("wisp: el WebSocket lleva %v con %.0f bytes sin drenar (umbral %d)",
+				plazo, enCola, umbralBufferWISP)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // enviarSeguro convierte en error la excepción de JavaScript que lanza `send`

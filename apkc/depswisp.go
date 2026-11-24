@@ -21,8 +21,11 @@ package main
 // `epoxy`: el framing, el control de flujo y el TLS son código de este repo.
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"net"
@@ -64,6 +67,12 @@ func RelaysWISP() []string {
 // ConfigWISP configura una conexión. `Habilitado` es el interruptor opt-in y
 // nace en false. `RootCAs` es obligatorio en `js/wasm`, donde no hay almacén del
 // sistema; en nativo, si es nil se usa el del sistema.
+//
+// El almacén de `js/wasm` tiene que salir de un PEM local cuya huella sha256 esté
+// fijada en la interfaz (o en este repo), no de una descarga: si el bundle
+// llegara por el relay, el relay pasaría a ser una CA y podría firmar el
+// certificado de cualquier host. `CargarCAsPEMFijadas` es la vía recomendada
+// cuando se conoce la huella.
 type ConfigWISP struct {
 	Habilitado bool
 	Relay      string
@@ -85,20 +94,80 @@ func NuevaConfigWISP() ConfigWISP {
 
 // CargarCAsPEM construye un almacén a partir de uno o más bundles PEM. Es la vía
 // para inyectar CAs en `js/wasm`, donde `PoolDeSistema` no existe.
+//
+// Es estricta a propósito: un bundle con un bloque que no sea `CERTIFICATE`, un
+// certificado X.509 que no parsea o bytes que no son PEM es un error, no algo
+// que se salte en silencio. Añadir un certificado de más al almacén equivale a
+// confiar en quien lo puso; si el bundle viniera del relay, ese relay podría
+// firmar el certificado de Maven o de Google. Nada se descarga aquí: el PEM lo
+// pasa el llamador desde un fichero local verificado.
 func CargarCAsPEM(bundles ...[]byte) (*x509.CertPool, error) {
-	pool := x509.NewCertPool()
-	validos := 0
-	for i, pem := range bundles {
-		if pool.AppendCertsFromPEM(pem) {
-			validos++
-			continue
-		}
-		return nil, fmt.Errorf("wisp: el bundle PEM %d no contiene ningún certificado válido", i+1)
-	}
-	if validos == 0 {
+	if len(bundles) == 0 {
 		return nil, errors.New("wisp: no se recibió ningún bundle PEM")
 	}
+	pool := x509.NewCertPool()
+	total := 0
+	for i, bundle := range bundles {
+		n, err := anadirCAsPEM(pool, bundle)
+		if err != nil {
+			return nil, fmt.Errorf("wisp: bundle PEM %d: %w", i+1, err)
+		}
+		total += n
+	}
+	if total == 0 {
+		return nil, errors.New("wisp: no se recibió ningún certificado X.509 válido")
+	}
 	return pool, nil
+}
+
+// anadirCAsPEM recorre un bundle bloque a bloque. Devuelve cuántos certificados
+// añadió y el primer defecto que encuentre, en vez de ignorarlo.
+func anadirCAsPEM(pool *x509.CertPool, bundle []byte) (int, error) {
+	resto := bundle
+	añadidos := 0
+	for {
+		inicio := bytes.Index(resto, []byte("-----BEGIN "))
+		if inicio < 0 {
+			if len(bytes.TrimSpace(resto)) > 0 {
+				return añadidos, fmt.Errorf("%d bytes al final que no son PEM", len(bytes.TrimSpace(resto)))
+			}
+			return añadidos, nil
+		}
+		if len(bytes.TrimSpace(resto[:inicio])) > 0 {
+			return añadidos, fmt.Errorf("%d bytes antes del primer bloque que no son PEM", len(bytes.TrimSpace(resto[:inicio])))
+		}
+		bloque, siguiente := pem.Decode(resto[inicio:])
+		if bloque == nil {
+			return añadidos, errors.New("bloque PEM ilegible")
+		}
+		if bloque.Type != "CERTIFICATE" {
+			return añadidos, fmt.Errorf("bloque PEM de tipo %q; solo se aceptan CERTIFICATE", bloque.Type)
+		}
+		cert, err := x509.ParseCertificate(bloque.Bytes)
+		if err != nil {
+			return añadidos, fmt.Errorf("certificado X.509 inválido: %w", err)
+		}
+		pool.AddCert(cert)
+		añadidos++
+		resto = siguiente
+	}
+}
+
+// HuellaCAsPEM devuelve el sha256 del bundle tal cual, para fijarlo en el código
+// y comprobarlo antes de construir el almacén.
+func HuellaCAsPEM(bundle []byte) [sha256.Size]byte {
+	return sha256.Sum256(bundle)
+}
+
+// CargarCAsPEMFijadas exige que el bundle tenga la huella esperada y después
+// aplica las mismas comprobaciones que CargarCAsPEM. La huella se fija en el
+// código o en la interfaz y el PEM se lee de un fichero local: así ni un cambio
+// en el fichero ni un bundle servido por el relay pasan inadvertidos.
+func CargarCAsPEMFijadas(bundle []byte, huella [sha256.Size]byte) (*x509.CertPool, error) {
+	if real := HuellaCAsPEM(bundle); real != huella {
+		return nil, fmt.Errorf("wisp: la huella sha256 del bundle de CAs no coincide: %x != %x", real, huella)
+	}
+	return CargarCAsPEM(bundle)
 }
 
 // Validar comprueba que el módulo está activado y que la URL del relay tiene la

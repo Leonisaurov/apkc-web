@@ -27,7 +27,7 @@ func TestWISPCodificarYDecodificar(t *testing.T) {
 		{"CONNECT", paqueteConnect(7, "ejemplo.test", 443), tipoWISPConnect, 7, nil},
 		{"DATA", paqueteData(9, []byte("hola")), tipoWISPData, 9, []byte("hola")},
 		{"CONTINUE", paqueteContinue(3, 2147483647), tipoWISPContinue, 3, []byte{0xff, 0xff, 0xff, 0x7f}},
-		{"CLOSE", paqueteClose(4, motivoCierreCliente), tipoWISPClose, 4, []byte{motivoCierreCliente}},
+		{"CLOSE", paqueteClose(4, motivoCierreVoluntario), tipoWISPClose, 4, []byte{motivoCierreVoluntario}},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nombre, func(t *testing.T) {
@@ -128,6 +128,7 @@ type relayPrueba struct {
 	flujos    map[uint32]*flujoRelay
 	capturado bytes.Buffer
 	datos     int
+	cierres   map[uint32]byte
 }
 
 // nuevoRelayPrueba arranca un relay en memoria que manda el CONTINUE inicial y
@@ -141,6 +142,7 @@ func nuevoRelayPrueba(t *testing.T, buffer uint32, eco bool, alConectar func(uin
 		eco:        eco,
 		alConectar: alConectar,
 		flujos:     map[uint32]*flujoRelay{},
+		cierres:    map[uint32]byte{},
 	}
 	t.Cleanup(func() {
 		_ = r.extremo.Cerrar()
@@ -201,6 +203,7 @@ func (r *relayPrueba) procesar(p paqueteWISP) {
 		}
 	case tipoWISPClose:
 		r.mu.Lock()
+		r.cierres[p.flujo] = p.carga[0]
 		f := r.flujos[p.flujo]
 		r.mu.Unlock()
 		if f != nil {
@@ -253,6 +256,29 @@ func (r *relayPrueba) datosRecibidos() int {
 	return r.datos
 }
 
+// motivoCierre devuelve el motivo del CLOSE que el cliente mandó para un flujo.
+func (r *relayPrueba) motivoCierre(id uint32) (byte, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	motivo, ok := r.cierres[id]
+	return motivo, ok
+}
+
+// esperarCierre espera a que el cliente envíe un CLOSE para un flujo y devuelve
+// su motivo.
+func esperarCierre(t *testing.T, r *relayPrueba, id uint32) byte {
+	t.Helper()
+	limite := time.Now().Add(2 * time.Second)
+	for time.Now().Before(limite) {
+		if motivo, ok := r.motivoCierre(id); ok {
+			return motivo
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("el cliente no mandó CLOSE para el flujo %d", id)
+	return 0
+}
+
 func (r *relayPrueba) capturadoBytes() []byte {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -284,6 +310,7 @@ func TestWISPControlDeFlujo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
+	idFlujo := conexion.(*flujoWISP).id
 	if _, err := conexion.Write([]byte("a")); err != nil {
 		t.Fatalf("primer Write: %v", err)
 	}
@@ -307,7 +334,7 @@ func TestWISPControlDeFlujo(t *testing.T) {
 		t.Fatalf("el relay recibió %d DATA mientras el crédito era 0", n)
 	}
 
-	relay.enviar(paqueteContinue(1, 5))
+	relay.enviar(paqueteContinue(idFlujo, 5))
 	select {
 	case err := <-tercero:
 		if err != nil {
@@ -329,7 +356,7 @@ func TestWISPCierreDelRelay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AbrirTCP: %v", err)
 		}
-		relay.enviar(paqueteClose(1, 0x41))
+		relay.enviar(paqueteClose(conexion.(*flujoWISP).id, 0x41))
 		_, err = conexion.Read(make([]byte, 8))
 		if err == nil || !strings.Contains(err.Error(), "0x41") {
 			t.Fatalf("Read tras CLOSE = %v, se esperaba el motivo 0x41", err)
@@ -345,7 +372,7 @@ func TestWISPCierreDelRelay(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AbrirTCP: %v", err)
 		}
-		relay.enviar(paqueteClose(1, motivoCierreVoluntario))
+		relay.enviar(paqueteClose(conexion.(*flujoWISP).id, motivoCierreVoluntario))
 		_, err = conexion.Read(make([]byte, 8))
 		if !errors.Is(err, io.EOF) {
 			t.Fatalf("Read tras CLOSE voluntario = %v, se esperaba io.EOF", err)
