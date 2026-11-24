@@ -114,7 +114,9 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      «tú eres el subagente, yo soy el orquestador; no delegues, ejecuta y verifica en tu ruta». Los
      gates solo se corren con autorización expresa del usuario; para iterar, pruebas focales. Tras
      integrar y verificar un worktree —su contenido ya está commiteado— el orquestador puede borrarlo
-     con `force: true` sin volver a pedir confirmación.
+     con `force: true` sin volver a pedir confirmación. El usuario autoriza **hasta 8 subagentes en
+     paralelo**: mantén la cola llena con trabajo independiente; el límite lo marca esa autorización,
+     no la prudencia de tokens.
 
 ## Entorno (Termux/Android aarch64)
 
