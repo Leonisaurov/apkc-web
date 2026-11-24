@@ -13921,6 +13921,45 @@ grep -rn -- '--escribir' apkc/
 # temperatura: remitida a §287
 ```
 
+## 289. Los dos avisos del intérprete de `preview`: permiso concedido e `invalidate` sin redibujado
+
+Medido el 2026-11-24 sobre el binario compartido `46a9a792`, con las dos APK reales ya construidas
+en `~/.cache/apkc-web/emular/`. Antes, `apkc preview` sobre `chatbt` daba **1 aviso** —
+`com.hola.chatbt.MainActivity.checkSelfPermission(Ljava/lang/String;)I no está en el dex ni en los
+stubs: se devuelve el cero de I`— y `apkc preview --pulsar id/lienzo` sobre `lienzo` daba **1 aviso**
+—`com.hola.lienzo.Lienzo.invalidate()V … se devuelve el cero de V`—. Después de los dos stubs
+(`apkc/previewinterprete.go`, casos `checkSelfPermission` e `invalidate`), los mismos comandos dan
+**0 avisos** en las dos APK.
+
+`checkSelfPermission` devuelve `int32(0)`, que es `PERMISSION_GRANTED`: el valor que ya entregaba el
+cero implícito, así que la rama «concedido» no se mueve. Con el guion
+`--escribir id/entrada/hola --pulsar id/enviar` las capturas antes y después son las mismas cinco,
+incluida `Bluetooth listo - 0 vinculos - 2 mensajes`. `invalidate` devuelve el cero de `V` sin
+captura ni contador: `pintaVistasPropias` (`apkc/previewdibujo.go:102-127`) ejecuta el `onDraw` una
+sola vez al construir la pantalla, con una instancia nueva de la vista
+(`apkc/previewdibujo.go:133-169`); no hay ciclo de fotogramas ni estado de la instancia que viaje,
+así que programar un redibujado sería inventar lo que el modelo no puede medir. Tras el clic en
+`id/lienzo` siguen las 17 operaciones y los textos `fotograma 0`, `toques 0`, igual que antes.
+
+Los tests (`apkc/previewstubspermisos_test.go`) comprueban el valor y la ausencia de aviso con
+`intentaStub`, y falsifican el aviso con el interruptor `stubsFrameworkActivos=false` por la vía
+real de `invoca`. `go test ./...` → `ok github.com/ajinasokan/apkc` en las dos pasadas
+(238.447s y 184.087s).
+
+```sh
+cd apkc && go build -o ~/.cache/apkc-web/apkc-preview-base .
+cd apkc && go build -o ~/.cache/apkc-web/apkc-stubs .
+cd apkc && go test -run 'TestStubCheckSelfPermissionConcedido|TestStubInvalidateSinHuella|TestFalsificacionAvisoDeLosDosStubs' -v .
+cd apkc && go test ./...
+# antes / después, con cada binario
+~/.cache/apkc-web/apkc-preview-base preview ~/.cache/apkc-web/emular/chatbt/proyecto/build/app.apk > ~/.cache/apkc-web/chatbt-antes.json
+~/.cache/apkc-web/apkc-stubs preview ~/.cache/apkc-web/emular/chatbt/proyecto/build/app.apk > ~/.cache/apkc-web/chatbt-despues.json
+python3 -c 'import json,os;f=lambda p:len(json.load(open(os.path.expanduser(p)))["ejecucion"].get("avisos",[]));print(f("~/.cache/apkc-web/chatbt-antes.json"),f("~/.cache/apkc-web/chatbt-despues.json"))'  # 1 0
+~/.cache/apkc-web/apkc-preview-base preview --pulsar id/lienzo ~/.cache/apkc-web/emular/lienzo/final/com.hola.lienzo/build/app.apk > ~/.cache/apkc-web/lienzo-antes.json
+~/.cache/apkc-web/apkc-stubs preview --pulsar id/lienzo ~/.cache/apkc-web/emular/lienzo/final/com.hola.lienzo/build/app.apk > ~/.cache/apkc-web/lienzo-despues.json
+python3 -c 'import json,os;f=lambda p:len(json.load(open(os.path.expanduser(p)))["ejecucion"].get("avisos",[]));print(f("~/.cache/apkc-web/lienzo-antes.json"),f("~/.cache/apkc-web/lienzo-despues.json"))'  # 1 0
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por

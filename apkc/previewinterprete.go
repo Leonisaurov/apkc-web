@@ -4010,7 +4010,8 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	if !stubsFrameworkActivos {
 		switch nombre {
 		case "getMainLooper", "getPackageManager", "getApplicationContext",
-			"getInstalledPackages", "newSingleThreadExecutor", "setView", "setCancelable":
+			"getInstalledPackages", "newSingleThreadExecutor", "setView", "setCancelable",
+			"checkSelfPermission", "invalidate":
 			return nil, false, nil
 		}
 	}
@@ -4094,6 +4095,14 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 0 && esContexto() {
 			return &objetoDalvik{clase: "Landroid/app/Application;",
 				campos: map[string]any{"esContexto": true}}, true, nil
+		}
+	case "checkSelfPermission":
+		// PERMISSION_GRANTED es cero en Android. La vista previa no tiene sistema de permisos;
+		// conceder es lo que ya hacía el cero implícito del intérprete, así que el valor explícito
+		// quita el aviso sin cambiar la rama que hoy se ejecuta. Se atiende tanto la llamada sobre
+		// la actividad (Context) como la estática de ContextCompat.
+		if len(vals) == 1 && (esContexto() || es("Landroidx/core/content/ContextCompat;")) {
+			return int32(0), true, nil
 		}
 	case "getInstalledPackages":
 		// no hay sistema de paquetes en la vista previa: la lista es vacía, pero no nula, para que
@@ -4403,6 +4412,15 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		// para construir sus filas
 		if len(vals) == 0 && obj != nil && m.actividad != nil {
 			return m.actividad, true, nil
+		}
+	case "invalidate":
+		// `View.invalidate()` solo pide al framework un dibujado futuro. El modelo ejecuta el
+		// `onDraw` una vez al construir la pantalla, con una instancia nueva de la vista, y no tiene
+		// ciclo de fotogramas: no hay redibujado que programar ni estado de la instancia que viaje.
+		// Se silencia el aviso y no se deja huella (ni captura ni contador), porque publicar un
+		// efecto que el modelo no puede dibujar sería inventar lo que la app no ha medido.
+		if len(vals) == 0 && esVista() {
+			return nil, true, nil
 		}
 	case "setOnClickListener":
 		if len(vals) == 1 {
