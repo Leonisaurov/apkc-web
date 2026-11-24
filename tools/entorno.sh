@@ -11,6 +11,8 @@
 #   tools/entorno.sh wasm              # suite en el hospedador con forma de navegador
 #   tools/entorno.sh gate              # binarios + studio/e2e.sh (la página de punta a punta)
 #   tools/entorno.sh banco             # banco/banco.sh (necesita rish para los caminos del aparato)
+#   tools/entorno.sh wisp              # falsificación de los dos gates WISP, sin red ni navegador
+#   tools/entorno.sh wisp-externo      # gate del modo externo; solo con APKC_WISP_EXTERNO=1 (si no, rc 2)
 #   tools/entorno.sh jar [api]         # ruta del android.jar local o lo instala con sdkmanager (fuente oficial)
 #   tools/entorno.sh sitio             # empaqueta sitio/ listo para subir con surge
 #   tools/entorno.sh publicar          # empaqueta, publica en Surge y verifica desde el host
@@ -117,6 +119,30 @@ case "$tarea" in
       git clone --depth 1 https://github.com/Leonisaurov/apkc-harness.git "$APKC_HARNESS" >&2
     fi
     printf '%s\n' "$APKC_HARNESS/zipcheck.py"
+    ;;
+  wisp)
+    # Falsificación de los dos gates del módulo WISP con la regla real (studio/wisp-gates.js):
+    # sin navegador y sin red, comprueba que rechazan lo que tienen que rechazar.
+    ( cd "$RAIZ" && node studio/prueba-wisp-gates.mjs )
+    ;;
+  wisp-externo)
+    # El gate del modo externo abre relays de terceros: nunca por defecto. Sin la variable a 1 se
+    # dice el motivo y se sale 2, para que «omitido» no se confunda con un verde.
+    if [ "${APKC_WISP_EXTERNO:-}" != 1 ]; then
+      printf 'gate externo omitido: fija APKC_WISP_EXTERNO=1 para abrir relays de terceros\n' >&2
+      exit 2
+    fi
+    # Sin compilar nada nuevo: usa el wasm y el fixture que ya dejó studio/e2e.sh o los que el
+    # usuario pase por entorno (las mismas variables que prueba-pestana.js).
+    APK_FIXTURE=$(find "$TMP/studio-e2e-java" -name app.apk -path "*/build/*" 2>/dev/null | head -1 || true)
+    CHROME=$(command -v chromium || command -v chromium-browser || command -v google-chrome || true)
+    ( cd "$RAIZ/studio" && \
+      APKC_WISP_EXTERNO=1 CHROME_BIN="${CHROME_BIN:-$CHROME}" \
+      APKC_WASM="${APKC_WASM:-$TMP/apkc-wasm.wasm}" \
+      APK_EJEMPLO="${APK_EJEMPLO:-$APK_FIXTURE}" \
+      KS_EJEMPLO="${KS_EJEMPLO:-$HOME/.android/debug.keystore}" \
+      ANDROID_JAR="${ANDROID_JAR:-$(jar_del_sdk 34 || true)}" \
+      node prueba-pestana.js )
     ;;
   gate)
     construye_binarios
