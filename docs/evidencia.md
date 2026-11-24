@@ -13704,7 +13704,7 @@ cd studio && node prueba.js
 cd studio && tcr -c 4 -m 3G env CHROME_BIN=/usr/bin/brave … node prueba-pestana.js
 ```
 
-## 286. La última fila de `LineNumberTable` cierra la paridad de ApkShare y el jar de la pestaña deja de romper `getAdapter`
+## 286. La última fila de `LineNumberTable` y el `getAdapter` del stub
 
 Registrado el 2026-11-24 por transferencia de dos frentes: `e47948b` (integrado como `7ca4675`)
 y `750df74` (integrado como `0809ad6`, la cabecera de este worktree). Las mediciones son de los
@@ -13820,7 +13820,8 @@ cambiado a `Math.max(alto, …)` y con escala 0,5 el alto no escalaba (48 en vez
 `prueba: todo en orden`. Corregido en `173c6bb`/`3dc1ed0`.
 
 **Deuda del emulador.** Radio de ~2 dp, acento de 1 px, sin barra de estado ni de navegación y sin
-densidad 213 real, tema claro fijo; `prueba-navegador.js:780-795` aún no cubre escala <1 ni bordes.
+densidad 213 real, tema claro fijo; `prueba-navegador.js:862-880` y `:967-970` aún no cubren escala <1
+ni bordes (las citas anteriores `:780-795`/`:927-930` estaban desplazadas).
 El CDP no se ejecutó por temperatura.
 
 **B. Hot swap sin selector (`12e065a`/`1547b76`).** Builder `ses_df1ac57c5ffeNSAdj8huY0JjNj`,
