@@ -9,6 +9,10 @@ package main
 //     «no se cae el test», no «no hay pánico». Ahora el prefijo del pánico recuperado es un fallo.
 //
 // El paquete se arma en el test con archive/zip y bytes: no se versiona ningún binario (regla 2).
+//
+// R6 (pendiente): el tope que la v4 pone a la lectura entera del paquete (topeApkParaV4, en
+// v4verify.go) está medido en el binario nativo, pero no en el hospedador de navegador; este
+// archivo no lo toca y no se baja la cota sin una medición en wasm.
 
 import (
 	"archive/zip"
@@ -160,9 +164,10 @@ func paqueteConFirmaExtra(t *testing.T, origen, nombre string, datos []byte) str
 // auditoría y su variante enorme; el resto lo pone el fuzz cuando se le invoca con -fuzz.
 //
 // Un error no es un veredicto: verificarApk atrapa los pánicos y devuelve un error con el prefijo
-// «paquete hostil:», así que el `return` que había aquí convertía el fuzz en una prueba de «no se
-// cae el test». El prefijo se mira ahora en cada corrida, y el detector se prueba con un pánico
-// de sonda en la primera línea: un fuzz verde significa que no hubo pánico, no que hubo salida.
+// prefijoPaqueteHostil, así que el `return` que había aquí convertía el fuzz en una prueba de «no
+// se cae el test». El prefijo se mira ahora en cada corrida —desde la fuente única de
+// verificar.go—, y el detector se prueba con un pánico de sonda en la primera línea: un fuzz verde
+// significa que no hubo pánico, no que hubo salida.
 func FuzzVerificarApkNoMuere(f *testing.F) {
 	f.Add([]byte{})
 	f.Add(apkConBloqueDeFirmas(f, 16))
@@ -183,17 +188,14 @@ func FuzzVerificarApkNoMuere(f *testing.F) {
 	})
 }
 
-// prefijoPanico es lo que verificarApk antepone al error que deja un pánico recuperado: un error
-// con este prefijo no es un veredicto, es la traza de pila que no llegó a imprimirse.
-const prefijoPanico = "paquete hostil:"
-
 // falloDelPaquete dice qué tiene de malo lo que el verificador devolvió, o "" si no hay nada que
 // reprocharle. Un error sin el prefijo es una salida legítima (un paquete que no se puede listar);
 // el prefijo significa que el recover() de verificarApk atrapó un pánico, y eso el fuzz no lo
-// puede dar por bueno.
+// puede dar por bueno. El prefijo es el de producción (prefijoPaqueteHostil), no una copia: si
+// verificar.go cambia el literal, este detector cambia con él.
 func falloDelPaquete(v *verificacion, err error) string {
 	if err != nil {
-		if strings.HasPrefix(err.Error(), prefijoPanico) {
+		if strings.HasPrefix(err.Error(), prefijoPaqueteHostil) {
 			return "el verificador recuperó un pánico: " + err.Error()
 		}
 		return ""
@@ -205,13 +207,13 @@ func falloDelPaquete(v *verificacion, err error) string {
 }
 
 // conLaGuardiaDeVerificarApk reproduce el recover() de verificarApk —el mismo prefijo, con el
-// pánico dentro— para poder fabricar un pánico recuperado sin un paquete que lo provoque. Es una
-// copia porque verificar.go no entra en este cambio; si allí cambia el prefijo, la prueba del
-// detector falla y obliga a poner esta al día.
+// pánico dentro— para poder fabricar un pánico recuperado sin un paquete que lo provoque. No
+// guarda una copia del literal: usa prefijoPaqueteHostil, la fuente única que también emplean
+// verificarApk y falloDelPaquete.
 func conLaGuardiaDeVerificarApk(f func()) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("%s%v", prefijoPanico, r)
+			err = fmt.Errorf("%s %v", prefijoPaqueteHostil, r)
 		}
 	}()
 	f()
@@ -226,7 +228,7 @@ func TestElDetectorDePanicosDelFuzz(t *testing.T) {
 		var nada []byte
 		_ = nada[1]
 	})
-	if err == nil || !strings.HasPrefix(err.Error(), prefijoPanico) {
+	if err == nil || !strings.HasPrefix(err.Error(), prefijoPaqueteHostil) {
 		t.Fatalf("la guardia del test no devolvió el prefijo de pánico: %v", err)
 	}
 	if fallo := falloDelPaquete(nil, err); fallo == "" {
@@ -239,5 +241,25 @@ func TestElDetectorDePanicosDelFuzz(t *testing.T) {
 	// y una verificación con error nulo y sin resultado tampoco es una salida válida
 	if fallo := falloDelPaquete(nil, nil); fallo == "" {
 		t.Error("el detector aceptó un veredicto nulo y un error nulo")
+	}
+}
+
+// TestLaSondaSigueAlPrefijoDeProduccion: el detector del fuzz y su sonda no pueden guardar una
+// copia del prefijo. Si la guardaran y producción cambiara el literal, el fuzz seguiría verde
+// mirando un prefijo que ya no existe y quedaría ciego a los pánicos. Aquí se altera el prefijo
+// de producción —la fuente única, prefijoPaqueteHostil— y se comprueba que la sonda y el detector
+// lo siguen: con una copia, la sonda emitiría el literal viejo y el detector (o el HasPrefix de
+// arriba) no lo reconocería, así que este test fallaría.
+func TestLaSondaSigueAlPrefijoDeProduccion(t *testing.T) {
+	anterior := prefijoPaqueteHostil
+	prefijoPaqueteHostil = "paquete hostil alterado:"
+	defer func() { prefijoPaqueteHostil = anterior }()
+
+	err := conLaGuardiaDeVerificarApk(func() { panic("sonda del cableado") })
+	if err == nil || !strings.HasPrefix(err.Error(), "paquete hostil alterado:") {
+		t.Fatalf("la sonda no siguió al prefijo de producción: %v", err)
+	}
+	if fallo := falloDelPaquete(nil, err); fallo == "" {
+		t.Fatal("el detector no siguió al prefijo de producción: quedaría ciego a los pánicos")
 	}
 }

@@ -73,6 +73,13 @@ const (
 	topeMetadatosV1 = 64 << 20
 )
 
+// prefijoPaqueteHostil es lo que verificarApk antepone al error que deja un pánico recuperado: un
+// error con este prefijo no es un veredicto, es la traza de pila que no llegó a imprimirse. Es la
+// única fuente del literal: la consumen el recover de producción, el detector del fuzz y su sonda.
+// Es var y no const para que la prueba de cableado pueda alterarlo y comprobar que los tres lo
+// siguen en vez de guardar una copia propia.
+var prefijoPaqueteHostil = "paquete hostil:"
+
 // topeEntradaV1 es el máximo que se acepta de una entrada del MANIFEST. El digest se calcula
 // en flujo sobre el hash, así que el tope no protege la memoria de esta ruta: corta el coste
 // de descomprimir un paquete que declare una entrada de varios GiB. Es una variable para que
@@ -192,7 +199,7 @@ func verificarApk(ruta string) (v *verificacion, err error) {
 	// devuelve es un motivo con nombre y no una traza de pila
 	defer func() {
 		if r := recover(); r != nil {
-			v, err = nil, fmt.Errorf("paquete hostil: %v", r)
+			v, err = nil, fmt.Errorf("%s %v", prefijoPaqueteHostil, r)
 		}
 	}()
 	f, err := os.Open(ruta)
