@@ -13486,6 +13486,78 @@ grep -n 'MethodHandles\$Lookup\|superIdx = e.pool.clase("java/lang/Object")' apk
 grep -n 'pendiente func' apkc/lambda.go
 ```
 
+## 283. Los oráculos que exigen javac 17 salen del binario de la pestaña por build tag
+
+Registrado el 2026-11-24 sobre `af7686b` (el commit del builder es `7cb559b`). La crítica de este
+frente sigue en curso: aquí se deja lo medido, **no** un veredicto de aprobado. El cambio no toca el
+emisor: mueve once pruebas que lanzan `javac` a ficheros con `//go:build !js`, para que la capa wasm
+deje de contar como fallo lo que en la pestaña no puede existir —no hay proceso que lanzar—.
+
+**Los once, y dónde viven.** `TestNewDeOtraClaseContraJavac17`, `TestNewConTipoDeJar` y
+`TestHerenciaDeOtraClaseSubePorSuPadre` en `apkc/javaemisor_alcance_paridad_test.go:21`, `:134` y
+`:215`; `TestElPostDelayedDeApkShareLlevaSuI2L` en `javaemisor_ancho_argumento_paridad_test.go:22`;
+`TestGotoWLargoHaciaAtrasContraJavac17` en `javaemisor_atras_paridad_test.go:19`;
+`TestElBooleanNoEnsanchaContraJavac17` en `javaemisor_boolean_ensancha_paridad_test.go:20`;
+`TestEmisorReferenciaCualificadaContraJavac17` en `javaemisor_cualificado_paridad_test.go:18`;
+`TestEmisorImportExplicitoContraJavac17` y `TestEmisorImportExplicitoMismoPaqueteContraJavac17` en
+`javaemisor_import_paridad_test.go:20` y `:63`; `TestSobrecargaExteriorContraJavac17` en
+`javaemisor_receptor_heredado_paridad_test.go:20`; y `TestTipoCualificadoLocalContraJavac17` en
+`javaemisor_tipo_cualificado_local_paridad_test.go:20`. Los ocho ficheros abren con
+`//go:build !js`.
+
+**Cero saltos nuevos.** `git diff -U0 7cb559b^ 7cb559b | grep -c "t.Skip"` da `0`: la doctrina de
+`apkc/dependencias_test.go:8` —«Estas pruebas **no se saltan**: … un SKIP deja la suite en verde sin
+haber medido nada»— se cumple con tag, no con `Skip`.
+
+**Lo que se queda sin tag para no perder cobertura.** `TestNewDeOtraClaseResuelveSuConstructor`
+(`apkc/javaemisor_alcance_test.go:48`), `TestElPostDelayedDeApkShareCompila`
+(`javaemisor_ancho_argumento_test.go:143`), `TestGotoWLargoHaciaAtras`
+(`javaemisor_atras_test.go:50`, la mitad que comprueba `Code` > 32767 y el `goto_w` sin javac),
+`TestElBooleanNoEnsanchaEnElArgumento` (`javaemisor_boolean_ensancha_test.go:42`),
+`TestEmisorReferenciaCualificada` (`javaemisor_cualificado_test.go:55`),
+`TestEmisorImportExplicitoMismoPaqueteGanaAlHomonimo` (`javaemisor_import_test.go:126`),
+`TestSobrecargaExteriorResuelvePorElTipo` (`javaemisor_receptor_heredado_test.go:219`) y
+`TestTipoCualificadoLocalApuntaAlTipoAnidado` (`javaemisor_tipo_cualificado_local_test.go:89`).
+
+**`javac17Exigido` no se mueve.** Sigue en `apkc/dependencias_test.go:41`, sin tag: lo usan los
+ficheros sin tag, y moverlo rompía el build wasm con `undefined: javac17Exigido`.
+
+**Medición transferida del builder, no re-ejecutada aquí.** La capa wasm pasa de 15 a **4**
+`--- FAIL` sin aborto; dos de esos cuatro son los `Dedupe` que `50952c0` ya corrigió (`§280` C), así
+que sobre este `HEAD` la cuenta esperada es **2**, ambos `multidex` y por la re-ejecución del propio
+binario (`exec.Command(os.Args[0])`, `apkc/multidex_app_test.go:386`):
+`TestCompilaAppPre21ConDemasiadasClasesAborta` (`:401`) y
+`TestCompilaAppSinUsesSdkConDemasiadasClasesAborta` (`:429`). La suite nativa da `ok … 177.340s` con
+los once movidos corriendo y pasando. **Ese recuento final queda pendiente de la crítica: no se
+declara cerrado aquí**, y en esta sesión no se re-ejecutaron ni la suite ni la capa wasm.
+
+**Lo medido aquí.** `GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .` sale `rc=0`, y `gofmt -l` sobre los
+dieciséis ficheros del cambio no lista ninguno; `git diff --check` queda limpio.
+
+**Deuda declarada, no cerrada.** `TestReceptorHeredadoEnAnonimaContraJavac17`
+(`apkc/javaemisor_receptor_heredado_test.go:83`) y otros ficheros (`comodin`, `cadena_estatica`,
+`lambda_fuente`, `estatica_cualificada`) siguen llamando a `javac17(t)`
+(`apkc/javaemisor_argumento_estatico_test.go:57`), que **se salta en silencio** en wasm. No estaban
+en este encargo, los trata otro frente y no se dan por cerrados.
+
+```sh
+# los ocho ficheros con tag, y la cuenta de saltos nuevos: la segunda línea debe dar 0
+grep -n 'go:build !js' apkc/javaemisor_*_paridad_test.go
+git diff -U0 7cb559b^ 7cb559b | grep -c "t.Skip"
+```
+
+```sh
+# las contrapartidas sin tag y el helper que se queda fuera del tag
+grep -n 'func Test' apkc/javaemisor_alcance_test.go apkc/javaemisor_atras_test.go
+grep -n 'func javac17Exigido' apkc/dependencias_test.go
+```
+
+```sh
+# lo medido en esta sesión: vet de wasm en verde y ningún fichero del cambio sin formatear
+cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .
+cd .. && git diff --name-only 7cb559b^ 7cb559b -- 'apkc/*_test.go' | xargs gofmt -l
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
