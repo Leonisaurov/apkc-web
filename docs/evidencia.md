@@ -11798,6 +11798,82 @@ tools/entorno.sh wisp
 APKC_WISP_EXTERNO=1 tools/entorno.sh wisp-externo
 ```
 
+## 262. El genérico del local, la sobrecarga por tipo y el gate de red con workers
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `45ec24a`, `445f7fb` y `ee19eb6` (que
+sube el submódulo `studio` de `ef738c9` a `f34c79d`), más las correcciones documentales `c072831`
+y `867d3fa`; aquí no se re-ejecutó nada: sin gate, sin chromium, sin red, sin push ni publicación.
+
+**El genérico del local en la llamada encadenada (`45ec24a`).** `c0b40e9` emitía el borrado en
+silencio para `void dame(List<Apk> m) { usa(m.get(0)); }`: elegía `usa(Object)` y perdía el
+`check-cast`, seis instrucciones (`2a2b03b900100200b60014b1`) frente a las siete de `javac 17`
+(`2a2b03b900070200c0000db6000fb1`, con `checkcast 0xc0`). La causa era que
+`tipoSinEmitirCompleto` se quedaba con `lv.desc` y tiraba el argumento de tipo, así que
+`vueltaGenerica` recibía `nil`. `localVar.generico` (`apkc/javaemisor.go:2447`) guarda el tipo
+declarado, y `reservaConGenerico` (`:2772`) lo pone en los dos sitios donde el fuente lo dice —los
+parámetros, que lo traen en `p.generico`, y las locales cuyo inicializador lo delata
+(`List<Apk> apks = app.apks`)—; `genericoDeLocal` (`:2788`) lo deduce del valor.
+`tipoSinEmitirCompleto` (`:5350`) devuelve ese genérico cuando la expresión **es** la local, no solo
+cuando sigue un campo de ella, y el fail-safe de `vueltaSinEmitir` (`:5465`) usa
+`vueltaConTipoVariable` (`:5509`): si la vuelta declarada es un tipo variable (`List.get` declara
+`(I)TE;`) y no hay con qué sustituirlo —una local cuyo tipo no se conoce, un método heredado de otra
+clase—, la llamada no se estima y vuelve el rechazo explícito; nunca el borrado.
+`propagaGenericoDeLocal` (`:5308`) es el interruptor de la sonda y, apagado, reproduce el defecto
+literal del crítico. El oráculo es `javac 17 --release 8 -g:lines,source` y el mismo dexer byte a
+byte para `List<Apk>` y para `Map<String,Apk>` —el segundo argumento de tipo, no el primero—
+(`javaemisor_llamada_argumento_test.go:365` y `:397`), con los controles de una local sin argumentos
+y de `var`, que se rechazan (`:474` y `:517`). Las 9 pruebas del fichero salen en verde, la suite
+`ok … 164.971s`, y el crítico aprueba. Quedan como preguntas abiertas no bloqueantes el local
+capturado `val$m`, `var`, el `for` de dos puntos, el `try` y el comodín en la vuelta.
+
+**La sobrecarga de una llamada sin receptor (`445f7fb`).** `candidatasSinReceptor`
+(`apkc/javaemisor.go:5446`) contaba por nombre y aridad y rechazaba con «hay 2 candidatas con 1
+argumentos y el tipo lo decide la sobrecarga» un fuente que javac acepta: `f(String)`/`f(int)` en la
+clase exterior y `usa(f("x"))` dentro de la anónima. Ahora `unaCandidataPorTipos` (`:5478`) elige
+con `elegirSobrecarga` (`:1435`) —las mismas fases estricta a laxa que `buscarMetodo` (`:1423`), con
+las varargs y `masEspecificaDe`— y devuelve la lista original si algún argumento no se puede
+estimar o las fases no dejan una sola candidata: el fail-safe es no elegir, nunca la primera.
+`filtraCandidatasPorTipos` (`:5470`) es el interruptor de la falsificación, que reproduce el rechazo
+previo. `javac 17` elige `f:(Ljava/lang/String;)Ljava/lang/String;` y
+`usa:(Ljava/lang/String;)V`, y el `onClick` sale instrucción a instrucción y en dex byte a byte
+(`javaemisor_receptor_heredado_test.go:169`, falsificación en `:197`). La suite `ok … 153.997s` y
+`go vet` queda limpio en nativo y en wasm. Deuda pactada: la sobrecarga varargs de igual nombre y
+los argumentos no estimables siguen en el rechazo conservador.
+
+**El gate de red con workers (`ee19eb6`, `studio` `f34c79d`).** El `Network.enable` iba solo a la
+sesión de la página, así que un `WebSocket` abierto en un worker no aparecía en ninguna lista y se
+escapaba al gate. `studio/prueba-pestana.js:222` engancha con `Target.setAutoAttach`
+(`autoAttach: true`, `waitForDebuggerOnStart: false`, `flatten: true`) —plano y antes de navegar— y
+habilita la red en cada sesión `Target.attachedToTarget` (`:198-205`);
+`studio/wisp-gates.js:116` suma los eventos con `sessionId` sin filtrar por sesión
+(`acumularRed`). La sonda abre en un worker `wss://sonda-ajena-del-gate.invalid/relay` y exige
+verlo (`:6341`); sin auto-attach (`APKC_GATE_SIN_WORKERS=1`, `:19`) se escapa: **247 bien, 2 mal**;
+con él, **249 bien, 0 mal**. El recuento base es el del árbol con `KS_RELEASE`, `AAB_EJEMPLO` y el
+`android.jar` de `ANDROID_JAR`, no el de una corrida recortada. La cobertura se comprueba aparte
+(`:6417`: 1 `page`, 1 `service_worker` y 2 `worker` con `Network.enable`), y la falsificación sin
+navegador queda en `studio/prueba-wisp-gates.mjs:110`. Deuda: `waitForDebuggerOnStart:false` deja
+una carrera teórica entre el enganche del worker y su primer `WebSocket`, y las listas exactas ahora
+deduplican por URL porque un mismo recurso llega una vez por sesión.
+
+**Las correcciones documentales (`c072831`, `867d3fa`).** `c072831` corrige en `§260` la cita del
+interruptor `booleanEnsanchaEnArgumentos` (`apkc/javaemisor.go:4716` pasa a `:4715`), y `867d3fa`
+es el `§261`, que ya quedó escrito.
+
+**Fronteras de este `§`.** 1) ApkShare **no** compila: se para en `MainActivity.java:179`, columna
+103, en `apk.name + ".apk"` como argumento (concatenación, `joperador`); ese frente sigue en curso.
+2) WISP sigue **inerte**, fuera del wasm, sin puente y sin llamadores. 3) Falta el cableado del
+núcleo WISP a la página. 4) Queda la publicación. 5) No hubo gate final, ni push, ni CI, ni
+publicación, por orden del usuario. Nada de esto se re-ejecutó aquí; los oráculos citados son los de
+cada commit (`javac 17`, `go vet`, chromium por `prueba-pestana.js` y las pruebas de `apkc` y
+`studio/`). Los selectores que reproducen lo citado:
+
+```sh
+cd apkc && go test -run 'LlamadaEncadenada' -count=1 .
+cd apkc && go test -run 'SobrecargaExterior' -count=1 .
+node studio/prueba-wisp-gates.mjs
+APKC_WASM=… APKC_GATE_SIN_WORKERS=1 node studio/prueba-pestana.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
