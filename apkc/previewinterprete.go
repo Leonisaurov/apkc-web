@@ -368,6 +368,11 @@ type objetoDalvik struct {
 	paintColor  uint32
 	paintPuesto bool
 	paintGrosor float64
+	// anchoVista y altoVista son el rect que el layout ya midió para esta vista, en píxeles del
+	// modelo. Un `onDraw` que pregunta por su tamaño los necesita: sin ellos `getWidth`/`getHeight`
+	// caerían en cero y todas las figuras se concentrarían en el origen.
+	anchoVista int32
+	altoVista  int32
 }
 
 // arregloDalvik es un arreglo: el descriptor de su tipo y sus huecos. Los de tipos primitivos
@@ -4422,6 +4427,16 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 0 && esVista() {
 			return nil, true, nil
 		}
+	case "getWidth", "getHeight":
+		// El tamaño de la vista es el que el layout ya midió y se sembró al construir la instancia
+		// del `onDraw`. Sin él se devuelve cero, que es el valor que el modelo daba antes: se sigue
+		// publicando el cero (con su aviso) para no inventar una medida donde no hay rect.
+		if len(vals) == 0 && obj != nil && esVista() && obj.anchoVista > 0 {
+			if nombre == "getWidth" {
+				return obj.anchoVista, true, nil
+			}
+			return obj.altoVista, true, nil
+		}
 	case "setOnClickListener":
 		if len(vals) == 1 {
 			if o := obj; o != nil {
@@ -5071,6 +5086,34 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				obj.paintPuesto = true
 			}
 			return nil, true, nil
+		}
+	case "rgb", "argb":
+		// `Color.rgb` y `Color.argb` comparten el entero ARGB que `Paint.setColor` guarda y que el
+		// modelo publica como `#rrggbb` (o `#aarrggbb` cuando el alfa no es opaco). Sin esto los
+		// colores de la app caían en cero y el pintor los convertía en `rgba(0,0,0,0)`.
+		cuantos := 3
+		if nombre == "argb" {
+			cuantos = 4
+		}
+		if es("Landroid/graphics/Color;") && len(vals) == cuantos {
+			partes := make([]uint32, cuantos)
+			valido := true
+			for i, v := range vals {
+				n, ok := enteroDeDibujo(v)
+				if !ok || n > 0xff {
+					valido = false
+					break
+				}
+				partes[i] = n & 0xff
+			}
+			if valido {
+				argb := uint32(0xff000000)
+				if cuantos == 4 {
+					argb = partes[0] << 24
+					partes = partes[1:]
+				}
+				return int32(argb | partes[0]<<16 | partes[1]<<8 | partes[2]), true, nil
+			}
 		}
 	case "getColor":
 		if len(vals) == 0 && obj != nil && es("Landroid/graphics/Paint;") {

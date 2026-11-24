@@ -116,7 +116,7 @@ func pintaVistasPropias(n *nodoVista, res *resultadoEjecucion, paquete string) {
 			}
 			n.Dibujo = &dibujoVista{Frontera: motivo}
 		default:
-			if d := res.maquina.dibujaVista(n.Tipo); d != nil {
+			if d := res.maquina.dibujaVista(n.Tipo, n.Rect); d != nil {
 				n.Dibujo = d
 			}
 		}
@@ -127,10 +127,12 @@ func pintaVistasPropias(n *nodoVista, res *resultadoEjecucion, paquete string) {
 }
 
 // dibujaVista ejecuta el `onDraw(Landroid/graphics/Canvas;)V` de la clase con un Canvas que anota
-// las operaciones. Devuelve nil cuando la clase no es del dex o no declara onDraw: entonces no hay
-// nada que decir y el nodo se queda como estaba. El Canvas es un objeto del modelo, no un lienzo
-// real: no hay fuentes, ni sombras, ni mapas de bits.
-func (m *maquinaDalvik) dibujaVista(nombre string) *dibujoVista {
+// las operaciones. `rect` es el rectángulo que el layout ya midió para el nodo: se siembra en la
+// instancia nueva para que un `onDraw` que llame a `getWidth`/`getHeight` vea el tamaño real y no
+// dibuje todo en el origen. Devuelve nil cuando la clase no es del dex o no declara onDraw: entonces
+// no hay nada que decir y el nodo se queda como estaba. El Canvas es un objeto del modelo, no un
+// lienzo real: no hay fuentes, ni sombras, ni mapas de bits.
+func (m *maquinaDalvik) dibujaVista(nombre string, rect rectVista) *dibujoVista {
 	if m == nil || m.prog == nil {
 		return nil
 	}
@@ -152,7 +154,8 @@ func (m *maquinaDalvik) dibujaVista(nombre string) *dibujoVista {
 	m.pasosBase = m.pasos
 	defer func() { m.pasosBase = base }()
 
-	obj := &objetoDalvik{clase: desc, campos: map[string]any{}}
+	obj := &objetoDalvik{clase: desc, campos: map[string]any{},
+		anchoVista: int32(rect.Ancho), altoVista: int32(rect.Alto)}
 	if err := m.construyeVistaPropia(desc, obj); err != nil {
 		dib.Frontera = "no se pudo construir la vista " + nombre + ": " + err.Error()
 		return dib

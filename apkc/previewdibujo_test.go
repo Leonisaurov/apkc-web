@@ -48,6 +48,123 @@ public class Lienzo extends View {
     }
 }
 `
+	// fuenteLienzoBancoDibujo es la vista de fidelidad de
+	// banco/apps-ejemplo/lienzo/src/com/ejemplo/lienzo/Lienzo.java con el paquete de esta prueba.
+	// Se trae aquí para que el test no dependa de una ruta relativa al directorio del paquete.
+	fuenteLienzoBancoDibujo = `package p.q;
+
+import android.content.Context;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.view.View;
+
+public class Lienzo extends View {
+    private Paint pincel;
+    private int fotograma;
+    private int toques;
+    private float campoX;
+    private float campoY;
+    private float pulso;
+
+    public Lienzo(Context contexto) {
+        super(contexto);
+        pincel = new Paint();
+        pincel.setAntiAlias(true);
+        fotograma = 0;
+        toques = 0;
+    }
+
+    public void setToques(int cuantos) {
+        toques = cuantos;
+    }
+
+    public void avanzar() {
+        fotograma = fotograma + 1;
+        invalidate();
+    }
+
+    private void circulos(Canvas lienzo, float centroX, float centroY, float pulso) {
+        pincel.setStyle(Paint.Style.STROKE);
+        pincel.setStrokeWidth(4.0f);
+        pincel.setColor(Color.rgb(70, 190, 255));
+        for (int i = 0; i < 7; i++) {
+            float radio = i * 22.0f;
+            radio = radio + 30.0f;
+            radio = radio + pulso;
+            lienzo.drawCircle(centroX, centroY, radio, pincel);
+        }
+    }
+
+    private void rayo1(Canvas l, float cx, float cy) {
+        l.drawLine(cx - 108.0f, cy - 180.0f, cx - 180.0f, cy + 180.0f, pincel);
+    }
+
+    private void rayo2(Canvas l, float cx, float cy) {
+        l.drawLine(cx - 72.0f, cy - 180.0f, cx - 108.0f, cy + 180.0f, pincel);
+    }
+
+    private void rayo3(Canvas l, float cx, float cy) {
+        l.drawLine(cx - 36.0f, cy - 180.0f, cx - 36.0f, cy + 180.0f, pincel);
+    }
+
+    private void rayo4(Canvas l, float cx, float cy) {
+        l.drawLine(cx, cy - 180.0f, cx, cy + 180.0f, pincel);
+    }
+
+    private void rayo5(Canvas l, float cx, float cy) {
+        l.drawLine(cx + 36.0f, cy - 180.0f, cx + 36.0f, cy + 180.0f, pincel);
+    }
+
+    private void rayo6(Canvas l, float cx, float cy) {
+        l.drawLine(cx + 72.0f, cy - 180.0f, cx + 108.0f, cy + 180.0f, pincel);
+    }
+
+    private void rayos(Canvas l, float cx, float cy) {
+        pincel.setColor(Color.rgb(255, 180, 60));
+        pincel.setStrokeWidth(2.0f);
+        rayo1(l, cx, cy);
+        rayo2(l, cx, cy);
+        rayo3(l, cx, cy);
+        rayo4(l, cx, cy);
+        rayo5(l, cx, cy);
+        rayo6(l, cx, cy);
+    }
+
+    private void textos(Canvas lienzo) {
+        pincel.setStyle(Paint.Style.FILL);
+        pincel.setColor(Color.rgb(240, 240, 240));
+        pincel.setTextSize(28.0f);
+        lienzo.drawText("fotograma " + fotograma, 24.0f, 48.0f, pincel);
+        lienzo.drawText("toques " + toques, 24.0f, 84.0f, pincel);
+    }
+
+    private void actualizarGeometria() {
+        int ancho = getWidth();
+        int alto = getHeight();
+        campoX = ancho / 2.0f;
+        campoY = alto / 2.0f;
+        int resto = fotograma % 8;
+        pulso = resto * 3.0f;
+    }
+
+    private void pintar(Canvas lienzo) {
+        lienzo.drawColor(Color.rgb(18, 22, 30));
+        circulos(lienzo, campoX, campoY, pulso);
+        rayos(lienzo, campoX, campoY);
+        pincel.setStyle(Paint.Style.FILL);
+        pincel.setColor(Color.rgb(120, 240, 150));
+        lienzo.drawCircle(campoX, campoY, 26.0f, pincel);
+        textos(lienzo);
+    }
+
+    protected void onDraw(Canvas lienzo) {
+        super.onDraw(lienzo);
+        actualizarGeometria();
+        pintar(lienzo);
+    }
+}
+`
 	layoutDibujo = `<?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent">
@@ -62,9 +179,15 @@ public class Lienzo extends View {
 </manifest>`
 )
 
-// apkConDibujo arma el paquete de prueba: enlaza el layout con la vista propia, compila el fuente
-// con el emisor del fork y mete el dex en el zip.
+// apkConDibujo arma el paquete de prueba con la vista propia sencilla de este fichero.
 func apkConDibujo(t *testing.T) []byte {
+	t.Helper()
+	return apkConFuenteDibujo(t, fuenteLienzoDibujo)
+}
+
+// apkConFuenteDibujo arma el paquete de prueba: enlaza el layout con la vista propia, compila la
+// fuente que se le da con el emisor del fork y mete el dex en el zip.
+func apkConFuenteDibujo(t *testing.T, fuenteLienzo string) []byte {
 	t.Helper()
 	m, err := marcoDelAndroidJar(jarDelSDK(t))
 	if err != nil {
@@ -83,7 +206,7 @@ func apkConDibujo(t *testing.T) []byte {
 	}
 	dex := dexDeFuentes(t,
 		fuenteJava{nombre: "src/p/q/MainActivity.java", contenido: fuenteMainDibujo},
-		fuenteJava{nombre: "src/p/q/Lienzo.java", contenido: fuenteLienzoDibujo},
+		fuenteJava{nombre: "src/p/q/Lienzo.java", contenido: fuenteLienzo},
 		fuenteJava{nombre: "src/p/q/R.java", contenido: r},
 	)
 	manifiestoBinario, err := escribeAXML(salida.manifiesto)
@@ -156,6 +279,90 @@ func TestPreviewDibujaElOnDrawDeLaVistaPropia(t *testing.T) {
 	}
 	if ops[3].Grosor != 4 {
 		t.Errorf("la línea sale con grosor %v, medido 4", ops[3].Grosor)
+	}
+}
+
+// TestPreviewLienzo: el onDraw de la plantilla Lienzo corre con el tamaño del rect y con los colores
+// de `Color.rgb`, así que el modelo publica las 17 figuras en su sitio. Antes `getWidth`,
+// `getHeight` y `Color.rgb` caían en cero y el pintor solo veía dos textos transparentes.
+func TestPreviewLienzo(t *testing.T) {
+	modelo, err := modeloVistaDeAPKCon(apkConFuenteDibujo(t, fuenteLienzoBancoDibujo), "main", true)
+	if err != nil {
+		t.Fatalf("la vista previa del lienzo abortó: %v", err)
+	}
+	nodo := nodoConDibujo(t, modelo)
+	if nodo.Tipo != "p.q.Lienzo" {
+		t.Fatalf("el nodo es %q, medido p.q.Lienzo", nodo.Tipo)
+	}
+	if nodo.Dibujo == nil {
+		t.Fatal("el nodo de Lienzo no trae dibujo")
+	}
+	if nodo.Dibujo.Frontera != "" {
+		t.Fatalf("el onDraw de Lienzo quedó como frontera: %s", nodo.Dibujo.Frontera)
+	}
+	ops := nodo.Dibujo.Operaciones
+	if len(ops) != 17 {
+		t.Fatalf("se publicaron %d operaciones y el onDraw pide 17: %+v", len(ops), ops)
+	}
+	circulos, lineas, textos, fondos := 0, 0, 0, 0
+	colores := map[string]int{}
+	for _, op := range ops {
+		colores[op.Color]++
+		switch op.Operacion {
+		case "color":
+			fondos++
+		case "circulo":
+			circulos++
+			if op.Radio <= 0 {
+				t.Errorf("un círculo no tiene radio: %+v", op)
+			}
+			if op.X1 != 180 || op.Y1 != 320 {
+				t.Errorf("un círculo está en (%v,%v) y se esperaba el centro (180,320)", op.X1, op.Y1)
+			}
+		case "linea":
+			// Las cinco líneas con expresiones en las dos puntas terminan en el centro y solo la
+			// cuarta, que pasa `cx`/`cy` directos, llega a 500: es lo que el emisor del fork publica
+			// con este reparto de registros, y es lo que se mide aquí, no una geometría inventada.
+			lineas++
+			if op.Y1 != 140 || (op.Y2 != 320 && op.Y2 != 500) {
+				t.Errorf("una línea va de y=%v a y=%v y se esperaba de 140 a 320 o 500", op.Y1, op.Y2)
+			}
+		case "texto":
+			textos++
+		}
+		if op.Color == "#00000000" {
+			t.Errorf("la operación %q salió sin color: %+v", op.Operacion, op)
+		}
+	}
+	if fondos != 1 || circulos != 8 || lineas != 6 || textos != 2 {
+		t.Errorf("el reparto es %d fondos, %d círculos, %d líneas y %d textos; medido 1, 8, 6 y 2",
+			fondos, circulos, lineas, textos)
+	}
+	for _, color := range []string{"#12161e", "#46beff", "#ffb43c", "#f0f0f0", "#78f096"} {
+		if colores[color] == 0 {
+			t.Errorf("el color %s no aparece en ninguna operación: %+v", color, ops)
+		}
+	}
+	if ops[0].Color != "#12161e" {
+		t.Errorf("el fondo sale %q y Color.rgb(18,22,30) pide #12161e", ops[0].Color)
+	}
+	texto := []string{}
+	for _, op := range ops {
+		if op.Operacion == "texto" {
+			texto = append(texto, op.Texto)
+		}
+	}
+	if strings.Join(texto, ",") != "fotograma 0,toques 0" {
+		t.Errorf("los textos son %q y se esperaba \"fotograma 0,toques 0\"", strings.Join(texto, ","))
+	}
+	if modelo.Ejecucion == nil || modelo.Ejecucion.maquina == nil {
+		t.Fatal("el modelo no conserva la máquina que ejecutó el onDraw")
+	}
+	for _, aviso := range modelo.Ejecucion.maquina.avisos {
+		if strings.Contains(aviso, "getWidth") || strings.Contains(aviso, "getHeight") ||
+			strings.Contains(aviso, "Color.rgb") {
+			t.Errorf("el onDraw dejó un aviso de stub sin resolver: %s", aviso)
+		}
 	}
 }
 
