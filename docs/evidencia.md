@@ -13591,7 +13591,8 @@ sin `javac` la prueba falla en vez de disfrazarse de verde.
 en `:1`, y las contrapartidas puras-Go sin tag se conservan. El árbol final tiene 43 ficheros
 nuevos con esa cabecera, 99 `func Test` y 86 call sites de `javac17Exigido`, todos confinados
 en ficheros `!js` (las dos líneas restantes del `grep` son la definición y su comentario). El frente
-del `else/goto` se integró después con un `javac17(t)` residual en el test nuevo; `d551d21` lo cambió
+del `else/goto` se integró después con un `javac17(t)` residual en el test nuevo; `d551d21` lo
+cambió
 a `javac17Exigido`, y `0d8df36` movió ese test a `javaemisor_else_goto_paridad_test.go` (`!js`)
 porque su ayudante `compilaYDejaElDexDeJavac` vive en un fichero de paridad: sin eso el binario wasm
 no compilaba. Con el cambio, los tres tests pasan y `GOOS=js GOARCH=wasm go vet .` está limpio.
