@@ -6,9 +6,10 @@ name: deps-maven
 # paquete desde su propio origen cuando el usuario pulsa «Resolver».
 #
 # No hay paso de publicación automática: el paquete no se versiona (son binarios) y el sitio se
-# publica a mano. Para servirlo, descarga el artefacto `deps-maven` y copia su contenido
-# (`deps-index.json` y `deps/`) en `studio/` antes de `tools/entorno.sh sitio`, o súbelo junto al
-# resto del sitio con tu propio paso de despliegue.
+# publica a mano. `tools/sitio.sh` empaqueta `studio/` con `git archive`, así que los ficheros sin
+# versionar no entran solos: descarga el artefacto `deps-maven` y copia `deps-index.json` y `deps/`
+# **dentro de `sitio/` ya empaquetado**, antes de subir. No los dejes en `studio/`: el árbol de
+# trabajo no se versiona y `git archive` los ignoraría. Ver `studio/DEPS.md`.
 
 on:
   workflow_dispatch:
@@ -54,6 +55,7 @@ jobs:
           import time
           import urllib.error
           import urllib.request
+          import xml.etree.ElementTree as ET
 
           entradas_txt, salida = sys.argv[1], sys.argv[2]
           REPOS = {
@@ -90,6 +92,31 @@ jobs:
                       ultimo = e
                   time.sleep(intento)
               morir(f"no se pudo descargar {url}: {ultimo}")
+
+          # La licencia vive en el .pom del artefacto (`<licenses><license>`). Se lee del XML que
+          # el runner ya descargó: no hay una tabla externa de SPDX ni una petición extra. Si el
+          # pom no la declara, el índice deja `null` y la página no inventa nada.
+          def licencia_del_pom(datos_pom):
+              if not datos_pom:
+                  return None, None
+              try:
+                  raiz = ET.fromstring(datos_pom)
+              except ET.ParseError:
+                  return None, None
+              for elemento in raiz.iter():
+                  # el tag puede venir con espacio de nombres: `{http://maven.apache.org/POM/4.0.0}license`
+                  if not str(elemento.tag).endswith("license"):
+                      continue
+                  nombre = url_lic = None
+                  for hijo in elemento:
+                      etiqueta = str(hijo.tag).rsplit("}", 1)[-1]
+                      if etiqueta == "name" and hijo.text and hijo.text.strip():
+                          nombre = hijo.text.strip()
+                      elif etiqueta == "url" and hijo.text and hijo.text.strip():
+                          url_lic = hijo.text.strip()
+                  if nombre or url_lic:
+                      return nombre, url_lic
+              return None, None
 
           coordenadas = []
           with open(entradas_txt, encoding="utf-8") as f:
@@ -137,6 +164,7 @@ jobs:
               fichero = "/".join(["deps", grupo, artefacto, version, nombre + "." + extension])
               sha256 = guardar(fichero, datos)
               pom = None
+              licencia = licencia_url = None
               if extension != "pom":
                   url_pom = "/".join([REPOS[repositorio], carpeta, artefacto, version,
                                       nombre + ".pom"])
@@ -149,6 +177,7 @@ jobs:
                           "sha256": guardar(fichero_pom, datos_pom),
                           "url": url_pom,
                       }
+                      licencia, licencia_url = licencia_del_pom(datos_pom)
                   else:
                       print(f"aviso: {crudo} no tiene .pom; el índice lo deja en null", file=sys.stderr)
               artefactos.append({
@@ -163,6 +192,9 @@ jobs:
                   "fichero": fichero,
                   "bytes": len(datos),
                   "sha256": sha256,
+                  "licencia": licencia,
+                  "licencia_url": licencia_url,
+                  "fecha": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                   "pom": pom,
               })
 
@@ -195,6 +227,10 @@ jobs:
           if not indice["artefactos"]:
               sys.exit("el índice está vacío")
           for a in indice["artefactos"]:
+              # todo artefacto lleva su licencia (aunque sea null) y su fecha: son contrato del
+              # índice, y la página los pinta si vienen.
+              for campo in ("licencia", "licencia_url", "fecha"):
+                  assert campo in a, f"falta {campo} en {a.get('coordenada')}"
               for pieza in [a] + ([a["pom"]] if a.get("pom") else []):
                   ruta = pieza["fichero"]
                   datos = open(ruta, "rb").read()
@@ -202,7 +238,7 @@ jobs:
                       sys.exit(f"tamaño distinto en {ruta}")
                   if hashlib.sha256(datos).hexdigest() != pieza["sha256"]:
                       sys.exit(f"sha256 distinto en {ruta}")
-                  print(f"ok {ruta} {pieza['bytes']} bytes {pieza['sha256']}")
+                  print(f"ok {ruta} {pieza['bytes']} bytes {pieza['sha256']} licencia={a.get('licencia')}")
           PY
           sha256sum deps-index.json > SHA256SUMS
           find deps -type f | sort | xargs sha256sum >> SHA256SUMS
@@ -218,11 +254,12 @@ jobs:
           d = json.load(open("dist/deps-index.json", encoding="utf-8"))
           print(json.dumps({k: d[k] for k in ("version", "generado", "origen")}, ensure_ascii=False, indent=2))
           for a in d["artefactos"]:
-              print(f"{a['coordenada']}  {a['bytes']} bytes  {a['sha256']}")
+              print(f"{a['coordenada']}  {a['bytes']} bytes  {a['sha256']}  licencia={a.get('licencia')}")
           PY
             echo '```'
             echo 'Para servirlo: descarga este artefacto, copia `deps-index.json` y `deps/` en'
-            echo '`studio/` y publica con `tools/entorno.sh sitio`. No se versiona ningún binario.'
+            echo '`sitio/` YA empaquetado (git archive no ve lo no versionado) y publica. No se'
+            echo 'versiona ningún binario. Detalle en `studio/DEPS.md`.'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4  # TODO(sha): requiere red; gh api repos/actions/upload-artifact/git/ref/tags/v4 --jq .object.sha
