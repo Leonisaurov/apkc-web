@@ -1425,6 +1425,14 @@ func (ctx *contextoJava) buscarMetodo(interno, nombre string, argc int, tipos []
 	if err != nil {
 		return candidato{}, err
 	}
+	return ctx.elegirSobrecarga(interno, nombre, cands, argc, tipos)
+}
+
+// elegirSobrecarga resuelve entre las candidatas ya juntadas por nombre y aridad con las tres fases de
+// `buscarMetodo`. Está separada para que el estimador de tipo de una llamada sin receptor
+// (`unaCandidataPorTipos`) elija con la misma regla que la emisión en vez de contar candidatas, que era
+// lo que rechazaba un fuente con dos métodos de igual aridad en la clase exterior.
+func (ctx *contextoJava) elegirSobrecarga(interno, nombre string, cands []candidato, argc int, tipos []string) (candidato, error) {
 	if len(cands) == 0 {
 		return candidato{}, fmt.Errorf("el metodo %s.%s con %d argumentos no esta en %s ni en sus padres",
 			interno, nombre, argc, interno)
@@ -5432,22 +5440,58 @@ var estimaMetodoDeExterior = true
 // por el campo `this$0`, y su descriptor se resuelve aquí leyendo la jerarquía, sin escribir ninguna
 // instrucción. Mientras la clase actual traiga candidatas se devuelve su lista y nada cambia para los
 // casos que ya se medían; el error de `candidatos` se conserva para que el llamador lo nombre.
-func (e *emisor) candidatasSinReceptor(nombre string, argc int) ([]candidato, error) {
+//
+// Con más de una candidata en la aridad manda el tipo de los argumentos, igual que en la emisión: ver
+// `unaCandidataPorTipos`.
+func (e *emisor) candidatasSinReceptor(nombre string, args []jexpr) ([]candidato, error) {
+	argc := len(args)
 	cands, err := e.ctx.candidatos(e.interno, nombre, argc)
 	if err != nil || len(cands) > 0 {
-		return cands, err
+		return e.unaCandidataPorTipos(e.interno, nombre, cands, args), err
 	}
 	if !estimaMetodoDeExterior || !(e.c.anonima || e.esInnerNoEstatica()) {
 		return cands, err
 	}
 	for _, c := range clasesEnAlcance(e.c) {
-		cs, err := e.ctx.candidatos(internoDe(c.paquete, c.nombre), nombre, argc)
-		if err != nil || len(cs) == 0 {
+		interno := internoDe(c.paquete, c.nombre)
+		cs, errC := e.ctx.candidatos(interno, nombre, argc)
+		if errC != nil || len(cs) == 0 {
 			continue
 		}
-		return cs, nil
+		return e.unaCandidataPorTipos(interno, nombre, cs, args), nil
 	}
 	return cands, err
+}
+
+// filtraCandidatasPorTipos es el interruptor de la sonda de la sobrecarga de igual aridad: apagado,
+// `unaCandidataPorTipos` devuelve la primera lista no vacía tal cual y el estimador vuelve al rechazo de
+// antes («hay 2 candidatas con 1 argumentos»). Lo usa la falsificación de
+// `javaemisor_receptor_heredado_test.go`; encendido en el binario que se publica.
+var filtraCandidatasPorTipos = true
+
+// unaCandidataPorTipos: cuando la llamada sin receptor tiene más de una candidata en su aridad, la
+// sobrecarga la decide el tipo de los argumentos, con la misma resolución que la emisión
+// (`elegirSobrecarga`). Sin esto, dos `f` de igual aridad en la clase exterior —`f(String)` y `f(int)`—
+// hacían que el estimador contara dos candidatas y rechazara un fuente que javac acepta. Si los tipos no
+// se pueden estimar o las fases no dejan una sola candidata, se devuelve la lista tal cual y el llamador
+// sigue rechazando en vez de adivinar: el fail-safe es no elegir, nunca elegir la primera.
+func (e *emisor) unaCandidataPorTipos(interno, nombre string, cands []candidato, args []jexpr) []candidato {
+	if !filtraCandidatasPorTipos || len(cands) < 2 {
+		return cands
+	}
+	tipos := make([]string, 0, len(args))
+	for _, a := range args {
+		d, err := e.tipoEstimado(a)
+		if err != nil {
+			return cands
+		}
+		tipos = append(tipos, d)
+	}
+	cand, err := e.ctx.elegirSobrecarga(interno, nombre, cands, len(args), tipos)
+	if err != nil {
+		return cands
+	}
+	return []candidato{cand}
 }
 
 // vueltaSinEmitir: el descriptor de lo que deja en la pila una llamada cuyo receptor **no se emite**.
@@ -5871,7 +5915,7 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		if v.base != nil || v.super {
 			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s() sin emitir el receptor de la llamada", v.donde.sitio(), v.nombre)
 		}
-		cands, err := e.candidatasSinReceptor(v.nombre, len(v.args))
+		cands, err := e.candidatasSinReceptor(v.nombre, v.args)
 		if err != nil {
 			return "", fmt.Errorf("%s: al estimar el tipo de %s(), %w", v.donde.sitio(), v.nombre, err)
 		}
@@ -6022,7 +6066,7 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 		if v.base != nil || v.super {
 			return "", false
 		}
-		cands, err := e.candidatasSinReceptor(v.nombre, len(v.args))
+		cands, err := e.candidatasSinReceptor(v.nombre, v.args)
 		if err != nil || len(cands) != 1 {
 			return "", false
 		}

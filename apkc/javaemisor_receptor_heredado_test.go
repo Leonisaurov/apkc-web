@@ -133,8 +133,97 @@ func TestReceptorHeredadoFalsificacion(t *testing.T) {
 	t.Logf("sin la ruta: %v", err)
 }
 
+// fuenteSobrecargaExterior es la sonda de la sobrecarga de igual aridad en la clase que encierra a la
+// anónima: `f(String)` y `f(int)` tienen la misma aridad, la anónima llama `usa(f("x"))` y `usa` vuelve a
+// estar sobrecargado. javac 17 resuelve `f("x")` por el tipo del literal (`String`) y después
+// `usa(String)`; este emisor estimaba el tipo de una llamada sin receptor contando candidatas por nombre
+// y aridad, veía las dos `f` y rechazaba el fuente con «hay 2 candidatas … y el tipo lo decide la
+// sobrecarga». La línea 15 es la que cita la falsificación.
+const fuenteSobrecargaExterior = `package p;
+
+import android.app.Activity;
+import android.view.View;
+
+public class Pantalla extends Activity {
+    String f(String s) { return s; }
+    int f(int n) { return n; }
+
+    void usa(String s) { }
+    void usa(int n) { }
+
+    public void comparte(View boton) {
+        boton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                usa(f("x"));
+            }
+        });
+    }
+}
+`
+
+// TestSobrecargaExteriorContraJavac17: con dos sobrecargas de igual aridad en la clase exterior, el
+// estimador resuelve por el tipo de los argumentos —las mismas fases estricta→laxa que la emisión
+// (`elegirSobrecarga`)— y el `onClick` sale instrucción a instrucción y en dex byte a byte como el de
+// javac. La sobrecarga elegida se comprueba además en el descriptor: javac escribe
+// `invokevirtual p/Pantalla.usa:(Ljava/lang/String;)V`, no la de `int`.
+func TestSobrecargaExteriorContraJavac17(t *testing.T) {
+	jar := jarDelSDKExigido(t)
+	javac := javac17Exigido(t)
+	fuentes := fuentesReceptorHeredado(fuenteSobrecargaExterior)
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó `usa(f(\"x\"))` con dos sobrecargas de igual aridad en la clase exterior: %v", err)
+	}
+
+	raiz := t.TempDir()
+	pon(t, raiz, "p/Pantalla.java", fuenteSobrecargaExterior)
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+
+	nuestraAnonima, suyaAnonima := buscaLaClase(t, nuestras, "Lp/Pantalla$1;", deJavac)
+	comparaMetodos(t, nuestraAnonima, suyaAnonima)
+	nuestroOnClick := metodoDeClaseEmitida(t, nuestras, "p/Pantalla$1", "onClick", "(Landroid/view/View;)V")
+	suOnClick := metodoDeClaseLeida(t, deJavac, "Lp/Pantalla$1;", "onClick", "(Landroid/view/View;)V")
+	if err := comparaInstrucciones(nuestroOnClick.Code, suOnClick.Code); err != nil {
+		t.Fatalf("Pantalla$1.onClick no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
+	}
+	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+		t.Fatalf("el dex de la sobrecarga exterior no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
+	}
+}
+
+// TestSobrecargaExteriorFalsificacion: apagado el filtro por tipos, el fuente que javac acepta vuelve a
+// rechazarse con el mensaje que veía el usuario, nombrando el fuente, la línea y las dos candidatas.
+func TestSobrecargaExteriorFalsificacion(t *testing.T) {
+	const literal = "no se puede estimar el tipo de f(): hay 2 candidatas con 1 argumentos y el tipo lo decide la sobrecarga"
+	jar := jarDelSDKExigido(t)
+	fuentes := fuentesReceptorHeredado(fuenteSobrecargaExterior)
+
+	if _, err := compilarProyectoJava(fuentes, jar); err != nil {
+		t.Fatalf("con el filtro encendido el fuente no compila: %v", err)
+	}
+
+	anterior := filtraCandidatasPorTipos
+	filtraCandidatasPorTipos = false
+	t.Cleanup(func() { filtraCandidatasPorTipos = anterior })
+
+	_, err := compilarProyectoJava(fuentes, jar)
+	if err == nil {
+		t.Fatal("con el filtro apagado el fuente fue aceptado: la falsificación no falsifica")
+	}
+	if !strings.Contains(err.Error(), literal) {
+		t.Fatalf("con el filtro apagado el rechazo es %q, y el de antes contiene %q", err, literal)
+	}
+	if !strings.HasPrefix(err.Error(), "Pantalla.java: ") || !strings.Contains(err.Error(), "linea 15") {
+		t.Fatalf("el rechazo no nombra el fuente y la línea de la llamada: %q", err)
+	}
+	t.Logf("sin el filtro: %v", err)
+}
+
 // TestReceptorInexistenteSigueRechazando: el control. Un nombre que no existe en la jerarquía no se
 // adivina: con la ruta encendida se rechaza con el mismo mensaje de antes (0 candidatas en esa aridad).
+// El caso de una sola candidata (`getExternalFilesDir(null)`) lo fija el test de arriba, que sigue
+// comparando byte a byte con javac.
 func TestReceptorInexistenteSigueRechazando(t *testing.T) {
 	const literal = "no se puede estimar el tipo de getArchivosInexistentes(): hay 0 candidatas con 0 argumentos y el tipo lo decide la sobrecarga"
 	jar := jarDelSDK(t)
