@@ -92,6 +92,28 @@ func keystoreHeadIsReadable(head []byte) bool {
 	return isJKSHead(head) || (len(head) > 0 && head[0] == 0x30)
 }
 
+// keystoreAbsentMessage es la única manera en que este paquete dice que un keystore no está.
+// requireKeystore, que detiene la ronda, y el aviso de --signer=auto, que solo elige backend,
+// nombran el mismo caso con las mismas palabras: una ruta que no contiene nada no es un formato
+// que apkc no sepa leer, y un lector que dijera eso mandaría a su usuario a buscar un JCEKS
+// cuando el fichero que escribió simplemente está en otro sitio (un HOME alternativo, un
+// --keystore que no existe). El mensaje literal se deja en inglés, como los de la herramienta.
+func keystoreAbsentMessage(path string) string {
+	return fmt.Sprintf("there is no keystore at %s - no package can be signed without it. apkc doctor prints the path in use, and --keystore takes another one", path)
+}
+
+// keystoreRefusal es la línea que --signer=auto deja cuando entrega la ronda al backend jvm
+// porque los lectores de Go no pueden abrir lo que hay en la ruta. Responde a dos preguntas
+// distintas con dos frases distintas a propósito: una ruta que no existe no es el formato de
+// nadie, y reservar el rechazo de formato para un fichero que sí está evita que el aviso culpe
+// al keystore de un HOME o un --keystore que no apuntan a nada.
+func keystoreRefusal(path string) string {
+	if _, err := os.Stat(path); err != nil {
+		return keystoreAbsentMessage(path)
+	}
+	return fmt.Sprintf("%s is neither a PKCS#12 nor a JKS keystore, and only the jvm backend reads the rest", path)
+}
+
 // requireKeystore stops a round that is about to sign with a path that holds nothing.
 // Neither backend can do anything with a missing file, and neither says so in the terms
 // the flag was written with: apksigner answers with a Java stack trace naming a path the
@@ -100,8 +122,7 @@ func keystoreHeadIsReadable(head []byte) bool {
 // is not there is nobody's format, so it is fatal before the choice of backend matters.
 func requireKeystore(path string) {
 	if _, err := os.Stat(path); err != nil {
-		LogF("sign", "there is no keystore at", path, "- no package can be signed without it.",
-			"apkc doctor prints the path in use, and --keystore takes another one")
+		LogF("sign", keystoreAbsentMessage(path))
 	}
 }
 

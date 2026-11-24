@@ -400,22 +400,40 @@ func TestResolveSigner(t *testing.T) {
 		key    string
 		aab    bool
 		want   string
+		// aviso es el fragmento que el mensaje de --signer=auto tiene que contener, y noAviso
+		// el que no puede aparecer: vacío quiere decir que el caso solo mira el backend, como
+		// hacía la tabla antes de separar «no está» de «no es un formato»
+		aviso   string
+		noAviso string
 	}{
-		{"an explicit jvm stays", signerJVM, 26, p12, false, signerJVM},
-		{"an explicit go is not second guessed", signerGo, 26, jks, false, signerGo},
-		{"an explicit go over a project that reads SHA-1 stays go", signerGo, 16, p12, false, signerGo},
-		{"auto takes the go path over a PKCS#12 keystore", signerAuto, 26, p12, false, signerGo},
-		{"auto takes it at the boundary too", signerAuto, minAPIForSHA256Digest, p12, false, signerGo},
-		{"auto refuses the SHA-1 strip below it", signerAuto, minAPIForSHA256Digest - 1, p12, false, signerJVM},
-		{"auto refuses a manifest that names no minSdkVersion", signerAuto, 0, p12, false, signerJVM},
-		{"auto takes a JKS keystore now that the reader opens one", signerAuto, 26, jks, false, signerGo},
-		{"auto refuses a keystore that is not there", signerAuto, 26, filepath.Join(dir, "absent.p12"), false, signerJVM},
-		{"auto refuses a format neither reader opens", signerAuto, 26, jceks, false, signerJVM},
-		{"auto leaves a bundle to jarsigner", signerAuto, 26, p12, true, signerJVM},
+		{"an explicit jvm stays", signerJVM, 26, p12, false, signerJVM, "", ""},
+		{"an explicit go is not second guessed", signerGo, 26, jks, false, signerGo, "", ""},
+		{"an explicit go over a project that reads SHA-1 stays go", signerGo, 16, p12, false, signerGo, "", ""},
+		{"auto takes the go path over a PKCS#12 keystore", signerAuto, 26, p12, false, signerGo, "", ""},
+		{"auto takes it at the boundary too", signerAuto, minAPIForSHA256Digest, p12, false, signerGo, "", ""},
+		{"auto refuses the SHA-1 strip below it", signerAuto, minAPIForSHA256Digest - 1, p12, false, signerJVM, "", ""},
+		{"auto refuses a manifest that names no minSdkVersion", signerAuto, 0, p12, false, signerJVM, "", ""},
+		{"auto takes a JKS keystore now that the reader opens one", signerAuto, 26, jks, false, signerGo, "", ""},
+		{"auto refuses a keystore that is not there", signerAuto, 26, filepath.Join(dir, "absent.p12"), false, signerJVM, "", ""},
+		// el caso que faltaba: la ruta ausente tiene que decirlo así, y nunca atribuir el fallo
+		// a un formato que nadie llegó a leer
+		{"auto names a missing keystore as missing, not as a format", signerAuto, 26,
+			filepath.Join(dir, "absent.p12"), false, signerJVM, "there is no keystore at", "neither a PKCS#12"},
+		{"auto still blames the format of a file that is there", signerAuto, 26, jceks, false, signerJVM,
+			"is neither a PKCS#12 nor a JKS keystore", "there is no keystore at"},
+		{"auto leaves a bundle to jarsigner", signerAuto, 26, p12, true, signerJVM, "", ""},
 	}
 	for _, c := range cases {
-		if got := resolveSigner(c.signer, c.api, c.key, c.aab); got != c.want {
+		var got string
+		salida := capturarSalida(t, func() { got = resolveSigner(c.signer, c.api, c.key, c.aab) })
+		if got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+		if c.aviso != "" && !strings.Contains(salida, c.aviso) {
+			t.Errorf("%s: el aviso de --signer=auto no dice %q: %q", c.name, c.aviso, salida)
+		}
+		if c.noAviso != "" && strings.Contains(salida, c.noAviso) {
+			t.Errorf("%s: el aviso de --signer=auto no puede decir %q: %q", c.name, c.noAviso, salida)
 		}
 	}
 

@@ -84,7 +84,10 @@ func resolveSigner(signer string, api int, keyPath string, useAAB bool) string {
 		LogD("sign", "--signer=auto: a bundle is signed by jarsigner, so the jvm backend it is")
 		return signerJVM
 	case !keystoreIsReadable(keyPath):
-		LogD("sign", "--signer=auto:", keyPath, "is neither a PKCS#12 nor a JKS keystore, and only the jvm backend reads the rest")
+		// el aviso lo escribe keystoreRefusal porque «no está» y «no es un formato que
+		// sepamos leer» son dos casos distintos: el fallback es el mismo jvm, pero culpar
+		// al formato de un fichero ausente manda a buscar un formato donde falta un fichero
+		LogD("sign", "--signer=auto:", keystoreRefusal(keyPath))
 		return signerJVM
 	case api < minAPIForSHA256Digest:
 		LogD("sign", "--signer=auto: minSdkVersion", api, "is old enough that its platform reads SHA-1 jar digests, which only apksigner writes")
