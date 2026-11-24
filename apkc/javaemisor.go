@@ -2439,6 +2439,12 @@ type parcheSalto4 struct {
 type localVar struct {
 	indice int
 	desc   string
+	// generico es el tipo declarado del local con sus argumentos (`List<Apk>`), cuando se conoce: es lo
+	// que estrecha la vuelta de un método genérico cuando el receptor es esta local
+	// (`m.get(0)` sobre un parámetro `List<Apk>`), igual que `campoResuelto.generico` para los campos.
+	// nil quiere decir «no se sabe si traía argumentos»: con eso `vueltaSinEmitir` no estima, en vez de
+	// devolver el borrado en silencio.
+	generico *tipoArgumento
 }
 
 // ambito es un bloque abierto del fuente: el reparto de locales con el que empezó y los nombres que
@@ -2757,6 +2763,41 @@ func (e *emisor) reserva(nombre string, desc string) int {
 		e.locales[nombre] = localVar{indice: i, desc: desc}
 	}
 	return i
+}
+
+// reservaConGenerico: `reserva` y, además, el tipo declarado del local con sus argumentos
+// (`List<Apk>`). Solo lo usan los sitios donde el fuente lo dice de verdad: los parámetros del método,
+// que lo traen en el AST, y las locales cuyo inicializador lo delata. Sin él, la vuelta de un método
+// genérico encadenado sobre esa local no se puede estrechar y la ruta no estima.
+func (e *emisor) reservaConGenerico(nombre, desc string, generico *tipoArgumento) int {
+	i := e.reserva(nombre, desc)
+	if propagaGenericoDeLocal {
+		if lv, ok := e.locales[nombre]; ok {
+			lv.generico = generico
+			e.locales[nombre] = lv
+		}
+	}
+	return i
+}
+
+// genericoDeLocal: el tipo declarado con argumentos de una local, deducido del valor que se le da. El
+// analizador guarda el borrado (`List<Apk> apks` llega como `List`), así que los argumentos de tipo de
+// una local solo quedan en su inicializador: `List<Apk> apks = app.apks` los trae en el campo. Si el
+// valor no los da —o da otra clase— la local se queda sin tipo declarado conocido, y eso hace que la
+// llamada encadenada sobre ella se rechace en vez de emitirse con el borrado.
+func (e *emisor) genericoDeLocal(valor jexpr, desc string) *tipoArgumento {
+	if valor == nil {
+		return nil
+	}
+	_, generico, ok := e.tipoSinEmitirCompleto(valor)
+	if !ok || generico == nil || len(generico.args) == 0 {
+		return nil
+	}
+	propio, err := e.ctx.descriptorDe(generico.crudo())
+	if err != nil || propio != desc {
+		return nil
+	}
+	return generico
 }
 
 // apuntaNombre deja anotado, en el bloque abierto más interno, lo que la tabla de locales decía de ese
@@ -5260,6 +5301,12 @@ var estimaMoldeSinEmitir = true
 // `javaemisor_llamada_argumento_test.go`; encendido en el binario que se publica.
 var estimaLlamadaEncadenada = true
 
+// propagaGenericoDeLocal es el interruptor de la sonda del tipo declarado del local. Apagado, un local
+// no apunta sus argumentos de tipo y la ruta vuelve al comportamiento de `c0b40e9`: el borrado en
+// silencio —`usa(Object)` y sin `check-cast`—, que es justo el defecto que mide esta ruta. Lo usa la
+// falsificación de `javaemisor_llamada_argumento_test.go`; encendido en el binario que se publica.
+var propagaGenericoDeLocal = true
+
 // descDeCampos: el descriptor del último campo de una cadena `a.b.c` sobre un receptor cuyo tipo ya se
 // conoce, sin escribir el `aload`/`getfield` que emitiría `cadenaDeCampos`. `length` sobre un arreglo da
 // `I`, como el `arraylength` de 0xbe. Devuelve además el tipo declarado del último campo cuando trae
@@ -5313,6 +5360,7 @@ func (e *emisor) tipoSinEmitirCompleto(x jexpr) (string, *tipoArgumento, bool) {
 			return "", nil, false
 		}
 		var actual string
+		var generico *tipoArgumento
 		if base != nil {
 			d, ok := e.tipoSinEmitir(base)
 			if !ok {
@@ -5320,13 +5368,17 @@ func (e *emisor) tipoSinEmitirCompleto(x jexpr) (string, *tipoArgumento, bool) {
 			}
 			actual = d
 		} else if lv, ok := e.locales[segs[0]]; ok {
-			// una local tapa al tipo que se llame igual
+			// una local tapa al tipo que se llame igual, y con ella se lleva sus argumentos de tipo
+			// (`List<Apk> m`): sin ellos `m.get(0)` devolvería el borrado
 			actual = lv.desc
+			generico = lv.generico
 			segs = segs[1:]
 		} else if _, cr, ok := e.capturaDeExterior(segs[0]); ok {
 			// una local capturada por una anonima que encierra a esta: el tipo es el del campo
-			// `val$nombre`, igual que al emitirla
+			// `val$nombre`, igual que al emitirla. Su `Signature` no viaja en el `.class` —javac
+			// declara el campo con el borrado—, así que si traía argumentos la ruta no los inventa.
 			actual = cr.desc
+			generico = cr.generico
 			segs = segs[1:]
 		} else if len(segs) == 1 {
 			// un campo suelto de la clase actual o del exterior que captura la anónima
@@ -5343,6 +5395,10 @@ func (e *emisor) tipoSinEmitirCompleto(x jexpr) (string, *tipoArgumento, bool) {
 			return d, nil, true
 		} else {
 			return "", nil, false
+		}
+		if len(segs) == 0 {
+			// la expresión es la local misma (`m.get(0)`), así que el tipo declarado es el suyo
+			return actual, generico, true
 		}
 		return e.descDeCampos(actual, segs)
 	case jnuevo:
@@ -5432,7 +5488,69 @@ func (e *emisor) vueltaSinEmitir(v jllamada) (string, bool, error) {
 	if vuelta, ok := e.vueltaGenerica(receptor, v.nombre, cand.desc, generico); ok {
 		return vuelta, true, nil
 	}
+	if !propagaGenericoDeLocal {
+		// la sonda: el borrado en silencio de `c0b40e9`, que elige `usa(Object)` y se come el `check-cast`
+		return vueltaDe(cand.desc), true, nil
+	}
+	if e.vueltaConTipoVariable(receptor, v.nombre, cand.desc) {
+		// la vuelta declarada es un tipo variable (`List.get` declara `(I)TE;`) y el argumento que lo
+		// sustituye no se conoce —una local cuyo tipo declarado con argumentos no viaja en el fuente,
+		// o un método heredado de otra clase—. Se devuelve el rechazo explícito de antes en vez del
+		// borrado: `Object` no es el tipo con el que resuelve javac y la sobrecarga elegida sería otra.
+		return "", false, nil
+	}
 	return vueltaDe(cand.desc), true, nil
+}
+
+// vueltaConTipoVariable: si la `Signature` del método declara la vuelta con un tipo variable en
+// cualquier posición (`TE;`, `[TE;`, `Ljava/util/List<TE;>;`). En los dos últimos el descriptor
+// borrado acierta la sobrecarga —Java no resuelve por argumentos de tipo—, pero el llamador no puede
+// distinguirlo sin mirar la firma, así que se rechaza igual: es más barato que adivinar.
+func (e *emisor) vueltaConTipoVariable(receptor, nombre, desc string) bool {
+	cf, err := e.ctx.busc.claseDelJar(receptor)
+	if err != nil {
+		return false
+	}
+	firma, ok := firmaDelMetodoDelJar(cf, nombre, desc)
+	if !ok {
+		return false
+	}
+	return vueltaConVariable(firma)
+}
+
+// vueltaConVariable: recorre el tipo de vuelta de una `Signature` de método y dice si nombra algún
+// tipo variable. Una `T` solo abre un tipo variable en un comienzo de tipo (el principio, detrás de
+// `[` o detrás de `<`), así que un nombre de clase que empiece por T no confunde.
+func vueltaConVariable(firma string) bool {
+	cierre := strings.IndexByte(firma, ')')
+	if cierre < 0 {
+		return false
+	}
+	principio := true
+	for i := cierre + 1; i < len(firma); i++ {
+		switch firma[i] {
+		case 'L':
+			// el nombre de la clase no lleva tipos hasta sus argumentos
+			for i < len(firma) && firma[i] != '<' && firma[i] != ';' {
+				i++
+			}
+			if i < len(firma) && firma[i] == '<' {
+				principio = true
+				continue
+			}
+			principio = false
+		case '[':
+			principio = true
+		case 'T':
+			if principio {
+				return true
+			}
+			principio = false
+		default:
+			principio = false
+		}
+	}
+	return false
 }
 
 // vueltaGenerica: estrecha la vuelta borrada de un método con el argumento de tipo que declara el
@@ -7808,7 +7926,11 @@ func (e *emisor) stm(s jstmt) error {
 		if err != nil {
 			return fmt.Errorf("linea %d: %w", v.donde.linea, err)
 		}
-		indice := e.reserva(v.nombre, d)
+		// el analizador guarda el borrado también para una local (`List<Apk> apks` llega como `List`),
+		// así que los argumentos de tipo solo se saben por el valor que se le da: `List<Apk> apks =
+		// app.apks` los trae en el campo. Sin ellos la local queda sin tipo declarado conocido y la
+		// ruta de la llamada encadenada no estima, en vez de devolver el borrado en silencio.
+		indice := e.reservaConGenerico(v.nombre, d, e.genericoDeLocal(v.valor, d))
 		if v.valor == nil {
 			// una declaracion sin inicializador no escribe ni un byte, y javac no le pone fila en la
 			// LineNumberTable: medido contra javac 17 en la copia de la linea 187 de ApkShare, donde
@@ -9255,7 +9377,15 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("linea %d: %w", p.donde.linea, err)
 		}
-		e.reserva(p.nombre, d)
+		// el parámetro trae su tipo declarado del AST: `List<Apk> m` guarda los argumentos en
+		// `p.generico` y el descriptor se queda en el borrado. Un parámetro sin argumentos se apunta
+		// como lo que es —un tipo crudo— para que la estimación de `m.get(0)` sepa que el borrado es
+		// de verdad el tipo de Java.
+		generico := p.generico
+		if generico == nil {
+			generico = &tipoArgumento{nombre: p.tipo}
+		}
+		e.reservaConGenerico(p.nombre, d, generico)
 	}
 	cuerpo := m.cuerpo
 	if m.nombre == "<init>" {

@@ -156,6 +156,95 @@ const fuenteLlamadaEncadenadaAncha = `public class S {
 }
 `
 
+// fuenteLlamadaDeLocalGenerico: el receptor de la llamada encadenada es un **parámetro** con
+// argumentos de tipo (`List<Apk> m`). El analizador guarda el borrado (`List`) y los argumentos solo
+// viajan en `p.generico`, así que sin propagarlos `m.get(0)` devuelve `Object`, se elige `usa(Object)`
+// y se pierde el `check-cast` que escribe javac. Es la sonda del crítico.
+const fuenteLlamadaDeLocalGenerico = `package p;
+
+import java.util.List;
+
+class Apk {
+    public String ruta;
+
+    public Apk(String ruta) {
+        this.ruta = ruta;
+    }
+}
+
+public class Sonda {
+    void dame(List<Apk> m) {
+        usa(m.get(0));
+    }
+
+    void usa(Apk apk) {
+        apk.ruta.toString();
+    }
+
+    void usa(Object objeto) {
+        objeto.hashCode();
+    }
+}
+`
+
+// fuenteLlamadaDeMapaGenerico: el mismo caso con dos parámetros de tipo y una clave que no es la
+// vuelta (`Map<String,Apk>`, cuyo `get` declara `(Ljava/lang/Object;)TV;`). El tipo que decide la
+// sobrecarga es el segundo, y el control comprueba que la propagación no se queda con el primero.
+const fuenteLlamadaDeMapaGenerico = `package p;
+
+import java.util.Map;
+
+class Apk {
+    public String ruta;
+
+    public Apk(String ruta) {
+        this.ruta = ruta;
+    }
+}
+
+public class Sonda {
+    void dame(Map<String, Apk> m) {
+        usa(m.get("uno"));
+    }
+
+    void usa(Apk apk) {
+        apk.ruta.toString();
+    }
+
+    void usa(Object objeto) {
+        objeto.hashCode();
+    }
+}
+`
+
+// fuenteLlamadaDeLocalSinArgumentos: el control del fail-safe. Con `var` la local no guarda su tipo
+// declarado (el emisor la reserva con el descriptor que deja el valor, `List` y nada más), así que los
+// argumentos de `List<Apk>` no se conocen: la ruta no estima y devuelve el rechazo explícito en vez
+// del `Object` en silencio.
+const fuenteLlamadaDeLocalSinArgumentos = `package p;
+
+import java.util.List;
+
+class Apk {
+    public String ruta;
+}
+
+public class Sonda {
+    void dame(List<Apk> m) {
+        var copia = m;
+        usa(copia.get(0));
+    }
+
+    void usa(Apk apk) {
+        apk.ruta.toString();
+    }
+
+    void usa(Object objeto) {
+        objeto.hashCode();
+    }
+}
+`
+
 // TestLlamadaEncadenadaComoArgumentoContraJavac17: la vuelta de `get()` se estima sin emitir el
 // receptor y el dex entero sale igual al de javac 17, sobrecarga elegida incluida.
 func TestLlamadaEncadenadaComoArgumentoContraJavac17(t *testing.T) {
@@ -266,6 +355,160 @@ func TestLlamadaEncadenadaAnchaContraJavac17(t *testing.T) {
 	if err := compararDex(t, nuestras, deJavac); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// TestLlamadaEncadenadaDeLocalGenericoContraJavac17: el receptor es un parámetro `List<Apk>` y no un
+// campo. El tipo declarado del parámetro llega del AST y `vueltaGenerica` sustituye la `E` de
+// `List.get` por `Apk`, así que la sobrecarga elegida es `usa(Apk)` con su `check-cast`, y el dex sale
+// byte a byte. Sin la propagación se elige `usa(Object)` y el `check-cast` desaparece: 6 instrucciones
+// frente a 7, que es lo que muestran las dos falsificaciones.
+func TestLlamadaEncadenadaDeLocalGenericoContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteLlamadaDeLocalGenerico}}
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó la llamada encadenada sobre un parámetro genérico: %v", err)
+	}
+
+	raiz := t.TempDir()
+	pon(t, raiz, "p/Sonda.java", fuenteLlamadaDeLocalGenerico)
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+
+	nuestra, suya := buscaLaClase(t, nuestras, "Lp/Sonda;", deJavac)
+	nuestro := metodoDeClaseEmitida(t, nuestras, "p/Sonda", "dame", "(Ljava/util/List;)V")
+	suyo := metodoDeClaseLeida(t, deJavac, "Lp/Sonda;", "dame", "(Ljava/util/List;)V")
+	if err := comparaInstrucciones(nuestro.Code, suyo.Code); err != nil {
+		t.Fatalf("dame(Ljava/util/List;)V no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
+	}
+	if !llevaCheckcast(t, suyo.Code) {
+		t.Fatal("javac ya no escribe el check-cast: el oráculo de este test no vale")
+	}
+	comparaMetodos(t, nuestra, suya)
+	if err := compararDex(t, nuestras, deJavac); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLlamadaEncadenadaDeMapaGenericoContraJavac17: el control de la sustitución por posición. `Map`
+// declara `<K,V>` y `get` devuelve `TV;`, así que el tipo que decide la sobrecarga es el **segundo**
+// argumento: con el primero (`String`) se elegiría `usa(Object)` y el dex no coincidiría.
+func TestLlamadaEncadenadaDeMapaGenericoContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteLlamadaDeMapaGenerico}}
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó la llamada encadenada sobre un parámetro `Map`: %v", err)
+	}
+
+	raiz := t.TempDir()
+	pon(t, raiz, "p/Sonda.java", fuenteLlamadaDeMapaGenerico)
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+
+	nuestra, suya := buscaLaClase(t, nuestras, "Lp/Sonda;", deJavac)
+	nuestro := metodoDeClaseEmitida(t, nuestras, "p/Sonda", "dame", "(Ljava/util/Map;)V")
+	suyo := metodoDeClaseLeida(t, deJavac, "Lp/Sonda;", "dame", "(Ljava/util/Map;)V")
+	if err := comparaInstrucciones(nuestro.Code, suyo.Code); err != nil {
+		t.Fatalf("dame(Ljava/util/Map;)V no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
+	}
+	comparaMetodos(t, nuestra, suya)
+	if err := compararDex(t, nuestras, deJavac); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestLlamadaEncadenadaDeLocalGenericoFalsificacion: con la propagación apagada vuelve el defecto de
+// `c0b40e9` —el borrado `Object` en silencio—, así que hay que enseñarlo tal cual: el `dame` de la
+// sonda sale con el `check-cast` menos y elige `usa(Object)`. La comprobación es doble: el dex deja de
+// coincidir con javac y el opcode `checkcast` (0xc0) desaparece del método.
+func TestLlamadaEncadenadaDeLocalGenericoFalsificacion(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteLlamadaDeLocalGenerico}}
+
+	raiz := t.TempDir()
+	pon(t, raiz, "p/Sonda.java", fuenteLlamadaDeLocalGenerico)
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+	suCodigo := metodoDeClaseLeida(t, deJavac, "Lp/Sonda;", "dame", "(Ljava/util/List;)V").Code
+
+	// encendida, el dex es el de javac
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("con la propagación encendida el fuente no compila: %v", err)
+	}
+	if err := compararDex(t, nuestras, deJavac); err != nil {
+		t.Fatalf("con la propagación encendida el dex no es el de javac: %v", err)
+	}
+
+	anterior := propagaGenericoDeLocal
+	propagaGenericoDeLocal = false
+	t.Cleanup(func() { propagaGenericoDeLocal = anterior })
+
+	nuestras, err = compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("con la propagación apagada el fuente no compila: %v", err)
+	}
+	nuestro := metodoDeClaseEmitida(t, nuestras, "p/Sonda", "dame", "(Ljava/util/List;)V")
+	if llevaCheckcast(t, nuestro.Code) {
+		t.Fatalf("con la propagación apagada sigue habiendo `check-cast`; la falsificación no enseña el defecto: %#x", nuestro.Code)
+	}
+	if llevara := llevaCheckcast(t, suCodigo); !llevara {
+		t.Fatal("javac ya no escribe el `check-cast`: el oráculo de la falsificación no vale")
+	}
+	if err := comparaInstrucciones(nuestro.Code, suCodigo); err == nil {
+		t.Fatal("con la propagación apagada las instrucciones siguen siendo las de javac: la falsificación no falsifica")
+	}
+	nInstr, suyas := cuentaInstrucciones(t, nuestro.Code), cuentaInstrucciones(t, suCodigo)
+	if nInstr+1 != suyas {
+		t.Fatalf("con la propagación apagada salen %d instrucciones y javac %d: se esperaba una menos (el `check-cast`)", nInstr, suyas)
+	}
+	t.Logf("sin la propagación, dame(Ljava/util/List;)V: %#x (javac %#x)", nuestro.Code, suCodigo)
+}
+
+// TestLlamadaEncadenadaDeLocalSinArgumentosSeRechaza: el fail-safe. Si el tipo declarado del local con
+// sus argumentos no se conoce, la ruta **no** devuelve el borrado: se rechaza con el mensaje de
+// siempre. Sin esto, `copia.get(0)` elegiría `usa(Object)` y se comería el `check-cast` en silencio.
+func TestLlamadaEncadenadaDeLocalSinArgumentosSeRechaza(t *testing.T) {
+	const literal = "no se puede estimar el tipo de get() sin emitir el receptor de la llamada"
+	jar := jarDelSDK(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteLlamadaDeLocalSinArgumentos}}
+
+	_, err := compilarProyectoJava(fuentes, jar)
+	if err == nil {
+		t.Fatal("una local sin tipo declarado conocido se aceptó: la ruta adivina el borrado")
+	}
+	if !strings.Contains(err.Error(), literal) {
+		t.Fatalf("el rechazo de la local sin argumentos es %q, y se esperaba el de siempre %q", err, literal)
+	}
+	t.Logf("local sin argumentos declarados: %v", err)
+}
+
+// llevaCheckcast y cuentaInstrucciones: las dos vistas del código desarmado que usan las
+// falsificaciones, para nombrar el opcode que desaparece sin depender del volcado entero.
+func llevaCheckcast(t *testing.T, code []byte) bool {
+	t.Helper()
+	instr, err := walkJvmCode(code)
+	if err != nil {
+		t.Fatalf("no se desarma el código: %v", err)
+	}
+	for _, in := range instr {
+		if in.op == opCheckcast {
+			return true
+		}
+	}
+	return false
+}
+
+func cuentaInstrucciones(t *testing.T, code []byte) int {
+	t.Helper()
+	instr, err := walkJvmCode(code)
+	if err != nil {
+		t.Fatalf("no se desarma el código: %v", err)
+	}
+	return len(instr)
 }
 
 // TestLlamadaEncadenadaSinTipoSigueRechazando: el control. Con la ruta encendida, un `get()` sobre un
