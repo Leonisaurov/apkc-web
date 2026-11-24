@@ -14,9 +14,14 @@
 // ver ../README.md y ../docs/evidencia.md para lo que medido y lo que todavia bloquea.
 const fs = require("fs");
 const os = require("os");
-// los flujos reales hay que capturarlos antes de sustituir globalThis.process: si no, la
-// salida de apkc se escribe contra el process falso y no la ve nadie
-const procReal = { stdout: process.stdout, stderr: process.stderr, exit: (c) => process.exit(c) };
+// los flujos reales y el proceso REAL hay que capturarlos antes de sustituir globalThis.process:
+// si no, la salida de apkc se escribe contra el process falso y no la ve nadie, y `exit` se
+// queda resolviendo `process` en el momento de llamarlo —ya sustituido—, de modo que el exit
+// falso solo anota el código y no termina nada: node seguía vivo en epoll_wait con
+// «(apkc devolvio 1)» ya impreso y había que matarlo con SIGTERM (rc 143)
+const procesoReal = process;
+const salirReal = procesoReal.exit.bind(procesoReal);
+const procReal = { stdout: process.stdout, stderr: process.stderr, exit: (c) => salirCon(c) };
 
 // --- las opciones del hospedador ---------------------------------------------------------
 // van antes del camino al wasm, porque lo que viene despues es el argv de apkc y el shim
@@ -103,6 +108,21 @@ const descriptores = new Map();
 let codigoDeSalida = null;
 function anotarSalida(c) {
   if (codigoDeSalida === null) codigoDeSalida = (c === undefined ? 0 : c);
+}
+
+// el único camino por el que node se va: fija el código en el proceso REAL, deja que stdio
+// vacíe lo que le quede y termina con el exit real. process.exit no espera a un stdout en
+// pipe, y ahí van justamente el recuento de ficheros y el «(apkc devolvio N)» que se leen
+// al final del gate. El temporizador sin ref es la red: si un flujo no llamara nunca, el
+// programa sale igual en un segundo en vez de quedarse colgado.
+function salirCon(codigo) {
+  if (typeof codigo !== "number" || !Number.isFinite(codigo)) codigo = 1;
+  procesoReal.exitCode = codigo;
+  let quedan = 2;
+  const cerrar = () => { if (--quedan === 0) salirReal(codigo); };
+  procReal.stdout.write("", cerrar);
+  procReal.stderr.write("", cerrar);
+  setTimeout(() => salirReal(codigo), 1000).unref();
 }
 
 // stdin, stdout y stderr viven en el objeto fs, no en el árbol: sin esto la salida de apkc
@@ -403,7 +423,7 @@ function exportarYResumir() {
   procReal.stdout.write(`--- ficheros en la memoria simulada: ${arbol.length}\n`);
   for (const k of arbol.slice(0, 25)) procReal.stdout.write(`    ${k} ${raiz.get(k).data.length} bytes\n`);
   if (codigoDeSalida !== 0) procReal.stdout.write(`(apkc devolvio ${codigoDeSalida})\n`);
-  procReal.exit(codigoDeSalida === null ? 1 : codigoDeSalida);
+  salirCon(codigoDeSalida === null ? 1 : codigoDeSalida);
 }
 
 WebAssembly.instantiate(fs.readFileSync(argvReal[0]), go.importObject)
