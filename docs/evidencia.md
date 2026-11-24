@@ -14282,3 +14282,52 @@ de la lista versionada, no una medición de red. Sin push del submódulo ni publ
 | §292 | `5cfb5b5`, `fb69a51` | `e2e.sh` compila y emula las diez plantillas en un gate |
 | §293 | `ed7db79` | fidelidad del emulador frente a Droidloom y CDP en verde |
 | §294 | `3f2b0e9` (submódulo) | Dependencias como vista de primer nivel sobre WISP |
+
+## 295. Hot swap, puente WISP y gates
+
+### Hot swap
+
+El `40` del hot swap **no se reproduce**: nativo y CDP dan
+`4 → swap → 4 → clic → 9`. Es un reporte del usuario: no hay comando
+que lo reproduzca y por eso no se registra como medido. Se corrigió
+la firma automática para derivar `MainActivity$1.onClick` (commit
+submódulo `677af8e`). En CDP salen `navegador: todo en orden` y el
+timeline `["Pulsos: 0","1","2","3","4","4","9"]`.
+
+```text
+4 → swap → 4 → clic → 9
+navegador: todo en orden
+["Pulsos: 0","1","2","3","4","4","9"]
+```
+
+### Puente WISP
+
+Puente WISP en wasm: commit `f841220`, `apkc/puente_wisp_js.go`.
+El proxy página-worker entra con el commit submódulo `d02b2da`
+(`wisp-puente.js`) y se activa solo con el contrato `apkc-wisp/1`.
+La validación de la respuesta del núcleo entra con el commit
+submódulo `de92a63` (`wisp.js:294-323`): cuatro falsificaciones
+rechazadas. La forma de relay entra con el commit submódulo
+`2146846`: tres casos rechazados y seis relays del JSON siguen
+pasando.
+
+### Gates
+
+Gate wasm `tools/entorno.sh wasm` en verde. La sonda con
+`apkc-wisp/2` y el relay ajeno quedan rechazados con `websockets=0`
+(log de QA). El gate de la página da 29/29 `ok` y, sin núcleo,
+`sockets:0, llamadas:0`.
+
+```sh
+node prueba-wisp-gates.mjs
+```
+
+```text
+29/29 ok
+sockets:0, llamadas:0
+websockets=0
+```
+
+**Frontera de `§295`.** Gate final, CI y publicación quedan fuera.
+El puente real contra Maven solo se probó con núcleo simulado, no
+con un relay externo; el `40` del hot swap sigue sin reproducirse.
