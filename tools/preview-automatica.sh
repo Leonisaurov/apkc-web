@@ -40,8 +40,11 @@ while :; do
           printf '%s\n' "$head_estable" > "$ESTADO"
           echo "[$(date -u +%FT%TZ)] HEAD $corto: wasm actualizado" >> "$LOG"
         else
+          # Caso ABA: si HEAD volvio al valor que ya estaba en ESTADO, dejarlo tal cual haria que el
+          # siguiente ciclo no reconstruya y sirva B para siempre. Vacia el estado: siempre se reconstruye.
+          : > "$ESTADO"
           echo "[$(date -u +%FT%TZ)] HEAD $corto: HEAD cambio a $(echo "$head_tras" | cut -c1-8) durante el build; " \
-               "wasm servido, estado sin fijar para reconstruir" >> "$LOG"
+               "wasm servido, estado vaciado para reconstruir" >> "$LOG"
         fi
       else
         echo "[$(date -u +%FT%TZ)] HEAD $corto: FALLO al reconstruir; se reintentara" >> "$LOG"
