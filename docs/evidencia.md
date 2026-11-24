@@ -13977,9 +13977,9 @@ cd apkc && go test -overlay=<overlay.json> -run TestAuditoriaCruce -count=1 -v .
 Medición previa, en `46a9a792`: la APK de `traducido` (`string/saludo`) mostraba `Hello!` en el
 modelo de `apkc preview` mientras `aapt2 dump resources` ya veía `(es) "Hola!"`. El lector elegía
 la configuración base (`apkc/recursos.go:604`, `:624`), no había flag (`apkc/preview.go:267`) y
-`esConfiguracionBase` (`apkc/preview.go:2537`) excluía `values-es`. Ahora `tablaRecursos` lleva
-`locale` (`apkc/recursos.go:379`), que el flag asigna tras `leeTabla` (`apkc/preview.go:636`), y
-`valorDeId` (`apkc/recursos.go:671`) elige el bloque por `language` en +8/+9 y `country` en +10/+11
+`esConfiguracionBase` (`apkc/preview.go:2545`) excluía `values-es`. Ahora `tablaRecursos` lleva
+`locale` (`apkc/recursos.go:390`), que el flag asigna tras `leeTabla` (`apkc/preview.go:645`), y
+`valorDeId` (`apkc/recursos.go:754`) elige el bloque por `language` en +8/+9 y `country` en +10/+11
 (§94, §107): prefiere el país exacto al país vacío y cae a la base si la entrada localizada falta,
 está `ausente` o es compleja. No se tocaron `bloqueDeTipo` ni `entradaDeId`, así que los ids, las
 rutas y los drawables siguen resolviéndose contra la base; el idioma solo cambia valores. Sin flag,
