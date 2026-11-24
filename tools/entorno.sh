@@ -111,7 +111,22 @@ case "$tarea" in
     ;;
   wasm)
     compila_wasm
-    ( cd "$RAIZ/shim" && node navegador-sim.js "$TMP/apkc-test.wasm" )
+    # El fs simulado nace vacío: sin montar el android.jar y el fixture del layout, las pruebas que
+    # los abren fallan con ENOENT (`sin android.jar que abrir`, `open testdata/...`) aunque el
+    # código esté bien. El jar se monta con la forma del SDK (platforms/android-34/android.jar bajo
+    # el ANDROID_HOME que el hospedador ya publica) porque `check` y el enlazador deducen la API del
+    # nombre del directorio padre: en /sdk/android.jar suelto piden --sdk-version y fallan. El
+    # destino va absoluto porque --montar también expande el destino. El origen sale de jar_del_sdk,
+    # la única definición de «dónde está» que comparten doctor y la tarea jar.
+    MONTAJES=
+    if JAR_WASM=$(jar_del_sdk 34); then
+      MONTAJES="--montar $JAR_WASM:/android/platforms/android-34/android.jar"
+    else
+      printf 'aviso: sin android.jar; las pruebas contra el SDK fallarán en wasm\n' >&2
+    fi
+    ( cd "$RAIZ/shim" && node navegador-sim.js $MONTAJES \
+        --montar "$RAIZ/apkc/testdata/vista-propia/main.xml:/testdata/vista-propia/main.xml" \
+        "$TMP/apkc-test.wasm" )
     ;;
   harness)
     if [ ! -f "$APKC_HARNESS/zipcheck.py" ]; then

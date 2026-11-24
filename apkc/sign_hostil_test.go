@@ -6,7 +6,6 @@ package main
 // silencio, aunque fuera contenido como META-INF/services/x.MF: ahora se avisa.
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,24 +83,28 @@ func TestOwnSignatureEntry(t *testing.T) {
 	}
 }
 
-// capturarSalida ejecuta fn con os.Stdout redirigido a una tubería y devuelve todo lo escrito, que
-// es donde Log imprime. Las pruebas de este paquete no corren en paralelo, así que el cambio de
-// os.Stdout no pisa a otra.
+// capturarSalida ejecuta fn con os.Stdout redirigido a un fichero temporal y devuelve todo lo
+// escrito, que es donde Log imprime. Se usa un fichero y no una tubería porque `os.Pipe` no existe
+// en el hospedador wasm (`os/pipe_wasm.go` devuelve ENOSYS): así la prueba mide lo mismo en nativo y
+// en la pestaña, sin debilitar la aserción. Las pruebas de este paquete no corren en paralelo, así
+// que el cambio de os.Stdout no pisa a otra; se restaura siempre, también si fn revienta.
 func capturarSalida(t *testing.T, fn func()) string {
 	t.Helper()
 	viejo := os.Stdout
-	r, w, err := os.Pipe()
+	f, err := os.CreateTemp(t.TempDir(), "salida-*.log")
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.Stdout = w
-	leido := make(chan string, 1)
-	go func() {
-		datos, _ := io.ReadAll(r)
-		leido <- string(datos)
-	}()
+	os.Stdout = f
+	defer func() { os.Stdout = viejo }()
 	fn()
-	w.Close()
 	os.Stdout = viejo
-	return <-leido
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	datos, err := os.ReadFile(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(datos)
 }
