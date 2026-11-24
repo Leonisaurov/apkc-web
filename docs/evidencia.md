@@ -13384,9 +13384,10 @@ deliberada, que se crea y se cierra **antes** de resolver DNS (dominio `.invalid
 **El egreso, comprobado aparte.** Un muestreo de `ss -tnp` cada 200 ms dejó
 `~/.cache/apkc-web/tmp/conexiones-brave.log` (3522 líneas) y **ninguna IP de los seis relays**
 (`wisp.mercurywork.shop`, `terbiumon.top`, `anura.pro`, `lichology.com`, `wisp.waved.site`,
-`gointospace.app`) aparece en las conexiones del proceso de la prueba. Matiz honesto: Brave abrió
-HTTPS propio del navegador (telemetría y actualizaciones) a otras IP, ajenas a la pestaña y a los
-relays; el tráfico que mide el CDP son las 481 peticiones locales.
+`gointospace.app`) aparece en las conexiones del proceso de la prueba. El bloque de abajo reproduce
+ese muestreo, con las diez IP resueltas de esos seis relays en el `grep`, que debe salir vacío.
+Matiz honesto: Brave abrió HTTPS propio del navegador (telemetría y actualizaciones) a otras IP,
+ajenas a la pestaña y a los relays; el tráfico que mide el CDP son las 481 peticiones locales.
 
 **Estado del entorno.** `APKC_WISP_EXTERNO` no queda exportado: la única asignación es inline en
 `tools/entorno.sh:155`, y el guard que sale `rc=2` sin ella está en `:146`. No quedaron procesos
@@ -13399,7 +13400,20 @@ no está activado por defecto.
 ```sh
 tcr -- sh tools/entorno.sh wisp
 CHROME_BIN=/usr/bin/brave APKC_WISP_EXTERNO=1 tcr -- sh tools/entorno.sh wisp-externo
-wc -l "$HOME/.cache/apkc-web/tmp/conexiones-brave.log"
+```
+
+```sh
+# el egreso: se muestrea ss -tnp mientras corre el externo (esta vez sí, el log sale de aquí)
+LOG="$HOME/.cache/apkc-web/tmp/conexiones-brave.log"
+: > "$LOG"
+CHROME_BIN=/usr/bin/brave APKC_WISP_EXTERNO=1 tcr -- sh tools/entorno.sh wisp-externo & GATE=$!
+while kill -0 "$GATE" 2>/dev/null; do ss -tnp >> "$LOG"; sleep 0.2; done
+wait "$GATE"
+wc -l "$LOG"
+# el patrón, partido en dos para no pasar de 100 columnas; el grep debe salir vacío
+IPS='104\.21\.33\.29|172\.67\.140\.188|51\.81\.36\.242|104\.21\.11\.48|172\.67\.165\.40'
+IPS="$IPS"'|104\.21\.34\.165|172\.67\.163\.20|104\.21\.1\.217|172\.67\.128\.22|15\.204\.247\.166'
+grep -nE "$IPS" "$LOG"   # debe salir vacío
 ```
 
 ## Fronteras del bloque, sin cerrar
