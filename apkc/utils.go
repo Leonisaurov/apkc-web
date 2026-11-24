@@ -104,6 +104,11 @@ type Data struct {
 	// digest of those names and bytes. Those trees only reach the apk when the
 	// bundle is rebuilt, so an addition or a deletion has to force it.
 	AuxInputs string `json:"auxInputs,omitempty"`
+	// AarInputs names the `.aar` roster of jar/ the last link read, as a digest of
+	// their names and bytes. Their resources and native libraries live outside
+	// res/ and lib/, so an artifact that appears, changes or goes away has to
+	// force the link or its files would stay linked forever.
+	AarInputs string `json:"aarInputs,omitempty"`
 	// AppApi is the minSdkVersion the dex of the project was produced with. d8
 	// desugars according to --min-api, so a minSdkVersion edit changes the bytes of
 	// build/classes.dex even when not a single source did, and nothing else in this

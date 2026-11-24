@@ -198,6 +198,15 @@ func _build(o buildOpts) {
 	storedLibs, libsDeclared := manifestNativeLibsStored()
 	libs := nativeLibs{stored: storedLibs, declared: libsDeclared}
 
+	// la mitad de recursos y nativos de los `.aar` de `jar/`: se extrae una vez por vuelta y las
+	// tres etapas que la usan —el enlace, el roster del incremental y el plan del paquete— leen la
+	// misma lista, o el paquete y el registro de lo que se copió podrían no hablar de lo mismo
+	aares, err := aarsExtraidos("")
+	if err != nil {
+		LogF("build", err.Error())
+	}
+	aaresDelProyecto = aares
+
 	// who writes the apk is decided by the api level and the keystore in front of it,
 	// before any stage asks: --signer=auto means exactly that
 	o.signer = resolveSigner(o.signer, api, o.keyStore, o.useAAB)
@@ -563,6 +572,21 @@ func compileRes(incremental bool, linker string) bool {
 			return true
 		}
 		cambiados, _ := getFiles("res", "", true)
+		// los recursos de un `.aar` de `jar/` no viven bajo `res/`: su carpeta lleva la huella del
+		// artefacto, así que un AAR que no cambió reutiliza la extracción y sus ficheros siguen sin
+		// cambio, y uno tocado deja ficheros sin registrar que fuerzan el enlace
+		for _, aar := range aaresDelProyecto {
+			if aar.res == "" {
+				continue
+			}
+			recursos, _ := getFiles(aar.res, "", true)
+			cambiados = append(cambiados, recursos...)
+		}
+		loadTable()
+		if rosterDeAars("") != DataTable.AarInputs {
+			// un AAR que aparece, cambia de bytes o se va no toca res/: el roster entero es su aviso
+			cambiados = append(cambiados, "build/aar")
+		}
 		if len(cambiados) > 0 {
 			LogD("Incremental", len(cambiados), "resource files changed: relinking")
 		}
@@ -610,7 +634,16 @@ func bundleRes(o buildOpts, incremental bool) bool {
 			// the link read res/: what it saw is the content the next round compares
 			// against, exactly like aapt2 compile records the flats it consumed
 			res, _ := getFiles("res", "", false)
+			for _, aar := range aaresDelProyecto {
+				if aar.res == "" {
+					continue
+				}
+				recursos, _ := getFiles(aar.res, "", false)
+				res = append(res, recursos...)
+			}
 			updateRecords(res)
+			// el enlace ya consumió estos AAR: hasta que cambie su roster no hay que repetirlo
+			DataTable.AarInputs = rosterDeAars("")
 		}
 		return changed
 	}
@@ -1108,6 +1141,17 @@ func auxRoster(libStored bool) (string, map[string]string) {
 			}
 			lines = append(lines, line)
 		}
+	}
+	// los `.so` que un AAR aporta viven en `build/aar/`, no en `lib/`: sin estas líneas, cambiarlos
+	// o quitarlos no forzaría un paquete nuevo y el apk se quedaría con el nativo anterior. La
+	// línea nombra la entrada del paquete, que es lo que decide el método de compresión
+	for _, e := range nativosDeAars(aaresDelProyecto) {
+		digest, err := fileSHA1(e.src)
+		if err != nil {
+			digest = "unreadable:" + e.src
+		}
+		digests[e.src] = digest
+		lines = append(lines, e.name+"\n"+digest+"\n"+zipMethod(libStored))
 	}
 	return sha1Text(strings.Join(lines, "\n")), digests
 }
@@ -1757,6 +1801,12 @@ func reusePlan(plan []bundleEntry, old map[string]bool, recorded map[string]stri
 	return reuse, entries
 }
 
+// aaresDelProyecto es lo que los `.aar` de `jar/` aportan al paquete además de sus clases, ya
+// extraído por `aarsExtraidos` al empezar la vuelta: el enlace lee sus recursos, `auxRoster` cuenta
+// sus `.so` y `packagePlan` los mete. Es un global como `androidJar` porque las tres etapas tienen
+// que ver la misma lista y el estado de un build es uno solo.
+var aaresDelProyecto []aarDelProyecto
+
 // nativeLibs is what the manifest dictates about the .so of lib/ inside the
 // package: stored and page aligned when it promises the runtime can map them
 // from the apk, deflated when it expects the package manager to unpack them.
@@ -1840,21 +1890,58 @@ func packagePlan(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	}
 
 	files, _ = getFiles("lib", "", false)
-	if len(files) > 0 {
+	nativos := nativosDeAars(aaresDelProyecto)
+	if len(files)+len(nativos) > 0 {
 		LogI("build", "bundling native libs")
 		if !libs.declared {
 			// the pairing is what breaks installs, and it is decided by an
 			// attribute most project authors never wrote down
-			LogD("build", "no android:extractNativeLibs in the manifest:", len(files),
+			LogD("build", "no android:extractNativeLibs in the manifest:", len(files)+len(nativos),
 				"libs go in deflated, so the package manager unpacks them at install")
 		} else if libs.stored {
-			LogD("build", "extractNativeLibs=false:", len(files), "libs go in stored, and page aligned")
+			LogD("build", "extractNativeLibs=false:", len(files)+len(nativos), "libs go in stored, and page aligned")
 		}
+	}
+	vistosLib := map[string]bool{}
+	for _, f := range files {
+		vistosLib[f] = true
 	}
 	for _, f := range files {
 		add(f, f, !libs.stored)
 	}
+	// los nativos de los AAR de jar/ entran con el nombre canónico que busca System.loadLibrary.
+	// Un `.so` que el proyecto ya tiene con la misma ruta se queda con el del proyecto: el mismo
+	// fichero no viaja dos veces y la prioridad no depende del orden de lectura
+	for _, e := range nativos {
+		if vistosLib[e.name] {
+			LogW("build", "el nativo", e.name, "de un AAR ya lo aporta el proyecto: se queda el del proyecto")
+			continue
+		}
+		vistosLib[e.name] = true
+		add(e.src, e.name, !libs.stored)
+	}
 	return plan
+}
+
+// nativosDeAars enumera los `.so` que los AAR de `jar/` aportan, con el nombre que tendrán dentro
+// del paquete (`lib/<abi>/<fichero>`, el que busca System.loadLibrary), no con la ruta de la
+// extracción. `getFiles` recorre en orden léxico, así que el plan es determinista.
+func nativosDeAars(aares []aarDelProyecto) []bundleEntry {
+	salida := []bundleEntry{}
+	for _, aar := range aares {
+		if aar.lib == "" {
+			continue
+		}
+		ficheros, _ := getFiles(aar.lib, "", false)
+		for _, f := range ficheros {
+			rel, err := filepath.Rel(aar.lib, f)
+			if err != nil {
+				LogF("build", err)
+			}
+			salida = append(salida, bundleEntry{src: f, name: "lib/" + filepath.ToSlash(rel)})
+		}
+	}
+	return salida
 }
 
 func buildBundle(useAAB bool, depDexes []string, auxDigests map[string]string, libs nativeLibs) {

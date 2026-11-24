@@ -10,8 +10,11 @@ package main
 // por la huella del AAR, así que un AAR que no cambió no se vuelve a escribir.
 //
 // Nada de esto resuelve Maven ni descarga: lo que hay en `jar/` es lo que se compila. El `res/` y el
-// `lib/<abi>/` de un AAR no son entradas del compilador (los recursos y las bibliotecas nativas no
-// resuelven nombres de Java) y quedan fuera de esta pieza.
+// `lib/<abi>/` de un AAR no son entradas del compilador —los recursos y las bibliotecas nativas no
+// resuelven nombres de Java—, pero sí son parte del paquete: la otra mitad de este fichero extrae
+// las dos a `build/aar/<huella>/` para que el enlazador de recursos y el empaquetador las lean del
+// disco con las mismas reglas que las del proyecto (`aarsExtraidos`). Si el proyecto o una isla de
+// `res/__deps/` ya aportan la misma ruta, gana el proyecto: un recurso o un `.so` no viaja dos veces.
 //
 // Desde que `--compiler go` también dexa las dependencias, este fichero tiene la segunda mitad: los
 // `.class` de cada entrada del classpath leídos en memoria (`clasesDeJar`) y la lista de lo que hay
@@ -24,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -295,4 +299,157 @@ func entradaDelZip(ruta, nombre string) ([]byte, error) {
 		return io.ReadAll(rc)
 	}
 	return nil, nil
+}
+
+// aarDelProyecto es lo que un `.aar` de `jar/` aporta al paquete además de sus clases: sus recursos
+// y sus bibliotecas nativas, ya extraídos a `build/aar/<huella>/`, para que el enlazador y el
+// empaquetador los lean del disco con las mismas reglas que los del proyecto. `res` y `lib` quedan
+// vacíos cuando el artefacto no trae esa mitad, que es el caso de un AAR de solo clases o de solo
+// nativos.
+type aarDelProyecto struct {
+	aar  string
+	isla string
+	res  string
+	lib  string
+}
+
+// aarsExtraidos es la puerta de la mitad de recursos y nativos de las dependencias: recorre `jar/`,
+// y por cada `.aar` deja sus entradas `res/` y `lib/` en `build/aar/<sha1 de la ruta>-<crc>/`. El
+// nombre lleva la huella del AAR entero, así que un artefacto que no cambió reutiliza la extracción
+// y uno con otros bytes deja otra carpeta: un AAR tocado no mezcla recursos viejos con nuevos.
+//
+// La extracción es atómica por carpeta: se escribe en una temporal y se renombra sobre el nombre
+// final, y la marca `.extraido` se escribe la última. Un build que muere a mitad no deja media
+// carpeta con el nombre que dice ser la de este AAR.
+func aarsExtraidos(raiz string) ([]aarDelProyecto, error) {
+	aars := aarsEn(raiz)
+	salida := make([]aarDelProyecto, 0, len(aars))
+	for _, aar := range aars {
+		_, directorio, err := huellaDelJar(aar)
+		if err != nil {
+			return nil, fmt.Errorf("el AAR %s no abre: %w", aar, err)
+		}
+		isla := sha1Text(aar)[:16] + fmt.Sprintf("-%08x", directorio)
+		base := filepath.Join(raiz, "build", "aar", isla)
+		if !exists(filepath.Join(base, ".extraido")) {
+			if err := extraerAar(aar, base); err != nil {
+				return nil, fmt.Errorf("el AAR %s no se puede extraer: %w", aar, err)
+			}
+		}
+		dependencia := aarDelProyecto{aar: aar, isla: isla}
+		if existeDirectorio(filepath.Join(base, "res")) {
+			dependencia.res = filepath.Join(base, "res")
+		}
+		if existeDirectorio(filepath.Join(base, "lib")) {
+			dependencia.lib = filepath.Join(base, "lib")
+		}
+		salida = append(salida, dependencia)
+	}
+	return salida, nil
+}
+
+// rosterDeAars resume qué AAR hay y con qué bytes: la huella de cada uno, en el orden de `jar/`.
+// Es lo que invalida el enlace cuando un AAR aparece, cambia o se va, porque los recursos que
+// aporta no están bajo `res/` y el incremental no los vería de otro modo. Sin AAR devuelve vacío,
+// que es el estado en el que un proyecto que nunca tuvo ninguno no tiene nada que invalidar.
+func rosterDeAars(raiz string) string {
+	aars := aarsEn(raiz)
+	if len(aars) == 0 {
+		return ""
+	}
+	lineas := make([]string, 0, len(aars))
+	for _, aar := range aars {
+		digest, err := fileSHA1(aar)
+		if err != nil {
+			digest = "ilegible:" + aar
+		}
+		lineas = append(lineas, aar+"\n"+digest)
+	}
+	return sha1Text(strings.Join(lineas, "\n"))
+}
+
+// extraerAar copia a `base` las entradas `res/` y `lib/` del zip. Los nombres se validan antes de
+// tocar el disco: una entrada con `..`, absoluta o con separador de Windows se rechaza, igual que
+// hace el importador de dependencias, porque el zip no es de fiar.
+//
+// Un `res/values/public.xml` se salta: es la tabla de ids fijos con la que aapt2 fija el artefacto,
+// no una declaración de recursos, y el enlazador de este fork no la modela.
+func extraerAar(rutaAar, base string) error {
+	zr, err := zip.OpenReader(rutaAar)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	if err := os.MkdirAll(filepath.Dir(base), 0o755); err != nil {
+		return err
+	}
+	tmp := base + ".tmp-" + sufijoDeTemporal()
+	defer os.RemoveAll(tmp)
+	for _, f := range zr.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		nombre, err := rutaSeguraDelAar(f.Name)
+		if err != nil {
+			return err
+		}
+		if nombre == "" || nombre == "res/values/public.xml" {
+			continue
+		}
+		destino := filepath.Join(tmp, filepath.FromSlash(nombre))
+		if err := os.MkdirAll(filepath.Dir(destino), 0o755); err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		datos, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(destino, datos, 0o644); err != nil {
+			return err
+		}
+	}
+	// la marca va antes del renombrado, dentro de la temporal: cuando la carpeta final existe, su
+	// contenido está entero
+	if err := os.WriteFile(filepath.Join(tmp, ".extraido"), []byte(rutaAar+"\n"), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, base); err != nil {
+		// otra vuelta del mismo build puede haber ganado la carrera: si la marca está, vale
+		if exists(filepath.Join(base, ".extraido")) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+// rutaSeguraDelAar devuelve la ruta relativa de una entrada del AAR si aporta algo al paquete, o
+// vacío si es de las que no se extraen. Una entrada fuera de `res/` y `lib/` se ignora (el
+// manifiesto, `R.txt` y las clases tienen su propio camino); una que intente salir de la carpeta
+// es un error, no algo que se salte en silencio.
+func rutaSeguraDelAar(nombre string) (string, error) {
+	if strings.Contains(nombre, "\\") {
+		return "", fmt.Errorf("la entrada %q del AAR usa separador de Windows", nombre)
+	}
+	limpio := path.Clean(nombre)
+	if limpio == "." || limpio == ".." || strings.HasPrefix(limpio, "../") || strings.HasPrefix(limpio, "/") {
+		return "", fmt.Errorf("la entrada %q del AAR sale de su carpeta", nombre)
+	}
+	if !strings.HasPrefix(limpio, "res/") && !strings.HasPrefix(limpio, "lib/") {
+		return "", nil
+	}
+	return limpio, nil
+}
+
+// existeDirectorio dice si hay una carpeta con ese nombre: `os.Stat` no distingue en la firma que
+// se usó arriba, y una entrada suelta llamada `res` no es una carpeta de recursos.
+func existeDirectorio(ruta string) bool {
+	info, err := os.Stat(ruta)
+	return err == nil && info.IsDir()
 }

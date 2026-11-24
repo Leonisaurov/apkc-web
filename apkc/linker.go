@@ -21,9 +21,12 @@ package main
 //
 // Lo que aporta un AAR importado entra por aquí también: `res/__deps/<isla>/<tipo>/…` se lee con las
 // mismas reglas que `res/` y su fichero viaja al paquete con la ruta de su tipo (`res/layout/x.xml`),
-// que es la que deja `aapt2 link` y la que resuelven la tabla y la vista previa. Los nativos de
-// `lib/<abi>/*.so` no pasan por el enlazador: los mete en el apk `packagePlan`, como cualquier otro
-// fichero de `lib/`, con el nombre canónico que `System.loadLibrary` busca.
+// que es la que deja `aapt2 link` y la que resuelven la tabla y la vista previa. Un `.aar` que sigue
+// en `jar/` aporta lo mismo por su propio camino: `aarsExtraidos` deja su `res/` en `build/aar/` y
+// esta misma función la recorre, con el proyecto por delante cuando dos recursos piden la misma ruta.
+// Los nativos de `lib/<abi>/*.so` no pasan por el enlazador: los mete en el apk `packagePlan`, como
+// cualquier otro fichero de `lib/`, con el nombre canónico que `System.loadLibrary` busca —también
+// los del `.aar` de `jar/`, que `aarsExtraidos` deja en su `lib/`.
 
 import (
 	"flag"
@@ -183,9 +186,10 @@ func tipoDeRecurso(ruta string) string {
 
 // fuentesDelProyecto recoge el arbol de recursos: los values, los layouts y el manifiesto, todos en
 // texto. Rechaza lo que no se pueda enlazar, antes de escribir nada. Además de res/, lee la isla
-// `res/__deps/`, que es lo que aporta un AAR importado: los dos árboles se enlazan con las mismas
-// reglas y sus ficheros viajan al apk con la ruta de su tipo, igual que los del proyecto (lo que
-// `aapt2 link` deja en `build/res`), para que el paquete y la vista previa no distingan el origen.
+// `res/__deps/`, que es lo que aporta un AAR importado, y el `res/` de cada `.aar` que siga en
+// `jar/` (extraído por `aarsExtraidos`): los tres se enlazan con las mismas reglas y sus ficheros
+// viajan al apk con la ruta de su tipo, igual que los del proyecto (lo que `aapt2 link` deja en
+// `build/res`), para que el paquete y la vista previa no distingan el origen.
 func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML, err error) {
 	manifiesto = fuenteXML{nombre: "AndroidManifest.xml"}
 	manifiesto.contenido, err = os.ReadFile(filepath.Join(raiz, "AndroidManifest.xml"))
@@ -223,6 +227,71 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 		valores = append(valores, v...)
 		layouts = append(layouts, l...)
 		ficheros = append(ficheros, f...)
+	}
+	// lo que cada `.aar` de `jar/` trae bajo `res/` entra con las mismas reglas que una isla de
+	// `res/__deps/`: su ruta de paquete tampoco lleva la isla. Un layout o un fichero que el
+	// proyecto (o una isla) ya aporta con el mismo nombre se queda con el suyo, así que un recurso
+	// no viaja dos veces y la prioridad no depende del orden en que se leyeron los artefactos.
+	aares, err := aarsExtraidos(raiz)
+	if err != nil {
+		return nil, nil, nil, manifiesto, err
+	}
+	vistos := map[string]bool{}
+	for _, f := range layouts {
+		vistos[f.nombre] = true
+	}
+	for _, f := range ficheros {
+		vistos[f.nombre] = true
+	}
+	// dos copias byte a byte del mismo `values` (el importador deja una isla y el `.aar` sigue en
+	// `jar/`) declaran los mismos recursos: se lee una vez
+	contenidos := map[string]bool{}
+	for _, f := range valores {
+		contenidos[string(f.contenido)] = true
+	}
+	for _, aar := range aares {
+		if aar.res == "" {
+			continue
+		}
+		tipos, err := os.ReadDir(aar.res)
+		if err != nil {
+			return nil, nil, nil, manifiesto, err
+		}
+		for _, tipo := range tipos {
+			logica := path.Join("jar", filepath.Base(aar.aar), "res", tipo.Name())
+			if !tipo.IsDir() {
+				return nil, nil, nil, manifiesto, fmt.Errorf("%s no es una carpeta de recursos", logica)
+			}
+			v, l, f, err := fuentesDeCarpetaRes(filepath.Join(aar.res, tipo.Name()), logica, true)
+			if err != nil {
+				return nil, nil, nil, manifiesto, err
+			}
+			for _, fuente := range l {
+				if vistos[fuente.nombre] {
+					LogW("build", "el recurso", fuente.nombre, "del AAR", filepath.Base(aar.aar),
+						"ya lo aporta el proyecto: se queda el del proyecto")
+					continue
+				}
+				vistos[fuente.nombre] = true
+				layouts = append(layouts, fuente)
+			}
+			for _, fuente := range f {
+				if vistos[fuente.nombre] {
+					LogW("build", "el fichero", fuente.nombre, "del AAR", filepath.Base(aar.aar),
+						"ya lo aporta el proyecto: se queda el del proyecto")
+					continue
+				}
+				vistos[fuente.nombre] = true
+				ficheros = append(ficheros, fuente)
+			}
+			for _, fuente := range v {
+				if contenidos[string(fuente.contenido)] {
+					continue
+				}
+				contenidos[string(fuente.contenido)] = true
+				valores = append(valores, fuente)
+			}
+		}
 	}
 	return valores, layouts, ficheros, manifiesto, nil
 }
