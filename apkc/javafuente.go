@@ -2921,35 +2921,25 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 			}
 			return jlambda{param: nombre, cuerpo: cuerpo, donde: t.donde}, nil
 		}
-		if !a.es('p', ".") && a.registraCaptura(nombre) {
+		if (!a.es('p', ".") || capturaDeLocalComoReceptor) && a.registraCaptura(nombre) {
 			// una local/parámetro effectively-final del método que crea la anónima: javac la baja a
-			// `val$nombre` y el emisor la lee como `this.val$nombre` (5.14)
-			return jacceso{base: jthis{donde: t.donde}, nombre: "val$" + nombre, donde: t.donde}, nil
+			// `val$nombre` y el emisor la lee como `this.val$nombre` (5.14). Con un punto detrás
+			// (`apps.getAdapter()`) lo que sigue es el acceso a un miembro de la local, no una cadena
+			// de tipo cualificado: `registraCaptura` ya distingue uno de otro porque solo devuelve
+			// cierto para un nombre que está en los locales del método de encierro (`R` y
+			// `android` no lo están) y no en los de la propia anónima.
+			base := jexpr(jacceso{base: jthis{donde: t.donde}, nombre: "val$" + nombre, donde: t.donde})
+			if !a.es('p', ".") {
+				return base, nil
+			}
+			return a.cadenaDeMiembros(base, t.donde)
 		}
 		if a.es('p', ".") {
 			// R.layout.main: se lee como acceso y el emisor decide si es una constante inlinable.
 			// MainActivity.this: la captura del exterior, que javac baja a un campo this$0.
 			// La cadena entera lleva la posicion de su **cabeza**, que es donde empieza el token que el
 			// editor tiene que subrayar: `R.layout.main` se señala en la `R`, no en `main` (§200).
-			inicio := t.donde
-			base := jexpr(jacceso{nombre: nombre, donde: inicio})
-			for a.es('p', ".") {
-				a.avanzar()
-				if a.es('k', "this") {
-					a.avanzar()
-					if acc, esAcceso := base.(jacceso); esAcceso && acc.base == nil {
-						return jthis{nombre: acc.nombre, donde: inicio}, nil
-					}
-					return nil, fmt.Errorf("%s: `.this` solo se mide detras de un nombre de clase suelto", inicio.sitio())
-				}
-				siguiente := a.actual()
-				if siguiente.kind != 'i' {
-					return nil, fmt.Errorf("%s: tras el punto se esperaba un nombre", siguiente.donde.sitio())
-				}
-				a.avanzar()
-				base = jacceso{base: base, nombre: siguiente.valor, donde: inicio}
-			}
-			return base, nil
+			return a.cadenaDeMiembros(jacceso{nombre: nombre, donde: t.donde}, t.donde)
 		}
 		return jacceso{nombre: nombre, donde: t.donde}, nil
 	}
@@ -2962,6 +2952,37 @@ func (a *analizadorJava) atomo() (jexpr, error) {
 	}
 	return nil, fmt.Errorf("linea %d: %q no es una expresion que este parser reconozca", t.donde.linea, t.valor)
 }
+
+// cadenaDeMiembros lee los `.nombre` que cuelgan de una base ya leída (`R.layout.main` desde la `R`,
+// `this.val$apps.getAdapter()` desde la captura). El `.this` cierra la cadena y devuelve el `Tipo.this`
+// de una interna, que javac baja a un campo this$0. La cadena entera lleva la posicion de su cabeza,
+// que es donde empieza el token que el editor tiene que subrayar: `R.layout.main` se señala en la `R`,
+// no en `main` (§200).
+func (a *analizadorJava) cadenaDeMiembros(base jexpr, inicio pos) (jexpr, error) {
+	for a.es('p', ".") {
+		a.avanzar()
+		if a.es('k', "this") {
+			a.avanzar()
+			if acc, esAcceso := base.(jacceso); esAcceso && acc.base == nil {
+				return jthis{nombre: acc.nombre, donde: inicio}, nil
+			}
+			return nil, fmt.Errorf("%s: `.this` solo se mide detras de un nombre de clase suelto", inicio.sitio())
+		}
+		siguiente := a.actual()
+		if siguiente.kind != 'i' {
+			return nil, fmt.Errorf("%s: tras el punto se esperaba un nombre", siguiente.donde.sitio())
+		}
+		a.avanzar()
+		base = jacceso{base: base, nombre: siguiente.valor, donde: inicio}
+	}
+	return base, nil
+}
+
+// capturaDeLocalComoReceptor es el interruptor de la sonda de `apps.getAdapter()` dentro de una anónima:
+// apagado, un nombre seguido de punto nunca se registra como captura (el comportamiento de antes, que
+// rechaza `MainActivity.java:55` de ApkShare con «al leer apps, el tipo apps no se resuelve»). Lo usa la
+// falsificación de `javaemisor_captura_receptor_test.go`; encendido en el binario que se publica.
+var capturaDeLocalComoReceptor = true
 
 // registraCaptura: si `nombre` es una local/parámetro del método que crea la anónima y no una
 // local/parámetro/campo de la propia anónima, la añade a `capturas` y a los campos `val$nombre`.
