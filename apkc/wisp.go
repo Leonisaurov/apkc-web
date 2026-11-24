@@ -86,7 +86,9 @@ const (
 	// topeBytesGlobalWISP: 64 MiB entre todos los flujos (cuatro flujos a tope).
 	// El heap inicial de un wasm de Go son 256 MiB y el compilador necesita el
 	// resto; con este tope, la cola no puede ser la causa de un OOM de la
-	// pestaña.
+	// pestaña. Y como el transporte rechaza una trama mayor que
+	// `topeMensajeWISP` antes de convertirla, una sola trama del relay tampoco
+	// puede saltarse estos números.
 	topeBytesGlobalWISP = 64 << 20
 
 	// creditoMaximoWISP acota el crédito de envío que se acepta de un CONTINUE,
@@ -101,6 +103,31 @@ const (
 // bytes. El flujo se cierra con un CLOSE y el lector recibe este error en vez de
 // esperar a que la memoria crezca.
 var ErrColaDesbordada = errors.New("wisp: la cola del flujo superó su tope de bytes sin lector")
+
+// topeMensajeWISP es el mayor mensaje del WebSocket que puede ser legítimo: un
+// DATA del tamaño máximo de una cola, su cabecera y un margen para los
+// CONTINUE/CLOSE que el relay pueda coalescer delante. El transporte del
+// navegador lo comprueba sobre `byteLength` antes de convertir el ArrayBuffer,
+// así que una sola trama de N bytes no cuesta N bytes de heap para rechazarla.
+// DATA no lleva longitud y ocupa el mensaje entero, de modo que una sola trama
+// basta para intentarlo.
+const topeMensajeWISP = topeBytesFlujoWISP + cabeceraWISP + 64
+
+// plazoDrenajeWISP es el máximo que se espera a que el WebSocket vacíe
+// `bufferedAmount` cuando el flujo no ha fijado un plazo de escritura. Con
+// plazo, manda el del flujo.
+const plazoDrenajeWISP = 10 * time.Second
+
+// errorFlujoWISP envuelve un fallo que afecta a un solo flujo, como una trama
+// demasiado grande descartada en el transporte: el bucle de lectura cierra ese
+// flujo y sigue con los demás en vez de tumbar la conexión.
+type errorFlujoWISP struct {
+	flujo uint32
+	err   error
+}
+
+func (e *errorFlujoWISP) Error() string { return e.err.Error() }
+func (e *errorFlujoWISP) Unwrap() error { return e.err }
 
 // TransporteWISP es el WebSocket visto desde el cliente: mensajes binarios
 // completos, en los dos sentidos, y un cierre. En `js/wasm` lo implementa el
@@ -195,6 +222,44 @@ func decodificarPaquetes(mensaje []byte) ([]paqueteWISP, error) {
 	return paquetes, nil
 }
 
+// comprobarMensajeWISP decide si un mensaje del WebSocket puede convertirse a
+// []byte. Se llama con el tamaño anunciado por el navegador (`byteLength`), antes
+// de reservar nada: rechazar N bytes no puede costar N bytes.
+func comprobarMensajeWISP(largo int) error {
+	if largo > topeMensajeWISP {
+		return fmt.Errorf("%w: trama de %d bytes con tope de mensaje %d",
+			ErrColaDesbordada, largo, topeMensajeWISP)
+	}
+	return nil
+}
+
+// flujoDeTramaGrandeWISP busca el streamID del DATA de una trama que se descarta
+// sin convertirla. Solo mira la cabecera y los CONTINUE/CLOSE que la precedan; si
+// el primer paquete no permite seguir, devuelve su flujo y el llamador decide.
+func flujoDeTramaGrandeWISP(prefix []byte) (uint32, bool) {
+	for len(prefix) >= cabeceraWISP {
+		tipo := prefix[0]
+		flujo := binary.LittleEndian.Uint32(prefix[1:cabeceraWISP])
+		switch tipo {
+		case tipoWISPData:
+			return flujo, true
+		case tipoWISPContinue:
+			if len(prefix) < cabeceraWISP+4 {
+				return flujo, true
+			}
+			prefix = prefix[cabeceraWISP+4:]
+		case tipoWISPClose:
+			if len(prefix) < cabeceraWISP+1 {
+				return flujo, true
+			}
+			prefix = prefix[cabeceraWISP+1:]
+		default:
+			return flujo, true
+		}
+	}
+	return 0, false
+}
+
 // errorCierreWISP describe un cierre ordenado por el relay.
 type errorCierreWISP struct {
 	flujo  uint32
@@ -233,6 +298,10 @@ type ClienteWISP struct {
 	topeFlujo  int
 	topeGlobal *topeBytes
 
+	// avisos son los mensajes de control (CLOSE de desborde) que manda una
+	// gorutina aparte para que el bucle de lectura no espere al transporte.
+	avisos chan []byte
+
 	inicial chan struct{}
 	cerrado chan struct{}
 	unaVez  sync.Once
@@ -246,10 +315,12 @@ func NuevoClienteWISP(transporte TransporteWISP) *ClienteWISP {
 		siguienteID: 1,
 		topeFlujo:   topeBytesFlujoWISP,
 		topeGlobal:  nuevoTopeBytes(topeBytesGlobalWISP),
+		avisos:      make(chan []byte, 8),
 		inicial:     make(chan struct{}),
 		cerrado:     make(chan struct{}),
 	}
 	go c.bucleLectura()
+	go c.bombeoAvisos()
 	return c
 }
 
@@ -270,6 +341,16 @@ func (c *ClienteWISP) bucleLectura() {
 	for {
 		mensaje, err := c.transporte.Recibir()
 		if err != nil {
+			// Un fallo de flujo (una trama descartada por tamaño) cierra solo ese
+			// flujo; cualquier otro error tumba el cliente.
+			var fallo *errorFlujoWISP
+			if errors.As(err, &fallo) {
+				if f := c.flujo(fallo.flujo); f != nil {
+					c.avisarSinBloquear(paqueteClose(fallo.flujo, motivoCierreGenerico))
+					f.cerrarCon(fallo.err)
+				}
+				continue
+			}
 			c.fallar(err)
 			return
 		}
@@ -308,10 +389,10 @@ func (c *ClienteWISP) despachar(p paqueteWISP) bool {
 		if f := c.flujo(p.flujo); f != nil {
 			if err := f.entregar(p.carga); err != nil {
 				// La cola no crece más: se avisa al relay con un CLOSE y se cierra
-				// el flujo con el motivo. El bucle de lectura sigue vivo para los
-				// demás flujos. El envío es corto y en wasm queda acotado por el
-				// plazo de drenaje del transporte.
-				_ = c.enviar(paqueteClose(p.flujo, motivoCierreGenerico))
+				// el flujo con el motivo. El aviso va por una cola aparte para que
+				// este bucle nunca espere al transporte (el drenaje del WebSocket
+				// puede tardar segundos y pararía todos los flujos).
+				c.avisarSinBloquear(paqueteClose(p.flujo, motivoCierreGenerico))
 				f.cerrarCon(err)
 			}
 		}
@@ -389,6 +470,81 @@ func (c *ClienteWISP) enviar(b []byte) error {
 	default:
 	}
 	return c.transporte.Enviar(b)
+}
+
+// transporteConPlazoWISP lo implementa el transporte que sabe esperar a que su
+// búfer drene (el WebSocket del navegador). El de memoria no lo implementa y el
+// plazo se ignora allí, donde `Enviar` no acumula.
+type transporteConPlazoWISP interface {
+	EnviarConPlazo(b []byte, hasta time.Time) error
+}
+
+// enviarConPlazo es `enviar` con el plazo de escritura del flujo. El envío sigue
+// serializado: el drenaje del WebSocket no admite dos escrituras a la vez.
+func (c *ClienteWISP) enviarConPlazo(b []byte, hasta time.Time) error {
+	select {
+	case <-c.cerrado:
+		return c.Err()
+	default:
+	}
+	c.envioMu.Lock()
+	defer c.envioMu.Unlock()
+	select {
+	case <-c.cerrado:
+		return c.Err()
+	default:
+	}
+	if tp, ok := c.transporte.(transporteConPlazoWISP); ok {
+		return tp.EnviarConPlazo(b, hasta)
+	}
+	return c.transporte.Enviar(b)
+}
+
+// avisarSinBloquear encola un mensaje de control (el CLOSE de un flujo que se
+// desborda) sin esperar al transporte. La cola tiene tope: si está llena el
+// aviso se descarta, porque el flujo ya está cerrado en este lado y los DATA que
+// lleguen para él se desechan. El bucle de lectura nunca se queda esperando al
+// socket por un CLOSE.
+func (c *ClienteWISP) avisarSinBloquear(b []byte) {
+	select {
+	case c.avisos <- b:
+	default:
+	}
+}
+
+// bombeoAvisos manda los avisos de control en su propia gorutina para que el
+// reparto de paquetes siga. Termina cuando se cierra el cliente.
+func (c *ClienteWISP) bombeoAvisos() {
+	for {
+		select {
+		case <-c.cerrado:
+			return
+		case b := <-c.avisos:
+			_ = c.enviar(b)
+		}
+	}
+}
+
+// esperarDrenajeWISP espera a que `pendiente` baje del umbral. `hasta` es el
+// plazo del Write y manda sobre `plazoDrenajeWISP`: sin esto, un Write con
+// deadline corto podía esperar 10 s por cada paquete. `reloj` y `dormir` se
+// inyectan para probarlo sin navegador.
+func esperarDrenajeWISP(pendiente func() (int, bool), umbral int, hasta time.Time, reloj func() time.Time, dormir func(time.Duration)) error {
+	limite := reloj().Add(plazoDrenajeWISP)
+	if !hasta.IsZero() && hasta.Before(limite) {
+		limite = hasta
+	}
+	for {
+		enCola, ok := pendiente()
+		if !ok || enCola <= umbral {
+			return nil
+		}
+		if !reloj().Before(limite) {
+			return fmt.Errorf("%w: el WebSocket lleva %d bytes sin drenar (umbral %d)",
+				os.ErrDeadlineExceeded, enCola, umbral)
+		}
+		dormir(5 * time.Millisecond)
+	}
 }
 
 // elegirID escoge el streamID de un flujo nuevo. Se llama con `c.mu` tomado.
@@ -502,9 +658,6 @@ type colaBytes struct {
 
 	topeFlujo  int
 	topeGlobal *topeBytes
-	// liberado marca que al cerrar se devolvió al tope global lo que quedaba, de
-	// modo que el drenaje posterior no lo devuelva dos veces.
-	liberado bool
 
 	errCierre error
 	cerrada   chan struct{}
@@ -520,15 +673,15 @@ func nuevaColaBytes(topeFlujo int, topeGlobal *topeBytes) *colaBytes {
 	}
 }
 
-// poner encola una copia del bloque. Devuelve ErrColaDesbordada sin crecer la
-// cola si no cabe; sobre una cola ya cerrada descarta el bloque en silencio,
-// como hacía la versión sin tope.
+// poner encola una copia del bloque. Comprueba el tamaño antes de copiar, de
+// modo que rechazar N bytes no cuesta N bytes de heap. Devuelve
+// ErrColaDesbordada sin crecer la cola si no cabe; sobre una cola ya cerrada
+// descarta el bloque en silencio, como hacía la versión sin tope.
 func (q *colaBytes) poner(b []byte) error {
-	if len(b) == 0 {
+	n := len(b)
+	if n == 0 {
 		return nil
 	}
-	copia := make([]byte, len(b))
-	copy(copia, b)
 
 	q.mu.Lock()
 	select {
@@ -537,22 +690,27 @@ func (q *colaBytes) poner(b []byte) error {
 		return nil
 	default:
 	}
-	if q.usado+len(copia) > q.topeFlujo {
-		desborde := q.usado + len(copia)
+	if q.usado+n > q.topeFlujo {
+		desborde := q.usado + n
 		enCola := q.usado
 		tope := q.topeFlujo
 		q.mu.Unlock()
 		return fmt.Errorf("%w: %d bytes pedidos con %d ya en cola y %d de tope",
 			ErrColaDesbordada, desborde, enCola, tope)
 	}
-	if q.topeGlobal != nil && !q.topeGlobal.reservar(len(copia)) {
+	if q.topeGlobal != nil && !q.topeGlobal.reservar(n) {
 		usado := q.topeGlobal.enUso()
 		capacidad := q.topeGlobal.capacidad()
 		q.mu.Unlock()
 		return fmt.Errorf("%w: %d bytes pedidos con %d en todos los flujos y %d de tope global",
-			ErrColaDesbordada, usado+len(copia), usado, capacidad)
+			ErrColaDesbordada, usado+n, usado, capacidad)
 	}
-	q.usado += len(copia)
+	// Solo aquí, con el hueco ya reservado, se copia. La copia va bajo `q.mu`
+	// para que nadie vea bytes contados que aún no están en la cola; el máximo
+	// que puede copiarse de una vez es el tope del flujo.
+	q.usado += n
+	copia := make([]byte, n)
+	copy(copia, b)
 	q.trozos = append(q.trozos, copia)
 	q.mu.Unlock()
 	q.despertar()
@@ -585,7 +743,7 @@ func (q *colaBytes) leer(b []byte) (int, error) {
 	trozo := q.trozos[0]
 	n := copy(b, trozo)
 	q.usado -= n
-	if q.topeGlobal != nil && !q.liberado {
+	if q.topeGlobal != nil {
 		q.topeGlobal.liberar(n)
 	}
 	if n == len(trozo) {
@@ -616,15 +774,24 @@ func (q *colaBytes) cerrar(err error) {
 	}
 	q.errCierre = err
 	close(q.cerrada)
-	// Un flujo cerrado ya no puede crecer: sus bytes pendientes quedan para que
-	// el lector los drene, pero dejan de contar en el tope global para no
-	// bloquear a los flujos vivos.
-	if q.topeGlobal != nil && !q.liberado {
-		q.topeGlobal.liberar(q.usado)
-		q.liberado = true
-	}
+	// Los bytes pendientes siguen vivos en memoria hasta que el lector los
+	// consuma o los suelte: siguen contando en el tope global. Devolverlos aquí
+	// declararía libre memoria que aún está retenida (sonda del auditor: 278.528
+	// B vivos con el global a 0). La liberación real la hacen `leer` y `soltar`.
 	q.mu.Unlock()
 	q.despertar()
+}
+
+// soltar descarta los trozos pendientes y devuelve su hueco al tope global. Se
+// usa cuando el flujo se abandona sin drenar (por ejemplo, un Close propio).
+func (q *colaBytes) soltar() {
+	q.mu.Lock()
+	q.trozos = nil
+	if q.topeGlobal != nil {
+		q.topeGlobal.liberar(q.usado)
+	}
+	q.usado = 0
+	q.mu.Unlock()
 }
 
 // flujoWISP es un stream concreto y cumple net.Conn.
@@ -698,7 +865,8 @@ func (f *flujoWISP) Write(b []byte) (int, error) {
 		if err := f.tomarCredito(); err != nil {
 			return total, err
 		}
-		if err := f.cliente.enviar(paqueteData(f.id, b[:n])); err != nil {
+		hasta, _ := f.plazos.instantanea(false)
+		if err := f.cliente.enviarConPlazo(paqueteData(f.id, b[:n]), hasta); err != nil {
 			return total, err
 		}
 		total += n
@@ -838,6 +1006,10 @@ func (f *flujoWISP) Close() error {
 	}
 	_ = f.cliente.enviar(paqueteClose(f.id, motivoCierreVoluntario))
 	f.cerrarCon(net.ErrClosed)
+	// Un Close propio abandona lo que quedara sin leer: se descarta y se
+	// devuelve su hueco al tope global, que si no quedaría retenido por un flujo
+	// que ya nadie va a drenar.
+	f.cola.soltar()
 	return nil
 }
 

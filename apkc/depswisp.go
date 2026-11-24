@@ -211,7 +211,7 @@ func ConectarWISP(cfg ConfigWISP) (*ClienteWISP, error) {
 	if err := cfg.Validar(); err != nil {
 		return nil, err
 	}
-	transporte, err := AbrirWebSocketWISP(cfg.Relay)
+	transporte, err := AbrirWebSocketWISP(cfg)
 	if err != nil {
 		return nil, err
 	}

@@ -82,8 +82,10 @@ func TestWISPColaPorFlujoAcotada(t *testing.T) {
 	if motivo := esperarCierre(t, relay, f.id); motivo != motivoCierreGenerico {
 		t.Fatalf("el CLOSE de desborde llevaba el motivo %#x, se esperaba %#x", motivo, motivoCierreGenerico)
 	}
-	if enUso := cliente.topeGlobal.enUso(); enUso != 0 {
-		t.Fatalf("el tope global retiene %d B de un flujo ya cerrado", enUso)
+	// El flujo está cerrado, pero sus 16 MiB siguen vivos en la cola: el tope
+	// global los cuenta hasta que se drenan o se sueltan (hallazgo B).
+	if enUso := cliente.topeGlobal.enUso(); enUso != enCola {
+		t.Fatalf("el tope global cuenta %d B con %d vivos en la cola de un flujo cerrado", enUso, enCola)
 	}
 
 	// Nada más entra: el flujo ya está fuera del mapa y la cola cerrada no crece.
@@ -93,6 +95,10 @@ func TestWISPColaPorFlujoAcotada(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	if crecido := bytesEnCola(f.cola); crecido != enCola {
 		t.Fatalf("la cola creció de %d a %d B después del cierre", enCola, crecido)
+	}
+	drenarCola(t, conexion, enCola)
+	if enUso := cliente.topeGlobal.enUso(); enUso != 0 {
+		t.Fatalf("el tope global quedó en %d B tras drenar el flujo cerrado", enUso)
 	}
 	t.Logf("cola acotada a %d B (%.2f MiB) con %d paquetes de %d B enviados",
 		enCola, float64(enCola)/(1<<20), enviados, tam)
@@ -147,6 +153,19 @@ func TestWISPColaGlobalAcotada(t *testing.T) {
 	}
 	if _, ok := relay.motivoCierre(uno.id); ok {
 		t.Fatal("el primer flujo recibió un CLOSE que no le tocaba")
+	}
+	// Tercer camino de salida con contabilidad a 0: al leer el flujo que sí
+	// retenía los 2 MiB, el tope global vuelve a cero. (No se usa `drenarCola`
+	// porque este flujo sigue abierto y nunca devolvería error.)
+	leido := make([]byte, 2<<20)
+	if _, err := io.ReadFull(primera, leido); err != nil {
+		t.Fatalf("leer los 2 MiB retenidos: %v", err)
+	}
+	if enUso := cliente.topeGlobal.enUso(); enUso != 0 {
+		t.Fatalf("el tope global quedó en %d B tras leer el flujo", enUso)
+	}
+	if enCola := bytesEnCola(dos.cola); enCola != 0 {
+		t.Fatalf("el flujo rechazado dejó %d B en cola", enCola)
 	}
 }
 

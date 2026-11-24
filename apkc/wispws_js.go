@@ -33,10 +33,6 @@ const plazoAperturaWISP = 30 * time.Second
 // lo acote. 1 MiB son 64 mensajes del tamaño máximo de DATA.
 const umbralBufferWISP = 1 << 20
 
-// plazoDrenajeWISP acota la espera de drenaje: si el socket lleva este tiempo
-// sin bajar del umbral, el envío falla en vez de bloquear al flujo para siempre.
-const plazoDrenajeWISP = 10 * time.Second
-
 type transporteWebSocket struct {
 	ws js.Value
 
@@ -45,7 +41,9 @@ type transporteWebSocket struct {
 	colaMu sync.Mutex
 	cola   [][]byte
 
-	plazoDrenaje time.Duration
+	// fallos lleva los errores de un solo flujo (trama demasiado grande) al
+	// bucle de lectura sin cerrar el WebSocket.
+	fallos chan error
 
 	mu      sync.Mutex
 	err     error
@@ -54,17 +52,21 @@ type transporteWebSocket struct {
 	unaVez  sync.Once
 }
 
-// AbrirWebSocketWISP abre la URL del relay y espera el evento `open`. Bloquea la
-// gorutina que lo llama, pero no el bucle de eventos: el runtime de Go devuelve
-// el control a JavaScript mientras espera, y los `js.Func` pueden correr.
-func AbrirWebSocketWISP(direccion string) (TransporteWISP, error) {
-	if direccion == "" {
-		return nil, errors.New("wisp: URL de WebSocket vacía")
+// AbrirWebSocketWISP abre el relay de una configuración ya validada (opt-in
+// incluido) y espera el evento `open`. Exige `ConfigWISP.Validar`, igual que
+// `ConectarWISP`, para que no exista una vía que se salte el interruptor.
+// Bloquea la gorutina que lo llama, pero no el bucle de eventos: el runtime de
+// Go devuelve el control a JavaScript mientras espera, y los `js.Func` pueden
+// correr.
+func AbrirWebSocketWISP(cfg ConfigWISP) (TransporteWISP, error) {
+	if err := cfg.Validar(); err != nil {
+		return nil, err
 	}
+	direccion := cfg.Relay
 	t := &transporteWebSocket{
-		cerrada:      make(chan struct{}),
-		aviso:        make(chan struct{}, 1),
-		plazoDrenaje: plazoDrenajeWISP,
+		cerrada: make(chan struct{}),
+		aviso:   make(chan struct{}, 1),
+		fallos:  make(chan error, 8),
 	}
 	abierto := make(chan error, 1)
 
@@ -90,6 +92,17 @@ func AbrirWebSocketWISP(direccion string) (TransporteWISP, error) {
 		}
 		datos := args[0].Get("data")
 		if datos.Type() != js.TypeObject {
+			return nil
+		}
+		// El tamaño se mira sobre el ArrayBuffer, antes de crear el Uint8Array:
+		// una trama de N bytes no puede costar N bytes para ser rechazada.
+		if err := comprobarMensajeWISP(datos.Get("byteLength").Int()); err != nil {
+			cabecera := t.cabeceraDe(datos)
+			if flujo, ok := flujoDeTramaGrandeWISP(cabecera); ok {
+				t.entregarFallo(&errorFlujoWISP{flujo: flujo, err: err})
+			} else {
+				t.cerrarCon(err)
+			}
 			return nil
 		}
 		arreglo := js.Global().Get("Uint8Array").New(datos)
@@ -149,6 +162,13 @@ func (t *transporteWebSocket) encolar(mensaje []byte) {
 }
 
 func (t *transporteWebSocket) Enviar(b []byte) error {
+	return t.EnviarConPlazo(b, time.Time{})
+}
+
+// EnviarConPlazo manda un mensaje esperando a que `bufferedAmount` drene. `hasta`
+// es el plazo de escritura del flujo y manda sobre `plazoDrenajeWISP`: un Write
+// con deadline corto no puede quedarse 10 s esperando por paquete.
+func (t *transporteWebSocket) EnviarConPlazo(b []byte, hasta time.Time) error {
 	select {
 	case <-t.cerrada:
 		return t.error()
@@ -162,7 +182,7 @@ func (t *transporteWebSocket) Enviar(b []byte) error {
 	if t.ws.Get("readyState").Int() != 1 {
 		return net.ErrClosed
 	}
-	if err := t.esperarDrenaje(); err != nil {
+	if err := t.esperarDrenaje(hasta); err != nil {
 		return err
 	}
 	arreglo := js.Global().Get("Uint8Array").New(len(b))
@@ -170,35 +190,40 @@ func (t *transporteWebSocket) Enviar(b []byte) error {
 	return t.enviarSeguro(arreglo)
 }
 
-// esperarDrenaje espera a que `bufferedAmount` baje del umbral antes de mandar
-// otro mensaje. En wasm, `time.Sleep` devuelve el control al bucle de eventos de
-// JavaScript, que es quien vacía el búfer del socket; no es una espera activa.
-func (t *transporteWebSocket) esperarDrenaje() error {
-	plazo := t.plazoDrenaje
-	if plazo <= 0 {
-		plazo = plazoDrenajeWISP
+// cabeceraDe copia solo los primeros bytes del ArrayBuffer, para saber de qué
+// flujo era una trama que se descarta sin convertirla entera.
+func (t *transporteWebSocket) cabeceraDe(datos js.Value) []byte {
+	largo := datos.Get("byteLength").Int()
+	if largo > 1024 {
+		largo = 1024
 	}
-	limite := time.Now().Add(plazo)
-	for {
-		pendiente := t.ws.Get("bufferedAmount")
-		if pendiente.IsUndefined() || pendiente.IsNull() {
-			return nil
-		}
-		enCola := pendiente.Float()
-		if enCola <= float64(umbralBufferWISP) {
-			return nil
-		}
-		select {
-		case <-t.cerrada:
-			return t.error()
-		default:
-		}
-		if time.Now().After(limite) {
-			return fmt.Errorf("wisp: el WebSocket lleva %v con %.0f bytes sin drenar (umbral %d)",
-				plazo, enCola, umbralBufferWISP)
-		}
-		time.Sleep(5 * time.Millisecond)
+	arreglo := js.Global().Get("Uint8Array").New(datos.Call("slice", 0, largo))
+	copia := make([]byte, largo)
+	js.CopyBytesToGo(copia, arreglo)
+	return copia
+}
+
+// entregarFallo pasa al bucle de lectura el error de un flujo concreto sin
+// cerrar el WebSocket.
+func (t *transporteWebSocket) entregarFallo(err error) {
+	select {
+	case t.fallos <- err:
+	default:
 	}
+}
+
+// esperarDrenaje espera a que `bufferedAmount` baje del umbral. En wasm,
+// `time.Sleep` devuelve el control al bucle de eventos de JavaScript, que es
+// quien vacía el búfer del socket; no es una espera activa.
+func (t *transporteWebSocket) esperarDrenaje(hasta time.Time) error {
+	pendiente := func() (int, bool) {
+		valor := t.ws.Get("bufferedAmount")
+		if valor.IsUndefined() || valor.IsNull() {
+			return 0, false
+		}
+		return int(valor.Float()), true
+	}
+	return esperarDrenajeWISP(pendiente, umbralBufferWISP, hasta, time.Now, time.Sleep)
 }
 
 // enviarSeguro convierte en error la excepción de JavaScript que lanza `send`
@@ -225,6 +250,8 @@ func (t *transporteWebSocket) Recibir() ([]byte, error) {
 		t.colaMu.Unlock()
 		select {
 		case <-t.aviso:
+		case err := <-t.fallos:
+			return nil, err
 		case <-t.cerrada:
 			return nil, t.error()
 		}

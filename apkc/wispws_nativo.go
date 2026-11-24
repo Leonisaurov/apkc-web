@@ -9,7 +9,12 @@ package main
 
 import "errors"
 
-// AbrirWebSocketWISP solo existe con GOOS=js GOARCH=wasm.
-func AbrirWebSocketWISP(direccion string) (TransporteWISP, error) {
+// AbrirWebSocketWISP solo existe con GOOS=js GOARCH=wasm. Valida la misma
+// configuración que la versión del navegador, para que la comprobación del
+// opt-in no dependa del build.
+func AbrirWebSocketWISP(cfg ConfigWISP) (TransporteWISP, error) {
+	if err := cfg.Validar(); err != nil {
+		return nil, err
+	}
 	return nil, errors.New("wisp: el WebSocket del navegador solo existe con GOOS=js GOARCH=wasm")
 }
