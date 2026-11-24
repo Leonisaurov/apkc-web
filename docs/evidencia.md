@@ -13588,8 +13588,9 @@ en 37 ficheros, todas `SKIP` silencioso bajo wasm. Después: **0** call sites. L
 sin `javac` la prueba falla en vez de disfrazarse de verde.
 
 **Dónde quedan.** Las 87 pruebas pasan a ficheros `*_paridad_test.go` con `//go:build !js`
-en `:1`, y las contrapartidas puras-Go sin tag se conservan. El árbol final tiene 43 ficheros
-nuevos con esa cabecera, 99 `func Test` y 86 call sites de `javac17Exigido`, todos confinados
+en `:1`, y las contrapartidas puras-Go sin tag se conservan. El árbol final tiene 44 ficheros
+nuevos con esa cabecera (el último, `javaemisor_else_goto_paridad_test.go`, tras `0d8df36`), 99
+`func Test` y 86 call sites de `javac17Exigido`, todos confinados
 en ficheros `!js` (las dos líneas restantes del `grep` son la definición y su comentario). El frente
 del `else/goto` se integró después con un `javac17(t)` residual en el test nuevo; `d551d21` lo
 cambió
