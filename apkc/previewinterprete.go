@@ -3998,10 +3998,22 @@ func cadenaObjeto(s string) *objetoDalvik {
 	return &objetoDalvik{clase: "Ljava/lang/String;", campos: map[string]any{}, texto: s}
 }
 
+// stubsFrameworkActivos es un interruptor de prueba: a false simula el emulador anterior a estos
+// stubs, para que la falsificación pueda reproducir el error del ejecutor nulo. En producción vale
+// siempre true; ninguna orden del preview lo cambia.
+var stubsFrameworkActivos = true
+
 // intentaStub resuelve las llamadas de framework que la app toca. `candidatos` son las clases por
 // las que se busca (la del objeto, la que declara el método); los sufijos bastan porque lo que
 // distingue un `setText` es el nombre y su firma, no la jerarquía entera del framework.
 func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, vals []any, receptor any) (any, bool, error) {
+	if !stubsFrameworkActivos {
+		switch nombre {
+		case "getMainLooper", "getPackageManager", "getApplicationContext",
+			"getInstalledPackages", "newSingleThreadExecutor", "setView", "setCancelable":
+			return nil, false, nil
+		}
+	}
 	es := func(sufijos ...string) bool {
 		for _, c := range candidatos {
 			for _, s := range sufijos {
@@ -4046,8 +4058,57 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 	// puede leer del objeto que recibió. Se decide por la jerarquía real —una excepción del proyecto
 	// como `MiExcepcion` no lleva el sufijo en el descriptor— y no por el nombre de la clase.
 	esThrowableObj := func() bool { return obj != nil && m.esThrowableDe(obj.clase) }
+	// esContexto reconoce la actividad que corre y el Application que devuelve
+	// `getApplicationContext`: son los dos objetos sobre los que el framework atiende
+	// `getPackageManager`, `getSystemService` y compañía. La actividad se reconoce por identidad;
+	// el Application se marca al crearlo para que las llamadas posteriores sobre él también casen.
+	esContexto := func() bool {
+		if obj == nil {
+			return false
+		}
+		if obj == m.actividad {
+			return true
+		}
+		_, marcado := obj.campos["esContexto"]
+		return marcado || strings.HasSuffix(obj.clase, "Landroid/app/Application;") ||
+			strings.HasSuffix(obj.clase, "Landroid/content/Context;")
+	}
 
 	switch nombre {
+	case "getMainLooper":
+		// `Looper.getMainLooper()` es estático y devuelve siempre el mismo objeto: el Handler que
+		// se construye con él solo necesita una referencia no nula para existir.
+		if len(vals) == 0 && es("Landroid/os/Looper;") {
+			return &objetoDalvik{clase: "Landroid/os/Looper;", campos: map[string]any{}}, true, nil
+		}
+	case "getPackageManager":
+		// el PackageManager de la app: un objeto con identidad que se pasa a los adaptadores y desde
+		// el que se piden los paquetes instalados (una lista vacía, sin sistema, más abajo).
+		if len(vals) == 0 && esContexto() {
+			return &objetoDalvik{clase: "Landroid/content/pm/PackageManager;",
+				campos: map[string]any{}}, true, nil
+		}
+	case "getApplicationContext":
+		// el Application es distinto de la Activity, como en el framework; se marca como contexto
+		// para que las llamadas posteriores sobre él se reconozcan igual que sobre la actividad.
+		if len(vals) == 0 && esContexto() {
+			return &objetoDalvik{clase: "Landroid/app/Application;",
+				campos: map[string]any{"esContexto": true}}, true, nil
+		}
+	case "getInstalledPackages":
+		// no hay sistema de paquetes en la vista previa: la lista es vacía, pero no nula, para que
+		// un `for (PackageInfo info : pm.getInstalledPackages(...))` termine sin un receptor nulo.
+		if len(vals) <= 1 && obj != nil && es("Landroid/content/pm/PackageManager;") {
+			return &objetoDalvik{clase: "Ljava/util/ArrayList;", campos: map[string]any{},
+				lista: []any{}}, true, nil
+		}
+	case "newSingleThreadExecutor":
+		// el ejecutor de un solo hilo: un objeto con identidad sobre el que `execute` encola el
+		// Runnable. No hay hilos reales, pero la cola lógica da el mismo orden y es determinista.
+		if len(vals) == 0 && es("Ljava/util/concurrent/Executors;") {
+			return &objetoDalvik{clase: "Ljava/util/concurrent/ExecutorService;",
+				campos: map[string]any{}}, true, nil
+		}
 	case "startActivity":
 		if len(vals) == 1 && obj != nil && obj == m.actividad {
 			if o, ok := vals[0].(*objetoDalvik); ok && o.clase == "Landroid/content/Intent;" && o.intentClase != "" {
@@ -4544,9 +4605,17 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 					"radio ni red", retorno)
 		}
 	case "iterator":
-		if len(vals) == 0 && esConjunto() {
-			return &objetoDalvik{clase: "Ljava/util/Iterator;", campos: map[string]any{},
-				iterando: obj.conjunto}, true, nil
+		if len(vals) == 0 {
+			if esConjunto() {
+				return &objetoDalvik{clase: "Ljava/util/Iterator;", campos: map[string]any{},
+					iterando: obj.conjunto}, true, nil
+			}
+			// el `for (X x : lista)` que emite javac llama a `List.iterator()` aunque el receptor
+			// sea un ArrayList: sin esto el iterador llegaba nulo y el bucle reventaba en hasNext.
+			if esLista() {
+				return &objetoDalvik{clase: "Ljava/util/Iterator;", campos: map[string]any{},
+					iterando: append([]any(nil), obj.lista...)}, true, nil
+			}
 		}
 	case "hasNext":
 		if len(vals) == 0 && esIterador() {
@@ -4645,6 +4714,13 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 1 && obj != nil && es("Landroid/os/AsyncTask;") {
 			m.difiereTarea(obj, vals[0])
 			return obj, true, nil
+		}
+		// `ExecutorService.execute(Runnable)` no tiene hilos aquí, así que el Runnable entra en la
+		// cola lógica como un `post` y corre cuando el guion avanza el reloj. Es lo mismo que hace el
+		// AsyncTask y conserva el orden y el determinismo del emulador.
+		if len(vals) == 1 && obj != nil && es("Ljava/util/concurrent/ExecutorService;",
+			"Ljava/util/concurrent/Executor;") {
+			return m.difiere("ExecutorService.execute", vals[0], 0), true, nil
 		}
 	case "executeOnExecutor":
 		if obj != nil && es("Landroid/os/AsyncTask;") {
@@ -4821,6 +4897,17 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			return m.rechaza(nombre, proto,
 				"la reflexión no está en el subconjunto", "")
 		}
+	case "setView", "setCancelable":
+		// los dos devuelven el propio builder en el framework: sin esto, la cadena
+		// `builder.setView(...).setCancelable(...).create().show()` recibía el cero y la app se
+		// paraba. La vista del `setView` se guarda y `setCancelable` solo se acepta: ni una ni otra
+		// cambian el título, el mensaje o los botones que publica el modelo.
+		if len(vals) == 1 && obj != nil && es("Landroid/app/AlertDialog$Builder;") {
+			if nombre == "setView" {
+				obj.campos["dialogo.vista"] = vals[0]
+			}
+			return obj, true, nil
+		}
 	case "setTitle", "setMessage":
 		// el título y el mensaje de un `AlertDialog.Builder`: se guardan para publicarlos como capa.
 		// El `setTitle` de la actividad sigue siendo otro: lo distingue la clase del receptor.
@@ -4876,7 +4963,9 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			m.apilaDialogo(obj)
 			return nil, true, nil
 		}
-	case "dismiss", "cancel":
+	case "dismiss", "cancel", "hide":
+		// `hide` deja el diálogo vivo en el framework, pero en el modelo no hay diferencia visible
+		// entre ocultarlo y cerrarlo: los dos lo quitan de la capa que se pinta.
 		if len(vals) == 0 && obj != nil && es("Landroid/app/AlertDialog;", "Landroid/app/Dialog;") {
 			m.cierraDialogo(obj)
 			return nil, true, nil
