@@ -12131,10 +12131,10 @@ del real no importa: lo que fija es que el camino vuelve a ser el de la estimaci
 -count=1 .` sobre `98dd864`. Aquí solo se ejecutó la prueba puntual:
 `ok github.com/ajinasokan/apkc 1.167s` con los tres `CadenaEstatica` en `PASS`.
 
-**Frontera viva.** Con `98dd864` la 198 pasa y ApkShare se detiene en `MainActivity.java:212`,
-columna 31, en `Intent.createChooser(sharedIntent, "Compartir con")`; la línea es la que imprime
-`sed -n '212p'` de la fuente real. La midió el builder y aquí se transfiere sin re-ejecutar el
-build. Otro frente la está corrigiendo, así que no se da por cerrada.
+**Frontera histórica, cerrada en `§265`.** Con `98dd864` la 198 pasaba y ApkShare se detenía en
+`MainActivity.java:212`, columna 31, en `Intent.createChooser(sharedIntent, "Compartir con")`; la
+línea es la que imprime `sed -n '212p'` de la fuente real. La midió el builder y aquí se transfiere
+sin re-ejecutar el build. `§265` cerró esa parada y `§269` registra el build completo con `rc=0`.
 
 **Observación del keystore, no un cierre.** Sin `--keystore`, `build --linker go --compiler go` no
 llama a `findSDKs` (`apkc/main.go:28-30`, por `sinProcesos`), así que el keystore queda vacío y el
@@ -12355,10 +12355,10 @@ Tampoco `tipoPrevisto` (`:6054`) estima la estática calificada: su `case jllama
 devuelve `false` con `v.base != nil`, lo que solo afectaría a una cuenta que llevara esa llamada
 como operando.
 
-**Frontera viva.** Con `e3a46a1` ApkShare pasa la 212 y se para en `MainActivity.java:217`, por el
-pool de constantes >255 y el `ldc_w` aún no medido; otro frente lo corrige, así que no se da por
-cerrada. `sed -n '217p'` devuelve `public void show_loading_dialog(String msg) {`, el método donde
-cae la siguiente parada.
+**Frontera histórica, cerrada en `§269`.** Con `e3a46a1` ApkShare pasaba la 212 y se paraba en
+`MainActivity.java:217`, por el pool de constantes >255 y el `ldc_w` aún no medido. `sed -n '217p'`
+devuelve `public void show_loading_dialog(String msg) {`, el método donde caía la siguiente parada;
+`§269` registra el `ldc_w` y el build completo con `rc=0`.
 
 **Lo ejecutado aquí.** La prueba puntual, en este worktree: `ok github.com/ajinasokan/apkc 3.673s`
 con seis `PASS` —las cinco `...EstaticaCualificada...` y `...InstanciaCalificada...`—, y `gofmt -l`
@@ -13706,7 +13706,8 @@ cd studio && tcr -c 4 -m 3G env CHROME_BIN=/usr/bin/brave … node prueba-pestan
 
 ## Fronteras del bloque, sin cerrar
 
-Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
+Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por
+analogía:
 
 1. **ApkShare no compila entero (superado por `§269`).** Esta fue la frontera en `§253`-`§258`;
    `§263`, `§265`, `§268` y `§269` la cerraron hasta el build completo con `rc=0` y 21 clases.
