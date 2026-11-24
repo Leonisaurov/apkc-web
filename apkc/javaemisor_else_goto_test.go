@@ -293,7 +293,7 @@ func TestElDexDeMainActivityConElseEsElDeJavac17(t *testing.T) {
 // fila, no).
 func TestLaFilaDelElseSeVeEnElDiffDeJavap(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 	for _, f := range fuentesMainActivityElse {
 		pon(t, raiz, f.nombre[len("src/"):], f.contenido)
