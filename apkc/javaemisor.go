@@ -4648,6 +4648,12 @@ func (e *emisor) escribeIndice(v jindice, valor jexpr) error {
 // el binario que se publica.
 var resuelveCampoDeLocal = true
 
+// estimaMoldeSinEmitir es el interruptor de la sonda del molde como argumento: apagado, `tipoEstimado`
+// no reconoce un `jcast` y devuelve el rechazo de antes («el tipo de una expresion main.jcast no se
+// puede estimar sin emitirla»). Lo usa la falsificación de `javaemisor_molde_argumento_test.go`;
+// encendido en el binario que se publica.
+var estimaMoldeSinEmitir = true
+
 // descDeCampos: el descriptor del último campo de una cadena `a.b.c` sobre un receptor cuyo tipo ya se
 // conoce, sin escribir el `aload`/`getfield` que emitiría `cadenaDeCampos`. `length` sobre un arreglo da
 // `I`, como el `arraylength` de 0xbe. Lo que no se resuelve sin código sale con ok falso.
@@ -4771,6 +4777,20 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		return "L" + interno + ";", nil
 	case jclase:
 		return "Ljava/lang/Class;", nil
+	case jcast:
+		// el molde fija el tipo de la expresión, no su receptor: `(App) x` es
+		// `Lshare/apps/util/App;` aunque `x` sea una llamada encadenada que no se puede estimar sin
+		// emitirla. Es el argumento de `openAppDetailsDialog((App) apps.getAdapter().getItem(positon))`
+		// de ApkShare (`MainActivity.java:55`), que llegaba aquí desde una anónima y se rechazaba con
+		// «el tipo de una expresion main.jcast no se puede estimar sin emitirla». El descriptor es el
+		// mismo que devuelve `exp` al escribir el `check-cast`, así que estimar y emitir coinciden.
+		if estimaMoldeSinEmitir {
+			d, err := e.ctx.descriptorDe(v.tipo)
+			if err != nil {
+				return "", fmt.Errorf("%s: al estimar el tipo del molde (%s), %w", v.donde.sitio(), v.tipo, err)
+			}
+			return d, nil
+		}
 	case jacceso:
 		segs, base := aplanar(v)
 		// `info.applicationInfo` llega aquí con `base == nil` y dos segmentos, porque `aplanar` no
