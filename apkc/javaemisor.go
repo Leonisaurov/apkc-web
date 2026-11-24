@@ -2467,6 +2467,10 @@ type emisor struct {
 	// ambitos es la pila de bloques abiertos: al cerrar cada uno se devuelve `siguiente` a lo que
 	// valía al abrirlo, que es el reparto de javac (ver `ambito`).
 	ambitos []ambito
+	// muertes son los puntos donde un bloque del fuente se cierra, con los huecos que declaró: el
+	// marco de javac los poda a `top` desde ahí aunque las dos ramas de una unión traigan el mismo
+	// tipo (ver `muerteAmbito`).
+	muertes []muerteAmbito
 	// picos son los altos que hay que vigilar aunque los bloques devuelvan su hueco: cada `try` con
 	// `finally` deja abierto uno para saber dónde pone javac el local del manejador `any`, que va en
 	// el registro más alto que alcanzó el cuerpo (ver `intenta`).
@@ -2552,6 +2556,20 @@ type ambito struct {
 	// previos guarda, por cada nombre que este bloque volvió a declarar, lo que había antes: una
 	// local exterior del mismo nombre o nada. Se devuelve en orden inverso al cerrar.
 	previos []nombreAnterior
+	// declarados son los huecos que este bloque declaró, con las dos mitades de un ancho: al cerrar
+	// el bloque dejan de estar en ámbito y el marco los poda a `top` (ver `muerteAmbito`).
+	declarados []int
+}
+
+// muerteAmbito es el punto del código donde un bloque del fuente se cierra. javac marca `top` los
+// huecos que declaró en el marco siguiente aunque las dos ramas de una unión traigan el MISMO tipo
+// (medido con javac 17: un `IOException x` dentro de un `try` y el parámetro de su `catch` caen los
+// dos en el hueco 2, y el marco del `goto` de salida los escribe `top`). Sin esa poda, la unión de
+// dos referencias distintas daba `Object` donde javac escribe un hueco sin asignar: era la cuarta
+// entrada del `StackMapTable` de `MainActivity$6`, `append Object` frente a `same`.
+type muerteAmbito struct {
+	pc      int
+	indices []int
 }
 
 // nombreAnterior: lo que la tabla de locales decía de ese nombre antes de que el bloque lo declarara.
@@ -2668,6 +2686,9 @@ func (e *emisor) inserta(en, n int) {
 	for i := range e.excepciones {
 		t := &e.excepciones[i]
 		t.inicio, t.fin, t.handler = desplaza(t.inicio), desplaza(t.fin), desplaza(t.handler)
+	}
+	for i := range e.muertes {
+		e.muertes[i].pc = desplaza(e.muertes[i].pc)
 	}
 }
 
@@ -2855,6 +2876,15 @@ func (e *emisor) reserva(nombre string, desc string) int {
 	if nombre != "" {
 		e.apuntaNombre(nombre)
 		e.locales[nombre] = localVar{indice: i, desc: desc}
+		if len(e.ambitos) > 0 {
+			// el hueco queda apuntado en el bloque que lo declara: al cerrarse, el marco lo poda.
+			// Un ancho ocupa DOS huecos y los dos dejan de estar en ámbito a la vez (parrafo 74).
+			a := &e.ambitos[len(e.ambitos)-1]
+			a.declarados = append(a.declarados, i)
+			if paso == 2 {
+				a.declarados = append(a.declarados, i+1)
+			}
+		}
 	}
 	return i
 }
@@ -2949,13 +2979,19 @@ var reutilizaHuecos = true
 // cierraAmbito devuelve el reparto y los nombres al punto en que el bloque se abrió. `maxLoc` no se
 // toca: es el alto que alcanzó el método, y los marcos apilados lo necesitan tal cual.
 func (e *emisor) cierraAmbito() {
-	if !reutilizaHuecos {
-		return
-	}
 	if len(e.ambitos) == 0 {
 		return
 	}
 	a := e.ambitos[len(e.ambitos)-1]
+	// la poda del marco no depende del reparto: javac marca `top` el hueco en cuanto el bloque se
+	// cierra, aunque el interruptor de los huecos esté apagado (la falsificación mueve el reparto,
+	// no el marco)
+	if len(a.declarados) > 0 {
+		e.muertes = append(e.muertes, muerteAmbito{pc: len(e.codigo), indices: a.declarados})
+	}
+	if !reutilizaHuecos {
+		return
+	}
 	e.ambitos = e.ambitos[:len(e.ambitos)-1]
 	e.siguiente = a.siguiente
 	for i := len(a.previos) - 1; i >= 0; i-- {
@@ -7889,6 +7925,11 @@ func (e *emisor) intenta(v jtry) error {
 		}
 	}
 	base := e.siguiente
+	// el `try` entero abre un ámbito: la excepción de cada `catch` y lo que quede del cuerpo dejan
+	// de estar en ámbito al cerrarse el constructo, y el local siguiente vuelve a caer en su hueco.
+	// Es el `astore_3` de `MainActivity$6`, donde javac reutiliza el hueco del `InputStream` para el
+	// `Uri` que se declara justo después del `try`.
+	e.abreAmbito()
 	e.abrePico()
 	alto := base
 	salida := e.nuevaEtiqueta()
@@ -8063,13 +8104,22 @@ func (e *emisor) intenta(v jtry) error {
 	e.cierraPico()
 	e.cierra(salida)
 	e.excepciones = append(e.excepciones, filas...)
+	e.cierraAmbito()
 	return nil
 }
 
+// cortaRangoEnTodoGoto es el interruptor de la falsificación del rango: encendido, el troceado
+// vuelve a partir en cualquier `goto`, que es lo que hacía antes de medir que javac solo corta
+// cuando el salto sale del rango protegido. Apagado en producción.
+var cortaRangoEnTodoGoto = false
+
 // trozosDelCuerpo: sin `finally` no hay pendiente que haya anotado los trozos, pero javac también
-// parte el rango protegido en cada `return`/`goto` del cuerpo (medido en §167 con `SalidaCatch.h`:
-// dos filas, [0,7) y [8,11), con el `ireturn` de la rama fuera de ambas). El `athrow` sí queda
-// dentro, como en §71.
+// parte el rango protegido en cada salida del cuerpo: un `return` (medido en §167 con
+// `SalidaCatch.h`: dos filas, [0,7) y [8,11), con el `ireturn` de la rama fuera de ambas) y un
+// `goto` que salta FUERA del rango, como el `break` que sale del `try` o el `continue` de un bucle
+// que lo envuelve (medido con javac 17 en este frente). Un `goto` que se queda dentro no parte
+// nada: ni la vuelta de un bucle del propio cuerpo, aunque su cabecera sea el primer pc del rango,
+// ni un `break` de un bucle interior. El `athrow` sí queda dentro, como en §71.
 func (e *emisor) trozosDelCuerpo(inicio, fin int) []entradaTry {
 	lista, err := walkJvmCode(e.codigo[:fin])
 	if err != nil || len(lista) == 0 {
@@ -8081,8 +8131,15 @@ func (e *emisor) trozosDelCuerpo(inicio, fin int) []entradaTry {
 		if in.pc < inicio {
 			continue
 		}
-		corta := in.name == "return" || in.name == "ireturn" || in.name == "lreturn" ||
-			in.name == "freturn" || in.name == "dreturn" || in.name == "areturn" || in.name == "goto"
+		corta := false
+		switch in.name {
+		case "return", "ireturn", "lreturn", "freturn", "dreturn", "areturn":
+			// un retorno sale del método y del rango: no puede lanzar y javac lo deja fuera
+			corta = true
+		case "goto", "goto_w":
+			destino := destinoDe(in)
+			corta = cortaRangoEnTodoGoto || destino < inicio || destino >= fin
+		}
 		if !corta {
 			continue
 		}
@@ -9456,7 +9513,7 @@ func (e *emisor) codeAttr() ([]byte, error) {
 	if err := e.resuelveSaltos(); err != nil {
 		return nil, err
 	}
-	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc, e.excepciones, e.esCtor)
+	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc, e.excepciones, e.muertes, e.esCtor)
 	if err != nil {
 		return nil, err
 	}

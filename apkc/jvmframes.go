@@ -308,9 +308,33 @@ func unirTipos(a, b tipoVerif) (tipoVerif, error) {
 	return tipoVerif{}, fmt.Errorf("se unen %s y %s, y eso no lo produce el subconjunto medido", a, b)
 }
 
+// podaHuecos marca `top` los huecos que un bloque del fuente declaró al cerrarse: javac los deja sin
+// asignar aunque las dos ramas que se unen traigan un valor, porque ya no están en ámbito. Medido con
+// javac 17 sobre dos sondas del mismo frente: en una, el `IOException x` de un `try` y el parámetro
+// de su `catch` caen en el mismo hueco y javac escribe `top` en el marco de la salida, aunque los dos
+// caminos lleven un valor; en la otra, una local declarada FUERA del `try` y muerta después de él
+// conserva el tipo y la unión de dos referencias distintas sale `Object`. La diferencia entre las dos
+// es el ámbito del fuente, no lo que se leyó después.
+func podaHuecos(e estadoFrame, indices []int) estadoFrame {
+	if len(indices) == 0 {
+		return e
+	}
+	// copia: el estado que llega puede compartir la lista con el análisis en curso, y podar ahí
+	// corrompería el camino que se está simulando
+	loc := append([]tipoVerif(nil), e.locales...)
+	for _, i := range indices {
+		if i >= 0 && i < len(loc) {
+			loc[i] = verifTop
+		}
+	}
+	e.locales = loc
+	return e
+}
+
 // fusiona mete `nuevo` en el estado de `pc` y dice si cambio. Un stack distinto de alto en el mismo
 // punto es un defecto del emisor, no del fuente, y se nombra.
-func fusiona(estados map[int]estadoFrame, pc int, nuevo estadoFrame) (bool, error) {
+func fusiona(estados map[int]estadoFrame, pc int, nuevo estadoFrame, poda map[int][]int) (bool, error) {
+	nuevo = podaHuecos(nuevo, poda[pc])
 	viejo, hay := estados[pc]
 	if !hay {
 		estados[pc] = copiaEstado(nuevo)
@@ -1164,7 +1188,7 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 
 // framesDeMetodo devuelve el cuerpo del StackMapTable (sin el nombre ni el largo) y el alto maximo
 // que alcanzo la pila simulada. Si no hay ningun marco, el atributo no va.
-func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool *poolBuilder, maxLoc int, tries []entradaTry, esCtor bool) ([]byte, int, error) {
+func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool *poolBuilder, maxLoc int, tries []entradaTry, muertes []muerteAmbito, esCtor bool) ([]byte, int, error) {
 	lector := pool.lector()
 	instrs, err := walkJvmCode(code)
 	if err != nil {
@@ -1258,6 +1282,13 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 	}
 
 	estados := map[int]estadoFrame{0: inicial}
+	poda := map[int][]int{}
+	for _, m := range muertes {
+		poda[m.pc] = append(poda[m.pc], m.indices...)
+	}
+	if len(poda[0]) > 0 {
+		estados[0] = podaHuecos(inicial, poda[0])
+	}
 	cola := []int{0}
 	enCola := map[int]bool{0: true}
 	alto := 0
@@ -1272,6 +1303,9 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 			if !ok {
 				return nil, 0, fmt.Errorf("el flujo llega al pc %d, que no es una instruccion", cur)
 			}
+			// un bloque del fuente se cierra en este pc: sus huecos dejan de estar en ámbito y el
+			// camino que sigue los lleva como `top` (ver `muerteAmbito`)
+			a.est = podaHuecos(a.est, poda[cur])
 			// cada instrucción protegida puede lanzar: el handler recibe sus locales con la
 			// excepción encima de la pila (JVMS 4.10.1.6, medido en el §71 sobre `T`)
 			for _, tr := range tries {
@@ -1287,7 +1321,7 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 					tipo = t
 				}
 				entrada := estadoFrame{locales: append([]tipoVerif(nil), a.est.locales...), pila: []tipoVerif{tipo}}
-				cambio, err := fusiona(estados, tr.handler, entrada)
+				cambio, err := fusiona(estados, tr.handler, entrada, poda)
 				if err != nil {
 					return nil, 0, fmt.Errorf("pc %d: %w", tr.handler, err)
 				}
@@ -1304,7 +1338,7 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 				alto = altoPilas(a.est.pila)
 			}
 			for _, s := range sucesores {
-				cambio, err := fusiona(estados, s, a.est)
+				cambio, err := fusiona(estados, s, a.est, poda)
 				if err != nil {
 					return nil, 0, fmt.Errorf("pc %d: %w", s, err)
 				}
@@ -1321,7 +1355,7 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 				break
 			}
 			if comienzos[cur] {
-				cambio, err := fusiona(estados, cur, a.est)
+				cambio, err := fusiona(estados, cur, a.est, poda)
 				if err != nil {
 					return nil, 0, fmt.Errorf("pc %d: %w", cur, err)
 				}
