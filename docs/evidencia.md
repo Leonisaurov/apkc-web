@@ -14222,6 +14222,14 @@ si el núcleo WISP no está en esta compilación, se cae al índice local de coo
 `studio/prueba-wisp-gates.mjs:163-172` mide `sockets:0, llamadas:0` sin núcleo y el motivo
 acordado. El gate de red en CDP sigue sin abrir websockets ajenos al origen.
 
+La compatibilidad con `apkc-deps` se mide sobre la gramática de coordenadas válidas, no sobre la
+aceptación ciega: siete casos ejecutados con `SourceFileLoader` sobre
+`~/Develop/Python/apkc-deps/apkc-deps` coinciden con `deps-coordenada.js` salvo `g:../a:1.0`.
+Python lo acepta y su `relp` produce `g/../a/1.0/../a-1.0.jar`; la página lo rechaza en
+`deps-coordenada.js:29`. El BOM y los espacios no son diferencia: ya se normalizan en `:91-97`
+con aviso. La decisión `critico` (modo A) conserva el rechazo porque los guardias reales de
+escritura están en `deps.js:46-57,156-157,206-224`, no en el parser.
+
 ```sh
 cd studio && node prueba.js
 cd studio && node prueba-navegador.js
@@ -14233,6 +14241,25 @@ prueba: todo en orden
 navegador: todo en orden
 falsificación: los dos gates rechazan lo que tienen que rechazar
 sockets:0, llamadas:0
+```
+
+```sh
+python3 - <<'PY'
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader("deps", "/home/leonisauro/Develop/Python/apkc-deps/apkc-deps").load_module()
+for c in ["g:a:1.0", "g:a:1.0:cls", "g:a:[1.0]", "g:a:[1.0,2.0]",
+          "g:a", "g:a:(,1.0],[1.2,)", "g:../a:1.0"]:
+    try:
+        print(c, "->", m.parse_coord(c, True))
+    except SystemExit as e:
+        print(c, "-> SystemExit", e.code)
+PY
+cd studio && node --input-type=module -e 'import {parsearCoordenada} from "./deps-coordenada.js"; for (const c of ["g:a:1.0","g:a:1.0:cls","g:a:[1.0]","g:a:[1.0,2.0]","g:a","g:a:(,1.0],[1.2,)","g:../a:1.0"]) { const r = parsearCoordenada(c, {permitirBom:true}); console.log(c, "->", r.ok, r.coord || r.motivo); }'
+```
+
+```text
+seis casos con paridad; g:../a:1.0 -> Coord(group='g', artifact='../a', ...) en Python
+g:../a:1.0 -> false "el artefacto «../a» no es válido" en la página
 ```
 
 **Frontera de `§294`.** La resolución por WISP se mide con un núcleo simulado en node y con el
