@@ -5340,6 +5340,13 @@ var estimaMoldeSinEmitir = true
 // `javaemisor_llamada_argumento_test.go`; encendido en el binario que se publica.
 var estimaLlamadaEncadenada = true
 
+// estimaEstaticaCualificada es el interruptor de la sonda de la llamada estática calificada por el
+// nombre del tipo (`Intent.createChooser(...)`) como argumento de otra llamada: apagado, `tipoEstimado`
+// no la reconoce y devuelve el rechazo de antes («no se puede estimar el tipo de createChooser() sin
+// emitir el receptor de la llamada»). Lo usa la falsificación de
+// `javaemisor_estatica_cualificada_test.go`; encendido en el binario que se publica.
+var estimaEstaticaCualificada = true
+
 // propagaGenericoDeLocal es el interruptor de la sonda del tipo declarado del local. Apagado, un local
 // no apunta sus argumentos de tipo y la ruta vuelve al comportamiento de `c0b40e9`: el borrado en
 // silencio —`usa(Object)` y sin `check-cast`—, que es justo el defecto que mide esta ruta. Lo usa la
@@ -5578,6 +5585,62 @@ func (e *emisor) vueltaSinEmitir(v jllamada) (string, bool, error) {
 		// sustituye no se conoce —una local cuyo tipo declarado con argumentos no viaja en el fuente,
 		// o un método heredado de otra clase—. Se devuelve el rechazo explícito de antes en vez del
 		// borrado: `Object` no es el tipo con el que resuelve javac y la sobrecarga elegida sería otra.
+		return "", false, nil
+	}
+	return vueltaDe(cand.desc), true, nil
+}
+
+// vueltaEstaticaCualificada: el descriptor de la vuelta de una llamada **estática calificada por el
+// nombre del tipo** (`Intent.createChooser(sharedIntent, "Compartir con")`), sin escribir ninguna
+// instrucción. Es la misma resolución que la emisión (`exp`, rama «una llamada estática sobre un nombre
+// de tipo»): el prefijo más largo que resuelve como tipo tiene que ser el receptor entero y la candidata
+// tiene que ser estática, o no se estima. La cadena de `MainActivity.java:212` es
+// `startActivity(Intent.createChooser(...))`: para elegir la sobrecarga de `startActivity` hace falta el
+// tipo del argumento, y `Intent` no es una local ni un campo sino un nombre de tipo, que la estimación
+// trataba como instancia y por eso pedía emitir el receptor. El orden de evaluación no cambia: aquí solo
+// se lee el `android.jar`, y la emisión sigue bajando los argumentos y escribiendo el `invokestatic`
+// contra la clase (no hay receptor en la pila).
+func (e *emisor) vueltaEstaticaCualificada(v jllamada) (string, bool, error) {
+	if !estimaEstaticaCualificada {
+		return "", false, nil
+	}
+	acc, esAcceso := v.base.(jacceso)
+	if !esAcceso {
+		return "", false, nil
+	}
+	segs, base := aplanar(acc)
+	// el mismo guardián que la emisión: con una local del mismo nombre delante, el receptor es esa
+	// local —una instancia— y el camino de instancia no se toca
+	if base != nil || len(segs) == 0 || e.locales[segs[0]].desc != "" {
+		return "", false, nil
+	}
+	interno, resto, ok := e.ctx.tipoDeReferencia(segs)
+	if !ok || len(resto) != 0 {
+		return "", false, nil
+	}
+	tipos := make([]string, 0, len(v.args))
+	for _, arg := range v.args {
+		d, err := e.tipoEstimado(arg)
+		if err != nil {
+			// un argumento que no se estima sin código deja la llamada al rechazo de siempre
+			return "", false, nil
+		}
+		tipos = append(tipos, d)
+	}
+	cand, err := e.ctx.buscarMetodo(interno, v.nombre, len(v.args), tipos)
+	if err != nil {
+		// el receptor sí es un nombre de tipo y la candidata no existe: se devuelve **su** motivo, que
+		// es el del argumento de tipo incorrecto, y no un «no se puede estimar» que escondería la causa
+		return "", true, fmt.Errorf("%s: al estimar el tipo de %s(), %w", v.donde.sitio(), v.nombre, err)
+	}
+	if cand.acceso&accStatic == 0 {
+		// un método de instancia llamado sobre el tipo lo rechaza la emisión con su propio mensaje;
+		// aquí se devuelve el rechazo de antes en vez de inventar un tipo
+		return "", false, nil
+	}
+	if e.vueltaConTipoVariable(interno, v.nombre, cand.desc) {
+		// la vuelta declara un tipo variable y el argumento que lo sustituye no viaja en la llamada
+		// (`Collections.emptyList()`): el borrado elegiría otra sobrecarga, así que se rechaza
 		return "", false, nil
 	}
 	return vueltaDe(cand.desc), true, nil
@@ -5961,6 +6024,12 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		// (`getApplicationContext()` en `MainActivity.java:179`), que se busca en la cadena de clases
 		// que la encierran sin emitir nada (`candidatasSinReceptor`).
 		if v.base != nil || v.super {
+			// una llamada estática calificada por el nombre del tipo (`Intent.createChooser(...)`): el
+			// receptor no es una instancia que emitir, y su vuelta se lee del `android.jar` sin escribir
+			// ninguna instrucción (`vueltaEstaticaCualificada`).
+			if d, ok, err := e.vueltaEstaticaCualificada(v); ok {
+				return d, err
+			}
 			return "", fmt.Errorf("%s: no se puede estimar el tipo de %s() sin emitir el receptor de la llamada", v.donde.sitio(), v.nombre)
 		}
 		cands, err := e.candidatasSinReceptor(v.nombre, v.args)

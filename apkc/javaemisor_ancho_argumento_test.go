@@ -225,13 +225,20 @@ func TestFalsificacionDelEnsanchamientoEnElArgumento(t *testing.T) {
 // `-1` y el `.class` salía con la pila descuadrada.
 //
 // La ruta `vueltaSinEmitir` estima ahora `s.n()` sin emitir el receptor (`S.n` tiene una sola candidata
-// y devuelve `I`), así que la guarda se mide con esa ruta **apagada**: sigue cubriendo el caso de un
-// argumento cuyo tipo no se sabe. Con la ruta encendida el mismo fuente se emite como javac, y eso lo
-// fija `TestLlamadaEncadenadaAnchaContraJavac17` (`javaemisor_llamada_argumento_test.go`).
+// y devuelve `I`), y `vueltaEstaticaCualificada` estima `S.n()` leyendo el jar, así que la guarda se
+// mide con **las dos** rutas apagadas: sigue cubriendo el caso de un argumento cuyo tipo no se sabe. Con
+// la ruta encadenada encendida el mismo fuente se emite como javac, y eso lo fija
+// `TestLlamadaEncadenadaAnchaContraJavac17` (`javaemisor_llamada_argumento_test.go`); con la estática
+// encendida lo fija `TestEstaticaCualificadaAnchaContraJavac17`
+// (`javaemisor_estatica_cualificada_test.go`).
 func TestElArgumentoAnchoQueNoSePuedeEstimarSeRechaza(t *testing.T) {
 	anterior := estimaLlamadaEncadenada
 	estimaLlamadaEncadenada = false
 	t.Cleanup(func() { estimaLlamadaEncadenada = anterior })
+
+	anteriorEstatica := estimaEstaticaCualificada
+	estimaEstaticaCualificada = false
+	t.Cleanup(func() { estimaEstaticaCualificada = anteriorEstatica })
 
 	fuentes := map[string]string{
 		"receptor_explicito": `public class S { int n(){ return 1; } void f(long b){} void t(S s){ s.f(s.n()); } }`,
