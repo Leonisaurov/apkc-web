@@ -34,7 +34,11 @@ const (
 	accSuper     = 0x0020
 	// accVarargs lo escribe javac en el method_info de un metodo con `...`: medido con javac 17
 	// (`--release 8`), `static void var(int... xs)` sale con 0x0088 (§194).
-	accVarargs   = 0x0080
+	accVarargs = 0x0080
+	// accBridge marca el puente sintetico del retorno covariante: medido con javac 17 sobre
+	// `AppAdapter.getItem`, sus flags son `ACC_PUBLIC | ACC_BRIDGE | ACC_SYNTHETIC` (0x1041) y sin el
+	// bit el dex no coincide con el de javac.
+	accBridge    = 0x0040
 	accSynthetic = 0x1000
 	accInterface = 0x0200
 	accAbstract  = 0x0400

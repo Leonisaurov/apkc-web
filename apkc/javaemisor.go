@@ -1674,7 +1674,7 @@ func (ctx *contextoJava) cabeEn(dv, hasta string) bool {
 // cabeSubidaDeReferencia es el interruptor de la sonda de la subida de referencias al escribir un
 // campo. Apagado, `cabeEn` vuelve a exigir el descriptor exacto —la comparación `dv != cr.desc` de
 // antes—, que es lo que devuelve el error literal del usuario sobre `AppAdapter.java:33`. Encendido en
-// el binario que se publica; lo usa la falsificación de `javaemisor_appadapter_test.go`.
+// el binario que se publica; lo usa la falsificación de `javaemisor_appadapter_cast_test.go`.
 var cabeSubidaDeReferencia = true
 
 // asignableEstricto: la conversión de invocación de la fase 1 (JVMS 15.12.2.2): identidad,
@@ -5100,7 +5100,41 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	if len(d) == 1 && len(deseado) == 1 && e.convierte(d, deseado) {
 		return deseado, nil
 	}
+	// `check-cast`: el hueco es de referencia y la pila trae una referencia MAS GENERAL. Es lo que
+	// javac escribe detrás de una llamada borrada: medido con javac 17 sobre `AppAdapter.java:73` del
+	// zip de ApkShare, `return apps_filter.get(position)` con la vuelta declarada `App` sale
+	// `aload_0; getfield; iload_1; invokeinterface List.get:(I)Ljava/lang/Object;` y después
+	// `checkcast #44 // class share/apps/util/App;`, y lo mismo en `App info = apps_filter.get(...)`
+	// (la 43) y en `TextView txt1 = convertView.findViewById(...)` (la 47). Sin el `check-cast` la
+	// pila queda en `Object` donde la firma declara `App` y el verificador de ART rechaza el método.
+	// La dirección es la única que lo dispara: `Object o = list.get(0)` no lleva nada (el hueco ES
+	// `Object`), y `List x = new ArrayList<>()` tampoco (ahí el valor ya es más estrecho y esto no
+	// escribe conversión; la asignación de subtipo a campo la sigue mediando `cabeEn`).
+	if esTipoDeReferencia(d) && esTipoDeReferencia(deseado) && d != deseado && e.ctx.asignableEstricto(deseado, d) && insertaCheckcast {
+		e.checkcastDe(deseado)
+		return deseado, nil
+	}
 	return d, nil
+}
+
+// insertaCheckcast es el interruptor de la sonda del `check-cast` de `expA`. Apagado, el emisor deja
+// sobre la pila la referencia borrada —`Object` donde la firma declara `App`—, que es el defecto que
+// el verificador rechaza; lo usan las falsificaciones de `javaemisor_appadapter_cast_test.go`.
+// Encendido en el binario que se publica.
+var insertaCheckcast = true
+
+// checkcastDe: el `check-cast` de un descriptor de referencia, con la forma que ya se midió en el
+// `for` mejorado (párrafo 129) y en `X.class`: la clase va al pool por su nombre interno —o por el
+// descriptor entero si es un arreglo— y el índice ocupa dos bytes. Media palabra dentro y media
+// fuera, así que no mueve el alto de la pila.
+func (e *emisor) checkcastDe(desc string) {
+	interno := desc
+	if desc[0] == 'L' {
+		interno = desc[1 : len(desc)-1]
+		e.usar(interno)
+	}
+	idx := e.pool.clase(interno)
+	e.emite(opCheckcast, byte(idx>>8), byte(idx))
 }
 
 // codigosConversion: la conversion numerica entre los tipos medidos, con la palabra que la escribe.
@@ -7421,6 +7455,18 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
+	// los puentes del retorno covariante. javac los escribe entre los metodos declarados y los
+	// `access$NNN` (medido con javac 17 sobre una clase que sobrescribe con `String` un `Object` y
+	// lleva a la vez un `access$002`: el orden del ClassFile es `m()Ljava/lang/String;`,
+	// `m()Ljava/lang/Object;`, `access$002`, `static {}`)
+	puentes, err := e.puentesCovariantes()
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range puentes {
+		metodos = append(metodos, b...)
+		conte++
+	}
 	// los `access$NNN` que pidieron las anidadas, en el orden en que se crearon; javac los escribe entre
 	// los metodos declarados y el `<clinit>` (medido en el parrafo 72)
 	for _, a := range e.ctx.accesores[e.interno] {
@@ -8477,6 +8523,121 @@ func (e *emisor) accesorDeClassFile(a accesorSintetico) ([]byte, error) {
 		return nil, err
 	}
 	return e.methodInfo(a.nombre, a.desc, accStatic|accSynthetic, attrInfo(e.pool, "Code", codigo), 1), nil
+}
+
+// sintetizaPuentesCovariantes es el interruptor de la sonda del puente del retorno covariante.
+// Apagado, el emisor escribe solo el metodo estrecho —el defecto original: `grep -c getItem` daba 1
+// donde javac escribe 2— y el dex de la clase deja de coincidir con el de javac. Encendido en el
+// binario que se publica; lo usa la falsificación de `javaemisor_appadapter_cast_test.go`.
+var sintetizaPuentesCovariantes = true
+
+// puentesCovariantes: los `method_info` sinteticos que javac añade cuando una clase sobrescribe un
+// metodo heredado con un retorno MAS ESTRECHO que su descriptor borrado. Es el caso de `AppAdapter`
+// de ApkShare: `public App getItem(int)` sobrescribe `ArrayAdapter<App>.getItem`, cuyo borrado
+// devuelve `Object`, así que javac sintetiza `getItem:(I)Ljava/lang/Object;`. Sin el puente, quien
+// llama por la firma heredada (`invokevirtual ArrayAdapter.getItem:(I)Ljava/lang/Object;`) no
+// encuentra en la clase el método que el descriptor promete: el verificador de ART rechaza el fichero.
+// Medido con `javac 17 --release 8 -g:lines,source` sobre los fuentes reales: `grep -c getItem` da 2
+// en `javap -p` (nosotros escribíamos 1) y el puente sale con `0x1041`, `aload_0`, los parámetros,
+// `invokevirtual` contra la propia clase, `areturn`, sin StackMapTable y con una sola fila de
+// LineNumberTable en 0 apuntando a la línea de la declaración de la clase (la 21 de
+// `AppAdapter.java`).
+func (e *emisor) puentesCovariantes() ([][]byte, error) {
+	salida := [][]byte{}
+	if e.c.esInterface || !sintetizaPuentesCovariantes {
+		return salida, nil
+	}
+	for i := range e.c.metodos {
+		m := &e.c.metodos[i]
+		if m.nombre == "<init>" || m.nombre == "<clinit>" || m.abstracto || m.esEstatico || m.esPrivado {
+			// una privada o una estatica no se sobrescribe, y un abstracto no tiene cuerpo que delegar
+			continue
+		}
+		desc, err := e.ctx.descDeMetodo(*m)
+		if err != nil {
+			// el tipo que no resuelve ya lo dice el emisor del metodo al escribirlo
+			continue
+		}
+		vuelta := vueltaDe(desc)
+		if !esTipoDeReferencia(vuelta) {
+			continue
+		}
+		heredada, hay, err := e.ctx.retornoHeredado(e.interno, m, desc)
+		if err != nil {
+			return nil, err
+		}
+		if !hay {
+			continue
+		}
+		params := desc[1 : strings.Index(desc, ")")+1]
+		b, err := e.puenteCovariante(m.nombre, "("+params+heredada, desc, e.flagsDeMetodo(*m))
+		if err != nil {
+			return nil, fmt.Errorf("linea %d: el puente de %s: %w", m.linea, m.nombre, err)
+		}
+		salida = append(salida, b)
+	}
+	return salida, nil
+}
+
+// retornoHeredado: el retorno del metodo que `m` sobrescribe con un tipo mas estrecho, si lo hay. Se
+// recorre la jerarquia con `candidatosDe`, que ya sabe cruzar de los fuentes al classpath, y se queda
+// con la primera firma heredada con los MISMOS parametros borrados, otro retorno y al que el nuestro
+// se le pueda asignar —la covarianza de JLS 8.4.5; `App` es `Object`—. Las privadas y las estaticas
+// quedan fuera porque no se sobrescriben, y una vuelta primitiva no puede estrecharse a referencia.
+func (ctx *contextoJava) retornoHeredado(interno string, m *jmetodo, desc string) (string, bool, error) {
+	cands, err := ctx.candidatosDe(interno, m.nombre, len(m.params), false)
+	if err != nil {
+		return "", false, err
+	}
+	_, vuelta, params := splitDescriptor(desc)
+	firma := strings.Join(params, "|")
+	for _, c := range cands {
+		if c.decl == m {
+			// la declaracion propia, que `candidatosDe` lista primero
+			continue
+		}
+		if c.acceso&(accStatic|accPrivate) != 0 {
+			continue
+		}
+		_, heredada, paramsHeredados := splitDescriptor(c.desc)
+		if strings.Join(paramsHeredados, "|") != firma || heredada == vuelta {
+			continue
+		}
+		if esTipoDeReferencia(heredada) && esTipoDeReferencia(vuelta) && ctx.asignableEstricto(vuelta, heredada) {
+			return heredada, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// puenteCovariante: el cuerpo del puente: `aload_0`, los huecos de los parametros, `invokevirtual`
+// del metodo estrecho contra la propia clase y el `return` de su vuelta. Los flags son los del
+// metodo que delega mas `ACC_BRIDGE` y `ACC_SYNTHETIC` (0x1041 para un `public`), y la unica fila de
+// la LineNumberTable es la de la declaracion de la clase, que es lo que javac pone en un sintetico.
+func (e *emisor) puenteCovariante(nombre, desc, delegado string, acc int) ([]byte, error) {
+	e.preparaMetodo(desc, false)
+	e.reserva("", "L")
+	_, _, params := splitDescriptor(desc)
+	for _, p := range params {
+		e.reserva("", p)
+	}
+	e.marcaLinea(e.c.linea)
+	e.cargaDe(0, "L")
+	for i, p := range params {
+		e.cargaDe(1+i, p)
+	}
+	e.invoca(opInvokevirt, e.interno, nombre, delegado, 1+len(params))
+	vuelta := vueltaDe(desc)
+	e.emite(retorno(vuelta[0]))
+	e.bajaPor(vuelta)
+	if e.prof != 0 {
+		return nil, fmt.Errorf("el puente de %s deja %d valores en la pila al cerrar", nombre, e.prof)
+	}
+	codigo, err := e.codeAttr()
+	if err != nil {
+		return nil, err
+	}
+	return e.methodInfo(nombre, desc, acc|accBridge|accSynthetic, attrInfo(e.pool, "Code", codigo), 1), nil
 }
 
 // terminaEnRetorno: la ultima sentencia del cuerpo es un return. Con `if` y bucles todavia no se puede
