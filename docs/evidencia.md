@@ -24,8 +24,10 @@ APKC_ANDROID_JAR» (`apkc/dependencias_test.go:32`, el guard de `8d6ee67`; el fs
 `/android`), 5 por `pipe: not implemented on js`, 2 por salida de hijo vacía, 1 por
 `testdata/vista-propia/main.xml` sin montar, 1 por permisos `644` y 1 por
 `apkc/wisp_endurecimiento_test.go:283` (bajo `GOOS=js`, `AbrirWebSocketWISP` sí funciona y el test
-espera que falle). Los 8 tests nuevos de `45ec24a`, `445f7fb` y `f064e5f` **no aparecen entre los
-fallos**: pasaron en el hospedador. Se reproduce con
+espera que falle). Ese desglose del informe del QA suma 35 entradas y no cuadra con las 38 líneas
+`--- FAIL` anunciadas ni con los 32 tests: discrepancia **sin resolver**, no se da por cuadrada
+hasta repetir la capa con la salida completa guardada. Los 8 tests nuevos de `45ec24a`, `445f7fb` y
+`f064e5f` **no aparecen entre los fallos**: pasaron en el hospedador. Se reproduce con
 
 ```sh
 sed -n '47p;217p;444,445p' docs/evidencia.md
