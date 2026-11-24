@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"syscall/js"
 	"time"
@@ -141,16 +142,18 @@ func obtenerPuente(peticion js.Value) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := AbrirTLSWISP(cliente, hostPuenteWisp, puertoPuenteWisp, cfg)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	// `AbrirTLSWISP` limpia el deadline del handshake; el GET lleva el suyo.
-	if err := conn.SetDeadline(time.Now().Add(plazoGetPuente)); err != nil {
-		return nil, err
-	}
-	respuesta, err := obtenerConConn(conn, coord)
+	respuesta, err := obtenerConConn(func() (net.Conn, error) {
+		conn, err := AbrirTLSWISP(cliente, hostPuenteWisp, puertoPuenteWisp, cfg)
+		if err != nil {
+			return nil, err
+		}
+		// `AbrirTLSWISP` limpia el deadline del handshake; el GET lleva el suyo.
+		if err := conn.SetDeadline(time.Now().Add(plazoGetPuente)); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}, coord)
 	if err != nil {
 		return nil, err
 	}

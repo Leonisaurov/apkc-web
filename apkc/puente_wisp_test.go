@@ -89,7 +89,7 @@ func TestPuenteWispObtenerConConn(t *testing.T) {
 		peticion <- servirUnaPuente(servidor, "200 OK", "hola!")
 	}()
 
-	respuesta, err := obtenerConConn(cliente, coordPuentePrueba)
+	respuesta, err := obtenerConConn(func() (net.Conn, error) { return cliente, nil }, coordPuentePrueba)
 	cliente.Close()
 	if err != nil {
 		t.Fatalf("obtenerConConn falló: %v", err)
@@ -110,45 +110,43 @@ func TestPuenteWispObtenerConConn(t *testing.T) {
 }
 
 func TestPuenteWispObtenerConConnPruebaExtensiones(t *testing.T) {
-	cliente, servidor := net.Pipe()
-	go func() {
-		defer servidor.Close()
-		lector := bufio.NewReader(servidor)
-		esperadas := []string{
-			"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.jar HTTP/1.1",
-			"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.aar HTTP/1.1",
-			"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.pom HTTP/1.1",
-		}
-		for i, esperada := range esperadas {
-			linea, err := lector.ReadString('\n')
-			if err != nil {
-				return
-			}
-			if !strings.HasPrefix(linea, esperada) {
-				return
-			}
-			for {
-				l, err := lector.ReadString('\n')
-				if err != nil || l == "\r\n" || l == "\n" {
-					break
-				}
-			}
-			if i < 2 {
-				io.WriteString(servidor, "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
-				continue
-			}
-			io.WriteString(servidor, "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\npom")
-		}
-	}()
-
-	respuesta, err := obtenerConConn(cliente, coordPuentePrueba)
-	cliente.Close()
+	respuestas := []struct {
+		estado string
+		cuerpo string
+	}{
+		{"404 Not Found", ""},
+		{"404 Not Found", ""},
+		{"200 OK", "pom"},
+	}
+	esperadas := []string{
+		"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.jar HTTP/1.1",
+		"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.aar HTTP/1.1",
+		"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.pom HTTP/1.1",
+	}
+	indice := 0
+	lineas := make([]<-chan string, 0, len(esperadas))
+	respuesta, err := obtenerConConn(func() (net.Conn, error) {
+		cliente, servidor := net.Pipe()
+		linea := make(chan string, 1)
+		lineas = append(lineas, linea)
+		respuesta := respuestas[indice]
+		indice++
+		go func() {
+			linea <- servirUnaPuente(servidor, respuesta.estado, respuesta.cuerpo)
+		}()
+		return cliente, nil
+	}, coordPuentePrueba)
 	if err != nil {
 		t.Fatalf("obtenerConConn falló tras probar extensiones: %v", err)
 	}
 	if string(respuesta.Bytes) != "pom" ||
 		respuesta.Ruta != "/deps/com/ejemplo/artefacto/1.0/artefacto-1.0.pom" {
 		t.Fatalf("respuesta inesperada: %q en %q", respuesta.Bytes, respuesta.Ruta)
+	}
+	for i, esperada := range esperadas {
+		if linea := <-lineas[i]; !strings.HasPrefix(linea, esperada) {
+			t.Fatalf("la petición %d no es el GET esperado: %q", i, linea)
+		}
 	}
 }
 
@@ -164,26 +162,32 @@ func TestPuenteWispObtenerConConnSinRespuestaParcial(t *testing.T) {
 		{"chunked", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\n", ""},
 		{"sin Content-Length", "HTTP/1.1 200 OK\r\n\r\n", "abc"},
 		{"estado inventado", "HTTP/1.1 999 ?\r\nContent-Length: 0\r\n\r\n", ""},
+		{"CL 3 / cuerpo pommas", "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n", "pommas"},
 	}
 	for _, caso := range casos {
 		t.Run(caso.nombre, func(t *testing.T) {
-			cliente, servidor := net.Pipe()
-			go func() {
-				defer servidor.Close()
-				lector := bufio.NewReader(servidor)
-				lector.ReadString('\n')
-				for {
-					l, err := lector.ReadString('\n')
-					if err != nil || l == "\r\n" || l == "\n" {
-						break
+			respuesta, err := obtenerConConn(func() (net.Conn, error) {
+				cliente, servidor := net.Pipe()
+				go func() {
+					defer servidor.Close()
+					lector := bufio.NewReader(servidor)
+					lector.ReadString('\n')
+					for {
+						l, err := lector.ReadString('\n')
+						if err != nil || l == "\r\n" || l == "\n" {
+							break
+						}
 					}
-				}
-				io.WriteString(servidor, caso.cabecera+caso.cuerpo)
-			}()
-			if _, err := obtenerConConn(cliente, coordPuentePrueba); err == nil {
+					io.WriteString(servidor, caso.cabecera+caso.cuerpo)
+				}()
+				return cliente, nil
+			}, coordPuentePrueba)
+			if err == nil {
 				t.Fatal("la respuesta debía rechazarse sin devolver bytes")
 			}
-			cliente.Close()
+			if respuesta.Bytes != nil {
+				t.Fatalf("se devolvieron %d bytes de una respuesta rechazada", len(respuesta.Bytes))
+			}
 		})
 	}
 }

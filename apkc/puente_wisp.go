@@ -91,11 +91,17 @@ func validarPeticionPuente(version, relay, coord, destino string) (ConfigWISP, s
 	return cfg, carpeta, nil
 }
 
-// obtenerConConn hace los GET necesarios sobre una conexión TLS ya autenticada.
-// El llamador le pone el deadline: `AbrirTLSWISP` limpia el del handshake.
-func obtenerConConn(conn net.Conn, coord string) (respuestaPuenteWisp, error) {
+// abrirConexionPuente entrega una conexión nueva para una extensión. El que
+// llama pone el deadline del GET: `AbrirTLSWISP` limpia el del handshake.
+type abrirConexionPuente func() (net.Conn, error)
+
+// obtenerConConn prueba las tres extensiones, cada una en su propia conexión.
+// Ningún lector sobrevive a una respuesta: no hay reintentos sobre bytes sin
+// consumir y un cuerpo mayor que su Content-Length no puede colarse en el GET
+// siguiente. La fábrica abre un flujo nuevo por extensión porque el GET pide
+// `Connection: close` y el servidor cierra tras responder.
+func obtenerConConn(abrir abrirConexionPuente, coord string) (respuestaPuenteWisp, error) {
 	var vacia respuestaPuenteWisp
-	lector := bufio.NewReader(conn)
 
 	for _, extension := range extensionesPuenteWisp {
 		ruta, err := RutaDependenciaMaven(coord, extension)
@@ -103,7 +109,13 @@ func obtenerConConn(conn net.Conn, coord string) (respuestaPuenteWisp, error) {
 			return vacia, err
 		}
 		rutaWeb := prefijoMavenPuente + strings.TrimPrefix(ruta, "deps/")
+		conn, err := abrir()
+		if err != nil {
+			return vacia, err
+		}
+		lector := bufio.NewReader(conn)
 		cuerpo, err := getHTTPPuente(conn, lector, rutaWeb)
+		conn.Close()
 		if err != nil {
 			return vacia, err
 		}
@@ -120,15 +132,17 @@ func obtenerConConn(conn net.Conn, coord string) (respuestaPuenteWisp, error) {
 	return vacia, fmt.Errorf("puente wisp: %q no está en ninguna de las extensiones permitidas (jar, aar, pom)", coord)
 }
 
-// getHTTPPuente manda un GET HTTP/1.1 sobre la conexión y devuelve nil cuando la
-// respuesta no es 200. Cualquier cuerpo se lee entero o se descarta; nunca se
-// devuelve un trozo. El tamaño se decide por Content-Length, con tope, y se
-// rechaza la codificación chunked en vez de interpretarla a medias.
+// getHTTPPuente manda un GET HTTP/1.1 con `Connection: close` y devuelve nil
+// cuando la respuesta no es 200. El cuerpo se lee hasta el cierre, acotado por
+// `topeCuerpoPuente`, y se compara con Content-Length: un cuerpo con más bytes
+// de los declarados se rechaza entero, sin devolver un trozo ni dejar bytes
+// para otra extensión. La codificación chunked se rechaza en las cabeceras.
 func getHTTPPuente(conn net.Conn, lector *bufio.Reader, rutaWeb string) ([]byte, error) {
 	peticion := "GET " + rutaWeb + " HTTP/1.1\r\n" +
 		"Host: " + hostPuenteWisp + "\r\n" +
 		"User-Agent: " + contratoPuenteWisp + "\r\n" +
-		"Accept: */*\r\n\r\n"
+		"Accept: */*\r\n" +
+		"Connection: close\r\n\r\n"
 	if _, err := io.WriteString(conn, peticion); err != nil {
 		return nil, fmt.Errorf("puente wisp: no se pudo mandar el GET %q: %w", rutaWeb, err)
 	}
@@ -137,20 +151,21 @@ func getHTTPPuente(conn net.Conn, lector *bufio.Reader, rutaWeb string) ([]byte,
 	if err != nil {
 		return nil, err
 	}
+	cuerpo, err := io.ReadAll(io.LimitReader(lector, int64(topeCuerpoPuente)+1))
+	if err != nil {
+		return nil, fmt.Errorf("puente wisp: no se pudo leer el cuerpo: %w", err)
+	}
+	if len(cuerpo) > topeCuerpoPuente {
+		return nil, fmt.Errorf("puente wisp: cuerpo de %d bytes supera el tope de %d", len(cuerpo), topeCuerpoPuente)
+	}
+	if len(cuerpo) != largo {
+		return nil, fmt.Errorf("puente wisp: cuerpo de %d bytes no coincide con Content-Length %d", len(cuerpo), largo)
+	}
 	if estado != 200 {
-		// Se consume el cuerpo de la respuesta rechazada para que la conexión
-		// siga siendo utilizable con la extensión siguiente.
-		if _, err := io.CopyN(io.Discard, lector, int64(largo)); err != nil {
-			return nil, fmt.Errorf("puente wisp: no se pudo descartar la respuesta %d: %w", estado, err)
-		}
 		return nil, nil
 	}
 	if largo == 0 {
 		return nil, errors.New("puente wisp: el servidor devolvió 200 con cuerpo vacío")
-	}
-	cuerpo := make([]byte, largo)
-	if _, err := io.ReadFull(lector, cuerpo); err != nil {
-		return nil, fmt.Errorf("puente wisp: cuerpo incompleto (%d de %d bytes): %w", len(cuerpo), largo, err)
 	}
 	return cuerpo, nil
 }

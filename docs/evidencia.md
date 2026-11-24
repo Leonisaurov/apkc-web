@@ -14406,3 +14406,59 @@ falsificación: los dos gates rechazan lo que tienen que rechazar
 
 **Frontera de `§296`.** `e2e.sh` no se registra en verde: sigue en `254 bien, 2 mal`. El puente se
 mide con núcleo simulado, nunca contra relays reales. Sin push del submódulo ni publicación.
+
+## 297. Content-Length menor que el cuerpo en el puente WISP
+
+### Arreglo
+
+`getHTTPPuente` pide `Connection: close`, lee hasta el cierre con un `io.LimitReader` de
+`topeCuerpoPuente+1` y compara el total de bytes con `Content-Length` antes de devolver nada.
+`obtenerConConn` abre una conexión y un `bufio.Reader` nuevos por extensión: ni un rechazo
+jar→aar→pom ni un timeout dejan bytes en un lector compartido. No hay token nuevo: el contrato
+sigue siendo `apkc-wisp/1` (`puente_wisp.go:32`).
+
+```sh
+cd apkc && tcr -c 3 -m 2G -- go test -run TestPuenteWispObtenerConConnSinRespuestaParcial -v .
+```
+
+```text
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/sin_200
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/cuerpo_por_encima_del_tope
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/cuerpo_cortado
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/chunked
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/sin_Content-Length
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/estado_inventado
+=== RUN   TestPuenteWispObtenerConConnSinRespuestaParcial/CL_3_/_cuerpo_pommas
+--- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/sin_200 (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/cuerpo_por_encima_del_tope (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/cuerpo_cortado (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/chunked (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/sin_Content-Length (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/estado_inventado (0.00s)
+    --- PASS: TestPuenteWispObtenerConConnSinRespuestaParcial/CL_3_/_cuerpo_pommas (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.004s
+```
+
+La suite completa, con las tres pruebas del puente ya corregidas, queda en verde:
+
+```sh
+cd apkc && tcr -c 3 -m 2G -- go test ./...
+```
+
+```text
+ok  	github.com/ajinasokan/apkc	213.082s
+```
+
+### Riesgo aceptado
+
+El aviso de `DEPS` es una puerta de UX de la página, no un límite de seguridad. Un script con
+`globalThis.apkcWisp` puede invocar `obtener` sin pasar por ese aviso: el global se registra en
+`init()` (`puente_wisp_js.go:36`) y el contrato se comprueba en `validarPeticionPuente`
+(`puente_wisp.go:62`). El puente rechaza respuestas incoherentes, pero no impide que se pida una
+coordenada válida; la política sigue siendo la allowlist de `ConfigWISP.Validar`.
+
+**Frontera de `§297`.** Sin relay real, sin CDP, sin gate y sin publicación: solo `net.Pipe()` y la
+suite nativa, además de la compilación `GOOS=js GOARCH=wasm` del lado registrado.
