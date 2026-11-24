@@ -727,3 +727,29 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
 - **Hot swap del contador, pendiente**: el `40` no se reproduce; nativo y CDP dan
   `4 -> swap -> 4 -> clic -> 9`. La firma automática sí apunta a la clase exterior, pero derivar
   `MainActivity$1` sigue **pendiente** (plan escrito, sin implementar). No se cuenta como cerrado.
+- **Hot swap del contador, sobre §295**: lo que no se reproduce sigue siendo el `40` —es un reporte
+  del usuario, sin comando que lo reproduzca y por eso no se registra como medido—; nativo y CDP dan
+  `4 → swap → 4 → clic → 9`, y en CDP salen `navegador: todo en orden` y el timeline
+  `["Pulsos: 0","1","2","3","4","4","9"]`. La firma automática ya deriva `MainActivity$1.onClick`
+  (commit del submódulo `677af8e`), así que lo que el bullet anterior dejaba pendiente quedó
+  corregido; el `40` sigue sin contarse como cerrado.
+- **Puente `apkcWisp/1` en wasm y proxy página-worker (§295)**: el commit `f841220` pone el global
+  `apkcWisp` en el wasm (`apkc/puente_wisp_js.go`, con opt-in y CAs fijadas); el proxy
+  `wisp-puente.js` (`d02b2da`) se activa solo con el contrato `apkc-wisp/1`; la validación de la
+  respuesta del núcleo (`de92a63`, `wisp.js:294-323`) rechaza cuatro falsificaciones y la forma de
+  relay (`2146846`) rechaza tres casos sin dejar de pasar los seis relays del JSON. En CDP el puente
+  informa `nucleoDisponible:true` y desaparece el mensaje de que el núcleo no está disponible.
+- **Gates del puente (§295)**: `tools/entorno.sh wasm` en verde; la sonda con `apkc-wisp/2` y el relay
+  ajeno quedan rechazados con `websockets=0` (log de QA), y el gate de la página da 29/29 `ok` con
+  `sockets:0, llamadas:0` sin núcleo (`node prueba-wisp-gates.mjs`). Frontera: gate final, CI y
+  publicación quedan fuera; el relay real solo se probó con núcleo simulado, nunca contra un relay
+  externo.
+- **Arreglo del AXML de los `EditText` (`da9c7de`)**: `apkc/axmlwriter.go` reserva una celda `""` al
+  final del pool cuando un atributo `tipoCadena` viene vacío, para que `w.idx("")` apunte a una
+  cadena vacía de verdad; antes el `android:text=""` caía en la posición 0 del pool, que en un layout
+  es `orientation`, y la siembra del emulador tomaba ese texto prestado, sin mover el orden medido
+  del resto del pool. Dos pruebas nuevas (`TestElTextoVacioDelEditText` y
+  `TestLosDosEditTextConservanSuIdRef`) reproducen dos `EditText` con idRefs distintos
+  (`0x7f010000` y `0x7f010002`) y un `Button` con `@string` «Enviar» de guarda: la siembra deja solo
+  el texto del botón, cada idRef publica su texto y dos escrituras llegan a dos capturas distintas.
+  Frontera: no se da por pasado `e2e.sh` (sigue en `254 bien, 2 mal`, cifra del encargo).
