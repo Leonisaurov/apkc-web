@@ -377,6 +377,7 @@ func retorno(desc byte) byte {
 // sale de build/jarindice.bin cuando la huella del jar cuadra (jarindice.go), y si no se recorre el
 // directorio central; en los dos casos se lee con `archivo`, que es el jar abierto para ReadAt.
 type buscadorDeClases struct {
+	ruta    string                // el fichero que se abrió, para nombrarlo en el diagnóstico
 	archivo *os.File              // el jar abierto para leer las entradas por su offset
 	zr      *zip.ReadCloser       // el respaldo: cuando el directorio central no se pudo recorrer
 	indice  map[string]entradaJar // nombre internal -> entrada, para no andar el listado en cada lectura
@@ -399,7 +400,7 @@ func abrirBuscador(rutaJar string) (*buscadorDeClases, error) {
 		}
 		if indice != nil {
 			if archivo, err := os.Open(rutaJar); err == nil {
-				return &buscadorDeClases{archivo: archivo, indice: indice, cache: map[string]*classFull{}}, nil
+				return &buscadorDeClases{ruta: rutaJar, archivo: archivo, indice: indice, cache: map[string]*classFull{}}, nil
 			}
 		}
 	}
@@ -415,7 +416,7 @@ func abrirBuscadorConZip(rutaJar string) (*buscadorDeClases, error) {
 	if err != nil {
 		return nil, fmt.Errorf("el jar %s no abre: %w", rutaJar, err)
 	}
-	b := &buscadorDeClases{zr: zr, indice: map[string]entradaJar{}, cache: map[string]*classFull{}}
+	b := &buscadorDeClases{ruta: rutaJar, zr: zr, indice: map[string]entradaJar{}, cache: map[string]*classFull{}}
 	for _, f := range zr.File {
 		internal, ok := recortaClase(f.Name)
 		if !ok {
@@ -473,12 +474,19 @@ func (c *classpathDeClases) cerrar() {
 }
 
 func (c *classpathDeClases) hayEnElJar(internal string) bool {
+	_, ok := c.jarDe(internal)
+	return ok
+}
+
+// jarDe devuelve la ruta del primer artefacto del classpath que define la clase: el diagnóstico de
+// una clase redefinida tiene que nombrar el jar concreto, no decir solo que «está en el classpath».
+func (c *classpathDeClases) jarDe(internal string) (string, bool) {
 	for _, b := range c.fuentes {
 		if b.hayEnElJar(internal) {
-			return true
+			return b.ruta, true
 		}
 	}
-	return false
+	return "", false
 }
 
 // claseDelJar lee la clase del primer jar que la tenga. El error nombra el classpath entero: la clase
@@ -2095,6 +2103,19 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 		return nil, &errorDeFuente{fuente: d.ahora, etapa: "registro",
 			err: fmt.Errorf("la clase %s ya está definida en %s: dos fuentes del proyecto no pueden declarar la misma clase",
 				strings.ReplaceAll(d.clase, "/", "."), d.antes)}
+	}
+	// Una clase del proyecto que además viaje en el classpath: `hay` prefiere la propia, así que el
+	// diagnóstico daba por bueno un fuente que llamaba a un miembro que solo existe en la copia local,
+	// mientras el build dexa esa copia y el runtime resuelve contra el jar. Se contrasta antes de
+	// emitir con el índice de cada artefacto ya abierto, sin leer una entrada de más.
+	for _, c := range ctx.orden {
+		interno := internoDe(c.paquete, c.nombre)
+		if ruta, enJar := busc.jarDe(interno); enJar {
+			fuente := ctx.origen[interno]
+			return nil, &errorDeFuente{fuente: fuente, etapa: "registro",
+				err: fmt.Errorf("la clase %s también está en %s: el fuente la redefine y la resolución usa la copia local",
+					strings.ReplaceAll(interno, "/", "."), ruta)}
+		}
 	}
 	var salida []claseEmitida
 	for i, p := range todos {
