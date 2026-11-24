@@ -14,8 +14,8 @@ package main
 // `ldc2_w 500l`, nunca `sipush 500; i2l`. Es lo que hace javac con `AutoResearchDelay` en
 // `MainActivity$3` de ApkShare (`MainActivity.java:105`, `handler.postDelayed(runnable,
 // AutoResearchDelay)`), y lo que este emisor no hacía: doblaba el campo a `int` y dejaba la conversión
-// detrás. La diferencia se veía con `javap -c` sobre las dos clases y costaba 8 B de dex acumulados
-// (§273, frontera de las cinco que quedan).
+// detrás. La diferencia se veía con `javap -c` sobre las dos clases y costaba 4 B de dex: la brecha
+// total con el oráculo queda en 12 B (16516 frente a 16504), no en los 8 B estimados al medirla.
 
 import (
 	"bytes"
