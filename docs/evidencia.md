@@ -14331,3 +14331,78 @@ websockets=0
 **Frontera de `§295`.** Gate final, CI y publicación quedan fuera.
 El puente real contra Maven solo se probó con núcleo simulado, no
 con un relay externo; el `40` del hot swap sigue sin reproducirse.
+
+## 296. Arreglo del AXML, latch del puente, destino canónico y validación
+
+### Arreglo del AXML
+
+El commit `da9c7de` reserva una celda `""` al final del pool del AXML cuando un atributo de texto
+está vacío: sin ella el atributo apuntaba a la posición 0 del mapa, que en un layout es el primer
+nombre con id (`orientation`), y la siembra del emulador inventaba texto para los `EditText`.
+El fixture se mide byte a byte, el texto vacío se lee vacío y dos `EditText` conservan su `idRef`
+distinto y capturan cada escritura por separado.
+
+```sh
+cd apkc && go test -v . \
+  -run 'Test(EscribeAXMLContraFixture|ElTextoVacioDelEditText|LosDosEditTextConservanSuIdRef)$'
+```
+
+```text
+=== RUN   TestEscribeAXMLContraFixture
+--- PASS: TestEscribeAXMLContraFixture (0.00s)
+=== RUN   TestElTextoVacioDelEditText
+--- PASS: TestElTextoVacioDelEditText (0.00s)
+=== RUN   TestLosDosEditTextConservanSuIdRef
+--- PASS: TestLosDosEditTextConservanSuIdRef (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.004s
+```
+
+### Latch del puente
+
+El commit `6938ceb` pega el puente del núcleo tras el primer contrato válido: el `activo:false`
+de fin de comando ya no lo retira, así que `nucleoDisponible` sigue verdadero en reposo. Un
+`obtener` sin instancia viva falla cerrado en el hospedador con su motivo, sin abrir socket.
+
+```sh
+cd studio && node prueba.js
+```
+
+```text
+prueba: todo en orden
+```
+
+### Destino canónico
+
+El commit `6edde93` trocea el grupo con barras en `destinoDeCoordenada`, igual que el núcleo
+(`ReplaceAll(grupo, ".", "/")`) y no con puntos como la vía del índice; además rechaza los grupos
+con algún segmento vacío. La coordenada de Gson da el mismo destino que el núcleo.
+
+```sh
+cd studio && node --input-type=module -e '
+  import { destinoDeCoordenada } from "./wisp.js";
+  console.log(destinoDeCoordenada("com.google.code.gson:gson:2.10.1"));
+'
+```
+
+```text
+/deps/com/google/code/gson/gson/2.10.1/
+```
+
+### Validación y contrato
+
+El commit `de92a63` contrasta la respuesta del núcleo antes de pintarla: exige `Uint8Array` no
+vacía y dentro del tope de 64 MiB, `sha256` hexadecimal de 64 dígitos en minúscula que coincide
+con los bytes recibidos y `ruta` bajo `/deps/` sin `..`, contrabarra, `?` ni `#`. El commit
+`f30b5cf` ajusta `DEPS.md` al puente registrado.
+
+```sh
+cd studio && node prueba-wisp-gates.mjs
+```
+
+```text
+falsificación: los dos gates rechazan lo que tienen que rechazar
+```
+
+**Frontera de `§296`.** `e2e.sh` no se registra en verde: sigue en `254 bien, 2 mal`. El puente se
+mide con núcleo simulado, nunca contra relays reales. Sin push del submódulo ni publicación.
