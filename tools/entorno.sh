@@ -55,6 +55,40 @@ PATH_EXTRA=/usr/sbin:$PREFIX/bin
 PATH=$PATH_EXTRA:$PATH
 export PATH
 
+# Corredor de pruebas: el entorno del escritorio se fija aquí una sola vez. Los agentes
+# llaman a `tools/entorno.sh <tarea>` (o a `tools/correr.sh <tarea>`) y no tienen que
+# acordarse de TCR, del guardia de RAM ni de la librería suelta de chromium.
+CORREDOR_BASE=$PREFIX/corredor
+mkdir -p "$CORREDOR_BASE"
+
+if [ -z "${TCR:-}" ] && command -v tcr >/dev/null 2>&1; then
+  TCR=$CORREDOR_BASE/tcr
+  GUARDIA=${CORREDOR_GUARDIA_MB:-300}
+  # e2e.sh y tcr_o_directo pasan `-j 1 -q --`; el envoltorio los descarta para no
+  # duplicarlos y fija el guardia en 300 MiB (con 1 GiB el gate muere con 137).
+  cat > "$TCR" <<ENVOLTORIO
+#!/bin/sh
+if [ "\${1:-}" = "-j" ] && [ "\${3:-}" = "-q" ] && [ "\${4:-}" = "--" ]; then
+  shift 4
+fi
+exec tcr -r ${GUARDIA}M -j 1 -q -- "\$@"
+ENVOLTORIO
+  chmod +x "$TCR"
+fi
+export TCR
+
+# El chromium del sistema necesita libsimdutf.so.36, que no está en el ldconfig. Sin
+# esta variable el debugger no abre y e2e.sh lo confunde con un puerto ocupado.
+SHIMLIB=${SHIMLIB:-$HOME/.cache/apkc-web-gate-final/shimlib}
+LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
+if [ -d "$SHIMLIB" ]; then
+  case ":$LD_LIBRARY_PATH:" in
+    *":$SHIMLIB:"*) ;;
+    *) LD_LIBRARY_PATH=${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$SHIMLIB ;;
+  esac
+  export LD_LIBRARY_PATH
+fi
+
 # El android.jar no se versiona; se toma del SDK que ya esté instalado. Esta es la única
 # definición de "dónde está el jar" que usan doctor y la tarea jar.
 jar_del_sdk() {
@@ -68,8 +102,8 @@ jar_del_sdk() {
 
 # tcr de Termux si está; si no, el comando tal cual.
 tcr_o_directo() {
-  if command -v tcr >/dev/null 2>&1; then
-    tcr -j 1 -q -- "$@"
+  if [ -n "${TCR:-}" ]; then
+    "$TCR" -j 1 -q -- "$@"
   else
     "$@"
   fi
@@ -222,6 +256,33 @@ case "$tarea" in
       printf 'sdkmanager terminó sin dejar %s/platforms/android-%s/android.jar\n' "$ANDROID_HOME" "$api" >&2
       exit 2
     fi
+    ;;
+  corredor)
+    printf 'RAIZ=%s\nHOME=%s\nPREFIX=%s\nTMP=%s\n' "$RAIZ" "$HOME" "$PREFIX" "$TMP"
+    printf 'TCR=%s\nGUARDIA_MB=%s\nLD_LIBRARY_PATH=%s\n' \
+      "${TCR:-<sin tcr>}" "${CORREDOR_GUARDIA_MB:-300}" "${LD_LIBRARY_PATH:-<vacio>}"
+    ;;
+  tareas|ayuda)
+    cat <<'AYUDA'
+Corredor de pruebas de apkc-web. Elige una tarea; el entorno ya está fijado.
+
+  sh tools/correr.sh test              suite Go nativa de apkc/
+  sh tools/correr.sh wasm              suite en el hospedador con forma de navegador
+  sh tools/correr.sh wisp              falsificación de los gates del módulo WISP
+  sh tools/correr.sh wisp-externo      gate externo (solo con APKC_WISP_EXTERNO=1)
+  sh tools/correr.sh gate              página de punta a punta: SOLO si el usuario lo pide
+  sh tools/correr.sh banco             los cinco caminos de ejecución
+  sh tools/correr.sh jar [api]         ruta del android.jar local
+  sh tools/correr.sh harness           clona el oráculo de zip si falta
+  sh tools/correr.sh sitio             empaqueta el sitio estático
+  sh tools/correr.sh publicar          empaqueta, publica y verifica sobre el host
+  sh tools/correr.sh doctor            entorno resuelto
+  sh tools/correr.sh corredor          envoltorio de tcr y librería de chromium
+  sh tools/correr.sh -- <mando>        ejecuta un mando suelto con el entorno puesto
+
+Opciones: CORREDOR_GUARDIA_MB cambia la guardia de RAM de tcr (por defecto 300),
+SHIMLIB apunta a otra librería de chromium y TCR=<ruta> sustituye el envoltorio.
+AYUDA
     ;;
   doctor)
     verifica_entorno
