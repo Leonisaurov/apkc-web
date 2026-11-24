@@ -110,19 +110,42 @@ function anotarSalida(c) {
   if (codigoDeSalida === null) codigoDeSalida = (c === undefined ? 0 : c);
 }
 
-// el único camino por el que node se va: fija el código en el proceso REAL, deja que stdio
-// vacíe lo que le quede y termina con el exit real. process.exit no espera a un stdout en
-// pipe, y ahí van justamente el recuento de ficheros y el «(apkc devolvio N)» que se leen
-// al final del gate. El temporizador sin ref es la red: si un flujo no llamara nunca, el
-// programa sale igual en un segundo en vez de quedarse colgado.
+// el único camino por el que node se va: fija el código en el proceso REAL y espera a que
+// stdout y stderr hayan vaciado lo suyo antes de salir con el exit real. process.exit no
+// espera a un pipe, y por ahí van el recuento de ficheros y «(apkc devolvio N)», que es lo
+// que se lee al final del gate. Ojo: no vale escribir un trozo vacío y esperar su callback,
+// porque node lo llama sin esperar a los anteriores (medido: salía a los 300 ms con dos
+// tercios de los 200 KB todavía en el buffer); lo que sí manda es writableLength, que es el
+// dato que aún no ha llegado al pipe. Se sondea hasta que sea cero: mientras el consumidor
+// drena despacio NO se corta, y solo se fuerza si lleva dos minutos sin moverse un byte. El
+// sondeo va con referencia (sin unref) a propósito: medido, con el temporizador suelto el
+// bucle se vaciaba antes de que stdio acabara de drenar y node salía con el buffer a medias.
 function salirCon(codigo) {
   if (typeof codigo !== "number" || !Number.isFinite(codigo)) codigo = 1;
   procesoReal.exitCode = codigo;
-  let quedan = 2;
-  const cerrar = () => { if (--quedan === 0) salirReal(codigo); };
-  procReal.stdout.write("", cerrar);
-  procReal.stderr.write("", cerrar);
-  setTimeout(() => salirReal(codigo), 1000).unref();
+  const enBuffer = () => (procReal.stdout.writableLength || 0) + (procReal.stderr.writableLength || 0);
+  let saliendo = false;
+  let ultimo = -1;
+  let desde = Date.now();
+  const vigilar = () => {
+    if (saliendo) return;
+    const ahora = enBuffer();
+    if (ahora === 0) {                      // ya está todo en los pipes: el exit no pierde nada
+      saliendo = true;
+      return salirReal(codigo);
+    }
+    if (ahora !== ultimo) {                 // el buffer se mueve: el consumidor está drenando
+      ultimo = ahora;
+      desde = Date.now();
+    } else if (Date.now() - desde >= 120000) {   // dos minutos sin moverse: consumidor muerto
+      // sincrónico a propósito: este aviso tiene que salir aunque el pipe no drene
+      fs.writeSync(2, `[shim] la salida lleva 120 s sin drenar (${ahora} bytes pendientes): se corta\n`);
+      saliendo = true;
+      return salirReal(codigo);
+    }
+    setTimeout(vigilar, 20);
+  };
+  vigilar();
 }
 
 // stdin, stdout y stderr viven en el objeto fs, no en el árbol: sin esto la salida de apkc
