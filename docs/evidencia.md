@@ -12365,6 +12365,93 @@ sed -n '212p;217p' \
   ~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/src/share/apps/util/MainActivity.java
 ```
 
+## 269. `ldc_w` cierra la compilación completa de ApkShare
+
+Registrado el 2026-11-24 sobre `570dacb`. La medición es del builder, `87bba91`, integrada en este
+árbol como `2ef8b94`; este `§` la **transfiere** y re-ejecuta solo la prueba puntual y las
+comprobaciones baratas sobre los artefactos, no la suite ni el build. Las cifras de suite, `gofmt` y
+`go vet` que se citan son salida del builder, no de este registro.
+
+**El error previo.** Con el binario de `e3a46a1`, el build se paraba con `[build] MainActivity.java:
+linea 35: linea 217: linea 217: el pool de share/apps/util/MainActivity pasa de 255 entradas y ldc_w
+no esta medido en este emisor`. La posición es la 217 del fuente —`public void
+show_loading_dialog(String msg) {`—, pero el motivo no está en esa línea: el pool de la **clase**
+pasó de 255 entradas al añadirse las constantes de `Intent.createChooser`, y el emisor cerraba el
+método sin forma larga para `ldc`.
+
+**Las piezas.** `opLdcW = 0x13` (`apkc/javaemisor.go:52`); `ldc(idx)` (`:3006-3017`): hasta 255
+`0x12` con un byte, de 256 a 65535 `0x13` con dos —`byte(idx>>8), byte(idx)`— y por encima de
+`0xffff` `truncado`; el interruptor `ldcSinFormaLarga` (`:2997`), apagado en el binario y solo para
+la falsificación; el comentario de `truncado` (`:2418`); y el rechazo (`:9627`), que ya no dice «no
+esta medido» sino «el indice no cabe en el `ldc` que se escribio».
+
+**Sin pasada extra.** El índice es definitivo al emitir porque el pool crece por el final, y las
+posiciones que se anotan después —filas de línea, etiquetas, `exception_table`— se toman de
+`len(e.codigo)` en ese momento; los saltos se resuelven luego en `resuelveSaltos` (`:2619`).
+`max_stack` no cambia: `ldc_w` empuja un valor igual que `ldc`.
+
+**El oráculo.** `apkc/javaemisor_ldcw_escritor_test.go` arma una clase con 200 cadenas y 80 enteros
+(`fuentePoolGrande`, `:28-49`) y, tras el límite, pone `conSalto` —rama y `StackMapTable`— y
+`conTry` —`exception_table`—. `TestElLdcWEscribeLaFormaLargaYCoincideConJavac17` (`:147`) exige la
+premisa sobre el `.class` de javac 17 (`--release 8 -g:lines,source`), la regla del límite sobre
+**nuestro** `.class` (`:163-179`: `ldc` solo con índice ≤ 255 y `ldc_w` solo por encima), las pilas
+declaradas método a método y el **dex byte a byte**. `TestElPoolCortoSeQuedaEnLdc` (`:209`) es el
+control sin `ldc_w`; `TestElLdcEligeLaFormaEnElLimite255` (`:227`) fija `0x12`/`0x13`/`truncado` en
+0, 254, 255, 256, 257, `0x7fff`, `0xffff` y `0x10000`; `TestElLdcWNoCambiaElMaxStack` (`:273`) mide
+que `ldc`→`ldc_w` alarga el `Code` exactamente un byte.
+
+**La falsificación.** `TestElInterruptorFuerzaLaFormaCorta` (`:257`) enciende `ldcSinFormaLarga` y
+el pool grande se rechaza nombrando el pool. Con el binario, la falsificación devuelve el mismo
+`file:line` y «el indice no cabe en el `ldc` que se escribio».
+
+**El cierre de ApkShare.** Con el binario de este árbol, sobre
+`~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/`, el build termina: 6 fuentes de Java en Go →
+21 clases → `build/classes.dex` de **16672 B** → `build/app.apk` de **305577 B**, `rc=0`, `finished
+in 97.012316ms`, con el empaquetado y la firma dentro de apkc. **No aparece bloqueo siguiente**: es
+la primera vez que ApkShare compila entero. Aquí solo se comprobaron los artefactos —`stat` da los
+dos tamaños, 21 `.class` y 6 `.java`—, no se relanzó el build.
+
+**Lo que revisó la crítica.** `ses_df3cbd7c0ffeeGo1IkZxjLAhrA` dio **APROBAR** sin hallazgos
+`CONFIRMADO` en contra. Repitió los límites exactos (`0x12` en 255, `0x13 01 00` en 256,
+`0x13 ff ff` en 65535 y `truncado` en 65536) con el `Code_length` cuadrado por
+`u4be(uint32(len(e.codigo)))` (`:9329`) y la aserción de forma sobre nuestro `.class` (test
+`:163-179`), no solo sobre el de javac; y reconstruyó ApkShare **sin caché**
+(`mv build/dexcache.bin …bak`, 0 de 63 reutilizados) con el mismo resultado: 21 clases, 16672 B de
+dex, `rc=0`. `apksigner verify --verbose` da «Verifies» y v1/v2/v3 en `true`; con
+`--v4-signature-file build/app.apk.idsig`, también v4 (medido aquí); `jarsigner -verify` dice «jar
+verified».
+
+**Deudas abiertas, no cerradas.** (1) 12 clases anidadas de `MainActivity`/`ApkAdapter$1` no son
+byte a byte contra javac por `StackMapTable` (`full_frame` frente a `same_frame`), una fila
+`line 159: 155` ausente y los `MethodParameters` de las anónimas; no tienen ninguna `ldc_w`, son
+preexistentes y no impiden que ApkShare compile (artefactos en `~/.cache/apkc-web/ldcw-w/`). (2)
+`apkc/lambda_fuente.go:449-451` conserva un mensaje viejo, que ya solo se dispara con el interruptor
+o con un pool de más de 65535. (3) Sin `--keystore` explícito, el paso de firma se queja con la ruta
+vacía (§267), aunque el default del flag esté puesto. (4) `ldc_w` junto a un `goto_w` real (más de
+32 KB de `Code`) no está medido: la sonda usa rama corta, así que el ensanchado de un salto sobre un
+`ldc_w` que ya corrió posiciones no queda ejercitado.
+
+**Lo ejecutado aquí.** La prueba puntual, en este worktree: `ok github.com/ajinasokan/apkc 4.883s`
+con seis `PASS` —las cinco del fichero nuevo y `TestElLdcWInternaElTipoYCoincideConD8` (§222), que
+entra por el patrón—; el patrón del encargo no casaba con `...Limite255`, así que se añadió.
+`gofmt -l` no devuelve nada sobre los dos ficheros citados. La suite `ok … 175.916s`, `gofmt` y
+`go vet` limpios son del builder.
+
+```sh
+cd apkc && go test -run 'LdcW|PoolCorto|InterruptorFuerza|Limite255' -count=1 -v .
+grep -n 'opLdcW\|ldcSinFormaLarga' apkc/javaemisor.go
+sed -n '2414,2422p;2580,2625p;2993,3017p;9325,9332p;9623,9630p' apkc/javaemisor.go
+sed -n '163,179p;227,252p' apkc/javaemisor_ldcw_escritor_test.go
+cd ~/.cache/apkc-web/arraylist-apkshare/ApkShare-main && \
+  ~/.cache/apkc-web/ldcw-w/apkc-despues build --linker go --compiler go --sdk-version 34 \
+    --android-jar ~/opt/android-sdk/platforms/android-34/android.jar \
+    --keystore ~/.android/debug.keystore
+stat -c '%s %n' build/classes.dex build/app.apk
+find build/classes -name '*.class' | wc -l
+apksigner verify --verbose --v4-signature-file build/app.apk.idsig build/app.apk | head -8
+jarsigner -verify build/app.apk | grep 'jar verified'
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
