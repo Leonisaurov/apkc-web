@@ -11221,11 +11221,16 @@ del emisor comparan el dex con javac 17 `--release 8 -g:lines,source`, byte a by
 instrucción, y las falsificaciones apagan el interruptor y devuelven el error literal del usuario.
 
 **ApkShare avanza, no compila.** El `check --proyecto` del fuente real pasó la 156, la 187, la 218 y
-`AppAdapter.java:21/29/33`; el build se para ahora en `MainActivity.java:52/53/55`, **columna 44**: al
+`AppAdapter.java:21/29/33`, y el build se para ahora en `MainActivity.java:55`, **columna 44**: al
 leer `apps`, el tipo no se resuelve porque es la captura de una local en posición de receptor dentro
-de una anónima (`apkc/javafuente.go:2924`). Después siguen fuera, medidos con `dexdump`, el puente
-`getItem:(I)Ljava/lang/Object;` del retorno covariante y el `check-cast` tras el `List.get` borrado.
-**No compila entero**: ninguna de estas piezas se presenta como cierre del build.
+de una anónima (`apkc/javafuente.go:2924`), y ese frente sigue en curso. El puente
+`getItem:(I)Ljava/lang/Object;` del retorno covariante y el `check-cast` tras el `List.get` borrado,
+que este `§` dejaba fuera, cerraron después en `ee5a372`: con la ruta del cast apagada el
+verificador de la JVM rechaza `getView` con `VerifyError`, con la del puente apagada `getItem` sale
+una sola vez, y el dex de `AppAdapter` queda byte a byte el de javac 17
+`--release 8 -g:lines,source` (`apkc/javaemisor_appadapter_cast_test.go`). **No compila entero**: el
+build no se presenta como cierre, y el proyecto entero sigue difiriendo de javac en el plegado
+`1|128` de `Apk.java`.
 
 **Docs (`e2fe7f1`, `8bd46da`).** Los nueve defectos de la crítica: I1, I2 e I3 con su estado real de
 cerradas; I4 hecha en nativo con el gate pendiente; I5 medida; J4 cerrada con el run `45062792689`
@@ -11237,9 +11242,14 @@ sus cifras 35/184— sustituida por `dpc`/`dlinea` (`docs/situacion.md:212`) y *
 
 **WISP.** Se descartó como módulo por defecto: rompe la regla 4 y la auditoría de peticiones fuera
 del origen, y por CDP no se ven los frames cifrados de un WebSocket. El usuario decidió abrirlo como
-**módulo opcional opt-in, con aviso y dos gates**; la investigación sigue en curso y **no hay nada
-implementado**: la única mención en el repo es `docs/plan-deps-red.md:44`, y `grep -rni wisp` sobre
-`*.go`, `*.js` y `*.html` no devuelve una sola línea.
+**módulo opcional opt-in, con aviso y dos gates**, y la forma elegida es un **módulo con TLS propio
+en Go** —`crypto/tls` sobre un `net.Conn` que habla WISP, compilado a `GOOS=js`—, no un cliente en
+JS: la investigación midió que JS puro no llega a TLS, porque el relay entrega el flujo en claro y
+cualquier relay del camino queda en posición de hacer MITM, y que de 98 relays solo 54 contestan el
+handshake. La spec es la **v1.2** (CC-BY-4.0, sin copia en el repo; se cita en
+`docs/plan-deps-red.md:47-48`): paquetes de 5 B, un `CONTINUE` inicial y `CLOSE`. **En
+implementación, núcleo en curso**: el gate por defecto sigue con **cero peticiones ajenas** y el
+módulo solo se activa a mano.
 
 **`deps-index` (`6157786` en el repo, `d70b8e7` en `studio/`).** El generador local
 `studio/deps-index-local.mjs` produce un índice mínimo y reproducible **sin red** —coordenada,
@@ -11252,7 +11262,7 @@ publicación, que queda pendiente de orden (`studio/DEPS.md`, «Estado»).
 
 **Fronteras de este `§`.** Un `.aar` real con `res/` y `lib/` sigue sin empaquetarlos: `classes.jar`
 se dexa, pero los recursos y las bibliotecas nativas quedan fuera de la pieza a propósito
-(`apkc/dependencias.go:12-14`). El opt-in de WISP no tiene especificación escrita, y el push, el CI
+(`apkc/dependencias.go:12-14`). El opt-in de WISP queda en implementación, y el push, el CI
 remoto y la publicación de `apkc-studio.surge.sh` siguen pendientes de orden. No se re-ejecutó nada
 aquí, no hubo gate ni chromium; el oráculo de cada bloque es el que cita: los tests de paquete hostil,
 javac 17 con el dex comparado y las comprobaciones de `studio/`.
@@ -11270,8 +11280,8 @@ cd studio && node prueba.js
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
 
 1. **ApkShare no compila entero.** En `§253` pasó la 187, la 218 y `AppAdapter`, y se para en
-   `MainActivity.java:52/53/55`, columna 44, con la captura de `apps` en una anónima; después
-   quedan el puente `getItem` del retorno covariante y su `check-cast`.
+   `MainActivity.java:55`, columna 44, con la captura de `apps` en una anónima; el puente `getItem`
+   del retorno covariante y su `check-cast` ya cerraron en `ee5a372`.
 2. **Asignación como valor sobre campo o arreglo**, rechazada por nombre, pendiente del
    `dup_x1`/`dup2_x1` (y del `dup_x2` del elemento).
 3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual sin
