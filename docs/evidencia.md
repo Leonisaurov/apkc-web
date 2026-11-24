@@ -13596,10 +13596,11 @@ en ficheros `!js` (las dos líneas restantes del `grep` son la definición y su 
 746 sin cambio y **2 `--- FAIL`**: los dos `multidex`, ya corregidos en `web` por `7f24a12`,
 y sin aborto. En nativo, `ok … 173.030s`, 871 `PASS`, 0 `FAIL` y 6 `SKIP` ajenos.
 
-**Veredicto de la crítica de A (transferido).** 265 funciones comparadas en 43 pares,
-**0 aserciones perdidas ni cambiadas**; el `grep -c 't.Skip'` del diff da 3 por reubicación de
-un guard preexistente, no skips nuevos. `go vet` nativo y wasm limpios; `gofmt -l` solo nombra
-el preexistente `javaemisor_constantvalue_long_test.go`.
+**Veredicto de la crítica de A: APROBADA.** `ses_df1f421a6ffeyiBCvStOUCLWd2` aprobó `8d93ada`
+con 265 funciones comparadas en 43 pares y **0 aserciones perdidas ni cambiadas**; el
+`grep -c 't.Skip'` del diff da 3 por reubicación de un guard preexistente, no skips nuevos.
+`go vet` nativo y wasm limpios; `gofmt -l` solo nombra el preexistente
+`javaemisor_constantvalue_long_test.go`.
 
 **B. Los dos últimos fallos, multidex.** `TestCompilaAppPre21ConDemasiadasClasesAborta` y
 `TestCompilaAppSinUsesSdkConDemasiadasClasesAborta` venían de `exec.Command(os.Args[0])`
@@ -13609,14 +13610,19 @@ contrapartidas puras-Go, `TestDexPrimarioPre21QueNoCabeSeRechazaEnGo` (`:341`) y
 `TestDexPrimarioSinUsesSdkQueNoCabeSeRechazaEnGo` (`:375`), comprueban los mismos mensajes
 (`main-dex`, `65536`, `API 19`/`API 1`, `classes2.dex`) con 0 dex escritos.
 
-**Medición transferida y crítica en curso.** El builder dio capa wasm `rc=0` y 0 `FAIL`, y
-nativo `ok … 192.981s`, con `vet` y `gofmt` limpios. La crítica sigue revisando este frente.
+**Medición transferida y crítica APROBADA.** El builder dio capa wasm `rc=0` y 0 `FAIL`, y
+nativo `ok … 192.981s`, con `vet` y `gofmt` limpios. La crítica
+`ses_df1f4df86ffeOiDMvdphcYLcTH` aprobó `7f24a12`: capa wasm
+`tcr -r 256M -- sh tools/entorno.sh wasm` → final `PASS`, **0 `--- FAIL`**, sin `t.Skip`
+nuevos; nativo `ok … 184.524s` con los dos tests movidos en `PASS`.
 
-**Condición pendiente.** QA (`ses_df1f12649ffeGtpp1o1HfFooeh`) ejecuta la capa wasm final para
-confirmar 0 `FAIL` y 29 `SKIP`; el veredicto se integrará al cerrar. Hasta que llegue, este `§`
-no se da por auditado.
+**Cierre.** La capa wasm final queda con 0 `FAIL` —verificado por la crítica del multidex— y
+29 `SKIP` como medición transferida del builder; el recuento definitivo de QA
+(`ses_df1f12649ffeGtpp1o1HfFooeh`), que aún corre, se integraría al llegar. Este `§` queda
+auditado con los dos veredictos de crítica recibidos.
 
-**Deuda por diseño del tag.** Que el hijo real aborta el build solo se prueba en nativo.
+**Deuda por diseño del tag.** Que el hijo real aborta el build solo se prueba en nativo; está
+registrada en el mensaje del commit y en los comentarios del fichero, no como medición nueva.
 
 ```sh
 # cero oráculos con skip silencioso, y el helper con Fatalf
