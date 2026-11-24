@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§254`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§255`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11228,9 +11228,10 @@ de una anónima (`apkc/javafuente.go:2924`), y ese frente sigue en curso. El pue
 que este `§` dejaba fuera, cerraron después en `ee5a372`: con la ruta del cast apagada el
 verificador de la JVM rechaza `getView` con `VerifyError`, con la del puente apagada `getItem` sale
 una sola vez, y el dex de `AppAdapter` queda byte a byte el de javac 17
-`--release 8 -g:lines,source` (`apkc/javaemisor_appadapter_cast_test.go`). **No compila entero**: el
-build no se presenta como cierre, y el proyecto entero sigue difiriendo de javac en el plegado
-`1|128` de `Apk.java`.
+`--release 8 -g:lines,source` (`apkc/javaemisor_appadapter_cast_test.go`). Ese `VerifyError` era el
+de la JVM; en el aparato lo cerró `§255`, con ART verificando y ejecutando el mismo dex. **No
+compila entero**: el build no se presenta como cierre, y el proyecto entero sigue difiriendo de
+javac en el plegado `1|128` de `Apk.java`.
 
 **Docs (`e2fe7f1`, `8bd46da`).** Los nueve defectos de la crítica: I1, I2 e I3 con su estado real de
 cerradas; I4 hecha en nativo con el gate pendiente; I5 medida; J4 cerrada con el run `45062792689`
@@ -11344,6 +11345,91 @@ gist citado, y versionarlo sigue pendiente para que el número se reproduzca sin
 
 ```sh
 curl http://repo1.maven.org/maven2/
+```
+
+## 255. ART verifica y ejecuta el `check-cast` de `AppAdapter`, y destapa el dexer ancho
+
+Medido el 2026-11-23 por el agente de QA `ses_df4582f86ffeMf8Tte2809AvOd` en el cell de Droidloom,
+no en la JVM. Este `§` transfiere su salida; aquí solo se releyeron los dex con el `dexdump` del SDK
+de escritorio (`~/opt/android-sdk/build-tools/35.0.1/dexdump`) para comprobar offsets, `access` y
+`registers`. No se levantó el cell, ni hubo gate, chromium, red, push ni publicación. El sujeto es
+el `getItem` de `AppAdapter` que arregló `ee5a372`: el hueco tipado del `List.get` con su
+`check-cast` y el puente del retorno covariante.
+
+**El aparato.** `droidloomctl status --json` contestó `{"message":"Droidloom is stopped",...}`; tras
+`droidloomctl start`, `adb devices -l` lista
+`10.177.0.2:5555 device product:aosp_cf_x86_64_only_phone model:Droidloom device:droidloom`, SDK 37.
+`adb root` devuelve `adbd cannot run as root in production builds` y no hay `rish` ni `su`, así que
+la sonda corre como uid 2000 con `app_process64` y `ANDROID_DATA=/data/local/tmp/artdata`.
+`droidloomctl stop` devolvió el cell a `stopped`.
+
+**Con `check-cast`.** El dex se generó con el binario de `6891693`, que contiene `ee5a372`, y sin
+`getItemId`, que estorba por el defecto del final. En el artefacto, `p_cast/cast.dex` reproduce el
+método. `dexdump -d` muestra el puente `getItem:(I)Ljava/lang/Object;` con
+`access: 0x1041 (PUBLIC BRIDGE SYNTHETIC)`, que delega en `getItem:(I)Lshare/apps/util/App;`; en el
+método real, el `check-cast` está en el offset `0x6`:
+
+```text
+|0005: move-result-object v0
+|0006: check-cast v0, Lshare/apps/util/App;
+|0008: return-object v0
+```
+
+En ART la corrida sale rc=0 y la línea de la sonda es
+`CUENTA 2 / CAST_NULO null / CAST_EJECUTADO ClassCastException / PUENTE null / FIN`: el verificador
+acepta el dex, el cast se ejecuta, el nulo pasa y un elemento ajeno del `List` revienta con
+`ClassCastException` en vez de colarse como `Object`. Es el contrato que javac 17 escribe con su
+`checkcast`.
+
+**Sin `check-cast`, la falsificación no es vacua.** El binario se compiló desde una copia de `apkc`
+hecha con `git archive HEAD`, con el interruptor apagado
+(`apkc-sin-cast/apkc/javaemisor.go:5214`, `var insertaCheckcast = false`), y el dex
+`p_sin_cast/sin.dex` deja el mismo `getItem` sin el `check-cast` del offset `0x6`. ART lo rechaza
+antes de ejecutar:
+
+```text
+VerifyError: returning 'Reference java.lang.Object', but expected 'Reference: share/apps/util/App'
+cannot access instance field java.lang.String App.name from object of type
+Reference java.lang.Object
+```
+
+La segunda línea va partida para no pasar de 100 columnas. El dex sin el cast no verifica, así que
+la corrida con cast sí distingue: el arreglo de `ee5a372` separa verificar de no verificar.
+
+**Veredicto.** `ee5a372` queda cerrado en ART **en lo que arregla**: el `check-cast` del hueco
+tipado y el puente del retorno covariante verifican, ejecutan y fallan con `ClassCastException`
+cuando entra un elemento ajeno. No se cierra con esto el compilador entero de ApkShare: la frontera
+de `MainActivity.java:55` sigue en curso, como decía `§253`.
+
+**Frontera abierta, ajena a este arreglo: `getItemId` ancho.** Con el `AppAdapter` completo, ART
+rechaza `getItemId` con `wide register index out of range (1+1 >= 2)`. `dexdump` enseña el defecto:
+`registers: 2` e `int-to-long v1, v1` en el offset `0x0`, con `return-wide v1`; ese `int-to-long`
+escribe el par `v1`/`v2`, y el `v2` no existe en un marco de dos registros. Se reproduce con
+`sonda-i2l/q/Ancho.java:4-5` del artefacto
+(`~/.cache/apkc-web/art-checkcast/sonda-i2l/q/Ancho.java`, `long id(int p) { return p; }`), que se
+compiló con javac 17 y se dexó con apkc: el dex sale con `registers: 2` e `int-to-long v1, v1`,
+igual que en `AppAdapter`. El defecto está en el `int-to-long` en sitio de `apkc/dexinstr.go:769`
+y entra con `6a23468`, que reescribe ese fichero. **No está cerrado**: otro agente lo corrige en un
+frente aparte, y la medición del `check-cast` se hizo con `getItemId` retirado (las instrucciones de
+`getItem` son idénticas). La vía siguiente es que el `int-to-long` no deje el par fuera del marco
+—reservar un par libre para el destino o contar las dos palabras— y el oráculo es el mismo
+`app_process64` con `getItemId:(I)J` completo, que hoy rechaza ART.
+
+**Fronteras de este `§`.** No se re-ejecutó ART aquí ni hubo gate; el `dexdump` local solo confirma
+el contenido de los artefactos. El argv literal de `app_process64` no vino en la transferencia: la
+invocación se sabe por sus variables (`ANDROID_DATA` y `CLASSPATH` sobre el directorio del dex), y
+reproducirla queda pendiente. El frente del dexer ancho se cita por su síntoma y su `file:line`, no
+por un arreglo.
+
+```sh
+droidloomctl status --json
+droidloomctl start
+adb devices -l
+adb root
+dexdump -d "$HOME/.cache/apkc-web/art-checkcast/p_cast/cast.dex"
+dexdump -d "$HOME/.cache/apkc-web/art-checkcast/p_sin_cast/sin.dex"
+dexdump -d "$HOME/.cache/apkc-web/art-checkcast/head-full.dex"
+droidloomctl stop
 ```
 
 ## Fronteras del bloque, sin cerrar
