@@ -112,7 +112,9 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      del `planificador` pasa por `critico` **antes** de delegarse; cada `builder` que escribe se abre en
      worktree propio con su sesión movida allí, y el auditor no lleva worktree. En el encargo se dice
      «tú eres el subagente, yo soy el orquestador; no delegues, ejecuta y verifica en tu ruta». Los
-     gates solo se corren con autorización expresa del usuario; para iterar, pruebas focales.
+     gates solo se corren con autorización expresa del usuario; para iterar, pruebas focales. Tras
+     integrar y verificar un worktree —su contenido ya está commiteado— el orquestador puede borrarlo
+     con `force: true` sin volver a pedir confirmación.
 
 ## Entorno (Termux/Android aarch64)
 
