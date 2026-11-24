@@ -13798,6 +13798,76 @@ grep -n 'subclaseDe\|desempataGenerica' apkc/javaemisor.go
 head -n1 apkc/javaemisor_else_goto_paridad_test.go apkc/javaemisor_vuelta_generica_test.go
 ```
 
+## 287. Emulador con medidas reales, hot swap sin selector y compilación en un clic
+
+Registrado el 2026-11-24 por transferencia de tres frentes de la pestaña: el emulador contra
+Droidloom (builder `ses_df1b21fa4ffeg5Zau1AEaUjKIc`), el hot swap sin selector
+(builder `ses_df1ac57c5ffeNSAdj8huY0JjNj`) y la compilación en un clic con API visible
+(builder `ses_df1a687e0ffeBjmbbSr4XEcEAS`). Las mediciones son de los builders y de las críticas;
+no se re-ejecutó aquí ningún CDP, build ni suite. Sin gate final, chromium, red, push ni
+publicación: solo documentación. La temperatura es medición del orquestador con `sensors`/`ps`.
+
+**A. El emulador contra Droidloom (`d84f175` → puntero `6ef4a5e`).** El builder midió en el cell
+con `wm size 1920x1080` y `wm density 213` (1,33125 px/dp); la captura
+`~/Develop/.tmp/droidloom/contador-real.png` da fondo `#FFFFFF`, texto `#30323A` 14sp
+(Large 22sp), botón `#D6D7D7` 88×48 dp y `textAllCaps`. Antes el emulador usaba fondo oscuro,
+botón hueco y 64×48; después los ajustes quedan en `vista-previa.js:24`, `:27`, `:122`/`:129`,
+`:205`, `:255-260`, `:519`, `:561-574`, `vista-xml.js:29`/`:340` y `layout-editor.js:195`.
+
+La crítica `ses_df1a24e7bffeW5SLRIRCjErwj8` RECHAZÓ una regresión: `vista-previa.js:212` había
+cambiado a `Math.max(alto, …)` y con escala 0,5 el alto no escalaba (48 en vez de 24). Se volvió a
+`Math.max(1, alto * caja.escala)`, con test en `prueba.js`; `node prueba.js` →
+`prueba: todo en orden`. Corregido en `173c6bb`/`3dc1ed0`.
+
+**Deuda del emulador.** Radio de ~2 dp, acento de 1 px, sin barra de estado ni de navegación y sin
+densidad 213 real, tema claro fijo; `prueba-navegador.js:780-795` aún no cubre escala <1 ni bordes.
+El CDP no se ejecutó por temperatura.
+
+**B. Hot swap sin selector (`12e065a`/`1547b76`).** Builder `ses_df1ac57c5ffeNSAdj8huY0JjNj`,
+crítica `ses_df1a11290ffe170DMklxG0qDu2`: APROBAR con condición CDP. Hay una casilla visible junto
+a Compilar, la firma se deriva del `.java` activo, el `classes.dex` del apk recién compilado va a
+OPFS y `--intercambiar` actúa en la sesión viva sin reiniciar; el selector avanzado se conserva.
+`node --check` ×2 y `node prueba.js` en verde; CDP no ejecutada.
+
+**Deuda del hot swap.** La primera compilación sin sesión aplica el swap en la siguiente, y por
+defecto se intercambia la clase entera, no un método.
+
+**C. Compilar en un clic y API visible (`2a5d8fe`).** Builder `ses_df1a687e0ffeBjmbbSr4XEcEAS`,
+crítica en curso. `#alternar-panel` abre la pestaña Compilar y enfoca `#compilar-debug`;
+`#api-version` y los ocultos suben al formulario de Inicio; el panel queda en orden Consola,
+Compilar, Diagnóstico…; la etiqueta dice «Firmar apk o .aab». `node --check` 3/3 y
+`node prueba.js` en verde; CDP no ejecutada.
+
+**D. Temperatura (medición del orquestador).** El CPU llegó a 90 °C por dos
+`droidloom-applications` colgados 20-22 min y por el CDP de las pruebas. Se terminaron los procesos,
+Tctl 41.9 °C, y los seis agentes pasaron a pruebas focalizadas sin procesos en segundo plano.
+Medido con `sensors`/`ps`.
+
+**Fronteras de este `§`.** El CDP no se ejecutó en A, B ni C (por temperatura), así que ninguna de
+las tres se da por verificada en navegador; la crítica de C sigue en curso y la de B aprobó con
+condición CDP. Siguen abiertas las deudas del emulador (radio, acento, barras, densidad y tema) y
+del hot swap (primera compilación, swap de clase entera). Sin gate, chromium, red, push ni
+publicación.
+
+```sh
+# emulador: medición del cell (captura transferida)
+wm size
+wm density
+# captura: ~/Develop/.tmp/droidloom/contador-real.png
+cd studio && node prueba.js
+# hot swap: sintaxis de dos .js y prueba focalizada
+cd studio && node --check …
+cd studio && node prueba.js
+# compilación en un clic: sintaxis de tres .js y prueba focalizada
+cd studio && node --check …
+cd studio && node prueba.js
+# ids citados en los tres frentes
+grep -rn 'alternar-panel\|compilar-debug\|api-version\|intercambiar' studio/
+# temperatura, medición del orquestador
+sensors
+ps -ef | grep droidloom-applications
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por
