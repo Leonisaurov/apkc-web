@@ -1654,6 +1654,29 @@ func (ctx *contextoJava) asignable(desde, hasta string) bool {
 	return false
 }
 
+// cabeEn: si un valor del descriptor `dv` se guarda en un hueco del descriptor `hasta` sin que javac
+// escriba conversión. Es la asignación de JLS 5.2 con lo estricto de 5.1.1-5.1.5: identidad, el
+// literal `null` en cualquier referencia y la subida de referencias —clase, interfaz y la covarianza
+// de arreglos—. Medido en ApkShare `AppAdapter.java:33`: `List<App> apps_filter` y `new ArrayList<>()`
+// conviven porque `ArrayList` es `List` y el verificador admite el subtipo sin `checkcast`; javac solo
+// escribe `new ArrayList; dup; aload; invokespecial; putfield List`. Un primitivo **no** cabe por aquí:
+// su ensanchamiento necesita la instrucción de conversión que ya escribe `expA`.
+func (ctx *contextoJava) cabeEn(dv, hasta string) bool {
+	if dv == hasta {
+		return true
+	}
+	if !cabeSubidaDeReferencia {
+		return false
+	}
+	return esTipoDeReferencia(dv) && esTipoDeReferencia(hasta) && ctx.asignableEstricto(dv, hasta)
+}
+
+// cabeSubidaDeReferencia es el interruptor de la sonda de la subida de referencias al escribir un
+// campo. Apagado, `cabeEn` vuelve a exigir el descriptor exacto —la comparación `dv != cr.desc` de
+// antes—, que es lo que devuelve el error literal del usuario sobre `AppAdapter.java:33`. Encendido en
+// el binario que se publica; lo usa la falsificación de `javaemisor_appadapter_test.go`.
+var cabeSubidaDeReferencia = true
+
 // asignableEstricto: la conversión de invocación de la fase 1 (JVMS 15.12.2.2): identidad,
 // ensanchamiento primitivo, subida de referencias —los arreglos suben a `Object`, `Cloneable` y
 // `Serializable`— y el literal `null` a cualquier referencia. **Sin** boxing ni desenvuelto: con
@@ -3585,7 +3608,7 @@ func (e *emisor) escribeCampoDe(segs []string, base jexpr, donde pos, valor jexp
 		e.baja(1) // el receptor que ya estaba contado
 		return err
 	}
-	if dv != cr.desc {
+	if !e.ctx.cabeEn(dv, cr.desc) {
 		e.baja(1)
 		return fmt.Errorf("linea %d: %s.%s es %s y se le asigna un %s", donde.linea, dueño, campo, cr.desc, dv)
 	}
@@ -5135,6 +5158,45 @@ func esEnteroDesc(desc string) bool {
 // `javaemisor_campo_local_test.go`; encendido en el binario que se publica.
 var comparaArregloConNulo = true
 
+// condicionBooleanaSuelta es el interruptor de la sonda del booleano suelto en una condicion: apagado,
+// `if (llama())` vuelve al rechazo de antes («una condicion que no sea una comparacion no esta
+// medida»), que es el error literal que daba ApkShare en `AppAdapter.java:64`. Encendido en el binario
+// que se publica; lo usa la falsificacion de `javaemisor_appadapter_test.go`.
+var condicionBooleanaSuelta = true
+
+// esComparacion: si la expresion es ya una comparacion de las que `condicionBranca` sabe branquear
+// por sí sola. Lo usa la rama de la `!` para no robarle el caso a la tabla de abajo: `!(a == b)` se
+// pliega en la comparación, como hace javac, y no se emite como un booleano materializado seguido de
+// `ifne`; el salto que se escribe es el opuesto del invertido de la tabla (`opuestoDeSalto`).
+func esComparacion(x jexpr) bool {
+	op, es := x.(joperador)
+	if !es {
+		return false
+	}
+	switch op.op {
+	case "==", "!=", "<", ">=", ">", "<=":
+		return true
+	}
+	return false
+}
+
+// opuestoDeSalto: el salto condicional que branquea lo contrario. `condicionBranca` devuelve, para
+// cada comparacion, el salto que aplica javac con la condicion **invertida** (salta cuando NO se
+// cumple); la `!` de una comparacion entera necesita el salto que salta cuando SÍ se cumple, que es
+// justo el opuesto. Medido con javac 17 en la sonda de la negación: `if (!(a == b))` es `if_icmpne`,
+// `if (!(x != null))` es `ifnull` y `if (!(d > 0.0))` es `dcmpl; ifgt`
+// (`TestLaNegacionDeUnBooleanoSueltoNoMaterializa`).
+var opuestoDeSalto = map[byte]byte{
+	opIFEQ: opIFNE, opIFNE: opIFEQ,
+	opIFLT: opIFGE, opIFGE: opIFLT,
+	opIFGT: opIFLE, opIFLE: opIFGT,
+	opIFICMPEQ: opIFICMPNE, opIFICMPNE: opIFICMPEQ,
+	opIFICMPLT: opIFICMPGE, opIFICMPGE: opIFICMPLT,
+	opIFICMPGT: opIFICMPLE, opIFICMPLE: opIFICMPGT,
+	opIFACMPEQ: opIFACMPNE, opIFACMPNE: opIFACMPEQ,
+	opIFNULL: opIFNONNULL, opIFNONNULL: opIFNULL,
+}
+
 // condicionBranca escribe los operandos de la condicion de un `if` y devuelve el opcode de salto con
 // la INVERSION que aplica javac, leida en el parrafo 52 comparando las seis relaciones contra cero,
 // contra una constante, contra otro entero y contra null:
@@ -5163,11 +5225,61 @@ func (e *emisor) condicionBranca(cond jexpr) (byte, int, error) {
 			}
 			return opIFNE, 1, nil
 		}
+		// `if (!b)` con `b` un booleano suelto: javac escribe la expresion y salta con `ifne`, que es
+		// el `ifeq` de `if (b)` invertido. La `!` de una comparacion (`!(a == b)`) NO se materializa:
+		// javac la pliega y salta con el opuesto de la tabla, que es lo que se hace justo debajo.
+		if !esComparacion(neg.dentro) {
+			if !condicionBooleanaSuelta {
+				return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida (sobre un booleano javac usa `ifeq`, y eso no lo leimos)",
+					lineaDeExpr(cond))
+			}
+			if _, esLit := neg.dentro.(jlit); esLit {
+				return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida sobre un literal booleano: `if (true)` lo pliega javac y ese plegado no lo leimos", lineaDeExpr(cond))
+			}
+			d, err := e.expA(neg.dentro, "Z")
+			if err != nil {
+				return 0, 0, err
+			}
+			if d != "Z" {
+				return 0, 0, fmt.Errorf("linea %d: la condicion es %s y no un booleano", lineaDeExpr(cond), d)
+			}
+			return opIFNE, 1, nil
+		}
+		// `!(a == b)` y compania: los operandos son los de la comparacion y el salto es el opuesto del
+		// invertido que devuelve la tabla, que es el que salta cuando la comparacion SI se cumple.
+		op, consume, err := e.condicionBranca(neg.dentro)
+		if err != nil {
+			return 0, 0, err
+		}
+		contrario, hay := opuestoDeSalto[op]
+		if !hay {
+			return 0, 0, fmt.Errorf("linea %d: el salto %#02x de una comparacion negada no tiene opuesto medido", lineaDeExpr(cond), op)
+		}
+		return contrario, consume, nil
 	}
 	op, esComp := cond.(joperador)
 	if !esComp {
-		return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida (sobre un booleano javac usa `ifeq`, y eso no lo leimos)",
-			lineaDeExpr(cond))
+		// El booleano suelto: `if (b)`, `if (isEmpty())`, `if (app.toString().contains(q))`. javac
+		// escribe la expresion —la carga del local o la llamada— y branquea con `ifeq` **sin
+		// invertir**, porque en el hueco no hay nada que comparar: medido en ApkShare
+		// `AppAdapter.java:64` (`if (... .contains(...))`), con `javap -c` sobre la misma clase. Un
+		// literal booleano se queda rechazado: javac pliega `if (true)` y borra la branca entera, y
+		// aqui no hay plegado de condiciones.
+		if _, esLit := cond.(jlit); esLit {
+			return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida sobre un literal booleano: `if (true)` lo pliega javac y ese plegado no lo leimos", lineaDeExpr(cond))
+		}
+		if !condicionBooleanaSuelta {
+			return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida (sobre un booleano javac usa `ifeq`, y eso no lo leimos)",
+				lineaDeExpr(cond))
+		}
+		d, err := e.expA(cond, "Z")
+		if err != nil {
+			return 0, 0, fmt.Errorf("linea %d: una condicion que no sea una comparacion no esta medida (%v)", lineaDeExpr(cond), err)
+		}
+		if d != "Z" {
+			return 0, 0, fmt.Errorf("linea %d: la condicion es %s y no un booleano", lineaDeExpr(cond), d)
+		}
+		return opIFEQ, 1, nil
 	}
 	linea := op.donde.linea
 	invertidas := map[string]struct{ dos, uno byte }{
@@ -6828,7 +6940,7 @@ func (e *emisor) stm(s jstmt) error {
 				e.baja(enPila - 1)
 				return err
 			}
-			if dv != cr.desc {
+			if !e.ctx.cabeEn(dv, cr.desc) {
 				e.baja(enPila - 1)
 				return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, segs[0], cr.desc, dv)
 			}
@@ -6855,7 +6967,7 @@ func (e *emisor) stm(s jstmt) error {
 			}
 			return err
 		}
-		if dv != cr.desc {
+		if !e.ctx.cabeEn(dv, cr.desc) {
 			if !esEstatico {
 				e.baja(1)
 			}
