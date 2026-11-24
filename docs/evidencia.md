@@ -13704,6 +13704,100 @@ cd studio && node prueba.js
 cd studio && tcr -c 4 -m 3G env CHROME_BIN=/usr/bin/brave … node prueba-pestana.js
 ```
 
+## 286. La última fila de `LineNumberTable` cierra la paridad de ApkShare y el jar de la pestaña deja de romper `getAdapter`
+
+Registrado el 2026-11-24 por transferencia de dos frentes: `e47948b` (integrado como `7ca4675`)
+y `750df74` (integrado como `0809ad6`, la cabecera de este worktree). Las mediciones son de los
+builders y de las críticas; no se re-ejecutó aquí ningún build ni suite. Sin gate final, chromium,
+red, push ni publicación: solo documentación. La crítica del frente A no pudo localizar el APK ni
+confirmar el recuento y la del frente B sigue en curso, así que ninguna se da por aprobada.
+
+**A. Cierre 21/21 de ApkShare (`e47948b` → `7ca4675`).** La fila que faltaba en §282 no era de la
+lambda: es un local con rango vivo abierto al cerrar el bloque `then` (`Gen.visitBlock`,
+`Code.curCP`/`markStatBegin`). Con un local con valor, javac 17 anota la línea del `} else {`
+sobre el `goto`; no la anota con una sola sentencia, con una llamada con lambda de argumento, con
+`break`, sin `else` ni con un local sin inicializador. La segunda divergencia era el orden: el
+implementador de la lambda va entre los puentes covariantes y los `access$NNN`, no detrás de
+estos; sin eso el `code_item` cambiaba de sitio.
+
+**Los cambios (por el builder).** `javaemisor.go:2572` (`ambito.almacena`), `:3132`
+(`almacenaEnBloque`), `:8525` (`filaDeCierre`), `:6948` (`branca`), el reorden en `:8978` y el
+interruptor en `:2993`; `javafuente.go:233` y `:1993` capturan la línea del `}`. El test
+`apkc/javaemisor_else_goto_paridad_test.go` trae 3 pruebas: antes daban `7a8 > line 159: 155`
+y después las tablas salen sin diferencias. Se movió a `!js` en `0d8df36` porque su ayudante
+vive en un fichero de paridad; `d551d21` corrigió `javac17(t)`.
+
+**Medición del builder, transferida.** 21 de 21 clases byte a byte; `classes.dex` de 16504 B,
+igual al oráculo; APK con SHA-1 `5cbdca5d…` verificado con apksigner v1/v2/v3; suite
+`ok … 185.994s`. La crítica `ses_df1e219b0ffe8ZcuS0mO6KnGwM` tiene la regla y los tests bien,
+pero NO pudo verificar el artefacto ni el recuento: el 21/21 queda como medición del builder,
+no como verificado por la crítica (no localizó el APK con ese hash).
+
+**B. `getAdapter` en la pestaña (`750df74` → `0809ad6`).** El usuario, con `--inc` y
+`/sdk/android.jar`, recibió `ListView.getAdapter tiene 2 sobrecargas aplicables en la fase
+estricta a (()Landroid/widget/ListAdapter; ()LT;) () y ninguna es la mas especifica`, desde
+`MainActivity.java:55` (literal de la herramienta, sin acentuar). La causa no era `--inc`: el
+stub AOSP que sirve la página declara `AdapterView.getAdapter` como `()LT;`, mientras el SDK
+dice `()Landroid/widget/Adapter;`; el rechazo estaba en `javaemisor.go:1491` (`elegirSobrecarga`).
+
+**El oráculo javac 17.** Emite `invokevirtual ListView.getAdapter:()ListAdapter`,
+`invokeinterface getItem` y `checkcast App`; sobre `AdapterView<T>` usa la genérica con
+`checkcast BaseAdapter`. El arreglo añade `candidato.dueño` (`:1453`), `esVueltaVariable`
+(`:1730`), `masEstrictaSobreGenerica` (`:1752`, con `subclaseDe` en `:1799`), el enganche en
+`:1637` y el interruptor `desempataGenerica` en `:1650`. Fail-safe: se abstiene si falta dueño,
+parentesco o hay más de una concreta. El test `apkc/javaemisor_vuelta_generica_test.go`
+(`!js`, 4 pruebas) cubre el byte a byte, el control con `AdapterView<T>`, la falsificación con
+el error literal y el fail-safe.
+
+**Medición del builder, transferida.** `build --inc` con el estado descartado y el jar híbrido
+da verde: 21 clases, 16520 B y apk `e64fded9…`; con el jar del SDK también verde; suite
+`ok … 142.142s`. La crítica de este frente está en curso: no se da por aprobada.
+
+**Deudas abiertas.** El stub AOSP crudo para en `Consumer.andThen` (sin `Signature`,
+`lambda_fuente.go:143` y `:176-193`); con una vuelta `LT;` sobre `AdapterView<T>` no se escribe
+el `checkcast` al tipo instanciado.
+
+**Fronteras de este `§`.** El 21/21 y las cifras de APK y suite son mediciones del builder: la
+crítica A no localizó el APK ni confirmó el recuento y la crítica B está en curso. El stub AOSP
+crudo y el `checkcast` sobre `AdapterView<T>` siguen abiertos. No se corrió gate, chromium, red
+ni publicación.
+
+```sh
+# tests puntuales de los dos frentes (JAVAC17 apunta al javac 17 del oráculo)
+cd apkc
+TESTS_A='TestLaLineaDelElseVaEnElGotoDelThen'
+TESTS_A="$TESTS_A|TestElDexDeMainActivityConElseEsElDeJavac17"
+TESTS_A="$TESTS_A|TestLaFilaDelElseSeVeEnElDiffDeJavap"
+JAVAC17=/ruta/al/javac17 GOTMPDIR="$HOME/.cache/apkc-web/gotmp" \
+  tcr go test -run "$TESTS_A" -count=1 -v .
+TESTS_B='TestElDexDeLaVueltaGenericaSinBorradoEsElDeJavac17'
+TESTS_B="$TESTS_B|TestElReceptorAdapterViewSigueUsandoLaGenerica"
+TESTS_B="$TESTS_B|TestFalsificacionDeLaVueltaGenerica"
+TESTS_B="$TESTS_B|TestElDesempateGenericoSeAbstieneSinPrueba"
+JAVAC17=/ruta/al/javac17 GOTMPDIR="$HOME/.cache/apkc-web/gotmp" \
+  tcr go test -run "$TESTS_B" -count=1 -v .
+cd ..
+```
+
+```sh
+# javap -c del oráculo javac 17: la vuelta y el checkcast
+JAVAC17=/ruta/al/javac17
+"$JAVAC17" -g:lines,source -d "$TMP/clases-oraculo" "$TMP/fuente/MainActivity.java"
+javap -c -p -classpath "$TMP/clases-oraculo" MainActivity \
+  | grep -n 'getAdapter\|checkcast'
+# build --inc con el estado descartado (caché nueva), tal como lo midió el builder
+sh -c 'cd apkc && go build -o "$TMP/apkc-gate" .'
+sh -c 'cd "$TMP/app" && "$TMP/apkc-gate" build --inc … --android-jar /sdk/android.jar'
+```
+
+```sh
+# los símbolos que sostienen cada arreglo y las cabeceras de los tests
+grep -n 'filaDeCierre\|almacenaEnBloque\|ambito.almacena' apkc/javaemisor.go
+grep -n 'esVueltaVariable\|masEstrictaSobreGenerica' apkc/javaemisor.go
+grep -n 'subclaseDe\|desempataGenerica' apkc/javaemisor.go
+head -n1 apkc/javaemisor_else_goto_paridad_test.go apkc/javaemisor_vuelta_generica_test.go
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por
