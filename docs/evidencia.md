@@ -12285,6 +12285,86 @@ sed -n '2996p;2382,2383p;3049,3054p' studio/pestana.js
 git log --oneline -2 0e65ac1
 ```
 
+## 268. La estática calificada por el nombre de tipo se estima sin emitir el receptor
+
+Registrado el 2026-11-24 sobre `e3a46a1`. La medición es del builder, `d6ae738`, integrada en este
+árbol como ese commit; este `§` la **transfiere** y re-ejecuta solo la prueba puntual, no la suite.
+Las cifras de suite, `go vet` y build wasm que se citan son salida del builder, no de este registro.
+
+**El error previo.** El build de ApkShare se paraba en `MainActivity.java:212`, columna 31, con
+`[build] MainActivity.java: linea 175: linea 176: linea 212: linea 212, columna 31: no se puede
+estimar el tipo de createChooser() sin emitir el receptor de la llamada` —posiciones encadenadas por
+el envoltorio y el motivo al final—. La línea es la 212 de la fuente real:
+`startActivity(Intent.createChooser(sharedIntent, "Compartir con"));`. Para elegir la sobrecarga de
+`startActivity(Intent)` hace falta el tipo del argumento, y la estimación lo pedía emitiendo un
+receptor que no existe: `Intent` no es local ni campo, sino el nombre de un tipo.
+
+**La ruta.** `vueltaEstaticaCualificada` (`apkc/javaemisor.go:5603`) lee el descriptor de vuelta del
+método en el `android.jar` sin escribir ninguna instrucción, y `tipoEstimado` la consulta en `:6030`
+en la rama de la llamada con receptor o `super`; ella misma exige que el receptor sea un acceso
+(`jacceso`). Repite el guardián de la emisión: el prefijo más largo que resuelve como tipo tiene que
+ser el receptor entero (`base == nil`), el primer segmento no puede ser una local
+(`e.locales[segs[0]].desc == ""`) y no puede quedar resto (`len(resto) == 0`); la candidata tiene
+que ser `static` (`:5636`) y su `Signature` no puede declarar la vuelta con un tipo variable
+(`vueltaConTipoVariable`). Si algo no se cumple devuelve «no se estima» y deja la llamada al rechazo
+de siempre. El interruptor es `estimaEstaticaCualificada` (`:5348`), encendido en el binario que se
+publica.
+
+**La emisión no se tocó.** `exp` ya escribía `invokestatic` contra la clase en la rama de la llamada
+estática sobre un nombre de tipo (`:4488-4524`, con el `i2l`/boxing de `argumentosResueltos` cuando
+toca) y no hay receptor en la pila, así que la única pieza nueva es la estimación. Los métodos de
+instancia siguen por su camino (`:4529-4577`: candidata contra el tipo estático del receptor y
+`invokevirtual`/`invokeinterface`/`invokespecial`).
+
+**El oráculo.** `apkc/javaemisor_estatica_cualificada_test.go` compara contra javac 17
+(`--release 8 -g:lines,source`) con el mismo dexer:
+`TestEstaticaCualificadaComoArgumentoContraJavac17` (`:116`) exige el dex byte a byte y desarma
+1 `invokestatic` de `createChooser` y 1 `invokevirtual` de `startActivity`;
+`...EnAnonimaContraJavac17` (`:210`) es la línea 212 tal cual dentro de la anónima —instrucciones y
+dex salvo el constructor, la diferencia conocida del §100—; `...AnchaContraJavac17` (`:155`) mide el
+`i2l` delante del `invokestatic`; y `TestInstanciaCalificadaPorVariableSigueSiendoInvokeVirtual`
+(`:295`) es el control: 1 `invokevirtual`, 2 `invokeinterface` y 0 `invokestatic`.
+
+**La falsificación.** `TestEstaticaCualificadaFalsificacion` (`:240`) apaga el interruptor y
+reproduce el rechazo de antes —`sin la ruta: Pantalla.java: linea 5: linea 6: linea 7: linea 7,
+columna 23: no se puede estimar el tipo de createChooser() sin emitir el receptor de la llamada`—;
+`TestEstaticaCualificadaTipoIncorrectoSeRechaza` (`:269`) devuelve el motivo de la candidata —`pc 4
+(invokestatic): el argumento 1 de
+(Landroid/content/Intent;Ljava/lang/CharSequence;)Landroid/content/Intent; llega entero y el
+descriptor pide referencia a java/lang/CharSequence`—, que javac también rechaza.
+
+**El ajuste de otro frente.** `apkc/javaemisor_ancho_argumento_test.go:222-241` mide ahora la guarda
+del argumento ancho con **las dos** rutas apagadas (`estimaLlamadaEncadenada` y
+`estimaEstaticaCualificada`); sin eso, la variante `cualificado` de su fuente dejaba de rechazar y
+el test pasaba a compilar. La variante encendida la fija `...AnchaContraJavac17`.
+
+**Deuda abierta, no arreglada.** Una llamada a un método **estático** a través de una expresión de
+instancia (`s.f(...)` con `f` static) no emite el `aload_0; pop` que escribe javac: el camino de
+instancia (`:4529-4577`) no mira `accStatic`. No bloquea ApkShare y queda como pregunta abierta.
+Tampoco `tipoPrevisto` (`:6054`) estima la estática calificada: su `case jllamada` (`:6182-6184`)
+devuelve `false` con `v.base != nil`, lo que solo afectaría a una cuenta que llevara esa llamada
+como operando.
+
+**Frontera viva.** Con `e3a46a1` ApkShare pasa la 212 y se para en `MainActivity.java:217`, por el
+pool de constantes >255 y el `ldc_w` aún no medido; otro frente lo corrige, así que no se da por
+cerrada. `sed -n '217p'` devuelve `public void show_loading_dialog(String msg) {`, el método donde
+cae la siguiente parada.
+
+**Lo ejecutado aquí.** La prueba puntual, en este worktree: `ok github.com/ajinasokan/apkc 3.673s`
+con seis `PASS` —las cinco `...EstaticaCualificada...` y `...InstanciaCalificada...`—, y `gofmt -l`
+sin salida sobre los tres ficheros citados. La suite `ok … 177.875s`, `go vet` limpio y
+`GOOS=js GOARCH=wasm go build .` OK son del builder y se transfieren sin re-ejecutar.
+
+```sh
+cd apkc && go test -run 'EstaticaCualificada|InstanciaCalificada' -count=1 -v .
+grep -n 'estimaEstaticaCualificada\|vueltaEstaticaCualificada' apkc/javaemisor.go
+sed -n '5343,5349p;5593,5650p;6025,6033p;4488,4524p;4529,4577p' apkc/javaemisor.go
+sed -n '222,241p' apkc/javaemisor_ancho_argumento_test.go
+grep -n 'func Test' apkc/javaemisor_estatica_cualificada_test.go
+sed -n '212p;217p' \
+  ~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/src/share/apps/util/MainActivity.java
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
