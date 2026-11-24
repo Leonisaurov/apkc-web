@@ -12432,12 +12432,13 @@ dex, `rc=0`. `apksigner verify --verbose` da «Verifies» y v1/v2/v3 en `true`; 
 verified».
 
 **Deudas abiertas, no cerradas.** (1) 12 clases anidadas de `MainActivity`/`ApkAdapter$1` no son
-byte a byte contra javac **en `.class` crudo** por `StackMapTable` (`full_frame` frente a `same_frame`), una fila
+byte a byte contra javac **en `.class` crudo** por `StackMapTable` (`full_frame` frente a
+`same_frame`), una fila
 `line 159: 155` ausente y los `MethodParameters` de las anónimas; no tienen ninguna `ldc_w`, son
 preexistentes y no impiden que ApkShare compile (artefactos en `~/.cache/apkc-web/ldcw-w/`).
 La compresión de marcos y la `Signature` de la anónima se corrigieron después en `d94be90`
-(`apkc/jvmframes.go`, `TestElStackMapDeLaAnidadaEsElDeJavac17`): 12 de 21 clases byte a byte en `.class` crudo y APK
-verificado; ese commit no tiene `§` propio y queda aquí como pregunta abierta. (2)
+(`apkc/jvmframes.go`, `TestElStackMapDeLaAnidadaEsElDeJavac17`): 12 de 21 clases byte a byte en
+`.class` crudo y APK verificado; ese commit no tiene `§` propio y queda aquí como pregunta abierta. (2)
 `apkc/lambda_fuente.go:449-451` conserva un mensaje viejo, que ya solo se dispara con el interruptor
 o con un pool de más de 65535. (3) Sin `--keystore` explícito, el paso de firma se queja con la ruta
 vacía (§267), aunque el default del flag esté puesto. (4) `ldc_w` junto a un `goto_w` real (más de
