@@ -11698,7 +11698,7 @@ auditor encontró un **CONFIRMADO**: `boolean` se trataba como `int` y ensanchab
 rechaza con la línea y nombra el tipo y el parámetro (JLS 5.1.2) en `apkc/javaemisor.go:4811`, con
 el control de los anchos que sí ensanchan (`javaemisor_boolean_ensancha_test.go:88`) y la
 falsificación con el interruptor `booleanEnsanchaEnArgumentos`
-(`apkc/javaemisor.go:4716`). Aprobado.
+(`apkc/javaemisor.go:4715`). Aprobado.
 
 **La llamada encadenada como argumento (`c0b40e9`).** `tipoSinEmitirCompleto`
 (`apkc/javaemisor.go:5303`) y `vueltaGenerica` (`:5410`) estiman el tipo de `app.apks.get(0)` sin
