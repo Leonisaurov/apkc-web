@@ -3060,7 +3060,7 @@ func (e *emisor) exp(x jexpr) (string, error) {
 		if !esAritmetica {
 			return "", fmt.Errorf("linea %d: el operador %q no esta medido en este emisor", v.donde.linea, v.op)
 		}
-		if plegado, esConstante := plegarConstante(v); esConstante {
+		if plegado, esConstante := e.plegarConstante(v); esConstante {
 			e.cargaConstante(plegado)
 			return string(plegado.tipo), nil
 		}
@@ -3341,6 +3341,12 @@ func (c constNum) promocionA(t byte) constNum {
 	return r
 }
 
+// pliegaBits es el interruptor de la falsificación: apagado, `&`, `|` y `^` de constantes vuelven a
+// emitirse como la cuenta, y el constructor de `Apk` de ApkShare vuelve a salir con
+// `iconst_1; bipush 128; ior` en vez del `sipush 129` de javac. Lo enciende el binario; solo lo apaga
+// `TestFalsificacionDelPlegadoDeBits`.
+var pliegaBits = true
+
 // plegarConstante: javac dobla las cuentas de literales ANTES de emitir (parrafo 53 para la entera,
 // parrafo 85 para la del punto). Las formas medidas:
 //
@@ -3351,7 +3357,19 @@ func (c constNum) promocionA(t byte) constNum {
 //	no es excepcion, es el resultado de la cuenta de IEEE)
 //	`1.0f / 3.0f` → ldc 0.33333334f: la cuenta de `float` se hace en precision de float32
 //	`1.5f + 2L` → ldc 3.5f y `1.0 + 2.5f` → ldc2_w 3.5d: cada operando entra ya promocionado
-func plegarConstante(x jexpr) (constNum, bool) {
+//
+// La familia de bits entra igual, con el ancho que da la promocion binaria: medido con javac 17
+// `--release 8 -g:lines,source`, `5 | 2` → iconst_7, `5 & 6` → iconst_4, `5 ^ 3` → bipush 6,
+// `1L | 128L` y `1 | 128L` → ldc2_w 129l (los dos, porque el `long` promociona al otro lado).
+//
+// Y no solo pliega el literal suelto: un `static final` de tipo entero nombrado por su tipo es una
+// constante de compilacion para javac, que la sustituye por el valor y no deja en el `.class` ni el
+// `getstatic` ni el Fieldref. Medido con el `Apk.java` real de ApkShare,
+// `PackageManager.GET_ACTIVITIES | PackageManager.GET_META_DATA` (1 | 128) sale `const/16 v0, #int
+// 129` en el dex de javac, sin `or-int/2addr`. La `Class` de las anidadas por las que pasa la cadena
+// si queda en el pool aunque el valor se doble (medido: `R.layout.a` deja `p/R$layout` en el pool y
+// en `InnerClasses`), asi que al plegar se anota igual que lo hace `accesoEstatico`.
+func (e *emisor) plegarConstante(x jexpr) (constNum, bool) {
 	switch v := x.(type) {
 	case jlit:
 		switch v.tipoJ {
@@ -3371,21 +3389,30 @@ func plegarConstante(x jexpr) (constNum, bool) {
 		return constNum{}, false
 	case joperador:
 		switch v.op {
-		case "+", "-", "*", "/", "%":
+		case "+", "-", "*", "/", "%", "&", "|", "^":
 		default:
 			return constNum{}, false
 		}
-		a, ok := plegarConstante(v.izq)
+		a, ok := e.plegarConstante(v.izq)
 		if !ok {
 			return constNum{}, false
 		}
-		b, ok := plegarConstante(v.der)
+		b, ok := e.plegarConstante(v.der)
 		if !ok {
 			return constNum{}, false
 		}
 		t := a.tipo
 		if nivelNum(b.tipo) > nivelNum(t) {
 			t = b.tipo
+		}
+		esDeBits := v.op == "&" || v.op == "|" || v.op == "^"
+		if esDeBits && !pliegaBits {
+			return constNum{}, false
+		}
+		if esDeBits && t != 'I' && t != 'J' {
+			// `&`, `|` y `^` no existen para `float` ni `double`: un fuente asi no compila, y plegarlo
+			// como si fuera una cuenta aritmetica inventaria un valor.
+			return constNum{}, false
 		}
 		if t == 'I' || t == 'J' {
 			if (v.op == "/" || v.op == "%") && b.entero == 0 {
@@ -3404,6 +3431,12 @@ func plegarConstante(x jexpr) (constNum, bool) {
 					r = a.entero / b.entero
 				case "%":
 					r = a.entero % b.entero
+				case "&":
+					r = a.entero & b.entero
+				case "|":
+					r = a.entero | b.entero
+				case "^":
+					r = a.entero ^ b.entero
 				}
 				return constNum{tipo: 'J', entero: r}, true
 			}
@@ -3420,6 +3453,12 @@ func plegarConstante(x jexpr) (constNum, bool) {
 				r = ia / ib
 			case "%":
 				r = ia % ib
+			case "&":
+				r = ia & ib
+			case "|":
+				r = ia | ib
+			case "^":
+				r = ia ^ ib
 			}
 			return constNum{tipo: 'I', entero: int64(r)}, true
 		}
@@ -3451,7 +3490,7 @@ func plegarConstante(x jexpr) (constNum, bool) {
 		// `-(1.5f + 2.5f)` las constantes negativas del pool. La negación es la del ancho de dentro
 		// (un `char` pliega como entero, como en su suma); el desborde de `int` envuelve, igual que en
 		// las cuentas.
-		c, ok := plegarConstante(v.dentro)
+		c, ok := e.plegarConstante(v.dentro)
 		if !ok {
 			return constNum{}, false
 		}
@@ -3465,6 +3504,42 @@ func plegarConstante(x jexpr) (constNum, bool) {
 			c.real = -c.real
 		}
 		return c, true
+	case jacceso:
+		// la constante de compilación nombrada por su tipo (`PackageManager.GET_META_DATA`,
+		// `R.layout.a`). Solo vale sin receptor —`esto.CAMPO` es una lectura de campo— y solo si el
+		// campo es un `static final` entero con valor, que es lo que `buscarCampo` trae ya doblado.
+		segs, base := aplanar(v)
+		if base != nil || len(segs) == 0 {
+			return constNum{}, false
+		}
+		interno, resto, ok := e.ctx.tipoDeReferencia(segs)
+		if !ok || len(resto) == 0 {
+			return constNum{}, false
+		}
+		// las anidadas de la cadena se comprueban sin tocar el pool: si al final no es una constante,
+		// el camino de siempre (`accesoEstatico`) las anota igual y no queremos dos anotaciones por
+		// una expresión que se va a emitir como acceso.
+		tipo := interno
+		for _, seg := range resto[:len(resto)-1] {
+			anidada := tipo + "$" + seg
+			if !e.ctx.hay(anidada) {
+				return constNum{}, false
+			}
+			tipo = anidada
+		}
+		cr, err := e.ctx.buscarCampo(tipo, resto[len(resto)-1])
+		if err != nil || !cr.constante || cr.acceso&accStatic == 0 {
+			return constNum{}, false
+		}
+		// el pool se anota solo al final, cuando el plegado es seguro: es lo mismo que hace
+		// `accesoEstatico` con cada anidada por la que pasa la cadena (medido: `R.layout.a` deja
+		// `p/R$layout` en el pool y en `InnerClasses` aunque el valor se doble).
+		tipo = interno
+		for _, seg := range resto[:len(resto)-1] {
+			tipo += "$" + seg
+			e.usar(tipo)
+		}
+		return constNum{tipo: 'I', entero: int64(cr.valor)}, true
 	}
 	return constNum{}, false
 }
@@ -5041,7 +5116,7 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	// conversion del parrafo 77 detras. Si el operando no es una constante plegable, la conversion si va
 	// en su sitio (`d + i` con `i` variable es `iload_0; i2d`).
 	if len(deseado) == 1 && strings.IndexByte("IJFD", deseado[0]) >= 0 {
-		if c, ok := plegarConstante(x); ok && nivelNum(c.tipo) <= nivelNum(deseado[0]) {
+		if c, ok := e.plegarConstante(x); ok && nivelNum(c.tipo) <= nivelNum(deseado[0]) {
 			c = c.promocionA(deseado[0])
 			e.cargaConstante(c)
 			return string(c.tipo), nil
@@ -5052,7 +5127,7 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	// istore_0` y `v[0] = 65` es `bipush 65; castore` (parrafo 87). Fuera del rango javac da error, y aqui
 	// se rechaza con el mismo nombre.
 	if deseado == "C" {
-		if c, ok := plegarConstante(x); ok && (c.tipo == 'I' || c.tipo == 'J' || c.tipo == 'C') {
+		if c, ok := e.plegarConstante(x); ok && (c.tipo == 'I' || c.tipo == 'J' || c.tipo == 'C') {
 			if c.entero < 0 || c.entero > 0xffff {
 				return "", fmt.Errorf("linea %d: la constante %d no cabe en un `char` (llega a 65535)", lineaDeExpr(x), c.entero)
 			}
