@@ -15,6 +15,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -122,6 +123,23 @@ func TestVerificarV4NoLeeUnApkPorEncimaDelTope(t *testing.T) {
 		}
 	}
 	t.Errorf("el apk de %d bytes no se rechazó con el tope en 16: %v", info.Size(), v.v4Motivos)
+}
+
+// TestTopeV4PorPlataforma: la cota del apk no es la misma en el binario nativo y en el wasm de la
+// pestaña. R6 midió que en wasm el tope también se aplica antes de leer; aquí se fija el valor de
+// cada plataforma para que quitar o cambiar una rama de `init` no pase inadvertido. El tope del
+// `.idsig` se deriva del tamaño del apk, no del tope, y tiene que seguir cubriendo su árbol.
+func TestTopeV4PorPlataforma(t *testing.T) {
+	esperado := int64(1 << 30)
+	if runtime.GOARCH == "wasm" {
+		esperado = 256 << 20
+	}
+	if topeApkParaV4 != esperado {
+		t.Errorf("topeApkParaV4 = %d en %s; se esperaba %d", topeApkParaV4, runtime.GOARCH, esperado)
+	}
+	if tope := topeIdsigParaV4(topeApkParaV4); tope <= topeApkParaV4/128 {
+		t.Errorf("el tope del .idsig (%d) no cubre el árbol de un apk de %d", tope, topeApkParaV4)
+	}
 }
 
 // TestVerificarV4LeeUnIdsigNormal: el control. Un `.idsig` corriente sigue llegando al lector, que

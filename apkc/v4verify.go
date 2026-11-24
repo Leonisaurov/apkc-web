@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 )
 
 // topeApkParaV4 es lo máximo que se lee entero para recalcular el árbol de verity. La v2, la v3
@@ -24,13 +25,31 @@ import (
 // MB) ni lo que la pestaña puede tener a la vez en memoria, así que por encima el veredicto es
 // un motivo con nombre, no un OOM de Go —que no es un pánico y el `recover` no atrapa—. Es una
 // variable para que la prueba pueda bajarlo sin fabricar un zip de un GiB que además sea válido.
+//
+// El valor de aquí es el del binario nativo; en wasm lo baja `init` (abajo), porque el heap de
+// un worker de la pestaña no es el de un proceso de escritorio.
 var topeApkParaV4 int64 = 1 << 30
+
+// init ajusta la cota del apk cuando el binario corre en la pestaña. En wasm32 el techo medido
+// es 3 GiB de `heapSys` en Node, con la RAM y el swap de un escritorio; eso no es lo que tiene un
+// renderer de Chromium en un móvil, que va a bastante menos. Un apk de la pestaña son decenas de
+// MB, así que 256 MiB deja aire de sobra y acota la lectura entera a lo que ese renderer sí puede
+// sostener: por encima, motivo con nombre. La cifra de 256 MiB sale del presupuesto del renderer y
+// **sigue siendo una hipótesis** hasta medirla en Chromium con `studio/prueba-pestana.js`.
+func init() {
+	if runtime.GOARCH == "wasm" {
+		topeApkParaV4 = 256 << 20
+	}
+}
 
 // topeIdsigParaV4 acota el `.idsig` que acompaña a un apk de `tamanoAPK` bytes. El árbol de
 // verity ocupa una digesta SHA-256 (32 B) por bloque de 4096 B en cada nivel, o sea ~tamano/128
 // y un nivel más por cada 128 veces que crece; los metadatos que lo envuelven (HashingInfo,
 // certificados y firmas) son pequeños por formato y llevan el mismo tope de 64 MiB que la v1 da
 // a los ficheros de firma. Para el apk más grande que pasa el tope son ~8 MiB de árbol.
+//
+// Depende del tamaño del apk, no del tope, así que con la cota de wasm se aprieta sola: un apk de
+// 256 MiB lleva ~2 MiB de árbol y su `.idsig` no pasa de ~66 MiB. Sigue siendo holgado.
 func topeIdsigParaV4(tamanoAPK int64) int64 {
 	return topeMetadatosV1 + tamanoAPK/128 + 64<<10
 }
