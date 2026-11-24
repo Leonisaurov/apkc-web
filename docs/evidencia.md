@@ -5478,15 +5478,21 @@ tools/entorno.sh -- sh -c 'cd apkc && go test -count=1 -run "Captura" .'
 | `Captura.dos(int x)` (static) | **`(I)V`**; `aload_0; iload_1; putfield val$x; aload_0; invokespecial Object.<init>; return` | `val$x` final synthetic (0x1010); **sin** `MethodParameters` |
 | `Captura3.r(int x)` (instancia) | **`(LCaptura3;I)V`**; asigna `this$0` y `val$x` antes del `super` | campos en orden `val$x` y después `this$0`; `MethodParameters` con dos filas: el exterior `final mandated` (0x8010) y `val$x` `final synthetic` (0x1010) |
 
+**Nota del §273 (`d123135`).** La columna de `MethodParameters` de la fila de instancia es la
+medición de javac 21. El oráculo del repo es javac 17.0.21, que no escribe el atributo en ninguna
+anónima, y el emisor dejó de escribirlo; el constructor, sus parámetros, el orden de los campos y la
+`Signature: ()V` de las capturas no cambian.
+
 La referencia `x` dentro de `run` sale `aload_0; getfield val$x` (y `x + y` añade el `getfield` del
 campo del exterior). Nuestras clases y sus dex salen byte a byte los de javac en los dos casos; las
 pruebas comparan campos, `Code`, filas de línea y dex.
 
 Implementado: el parser registra las locales del método (`jmetodo.locales`), al entrar en la anónima
 resuelve un nombre contra ellas y lo convierte en `this.val$nombre`, añade el campo `val$…` y guarda
-la captura; el emisor pone los campos en el orden de javac, el constructor con sus parámetros y
-`MethodParameters`, y `new` pasa las capturas antes de los argumentos (`apkc/javafuente.go`,
-`apkc/javaemisor.go`). Frontera: una anónima dentro de otra sigue rechazada por nombre.
+la captura; el emisor pone los campos en el orden de javac, el constructor con sus parámetros (hoy
+sin `MethodParameters`, §273), y `new` pasa las capturas antes de los argumentos
+(`apkc/javafuente.go`, `apkc/javaemisor.go`). Frontera: una anónima dentro de otra sigue rechazada
+por nombre.
 
 ## 101. `Signature` genérica en el dex: el troceado de `d8`
 
@@ -12623,6 +12629,106 @@ SHIM="$HOME/.cache/apkc-web/falsif/bb0f622/navegador-sim.js" node shim/prueba-sa
 SHIM="$HOME/.cache/apkc-web/falsif/original/navegador-sim.js" node shim/prueba-salida.js
 node --check shim/navegador-sim.js
 node --check shim/prueba-salida.js
+```
+
+## 273. El oráculo javac 17 no escribe `MethodParameters` en las anónimas
+
+Registrado el 2026-11-24 sobre `d0610bf` (corrección `d123135`). Viene del builder
+`ses_df3a97d2dffeSWivnPlU52wn50`, con la investigación `ses_df3ac6d4effeRzuYqiLJzx2xxD` y la
+crítica `ses_df38ccb99ffeoZv5oEopy5SHn9`. Este `§` **transfiere** el cierre: aquí se re-ejecutaron
+las sondas de javac 17.0.21 y 21.0.13, se recontaron los artefactos de
+`~/.cache/apkc-web/mp-probe/` y se comprobaron los `file:line`; el build de ApkShare, la suite y
+`apksigner` son del builder y se citan sin re-ejecutar.
+
+**El defecto.** Antes de `d123135`, 7 de las 21 clases de ApkShare llevaban `MethodParameters` en
+nuestro `javap -v`; javac 17.0.21 —el oráculo del repo, el JDK que fija la CI (§152)— no lo escribe
+en **ninguna**. El bloque estaba en `apkc/javaemisor.go:9090-9106` con la condición
+`!estatica && !bajoAnonima`: copiaba la medición del párrafo 42, hecha con javac 21.
+
+**La aclaración de javac 21.** javac 21.0.13 sí lo escribe, pero solo en la anónima de un método de
+instancia: el `this$0` va como `final mandated` (0x8010), y si además hay capturas de locales, una
+segunda fila `final synthetic` (0x1010). Nunca en la anónima de un `static`. La sonda de la crítica
+era `static`, de ahí la duda; la causa de las 7 clases era nuestro emisor, no javac 21.
+
+Sonda reproducida aquí (`Sonda$1` es la de instancia con captura, `Sonda$2` la de instancia con solo
+`this$0`, `Sonda$3` la de `static` con captura):
+
+- `Sonda$1` `(Lp/Sonda;I)V`: javac 17, sin `MethodParameters` y `Signature: ()V`; javac 21, dos
+  filas y `Signature: ()V`.
+- `Sonda$2` `(Lp/Sonda;)V`: javac 17, sin `MethodParameters` ni `Signature`; javac 21, una fila
+  (`final mandated`) y sin `Signature`.
+- `Sonda$3` `(I)V`: javac 17, sin `MethodParameters` y `Signature: ()V`; javac 21, sin
+  `MethodParameters` y `Signature: ()V`.
+
+La `Signature: ()V` depende solo de que el constructor reciba capturas de locales: aparece en `$1` y
+`$3` con los dos JDK, con `this$0` o sin él, con `static` o sin él, y también sin `--release`
+(major 61 con javac 17, compilado aquí). Una constante local plegada no es captura: `Const2.m` usa
+`final int k = 5` en un `static` y su anónima sale `()V`, sin `MethodParameters` y sin `Signature`.
+
+**El cambio (`d123135`, ya integrado).** `javaemisor.go:9083-9092` retira el atributo y deja solo la
+nota del porqué; se elimina la constante `accMandated`; la `Signature: ()V` queda intacta
+(`len(capturas)>0`, `:9093-9101`). Los tests comparan contra el oráculo 17 sin normalizar:
+`javaemisor_captura_receptor_test.go:100` (`comparaDexComoJavac17`), `:170` exige
+`Parameters=false` en los dos lados conservando `Signature=="()V"`, y `javaemisor_test.go:540`
+invierte la aserción. `classreader_javac17_test.go:99,119` añade fixtures major 52; los fixtures
+major 65 de `classreader_test.go` (javac 21) se conservan a propósito para las tablas del dexer
+contra `d8`.
+
+**Lo recontado aquí.** Sobre los artefactos del probe: 21 clases en cada directorio; con
+`MethodParameters` 7 en `clases-antes`, 0 en `clases-despues`, 0 en `clases-final` y 0 en `javac`.
+El dex baja de 16668 a 16520 B y el del oráculo mide 16504 (16 B de diferencia); `app.apk` mide
+305493 B. Del builder: 16 de las 21 clases dexan byte a byte como javac 17 (antes 12),
+`apksigner verify --verbose` con v1/v2/v3 en `true`, suite `ok … 163.880s` y `go vet` limpio.
+
+**Las 5 que quedan** no bloquean la compilación: `access$000` frente a lambda en `MainActivity`,
+`sipush`/`i2l` frente a `ldc2_w 500L` en `$3`, `invokeinterface` frente a `invokevirtual` en
+`Editable.toString`, `astore` frente a `astore_3` en `$6`, y la clase externa triada. Todas
+abiertas, no se adjudican aquí.
+
+**La crítica.** `ses_df38ccb99ffeoZv5oEopy5SHn9` dio **APROBAR con condiciones**. (1) cerrada en
+`d0610bf`: los cuatro comentarios obsoletos que decían «se normaliza» —tres tests y `§263`— ya no lo
+dicen. (2) este `§` aporta los comandos que reproducen las cifras, que solo constaban en el mensaje
+del commit. (3) **no ejecutada**: la falsificación de `len(capturas)>0` (quitar la `Signature` y ver
+si algún test la echa en falta); queda como pregunta abierta, no como cierre.
+
+**Pregunta abierta.** ¿Algún caso de javac 17 escribe `Signature` sin capturas de locales? Las
+sondas de aquí no lo encuentran: solo la llevan los constructores con `val$x`, y la constante
+plegada no cuenta como captura.
+
+```sh
+# la reproducción completa (builder; aquí no se relanzó): build de ApkShare y conteo
+cd apkc && go build -o "$HOME/.cache/apkc-web/s273/apkc" .
+cd ~/.cache/apkc-web/arraylist-apkshare/ApkShare-main && \
+  "$HOME/.cache/apkc-web/s273/apkc" build --linker go --compiler go --sdk-version 34 \
+    --android-jar ~/opt/android-sdk/platforms/android-34/android.jar \
+    --keystore ~/.android/debug.keystore
+find build/classes -name '*.class' | wc -l
+for f in $(find build/classes -name '*.class'); do
+  ~/opt/jdk17/bin/javap -v "$f" | grep -q 'MethodParameters:' && echo "$f"
+done
+
+# sondas: instancia con captura ($1), instancia solo con this$0 ($2), static con captura ($3)
+~/opt/jdk17/bin/javac --release 8 -g:lines,source -d "$HOME/.cache/apkc-web/s273/p17" \
+  "$HOME/.cache/apkc-web/s273/src/p/Sonda.java"
+~/opt/jdk21/bin/javac --release 8 -g:lines,source -d "$HOME/.cache/apkc-web/s273/p21" \
+  "$HOME/.cache/apkc-web/s273/src/p/Sonda.java"
+for f in 'p/Sonda$1.class' 'p/Sonda$2.class' 'p/Sonda$3.class'; do
+  ~/opt/jdk17/bin/javap -v "$HOME/.cache/apkc-web/s273/p17/$f" |
+    grep -E 'MethodParameters:|Signature:'
+  ~/opt/jdk21/bin/javap -v "$HOME/.cache/apkc-web/s273/p21/$f" |
+    grep -E 'MethodParameters:|Signature:'
+done
+
+# el probe del builder, recontado aquí sobre sus artefactos
+cd ~/.cache/apkc-web/mp-probe
+for d in clases-antes clases-despues clases-final javac; do
+  n=0
+  for f in $(find "$d" -name '*.class'); do
+    ~/opt/jdk17/bin/javap -v "$f" | grep -q 'MethodParameters:' && n=$((n+1))
+  done
+  echo "$d: $n de 21"
+done
+stat -c '%s %n' dex-antes.apkc dex-final.apkc dex-javac.apkc apkshare/build/app.apk
 ```
 
 ## Fronteras del bloque, sin cerrar
