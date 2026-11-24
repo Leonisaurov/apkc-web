@@ -20,7 +20,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"net"
 	"sync"
 	"syscall/js"
 )
