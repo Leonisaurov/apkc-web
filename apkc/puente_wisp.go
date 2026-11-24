@@ -10,12 +10,15 @@ package main
 // registra dos funciones, no abre ningún socket, y `Habilitado` solo se pone a
 // true dentro de `validarPeticionPuente`, que únicamente se alcanza cuando la
 // página llama a `apkcWisp.obtener` después de la decisión de la persona. No hay
-// demonio, no hay CLI nuevo y no se escribe nada en OPFS: el núcleo devuelve los
-// bytes y la ruta canónica, y la página decide qué hacer con ellos.
+// demonio: `wisp-get` es un comando de un solo disparo que lee la petición de
+// `go.env`, recorre este mismo camino y escribe una línea de JSON; no se escribe
+// nada en OPFS: el núcleo devuelve los bytes y la ruta canónica, y la página
+// decide qué hacer con ellos.
 
 import (
 	"bufio"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -94,6 +97,33 @@ func validarPeticionPuente(version, relay, coord, destino string) (ConfigWISP, s
 // abrirConexionPuente entrega una conexión nueva para una extensión. El que
 // llama pone el deadline del GET: `AbrirTLSWISP` limpia el del handshake.
 type abrirConexionPuente func() (net.Conn, error)
+
+// obtenerConCfg es el camino común del puente vivo y del comando `wisp-get`:
+// recibe la configuración ya validada y el almacén de CAs fijado, monta TLS sobre
+// el relay y devuelve el artefacto entero. La allowlist se aplica aguas arriba,
+// en `validarPeticionPuente`; aquí no se duplica ni se ensancha.
+func obtenerConCfg(cfg ConfigWISP, pool *x509.CertPool, coord string) (respuestaPuenteWisp, error) {
+	var vacia respuestaPuenteWisp
+	cfg.RootCAs = pool
+	cliente, err := ConectarWISP(cfg)
+	if err != nil {
+		return vacia, err
+	}
+	defer cliente.Cerrar()
+	abrir := func() (net.Conn, error) {
+		conn, err := AbrirTLSWISP(cliente, hostPuenteWisp, puertoPuenteWisp, cfg)
+		if err != nil {
+			return nil, err
+		}
+		// `AbrirTLSWISP` limpia el deadline del handshake; el GET lleva el suyo.
+		if err := conn.SetDeadline(time.Now().Add(plazoGetPuente)); err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	}
+	return obtenerConConn(abrir, coord)
+}
 
 // obtenerConConn prueba las tres extensiones, cada una en su propia conexión.
 // Ningún lector sobrevive a una respuesta: no hay reintentos sobre bytes sin

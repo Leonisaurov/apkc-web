@@ -21,7 +21,7 @@ func main() {
 	// verify reads one package and starts nothing either, for the same reason: it is the
 	// stage the tab needs to say something about the apk it just wrote.
 	switch os.Args[1] {
-	case "dex", "link", "compile", "check", "verify", "keystore", "rotate", "debug-keystore", "create-keystore", "preview":
+	case "dex", "link", "compile", "check", "verify", "keystore", "rotate", "debug-keystore", "create-keystore", "preview", "wisp-get":
 	case "build":
 		// `apkc build --linker go --compiler go` starts no process either: it is the whole build of
 		// the tab, and there is no SDK to find in there (§44)
@@ -70,12 +70,15 @@ func main() {
 	case "version":
 		// what a script asks when it has to know which apkc answered the rest
 		fmt.Println(buildStamp())
+	case "wisp-get":
+		comandoWispGet()
 	}
 
-	// preview es el único comando cuyo stdout es el contrato entero: la línea de JSON del modelo.
-	// La línea de cierre de los demás sería un segundo documento en la misma salida y rompería a
-	// quien lea stdout tal cual (`apkc preview app.apk | jq .`), así que en preview va a stderr.
-	if os.Args[1] == "preview" {
+	// preview y wisp-get son los comandos cuyo stdout es el contrato entero: una sola línea de
+	// JSON. La línea de cierre de los demás sería un segundo documento en la misma salida y
+	// rompería a quien lea stdout tal cual (`apkc preview app.apk | jq .`), así que en estos dos
+	// ese cierre va a stderr. wisp-get además silencia su salida en el hospedador de la pestaña.
+	if os.Args[1] == "preview" || os.Args[1] == "wisp-get" {
 		fmt.Fprintln(os.Stderr, "[apkc] finished in", time.Since(start))
 	} else {
 		LogV("apkc", "finished in", time.Since(start))

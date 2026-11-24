@@ -432,6 +432,11 @@ const go = new Go();
 // es todo lo que viene despues, no lo que viene a partir del tercero
 go.argv = ["apkc", ...argvReal.slice(1)];
 go.env = { HOME: "/home/usuario", ANDROID_HOME: "/android", JAVA_HOME: "/jvm" };
+// `wisp-get` lee su petición de go.env, no de argv ni de OPFS. Las variables APKC_WISP_ del
+// proceso real se pasan tal cual para poder falsificar el comando sin tocar el shim.
+for (const clave of Object.keys(procesoReal.env || {})) {
+  if (clave.startsWith("APKC_WISP_")) go.env[clave] = procesoReal.env[clave];
+}
 // wasm_exec.js: run() espera this._exitPromise, y quien lo resuelve es la implementación
 // POR DEFECTO de this.exit. Sustituir go.exit sin resolverla deja el promise de run() sin
 // terminar: la exportación nunca corre y el temporizador de scheduling del propio

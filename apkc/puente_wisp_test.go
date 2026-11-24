@@ -7,7 +7,10 @@ package main
 import (
 	"bufio"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -190,4 +193,107 @@ func TestPuenteWispObtenerConConnSinRespuestaParcial(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestWispGetDesdeEnv falsifica el comando de un solo disparo: la petición entra
+// por `go.env`, las CAs se fijan con la misma huella que el puente vivo y el GET
+// se sirve por `net.Pipe()`. Ninguna prueba abre un relay de verdad.
+func TestWispGetDesdeEnv(t *testing.T) {
+	pem := pemDePrueba(t)
+	huella := HuellaCAsPEM(pem)
+	peticion := peticionWispGet{
+		Version: contratoPuenteWisp, Relay: RelaysWISP()[0],
+		Coordenada: coordPuentePrueba, Destino: destinoPuentePrueba,
+		PEM: string(pem), Huella: hex.EncodeToString(huella[:]),
+	}
+	crudo, err := json.Marshal(peticion)
+	if err != nil {
+		t.Fatalf("no pude serializar la petición: %v", err)
+	}
+	t.Setenv("APKC_WISP_REQ", string(crudo))
+
+	llamadas := 0
+	obtener := func(_ ConfigWISP, _ *x509.CertPool, coord string) (respuestaPuenteWisp, error) {
+		llamadas++
+		cliente, servidor := net.Pipe()
+		peticionHecha := make(chan string, 1)
+		go func() { peticionHecha <- servirUnaPuente(servidor, "200 OK", "artefacto desde env") }()
+		respuesta, err := obtenerConConn(func() (net.Conn, error) { return cliente, nil }, coord)
+		cliente.Close()
+		if linea := <-peticionHecha; !strings.HasPrefix(linea,
+			"GET /maven2/com/ejemplo/artefacto/1.0/artefacto-1.0.jar HTTP/1.1") {
+			t.Errorf("el GET no es el esperado: %q", linea)
+		}
+		return respuesta, err
+	}
+
+	linea, err := wispGetDesdeEnv(obtener)
+	if err != nil {
+		t.Fatalf("wispGetDesdeEnv falló con una petición válida: %v", err)
+	}
+	if !strings.HasPrefix(linea, marcaWispGet) {
+		t.Fatalf("la línea no lleva la marca %q: %q", marcaWispGet, recorteLinea(linea))
+	}
+	var salida salidaWispGet
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(linea, marcaWispGet)), &salida); err != nil {
+		t.Fatalf("la línea con marca no es el JSON del contrato: %v", err)
+	}
+	bytes, err := base64.StdEncoding.DecodeString(salida.Bytes)
+	if err != nil {
+		t.Fatalf("el campo bytes no es base64: %v", err)
+	}
+	if string(bytes) != "artefacto desde env" {
+		t.Fatalf("los bytes devueltos son %q", bytes)
+	}
+	suma := sha256.Sum256(bytes)
+	if salida.SHA256 != hex.EncodeToString(suma[:]) {
+		t.Fatalf("el sha256 de la línea no coincide con los bytes: %q", salida.SHA256)
+	}
+	if salida.Ruta != "/deps/com/ejemplo/artefacto/1.0/artefacto-1.0.jar" {
+		t.Fatalf("la ruta canónica no válida: %q", salida.Ruta)
+	}
+	if llamadas != 1 {
+		t.Fatalf("el comando disparó %d obtenciones, se esperaba una sola", llamadas)
+	}
+
+	// Una huella inválida se rechaza antes de abrir cualquier conexión: ni línea
+	// de marca ni llamada al obtendor. Se prueban la forma y el desajuste.
+	for _, caso := range []struct {
+		nombre, huella, motivo string
+	}{
+		{"huella no hexadecimal", "no-es-hex", "64 dígitos"},
+		{"huella que no coincide", strings.Repeat("0", 64), "no coincide"},
+	} {
+		t.Run(caso.nombre, func(t *testing.T) {
+			mala := peticion
+			mala.Huella = caso.huella
+			crudo, err := json.Marshal(mala)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("APKC_WISP_REQ", string(crudo))
+			intentos := 0
+			sinRed := func(ConfigWISP, *x509.CertPool, string) (respuestaPuenteWisp, error) {
+				intentos++
+				return respuestaPuenteWisp{}, errors.New("no debió llegar aquí")
+			}
+			linea, err := wispGetDesdeEnv(sinRed)
+			if err == nil || strings.Contains(linea, marcaWispGet) {
+				t.Fatalf("la huella inválida no debía producir una línea: %q, %v", recorteLinea(linea), err)
+			}
+			if !strings.Contains(err.Error(), caso.motivo) {
+				t.Fatalf("el error no nombra el motivo %q: %v", caso.motivo, err)
+			}
+			if intentos != 0 {
+				t.Fatalf("se abrieron %d conexiones con la huella inválida", intentos)
+			}
+		})
+	}
+}
+
+func recorteLinea(linea string) string {
+	if len(linea) > 120 {
+		return linea[:120] + "…"
+	}
+	return linea
 }

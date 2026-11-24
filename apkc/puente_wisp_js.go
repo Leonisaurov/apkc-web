@@ -23,7 +23,6 @@ import (
 	"net"
 	"sync"
 	"syscall/js"
-	"time"
 )
 
 var (
@@ -121,7 +120,8 @@ func campoTextoPuente(objeto js.Value, clave string) string {
 
 // obtenerPuente es la mitad del contrato con `js.Value`. Toda la política vive
 // en `validarPeticionPuente` y en el cliente WISP; aquí solo se junta el pool,
-// se conecta y se convierte la respuesta al objeto de JavaScript.
+// se llama a `obtenerConCfg` —el mismo camino que `wisp-get`— y se convierte la
+// respuesta al objeto de JavaScript.
 func obtenerPuente(peticion js.Value) (any, error) {
 	version := campoTextoPuente(peticion, "version")
 	relay := campoTextoPuente(peticion, "relay")
@@ -136,24 +136,7 @@ func obtenerPuente(peticion js.Value) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.RootCAs = pool
-
-	cliente, err := ConectarWISP(cfg)
-	if err != nil {
-		return nil, err
-	}
-	respuesta, err := obtenerConConn(func() (net.Conn, error) {
-		conn, err := AbrirTLSWISP(cliente, hostPuenteWisp, puertoPuenteWisp, cfg)
-		if err != nil {
-			return nil, err
-		}
-		// `AbrirTLSWISP` limpia el deadline del handshake; el GET lleva el suyo.
-		if err := conn.SetDeadline(time.Now().Add(plazoGetPuente)); err != nil {
-			conn.Close()
-			return nil, err
-		}
-		return conn, nil
-	}, coord)
+	respuesta, err := obtenerConCfg(cfg, pool, coord)
 	if err != nil {
 		return nil, err
 	}
