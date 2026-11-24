@@ -230,7 +230,7 @@ func TestEstaticaCualificadaEnAnonimaContraJavac17(t *testing.T) {
 	if n := cuentaOpcode(t, nuestro.Code, opInvokestat); n != 1 {
 		t.Fatalf("`Intent.createChooser` en la anónima no sale con un solo `invokestatic`: %d en %#x", n, nuestro.Code)
 	}
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("el dex de la anónima no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
 }

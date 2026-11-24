@@ -128,13 +128,12 @@ func TestElDexDeLaVueltaCovarianteEsElDeJavac17(t *testing.T) {
 	}
 }
 
-// TestElDexDeLaExpresionDeApkShareEsElDeJavac17: la fuente de `MainActivity.java:48-57` entera. La
-// clase de fuera y la de `App` dexan byte a byte; la anónima, que es donde vive la llamada, se compara
-// instrucción a instrucción porque su constructor arrastra dos divergencias ya conocidas de este emisor
-// que no son de la resolución: escribe `MethodParameters` donde javac no lo pone
-// (`apkc/javaemisor_captura_receptor_test.go:98` y `:187`) y no escribe la `Signature` `()V` del
-// constructor (`apkc/javaemisor_anonima_anidada_test.go:12`). Lo que sí se comprueba de ella es el
-// descriptor elegido, en los bytes del propio `.class`.
+// TestElDexDeLaExpresionDeApkShareEsElDeJavac17: la fuente de `MainActivity.java:48-57` entera. Las
+// tres clases —la de fuera, `App` y la anónima— dexan byte a byte. La anónima se comparaba solo
+// instrucción a instrucción por dos divergencias de su constructor que ya no existen: el
+// `MethodParameters` que este emisor escribía y javac 17 no pone en ninguna anónima, y la `Signature`
+// `()V`, que ahora escribe igual. El descriptor elegido se sigue comprobando además en los bytes del
+// propio `.class`, porque ahí se ve que es `ListAdapter` y no el `Adapter` que borra la genérica.
 func TestElDexDeLaExpresionDeApkShareEsElDeJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
 	javac := javac17(t)
@@ -152,6 +151,10 @@ func TestElDexDeLaExpresionDeApkShareEsElDeJavac17(t *testing.T) {
 		nuestra := claseEmitidaPorNombre(t, nuestras, interno)
 		suya := claseLeidaPorNombre(t, deJavac, "L"+interno+";")
 		comparaDexByteAByte(t, dexDeUnaClase(t, nuestra), dexDeUnaClaseLeida(t, suya), volcadoDeClases(nuestras))
+	}
+	// y el dex de las tres clases juntas, la anónima incluida, sin normalizar el constructor
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
+		t.Fatalf("el dex de la expresión de ApkShare no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
 
 	anónima := claseEmitidaPorNombre(t, nuestras, "share/apps/util/MainActivity$1")

@@ -139,7 +139,7 @@ func TestLaCapturaDeLocalAtraviesaLaAnonimaAnidada(t *testing.T) {
 	comparaMetodos(t, nuestraExterior, suyaExterior)
 
 	// el dex entero, con el atributo del constructor de la anonima fuera
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("%v\n%s", err, volcadoDeClases(nuestras))
 	}
 }

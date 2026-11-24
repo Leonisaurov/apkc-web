@@ -93,30 +93,12 @@ func fuentesSondaCapturaReceptor(fuente string) []fuenteJava {
 	return []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuente}}
 }
 
-// comparaDexSalvoConstructorDeAnonima: el dex de los dos lados, byte a byte, con el `MethodParameters`
-// del constructor de la anónima fuera de los dos. Es la única diferencia que queda y no es de esta
-// ruta: este emisor escribe `MethodParameters` en ese constructor (medido contra el fixture del
-// párrafo 100, que se hizo con javac 21) y javac 17.0.21 no lo escribe en ninguna anónima. `Signature`
-// ya no se normaliza: los dos lados dejan `()V` cuando hay capturas (§270).
-func comparaDexSalvoConstructorDeAnonima(t *testing.T, nuestras []claseEmitida, deJavac []classFull) error {
+// comparaDexComoJavac17: el dex de los dos lados, byte a byte, sin normalizar nada. Antes se quitaba
+// el `MethodParameters` del constructor de la anónima porque este emisor lo escribía y javac 17.0.21
+// no lo pone en ninguna anónima; desde que el emisor tampoco lo escribe, el constructor coincide y una
+// diferencia en cualquiera de los dos lados rompe la comparación.
+func comparaDexComoJavac17(t *testing.T, nuestras []claseEmitida, deJavac []classFull) error {
 	t.Helper()
-	normaliza := func(cs []classFull) []classFull {
-		out := make([]classFull, len(cs))
-		for i, c := range cs {
-			ms := make([]classMethod, len(c.Methods))
-			copy(ms, c.Methods)
-			for j := range ms {
-				if ms[j].Name != "<init>" {
-					continue
-				}
-				ms[j].Parameters = false
-				ms[j].Parametros = nil
-			}
-			c.Methods = ms
-			out[i] = c
-		}
-		return out
-	}
 	clases := make([]classFull, 0, len(nuestras))
 	for _, c := range nuestras {
 		cf, err := readClassFull(c.datos)
@@ -125,11 +107,11 @@ func comparaDexSalvoConstructorDeAnonima(t *testing.T, nuestras []claseEmitida, 
 		}
 		clases = append(clases, cf)
 	}
-	dexNuestro, err := dexDeClases(normaliza(clases))
+	dexNuestro, err := dexDeClases(clases)
 	if err != nil {
 		t.Fatalf("dexando lo nuestro: %v", err)
 	}
-	dexJavac, err := dexDeClases(normaliza(deJavac))
+	dexJavac, err := dexDeClases(deJavac)
 	if err != nil {
 		t.Fatalf("dexando lo de javac: %v", err)
 	}
@@ -175,17 +157,17 @@ func TestLaCapturaDeLocalEnReceptorSeEscribeComoJavac(t *testing.T) {
 		t.Fatalf("la misma llamada sin anónima dejó de compilar: %v", err)
 	}
 
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("%v\n%s", err, volcadoDeClases(nuestras))
 	}
 }
 
-// TestElConstructorDeLaAnonimaSigueComoEstaba fija la diferencia que `comparaDexSalvoConstructorDeAnonima`
-// deja fuera: en el constructor de la anónima este emisor escribe `MethodParameters` y javac 17 escribe
-// `Signature: ()V` (apkc/javaemisor.go:7733-7750). Es anterior a la captura en posición de receptor —
-// sale igual en la sonda del párrafo 100, sin ningún punto detrás de la captura— y arreglarlo es otro
-// cambio; aquí solo se fija para que no se cuele en el oráculo.
-func TestElConstructorDeLaAnonimaSigueComoEstaba(t *testing.T) {
+// TestElConstructorDeLaAnonimaNoLlevaMethodParameters: el constructor de la anónima coincide con el de
+// javac 17.0.21 en los dos atributos que importan: ninguno lleva `MethodParameters` —javac no lo pone en
+// ninguna anónima; el emisor lo escribía por la medición del párrafo 42, hecha con javac 21— y los dos
+// llevan `Signature: ()V` cuando el constructor recibe capturas de locales. Fija la aserción que la
+// comparación del dex entero ya hace, para que un cambio futuro diga cuál de los dos atributos rompió.
+func TestElConstructorDeLaAnonimaNoLlevaMethodParameters(t *testing.T) {
 	jar := jarDelSDK(t)
 	javac := javac17(t)
 	fuentes := fuentesSondaCapturaReceptor(fuenteSondaCapturaReceptor)
@@ -204,9 +186,9 @@ func TestElConstructorDeLaAnonimaSigueComoEstaba(t *testing.T) {
 	if !okNuestro || !okSuyo {
 		t.Fatalf("sin constructor en la anónima: nuestro %v, javac %v", okNuestro, okSuyo)
 	}
-	if !nuestro.Parameters || nuestro.Signature != "()V" {
-		t.Errorf("nuestro constructor ya no es el de este emisor (MethodParameters y Signature: ()V): Parameters=%v Signature=%q; "+
-			"si se ha arreglado, vuelve a mirarse la normalización de comparaDexSalvoConstructorDeAnonima", nuestro.Parameters, nuestro.Signature)
+	if nuestro.Parameters || nuestro.Signature != "()V" {
+		t.Errorf("nuestro constructor no es el de javac 17 (sin MethodParameters y con Signature: ()V): Parameters=%v Signature=%q",
+			nuestro.Parameters, nuestro.Signature)
 	}
 	if suyo.Parameters || suyo.Signature != "()V" {
 		t.Errorf("javac 17 ya no deja Signature: ()V en el constructor de la anónima: Parameters=%v Signature=%q", suyo.Parameters, suyo.Signature)

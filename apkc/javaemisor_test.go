@@ -489,8 +489,9 @@ func compilarStudio(t *testing.T) []claseEmitida {
 	return salida
 }
 
-// TestEmisorAnonimaContraJavap comprueba la clase anonima contra lo que javap imprimio sobre
-// MainActivity$1.class (parrafo 42): el campo de captura, el constructor con MethodParameters, el
+// TestEmisorAnonimaContraJavap comprueba la clase anónima contra lo que javap imprimió sobre
+// MainActivity$1.class: el campo de captura, el constructor sin MethodParameters (javac 17, el oráculo
+// del repo, no lo escribe en ninguna anónima; el volcado del párrafo 42 se hizo con javac 21), el
 // EnclosingMethod y las dos filas del InnerClasses.
 func TestEmisorAnonimaContraJavap(t *testing.T) {
 	salida := compilarStudio(t)
@@ -536,8 +537,8 @@ func TestEmisorAnonimaContraJavap(t *testing.T) {
 	if init.Access != 0 {
 		t.Errorf("flags del constructor 0x%04x, medidos 0x0000 (paquete, sin public)", init.Access)
 	}
-	if !init.Parameters {
-		t.Errorf("el constructor sintetizado lleva MethodParameters en javac (medido: `%s`) y aqui no", "<no name> final mandated")
+	if init.Parameters {
+		t.Errorf("el constructor sintetizado lleva MethodParameters y javac 17 no lo escribe en ninguna anónima (medido: 0 de 21 clases de ApkShare)")
 	}
 	// aload_0, aload_1, putfield this$0, aload_0, invokespecial Object.<init>, return
 	if !mismaForma(init.Code, []byte{0x2a, 0x2b, opPutfield, 0xee, 0xee, 0x2a, opInvokespec, 0xee, 0xee, 0xb1}) {
@@ -615,8 +616,9 @@ func TestEmisorAnonimaContraJavap(t *testing.T) {
 }
 
 // TestEmisorMuestraDexaLoQueDexaJavac es el oráculo gordo: el proyecto de la página, seis clases escritas
-// aqui contra las seis que javac dejo en disco, dexadas por el mismo codigo. `leeLasSeis` es el helper de
-// classreader_test.go, con los seis ficheros de javac como base64.
+// aquí contra las seis que javac 17 dejó en disco, dexadas por el mismo código. `leeLasSeisDeJavac17` es
+// el helper de classreader_javac17_test.go, con los seis ficheros de javac 17 como base64: el oráculo de
+// 21 no sirve aquí porque su anónima lleva `MethodParameters` y el emisor ya no lo escribe.
 func TestEmisorMuestraDexaLoQueDexaJavac(t *testing.T) {
 	salida := compilarStudio(t)
 	var nuestras []classFull
@@ -627,7 +629,7 @@ func TestEmisorMuestraDexaLoQueDexaJavac(t *testing.T) {
 	if err != nil {
 		t.Fatalf("el dexer rechaza nuestras clases: %v", err)
 	}
-	dexJavac, err := dexDeClases(leeLasSeis(t))
+	dexJavac, err := dexDeClases(leeLasSeisDeJavac17(t))
 	if err != nil {
 		t.Fatalf("el dexer rechaza las clases de javac: %v", err)
 	}

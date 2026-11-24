@@ -244,11 +244,9 @@ class Sonda {
 `
 
 // fuenteSondaAccesor: la tercera ruta de la subida, el `access$NN2` que escribe un campo privado del
-// exterior desde una anónima. Su dex no se compara byte a byte con el de javac porque nuestro
-// escritor de `.class` le añade a la anónima el atributo de `MethodParameters` y eso mete en el pool
-// la cadena `$Ldalvik/annotation/MethodParameters;`, que el de javac con `-g:lines,source` no tiene
-// (medido: pasa igual con `oculta = null`, así que no es de esta ruta). Aquí se mide que se acepta y
-// que su falsificación devuelve el error.
+// exterior desde una anónima. Su dex se compara byte a byte con el de javac 17: el constructor de la
+// anónima ya no lleva `MethodParameters` (javac 17 no lo escribe en ninguna), así que el pool no mete
+// la cadena `$Ldalvik/annotation/MethodParameters;` que antes rompía la comparación.
 const fuenteSondaAccesor = `package p;
 
 import java.util.ArrayList;
@@ -438,11 +436,21 @@ func TestLaSubidaDeUnaReferenciaAlEscribirUnCampoDexaComoJavac17(t *testing.T) {
 }
 
 // TestElAccesorDeUnaAnonimaAceptaLaSubida: el tercer sitio de `cabeEn`, la escritura por `access$NN2`
-// desde una anónima. Sin la ruta nueva el emisor paraba en ella.
+// desde una anónima. Sin la ruta nueva el emisor paraba en ella; con ella, el dex de la sonda es el de
+// javac 17 byte a byte, el de la anónima incluida.
 func TestElAccesorDeUnaAnonimaAceptaLaSubida(t *testing.T) {
-	if _, err := compilarProyectoJava([]fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteSondaAccesor}}, jarDelSDK(t)); err != nil {
+	jar := jarDelSDK(t)
+	javac := javac17(t)
+	fuentes := []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteSondaAccesor}}
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
 		t.Fatalf("el emisor rechazó la subida por el accesor: %v", err)
 	}
+	raiz := t.TempDir()
+	pon(t, raiz, "p/Sonda.java", fuenteSondaAccesor)
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+	comparaDexByteAByte(t, dexDeNuestrasClases(t, nuestras), dexDeLasDeJavac(t, deJavac), volcadoDeClases(nuestras))
 }
 
 // TestFalsificacionDeLaSubidaDeReferencia: con el interruptor apagado, los fuentes reales de ApkShare

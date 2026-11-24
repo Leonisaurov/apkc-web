@@ -62,7 +62,7 @@ func TestCompileEscribeLasClasesDelProyecto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dexando nuestras clases desde disco: %v", err)
 	}
-	dexJavac, err := dexDeClases(leeLasSeis(t))
+	dexJavac, err := dexDeClases(leeLasSeisDeJavac17(t))
 	if err != nil {
 		t.Fatalf("dexando las clases de javac: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestEtapasDeBuildEnGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no hay build/classes.dex: %v", err)
 	}
-	esperado, err := dexDeClases(leeLasSeis(t))
+	esperado, err := dexDeClases(leeLasSeisDeJavac17(t))
 	if err != nil {
 		t.Fatal(err)
 	}

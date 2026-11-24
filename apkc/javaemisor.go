@@ -41,10 +41,6 @@ const versionDeClassEmitida = 52
 // accEnum: el flag ACC_ENUM de JVMS 4.1, medido con `javap -v` sobre el enum de javac 17 (0x4031).
 const accEnum = 0x4000
 
-// accMandated: el flag con el que javac marca el parametro de la captura en el MethodParameters del
-// constructor sintetizado de una anonima (parrafo 42, medido como `final mandated` = 0x8010).
-const accMandated = 0x8000
-
 // Los opcodes que este emisor escribe, con el numero del JVMS.
 const (
 	opAconstNull = 0x01
@@ -9025,13 +9021,13 @@ func (ctx *contextoJava) esInnerNoEstatica(internal string) (*jclas, bool) {
 	return c, ok && c.encierre != nil && !c.esEstatica && !c.anonima
 }
 
-// initCaptura: el constructor de la anonima. Lleva la captura como unico parametro, le pone el campo antes
-// de subir al padre y anade el atributo MethodParameters marcando el parametro como `final mandated`
-// (0x8010), todo medido en el parrafo 42 sobre MainActivity$1.
+// initCaptura: el constructor de la anónima. Lleva la captura como único parámetro, le pone el campo antes
+// de subir al padre y sube al `super()`, medido en el párrafo 42 sobre MainActivity$1. No escribe
+// `MethodParameters`: ningún JDK lo pone en el constructor de una anónima (ver la nota del final).
 func (e *emisor) initCaptura() ([]byte, error) {
-	// Una anonima captura el exterior (`this$0`, si el metodo no es static) y las locales
-	// effectively-final (`val$x`). Javac escribe primero las asignaciones de captura y despues el
-	// `super()`, y para capturas de un metodo static NO escribe `MethodParameters` (parrafo 100).
+	// Una anónima captura el exterior (`this$0`, si el método no es static) y las locales
+	// effectively-final (`val$x`). Javac escribe primero las asignaciones de captura y después el
+	// `super()`.
 	estatica := e.c.metodoEncierre != nil && e.c.metodoEncierre.esEstatico
 	desc := "("
 	externo := ""
@@ -9087,24 +9083,12 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	}
 	attrs := attrInfo(e.pool, "Code", codigo)
 	conte := 1
-	// Una anonima dentro de otra no lleva MethodParameters
-	bajoAnonima := e.c.encierre != nil && e.c.encierre.anonima
-	// MethodParameters: el `this$0` sale `final mandated` (0x8010) y cada `val$x`
-	// `final synthetic` (0x1010); medido en `Captura3$1` (parrafo 100) con javac 21, que es el `javac`
-	// de PATH en Termux. javac 17.0.21 NO lo escribe (medido: sin `-parameters`, ninguna anonima lo
-	// lleva), asi que la presencia del atributo depende del JDK con el que se compare: es la frontera
-	// que deja el frente de las anidadas.
-	if !estatica && !bajoAnonima {
-		mp := []byte{byte(1 + len(e.c.capturas))}
-		mp = append(mp, u2be(0)...)
-		mp = append(mp, u2be(uint16(accFinal|accMandated))...)
-		for range e.c.capturas {
-			mp = append(mp, u2be(0)...)
-			mp = append(mp, u2be(uint16(accFinal|accSynthetic))...)
-		}
-		attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
-		conte++
-	}
+	// Sin `MethodParameters` en el constructor de una anónima: javac 17.0.21 —el oráculo del repo— no lo
+	// escribe en ninguna, ni con `this$0` (método de instancia) ni con capturas de locales (medido en
+	// cuatro sondas y en las 21 clases de ApkShare: 0 apariciones). javac 21.0.13 lo escribe solo en la
+	// anónima de un método de instancia, con el `this$0` como `final mandated` (0x8010) —la medición del
+	// párrafo 42 se hizo con ese JDK— y nunca en la de un `static`. Como el oráculo es 17 y el atributo no
+	// cambia la ejecución, se omite: era la única diferencia del constructor con javac 17.
 	// `Signature: ()V`: javac la escribe —17 y 21 por igual— si y solo si el constructor recibe
 	// capturas de locales (`val$x`); con solo el exterior (`this$0`/`this$1`) no aparece. Medido con
 	// javac 17.0.21 sobre ApkShare (`MainActivity$1..$6` y `ApkAdapter$1` la llevan, `$2$1` y `$6$1`
@@ -9117,9 +9101,9 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	return e.methodInfo("<init>", desc, 0, attrs, conte), nil
 }
 
-// initInner: el constructor sintetizado de una anidada con nombre no estatica. Guarda su exterior antes
-// de subir al padre (javap lo pone en la linea de la declaracion de la clase) y no lleva MethodParameters,
-// a diferencia del de una anonima (§42).
+// initInner: el constructor sintetizado de una anidada con nombre no estática. Guarda su exterior antes
+// de subir al padre (javap lo pone en la línea de la declaración de la clase) y tampoco lleva
+// MethodParameters: ni esta ni la anónima lo llevan con el oráculo de javac 17.
 func (e *emisor) initInner() ([]byte, error) {
 	externo := "L" + e.encierreInterno() + ";"
 	desc := "(" + externo + ")V"

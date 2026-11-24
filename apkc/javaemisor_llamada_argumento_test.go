@@ -295,7 +295,7 @@ func TestLlamadaEncadenadaEnAnonimaContraJavac17(t *testing.T) {
 	if err := comparaInstrucciones(nuestroOnClick.Code, suOnClick.Code); err != nil {
 		t.Fatalf("Pantalla$1.onClick no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("el dex de la anónima no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
 }

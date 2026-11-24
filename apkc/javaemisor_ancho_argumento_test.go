@@ -137,9 +137,10 @@ public class AppAdapter {
 // TestElPostDelayedDeApkShareLlevaSuI2L: el bloque real compila —el `-1` que paraba ApkShare ya no
 // está— y el `afterTextChanged` de la anónima sale instrucción a instrucción como el de javac 17,
 // con su `max_stack` y sus huecos, y con el `i2l` de la 105 justo delante del `invokevirtual` de
-// `android.os.Handler.postDelayed:(Ljava/lang/Runnable;J)Z`. El dex entero no se compara: javac no
-// escribe el `MethodParameters` de los constructores de la anónima que sí emite este emisor, y esa
-// diferencia es de otro frente.
+// `android.os.Handler.postDelayed:(Ljava/lang/Runnable;J)Z`. El constructor de la anónima ya no lleva
+// `MethodParameters`, así que `Retardo$1` dexa byte a byte; el dex entero sigue sin compararse porque
+// `Retardo$1$1` llama a `Editable.toString()` y ahí nuestro emisor elige `invoke-static` donde javac 17
+// escribe `invoke-virtual` (diferencia de la resolución del método, no del constructor ni de esta ruta).
 func TestElPostDelayedDeApkShareLlevaSuI2L(t *testing.T) {
 	jar := jarDelSDKExigido(t)
 	javac := javac17Exigido(t)
@@ -174,6 +175,7 @@ func TestElPostDelayedDeApkShareLlevaSuI2L(t *testing.T) {
 	if err != nil {
 		t.Fatalf("nuestro `afterTextChanged` no se desarma: %v", err)
 	}
+	visto := false
 	for i, in := range instrucciones {
 		if in.name != "invokevirtual" {
 			continue
@@ -182,9 +184,17 @@ func TestElPostDelayedDeApkShareLlevaSuI2L(t *testing.T) {
 			t.Fatalf("el `invokevirtual` de la pc %d no lleva el `i2l` detrás: %v", in.pc, instrucciones)
 		}
 		t.Logf("`postDelayed` en la pc %d, con el `i2l` de la pc %d delante", in.pc, instrucciones[i-1].pc)
-		return
+		visto = true
+		break
 	}
-	t.Fatalf("no hay ningún `invokevirtual` en `afterTextChanged`: %v", instrucciones)
+	if !visto {
+		t.Fatalf("no hay ningún `invokevirtual` en `afterTextChanged`: %v", instrucciones)
+	}
+	// y la anónima —la que lleva el `postDelayed`— dexa byte a byte el de javac 17: su constructor ya
+	// no arrastra el `MethodParameters` que se dejaba fuera antes
+	nuestraAnonima := dexDeUnaClase(t, claseEmitidaPorNombre(t, nuestras, "share/apps/util/Retardo$1"))
+	suyaAnonima := dexDeUnaClaseLeida(t, claseLeidaPorNombre(t, deJavac, "Lshare/apps/util/Retardo$1;"))
+	comparaDexByteAByte(t, nuestraAnonima, suyaAnonima, volcadoDeClases(nuestras))
 }
 
 // TestFalsificacionDelEnsanchamientoEnElArgumento: con el interruptor apagado vuelve el defecto

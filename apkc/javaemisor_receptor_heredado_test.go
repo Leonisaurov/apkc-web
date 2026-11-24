@@ -20,9 +20,8 @@ package main
 // intacto y solo se lee la jerarquía.
 //
 // El oráculo es el de siempre: javac 17 con `--release 8 -g:lines,source`, el `onClick` instrucción a
-// instrucción y el dex entero byte a byte salvo el constructor de la anónima, que es la diferencia ya
-// medida del §100 (`MethodParameters` de este emisor frente al `Signature: ()V` de javac) y no de esta
-// ruta.
+// instrucción y el dex entero byte a byte, también el constructor de la anónima: ya no escribe
+// `MethodParameters` y javac 17 tampoco (§100, corregido al fijar el oráculo en 17).
 
 import (
 	"strings"
@@ -100,7 +99,7 @@ func TestReceptorHeredadoEnAnonimaContraJavac17(t *testing.T) {
 	if err := comparaInstrucciones(nuestroOnClick.Code, suOnClick.Code); err != nil {
 		t.Fatalf("Pantalla$1.onClick no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("el dex de la anónima no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
 }
@@ -187,7 +186,7 @@ func TestSobrecargaExteriorContraJavac17(t *testing.T) {
 	if err := comparaInstrucciones(nuestroOnClick.Code, suOnClick.Code); err != nil {
 		t.Fatalf("Pantalla$1.onClick no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("el dex de la sobrecarga exterior no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
 }

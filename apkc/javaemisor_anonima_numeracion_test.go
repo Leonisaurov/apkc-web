@@ -148,8 +148,8 @@ func TestLaNumeracionDeAnonimasEsLaDeJavac(t *testing.T) {
 	}
 	comparaMetodos(t, nuestraProfunda, suyaProfunda)
 
-	// y el dex entero, con el atributo del constructor de la anónima fuera
-	if err := comparaDexSalvoConstructorDeAnonima(t, nuestras, deJavac); err != nil {
+	// y el dex entero, sin normalizar el constructor de la anónima
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
 		t.Fatalf("%v\n%s", err, volcadoDeClases(nuestras))
 	}
 }
@@ -196,7 +196,7 @@ func TestLaNumeracionDeAnonimasFalsificacion(t *testing.T) {
 	raiz := t.TempDir()
 	pon(t, raiz, "p/Sonda.java", fuenteSondaNumeracion)
 	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
-	if err := comparaDexSalvoConstructorDeAnonima(t, viejas, deJavac); err == nil {
+	if err := comparaDexComoJavac17(t, viejas, deJavac); err == nil {
 		t.Fatal("con el contador viejo el dex sigue coincidiendo con javac: la falsificación no falsifica")
 	} else {
 		t.Logf("con el contador viejo el dex diverge: %v", err)
