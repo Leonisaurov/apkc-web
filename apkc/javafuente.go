@@ -225,6 +225,12 @@ func (jasignExp) jexprPuede() {}
 type jbloque struct {
 	sentencias []jstmt
 	donde      pos
+	// lineaCierre es la del `}` que cierra el bloque, cuando el bloque es un `{ … }` del fuente. javac
+	// anota esa línea en el pc donde cierra el ámbito (`visitBlock` hace `statBegin(endpos)` antes de
+	// `endScopes`), y solo si algún local del bloque llegó a tener valor: es la fila que cae en el
+	// `goto` que salta el `else` (medido en el párrafo de la sonda `ElseGoto`). Cero en los bloques
+	// que arma el analizador (`for`, brazos de `switch`, `finally`), que no son un `{ … }` del fuente.
+	lineaCierre int
 }
 
 func (jbloque) jstmtPuede() {}
@@ -469,11 +475,11 @@ type jclas struct {
 	esEstatica     bool // solo cambia los flags del InnerClasses: en su propio ClassFile una anidada no es ACC_STATIC
 	// esEnum y constantes: un `enum Color { RED, GREEN }` simple. El emisor escribe el andamiaje que
 	// javac genera para el tipo (java/lang/Enum, $VALUES, values, valueOf y <clinit>).
-	esEnum        bool
-	constantes    []string
-	linea         int
-	paquete       string
-	imports       []string // los del fuente donde se declaró la clase: su alcance, no el del llamador
+	esEnum     bool
+	constantes []string
+	linea      int
+	paquete    string
+	imports    []string // los del fuente donde se declaró la clase: su alcance, no el del llamador
 	// unidad es el índice del fichero del que salió la clase. JLS 6.5.5.1 resuelve un nombre simple
 	// primero contra el mismo compilation unit y solo después contra los imports: sin este dato, una
 	// clase de otro fichero del proyecto se colaba por delante del import explícito. El nombre base no
@@ -1979,7 +1985,12 @@ func (a *analizadorJava) sentencia() (jstmt, bool, error) {
 	switch {
 	case a.es('p', "{"):
 		b, err := a.bloque()
-		return jbloque{sentencias: b, donde: pos{linea: linea}}, err == nil, err
+		if err != nil {
+			return nil, false, err
+		}
+		// el `}` queda consumido y es el token anterior: es la línea que javac anota al cerrar el
+		// ámbito (ver `jbloque.lineaCierre`)
+		return jbloque{sentencias: b, donde: pos{linea: linea}, lineaCierre: a.toks[a.i-1].donde.linea}, true, nil
 	case a.es('k', "return"):
 		a.avanzar()
 		if a.es('p', ";") {

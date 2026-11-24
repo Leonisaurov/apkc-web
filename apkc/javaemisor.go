@@ -2471,6 +2471,10 @@ type emisor struct {
 	// marco de javac los poda a `top` desde ahí aunque las dos ramas de una unión traigan el mismo
 	// tipo (ver `muerteAmbito`).
 	muertes []muerteAmbito
+	// filaDeCierre es la del `}` del último bloque emitido cuando ese bloque declaró algún local con
+	// valor, y cero si no: es la fila que javac escribe en el pc donde cierra el ámbito y que cae en el
+	// `goto` que salta el `else` (ver `branca` y `jbloque.lineaCierre`).
+	filaDeCierre int
 	// picos son los altos que hay que vigilar aunque los bloques devuelvan su hueco: cada `try` con
 	// `finally` deja abierto uno para saber dónde pone javac el local del manejador `any`, que va en
 	// el registro más alto que alcanzó el cuerpo (ver `intenta`).
@@ -2562,6 +2566,10 @@ type ambito struct {
 	// declarados son los huecos que este bloque declaró, con las dos mitades de un ancho: al cerrar
 	// el bloque dejan de estar en ámbito y el marco los poda a `top` (ver `muerteAmbito`).
 	declarados []int
+	// almacena dice si alguno de esos huecos recibió un valor. javac solo abre el rango vivo del local
+	// al guardarlo (`setDefined`), y `endScope` escribe la fila del cierre del bloque solo con un rango
+	// abierto: sin local con valor no hay fila (ver `branca` y `jbloque.lineaCierre`).
+	almacena bool
 }
 
 // muerteAmbito es el punto del código donde un bloque del fuente se cierra. javac marca `top` los
@@ -2978,6 +2986,35 @@ func (e *emisor) cierraPico() int {
 // `reserva` antes. La prueba de la frontera mide con él las dos caras: el dex de las seis clases de
 // ApkShare byte a byte con él encendido y distinto (y con `locals=6` en vez de 5) apagado.
 var reutilizaHuecos = true
+
+// anotaLineaDelElse es el interruptor de la falsificación de la fila del `else`: apagado, el `goto`
+// que salta el `then` se queda sin la fila del `}` del bloque y el dex de `MainActivity` vuelve a
+// separarse del de javac en esa fila (ver `branca` y `TestFalsificacionDeLaLineaDelElse`).
+var anotaLineaDelElse = true
+
+// almacenaEnBloque apunta que el hueco `indice` recibió un valor: javac abre ahí el rango vivo del
+// local, y sin rango abierto el cierre del bloque no deja fila (ver `jbloque.lineaCierre`). Se marca el
+// ámbito más interno que declaró ese hueco, que es el del bloque que lo declara: es el que `endScopes`
+// cierra. Un hueco de un parámetro o de un local de fuera del bloque no está en `declarados` y no
+// marca nada, como en javac.
+func (e *emisor) almacenaEnBloque(indice int) {
+	for i := len(e.ambitos) - 1; i >= 0; i-- {
+		for _, d := range e.ambitos[i].declarados {
+			if d == indice {
+				e.ambitos[i].almacena = true
+				return
+			}
+		}
+	}
+}
+
+// ambitoAlmacena: el ámbito que se está cerrando declaró algún local con valor.
+func (e *emisor) ambitoAlmacena() bool {
+	if len(e.ambitos) == 0 {
+		return false
+	}
+	return e.ambitos[len(e.ambitos)-1].almacena
+}
 
 // cierraAmbito devuelve el reparto y los nombres al punto en que el bloque se abrió. `maxLoc` no se
 // toca: es el alto que alcanzó el método, y los marcos apilados lo necesitan tal cual.
@@ -6902,6 +6939,20 @@ func (e *emisor) branca(v jif) error {
 	}
 	if !terminaEnSalida(v.entonces) {
 		final := e.nuevaEtiqueta()
+		// el `goto` que salta el `else` lleva la línea del `}` del `then` cuando ese bloque declaró
+		// algún local con valor: es la fila que javac escribe al cerrar el ámbito, en el pc donde va el
+		// `goto` (medido en el párrafo de la sonda `ElseGoto`). Sin local con valor javac no la escribe
+		// y el `goto` se queda con la línea de la última sentencia del `then`; cuando el `then` no es
+		// un bloque (`if (c) b(2);`) tampoco hay fila.
+		cierre := 0
+		if anotaLineaDelElse {
+			if _, esBloque := v.entonces.(jbloque); esBloque {
+				cierre = e.filaDeCierre
+			}
+		}
+		if cierre > 0 {
+			e.marcaLinea(cierre)
+		}
 		e.saltoEmite(opGOTO, final, 0)
 		e.cierra(otroLado)
 		if err := e.stm(v.siNo); err != nil {
@@ -7555,6 +7606,7 @@ func (e *emisor) asignacionValor(v jasignExp) (string, error) {
 	}
 	e.subePor(lv.desc)
 	e.guardaDe(lv.indice, lv.desc)
+	e.almacenaEnBloque(lv.indice)
 	return lv.desc, nil
 }
 
@@ -8301,6 +8353,7 @@ func (e *emisor) stm(s jstmt) error {
 			}
 			indice := e.reserva(v.nombre, dv)
 			e.guardaDe(indice, dv)
+			e.almacenaEnBloque(indice)
 			return nil
 		}
 		d, err := e.ctx.descriptorDe(v.tipo)
@@ -8329,6 +8382,7 @@ func (e *emisor) stm(s jstmt) error {
 			return fmt.Errorf("linea %d: se declara %s y se le da un %s", v.donde.linea, d, dv)
 		}
 		e.guardaDe(indice, d)
+		e.almacenaEnBloque(indice)
 		return nil
 	case jasign:
 		e.marcaLinea(v.donde.linea)
@@ -8368,6 +8422,7 @@ func (e *emisor) stm(s jstmt) error {
 					return fmt.Errorf("linea %d: %s es %s y se le asigna un %s", v.donde.linea, acc.nombre, lv.desc, dv)
 				}
 				e.guardaDe(lv.indice, lv.desc)
+				e.almacenaEnBloque(lv.indice)
 				return nil
 			}
 		}
@@ -8463,6 +8518,13 @@ func (e *emisor) stm(s jstmt) error {
 			if err := e.stm(st); err != nil {
 				return err
 			}
+		}
+		// la fila del cierre: javac la escribe en el pc donde cierra el ámbito, y solo si algún local
+		// del bloque llegó a tener valor (`endScope` llama a `curCP`, que vuelca el `statBegin(endpos)`
+		// del bloque). La lee `branca` al terminar de emitir el `then`, que es donde esa fila cae.
+		e.filaDeCierre = 0
+		if e.ambitoAlmacena() {
+			e.filaDeCierre = v.lineaCierre
 		}
 		e.cierraAmbito()
 		return nil
@@ -8902,6 +8964,30 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
+	// Los implementadores de las lambdas, ahora que el código de todos los métodos está escrito: es
+	// el punto en el que javac los genera, y por eso sus constantes caen al final del pool. Cada
+	// vaciado puede encolar otros (una lambda dentro de otra), de ahí el bucle.
+	for len(e.lambdaPendientes) > 0 {
+		p := e.lambdaPendientes[0]
+		e.lambdaPendientes = e.lambdaPendientes[1:]
+		if err := e.escribeImplementador(p); err != nil {
+			return nil, err
+		}
+	}
+	// los implementadores de las lambdas del fuente, con `ACC_PRIVATE|ACC_SYNTHETIC`, en el sitio que
+	// les da javac: entre los puentes del retorno covariante y los `access$NNN`. javac los escribe en
+	// el orden INVERSO al que los crea (medido con `javap -p` sobre una clase con seis lambdas: crea
+	// `lambda$f$0`…`lambda$h$5` y el ClassFile los lista `lambda$h$5`…`lambda$f$0`), y ese orden es el
+	// que ven el `class_data_item` del dex y su comparación byte a byte. El sitio entre los puentes y
+	// los `access$` está medido con javac 17 en `W`, una clase con puente covariante, lambda, anónima
+	// que pide un `access$002` y `static {}`: el ClassFile sale `f()Ljava/lang/String;`,
+	// `f()Ljava/lang/Object;` (el puente), `lambda$conLambdaYAnonima$0`, `access$002` y `static {}`,
+	// que es el orden de las pasadas de javac —TransTypes crea el puente, LambdaToMethod la lambda y
+	// Lower el `access$`—. Antes iban detrás de los `access$` y el dex de `MainActivity` no coincidía.
+	for i := len(e.lambdaMetodos) - 1; i >= 0; i-- {
+		metodos = append(metodos, e.lambdaMetodos[i]...)
+	}
+	conte += len(e.lambdaMetodos)
 	// los `access$NNN` que pidieron las anidadas, en el orden en que se crearon; javac los escribe entre
 	// los metodos declarados y el `<clinit>` (medido en el parrafo 72)
 	for _, a := range e.ctx.accesores[e.interno] {
@@ -8921,16 +9007,6 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 		metodos = append(metodos, b...)
 		conte++
 	}
-	// Los implementadores de las lambdas, ahora que el código de todos los métodos está escrito: es
-	// el punto en el que javac los genera, y por eso sus constantes caen al final del pool. Cada
-	// vaciado puede encolar otros (una lambda dentro de otra), de ahí el bucle.
-	for len(e.lambdaPendientes) > 0 {
-		p := e.lambdaPendientes[0]
-		e.lambdaPendientes = e.lambdaPendientes[1:]
-		if err := e.escribeImplementador(p); err != nil {
-			return nil, err
-		}
-	}
 	// y las filas del BootstrapMethods, cuyos MethodHandle y MethodType se acaban de añadir. El
 	// índice de la fila ya estaba reservado en el sitio del `invokedynamic`.
 	for i := range e.bootstraps {
@@ -8943,16 +9019,6 @@ func (ctx *contextoJava) emmitirClase(c *jclas) ([]byte, error) {
 			e.usar("java/lang/invoke/MethodHandles$Lookup")
 		}
 	}
-	// los implementadores de las lambdas del fuente, con `ACC_PRIVATE|ACC_SYNTHETIC`. javac los
-	// escribe en el orden INVERSO al que los crea (medido con `javap -p` sobre una clase con seis
-	// lambdas: crea `lambda$f$0`…`lambda$h$5` y el ClassFile los lista `lambda$h$5`…`lambda$f$0`), y
-	// ese orden es el que ven el `class_data_item` del dex y su comparación byte a byte. Lo que no
-	// está medido es cómo se mezclan con los `access$`: una clase que tenga de los dos sale con los
-	// implementadores detrás, y su orden sería otro.
-	for i := len(e.lambdaMetodos) - 1; i >= 0; i-- {
-		metodos = append(metodos, e.lambdaMetodos[i]...)
-	}
-	conte += len(e.lambdaMetodos)
 	// Las filas del InnerClasses van en el orden en que javac las escribe: las anidadas declaradas aqui, al
 	// reves de como se declaran (medido: la R del estudio lista style, layout, id); la propia clase si es
 	// anidada; y despues las que menciona el codigo, en orden de primer uso (medido: R$layout, MainActivity$1
