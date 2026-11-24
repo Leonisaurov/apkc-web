@@ -11566,6 +11566,56 @@ condición F. 3) Quedan **dos gates** por pasar. 4) El sitio publicado no se act
 commits no se empujaron y el CI no se midió. Nada de esto se re-ejecutó aquí; los oráculos citados
 son los de cada commit (`javap`, el dex de `javac 17` y las pruebas de `studio/`).
 
+## 258. La numeración de anónimas cerrada, la interfaz implícita y el endurecimiento de WISP
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `0ad4128`, `8af90c2`, `ae6bc0e`,
+`09d6de2`, `3794daf`, `c726329` y `36040e3`; aquí no se re-ejecutó nada: sin gate, sin chromium,
+sin red, sin push y sin publicación. **ApkShare sigue sin compilar** y el núcleo WISP sigue
+**inerte**, fuera del wasm.
+
+**La numeración de las anónimas, con su condición cerrada (`0ad4128`).** `§257` la dejó aprobada
+salvo que el crítico no pudo medir ApkShare porque la ruta de fuente que usó era errónea. Con la
+ruta real, `src/share/apps/util/MainActivity.java`, el build ya no muestra `MainActivity$4$1` y
+avanza hasta la línea 97. Los **10 de 10** nombres siguen coincidiendo con `javac 17` leídos con
+`javap`, y la falsificación con el contador viejo da un dex divergente, así que el arreglo no es
+vacuo. La condición de `§257` queda cerrada: se mide sobre la fuente que de verdad compila.
+
+**La interfaz implícita de la anónima (`8af90c2`).** Aprobada: la anónima se asigna a su interfaz
+aunque el campo sea del exterior. `check` sobre la fuente real ya no emite
+`runnable es Ljava/lang/Runnable;` en la línea 99, y el build avanza a `MainActivity.java:97`. La
+suite de `Interfaz|Anonima|Acces|Captura` sale `ok … 5.293s`. Queda una pregunta **no bloqueante**:
+un `implementa` no resoluble descarta el padre en `asignableEstricto`
+(`apkc/javaemisor.go:1825-1837`), y eso solo alcanza a fuentes inválidas.
+
+**ApkShare no compila: se para en la línea 97.** El build para en `MainActivity.java:97` con
+`quedan -1 valores en la pila al cerrar el metodo`. Es un defecto **preexistente** —no lo introduce
+`8af90c2`— de pila en el paso `int`→`long` de `handler.postDelayed(runnable, AutoResearchDelay)`
+(`MainActivity.java:105`). Se reproduce con una clase mínima `class H { void f(long b){} }` y la
+llamada `h.f(n)`, que deja `-1` en la pila al cerrar el método. Ese frente está en curso; **no** se
+afirma que ApkShare compile.
+
+**El endurecimiento del núcleo WISP (`ae6bc0e`, `09d6de2`).** Aprobado: la cola baja de
+**31 MiB a 16 MiB** con `CLOSE`; los plazos despiertan en **50 ms**; el crédito se topa en
+**1024**; las CAs se validan de forma estricta; y la trama se rechaza **antes de copiar**, medido
+con 48 MiB rechazados y `TotalAlloc +1736 B`. El módulo sigue **inerte y fuera del wasm**: el
+linker lo elimina y `nucleoDisponible` falla cerrado sin abrir ningún socket. Queda la allowlist F,
+en curso.
+
+**Las CAs de la UI (`3794daf`, `c726329`, `36040e3`).** Las CAs se leen de un `File` local, el
+orden es CAs→relay y la huella es `sha256(pem entregado)`, con el BOM corregido. Aprobado con
+**6 de 6** rechazos. Riesgo vigilado: la UI puede parecer TLS verificado mientras el núcleo no
+registra `apkcWispCargarCAs`; hoy falla cerrado.
+
+**Deuda de resources, en corrección.** Un AAR real usa `jni/<abi>/` y **no** `lib/<abi>/` —el
+`lib/` era un falso positivo del fixture—; además, el aviso de colisión de `.so` nombraba al
+proyecto cuando ganaba otro AAR. Otro frente lo está corrigiendo: **en corrección**, no cerrado.
+
+**Fronteras de este `§`.** 1) ApkShare **no** compila: el `postDelayed` deja `-1` en
+`MainActivity.java:97`. 2) WISP **no** está cableado a la página: faltan la allowlist F y el
+cableado del núcleo. 3) Quedan **dos gates** por pasar. 4) El sitio publicado no se actualizó.
+5) Los commits no se empujaron y el CI no se midió. 6) La deuda de resources sigue en corrección.
+Nada de esto se re-ejecutó aquí; los oráculos citados son los de cada commit.
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
@@ -11573,7 +11623,9 @@ Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que 
 1. **ApkShare no compila entero.** En `§253` pasó la 187, la 218 y `AppAdapter`, y se para en
    `MainActivity.java:55`, columna 44, con la captura de `apps` en una anónima; el puente `getItem`
    del retorno covariante y su `check-cast` ya cerraron en `ee5a372`. `§256` avanza esa frontera a
-   `MainActivity.java:74`, con la captura de `adapter` en una anónima anidada.
+   `MainActivity.java:74`, con la captura de `adapter` en una anónima anidada; `§257` la deja en la
+   interfaz de la anónima (línea 99) y `§258` fija la parada en `MainActivity.java:97`, con el
+   `int`→`long` del `postDelayed`.
 2. **Asignación como valor sobre campo o arreglo**, rechazada por nombre, pendiente del
    `dup_x1`/`dup2_x1` (y del `dup_x2` del elemento).
 3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual sin
