@@ -614,6 +614,10 @@ type contextoJava struct {
 	// fuente es la ruta con la que entró el fuente que se está registrando, para poder nombrar los
 	// dos ficheros de una clase repetida.
 	fuente string
+	// objeto son los métodos que declara `java/lang/Object`, por `nombre descriptor` (ver
+	// `metodoDeObject`). Se llena una sola vez, la primera vez que una llamada sobre una interfaz
+	// necesita saber si el método es de `Object`.
+	objeto map[string]bool
 }
 
 // claseRepetida: la clase que declararon dos fuentes del proyecto, con las dos rutas para nombrarlas.
@@ -1324,6 +1328,57 @@ func (ctx *contextoJava) descDeMetodoEn(c *jclas, m jmetodo) (string, error) {
 		return e
 	})
 	return desc, err
+}
+
+// objetoEnInterfazVirtual es el interruptor de la falsificación: apagado, una llamada a un método de
+// `java/lang/Object` sobre un receptor de interfaz vuelve a ser `invokeinterface <interfaz>`, que es
+// la forma vieja y deja de coincidir con javac. Encendido en el binario que se publica. Lo usa
+// `javaemisor_objeto_interfaz_test.go`.
+var objetoEnInterfazVirtual = true
+
+// metodoDeObject: ¿`java/lang/Object` declara ese método con ese descriptor? Es la pregunta que decide
+// si una llamada sobre un receptor de tipo interfaz se emite como `invokevirtual java/lang/Object.*`
+// en vez de `invokeinterface` (ver `llamada`). Los métodos se cargan una sola vez por compilación; si
+// el classpath no trae `java/lang/Object` la respuesta es «no» y se emite lo de antes.
+func (ctx *contextoJava) metodoDeObject(nombre, desc string) bool {
+	if ctx.objeto == nil {
+		ctx.objeto = map[string]bool{}
+		if c, err := ctx.busc.claseDelJar("java/lang/Object"); err == nil {
+			for _, m := range c.Methods {
+				ctx.objeto[m.Name+" "+m.Desc] = true
+			}
+		}
+	}
+	return ctx.objeto[nombre+" "+desc]
+}
+
+// declaraElMismo: ¿el tipo `interno` declara él mismo un método con ese nombre y descriptor? No sube a
+// los padres ni a las superinterfaces a propósito: javac resuelve el `toString()` de un receptor
+// `Hereda extends CharSequence` contra `java/lang/Object` aunque `CharSequence` lo declare, y solo se
+// queda en la interfaz cuando el tipo estático del receptor lo declara él mismo (medido con javac 17
+// `--release 8 -g:lines,source`, tabla en `javaemisor_objeto_interfaz_test.go`).
+func (ctx *contextoJava) declaraElMismo(interno, nombre, desc string) bool {
+	if c, ok := ctx.clasePropia(interno); ok {
+		for _, m := range c.metodos {
+			if m.nombre != nombre {
+				continue
+			}
+			if d, err := ctx.descDeMetodoEn(c, m); err == nil && d == desc {
+				return true
+			}
+		}
+		return false
+	}
+	c, err := ctx.busc.claseDelJar(interno)
+	if err != nil {
+		return false
+	}
+	for _, m := range c.Methods {
+		if m.Name == nombre && m.Desc == desc {
+			return true
+		}
+	}
+	return false
 }
 
 // accesosDe: los access_flags del tipo, como los veria javap. De los propios se toman los modificadores
@@ -4655,8 +4710,21 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 	}
 	var opcode byte = opInvokevirt
+	dueño := receptor
 	if accesosReceptor&accInterface != 0 {
 		opcode = opInvointf
+		// Un método que declara `java/lang/Object` y se llama sobre un receptor de tipo interfaz es
+		// `invokevirtual java/lang/Object.x`, no `invokeinterface`: javac solo se queda en la
+		// interfaz cuando el tipo estático del receptor declara el método **él mismo**. Lo que lo
+		// hereda de una superinterfaz sigue yendo a `Object`: medido con javac 17 `--release 8` sobre
+		// `CharSequence` (declara `toString` y sale `invokeinterface CharSequence.toString`) frente a
+		// `Editable` (lo hereda de `CharSequence` y sale `invokevirtual Object.toString`), y sobre una
+		// interfaz propia sin `toString` (sale `Object`) y otra que lo redeclara (sale la interfaz).
+		// El oráculo y la tabla de la regla viven en `javaemisor_objeto_interfaz_test.go`.
+		if objetoEnInterfazVirtual && e.ctx.metodoDeObject(l.nombre, cand.desc) && !e.ctx.declaraElMismo(receptor, l.nombre, cand.desc) {
+			opcode = opInvokevirt
+			dueño = "java/lang/Object"
+		}
 	}
 	if cand.acceso&accPrivate != 0 {
 		if receptor != e.interno {
@@ -4664,8 +4732,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		}
 		// `this.metodoPrivado()`: javac tambien escribe `invokespecial` (parrafo 72)
 		opcode = opInvokespec
+		dueño = receptor
 	}
-	e.invoca(opcode, receptor, l.nombre, cand.desc, n+1)
+	e.invoca(opcode, dueño, l.nombre, cand.desc, n+1)
 	return vueltaDe(cand.desc), nil
 }
 
