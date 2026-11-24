@@ -4,13 +4,13 @@ package main
 // un jar se resuelva leyendo el jar (y no se invente el descriptor), que un `.aar` aporte su
 // `classes.jar`, que una cadena de padres cruce dos jars hasta el `android.jar`, que la huella del
 // classpath cubra cada dependencia y que cambiar una de ellas abra el atajo de I3. El oráculo de
-// paridad es javac 17. Estas pruebas **no se saltan**: sin SDK o sin javac 17 fallan, porque un SKIP
-// deja la suite en verde sin haber medido nada (el crítico de 5bc1e8c vio cuatro SKIP y
-// «ok … 0.034s»).
+// paridad es javac 17, y esa mitad vive en `dependencias_paridad_test.go` con `//go:build !js`
+// porque bajo `GOOS=js` no hay proceso que lanzar. Estas pruebas **no se saltan**: sin SDK —o sin
+// javac 17 en la mitad nativa— fallan, porque un SKIP deja la suite en verde sin haber medido nada
+// (el crítico de 5bc1e8c vio cuatro SKIP y «ok … 0.034s»).
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -35,7 +35,9 @@ func jarDelSDKExigido(t *testing.T) string {
 }
 
 // javac17Exigido es javac17 sin el SKIP: la paridad byte a byte con javac 17 es la medida, no un
-// extra, así que un entorno sin javac 17 tiene que verse.
+// extra, así que un entorno sin javac 17 tiene que verse. Se queda en este fichero, sin tag, porque
+// también la usan las pruebas de `javaemisor_*` (también sin tag) que compilan contra javac; la
+// prueba de paridad que la consume vive en `dependencias_paridad_test.go` con `//go:build !js`.
 func javac17Exigido(t *testing.T) string {
 	t.Helper()
 	if ruta := buscarJavac17(); ruta != "" {
@@ -168,72 +170,6 @@ func TestCompilarEnGoResuelveUnaClaseDeJar(t *testing.T) {
 		t.Fatal("sin el jar el emisor aceptó un tipo que no puede resolver")
 	} else if !strings.Contains(err.Error(), "Suma") || !strings.Contains(err.Error(), "classpath") {
 		t.Errorf("el rechazo no nombra la clase que falta ni el classpath: %v", err)
-	}
-}
-
-// TestCompilarEnGoDexaIgualQueJavacConUnaDependencia: el `.class` que emitimos para un fuente que
-// llama a un jar, dexado, tiene que dar el mismo dex que el `.class` de javac 17 para el mismo fuente
-// contra el mismo jar. Es la prueba de que el descriptor se leyó del jar y no se adivinó.
-func TestCompilarEnGoDexaIgualQueJavacConUnaDependencia(t *testing.T) {
-	jarSDK := jarDelSDKExigido(t)
-	javac := javac17Exigido(t)
-	raiz := t.TempDir()
-
-	// la dependencia, compilada por javac 17 con la versión que emite el subconjunto
-	pon(t, raiz, "dep/dep/Suma.java", fuenteDepSuma)
-	depOut := filepath.Join(raiz, "dep-out")
-	if out, err := exec.Command(javac, "--release", "8", "-g:lines,source", "-d", depOut,
-		filepath.Join(raiz, "dep", "dep", "Suma.java")).CombinedOutput(); err != nil {
-		t.Fatalf("javac 17 no compiló la dependencia: %v\n%s", err, out)
-	}
-	datos, err := os.ReadFile(filepath.Join(depOut, "dep", "Suma.class"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	jarDep := jarDeDependencia(t, raiz, map[string][]byte{"dep/Suma.class": datos})
-	pon(t, raiz, "src/com/hola/Uso.java", fuenteUsoSuma)
-	t.Chdir(raiz)
-
-	// lo nuestro, contra el jar de dependencias que está en jar/
-	fuentes, err := fuentesJava([]string{"src"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	nuestras, err := compilarProyectoJavaConClasspath(fuentes, []string{jarSDK, jarDep})
-	if err != nil {
-		t.Fatalf("el emisor no resolvió el jar de javac: %v", err)
-	}
-	nuestroDex, err := dexarUnaClase(t, nuestras, "com/hola/Uso")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// lo de javac 17, el mismo fuente contra el mismo jar
-	javacOut := filepath.Join(raiz, "javac-out")
-	if out, err := exec.Command(javac, "--release", "8", "-g:lines,source", "-classpath",
-		classpath([]string{jarSDK, jarDep}), "-d", javacOut,
-		filepath.Join(raiz, "src", "com", "hola", "Uso.java")).CombinedOutput(); err != nil {
-		t.Fatalf("javac 17 no compiló el consumidor: %v\n%s", err, out)
-	}
-	datosJavac, err := os.ReadFile(filepath.Join(javacOut, "com", "hola", "Uso.class"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cf, err := readClassFull(datosJavac)
-	if err != nil {
-		t.Fatal(err)
-	}
-	javacDex, err := dexDeClases([]classFull{cf})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(nuestroDex) != len(javacDex) {
-		t.Fatalf("el dex del consumidor mide %d bytes y el de javac %d", len(nuestroDex), len(javacDex))
-	}
-	for i := range nuestroDex {
-		if nuestroDex[i] != javacDex[i] {
-			t.Fatalf("el dex difiere de javac en el byte %d: %#02x frente a %#02x", i, nuestroDex[i], javacDex[i])
-		}
 	}
 }
 

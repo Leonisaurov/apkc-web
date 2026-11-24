@@ -266,7 +266,12 @@ func TestWISPCLOSEDeDesbordeNoBloqueaElReparto(t *testing.T) {
 }
 
 // TestAbrirWebSocketWISPExigeConfigValidada es la sonda E: no hay puerta
-// pública que se salte `ConfigWISP.Validar`.
+// pública que se salte `ConfigWISP.Validar`. Solo quedan aquí las dos
+// aserciones que se deciden **antes** de tocar un socket, así que valen igual
+// en nativo y en la pestaña. Lo que cada entorno hace con una configuración ya
+// válida vive en `wisp_endurecimiento_nativo_test.go` (el aviso de que el
+// WebSocket solo existe con `GOOS=js`) y en `wisp_endurecimiento_js_test.go`
+// (el rechazo de la dirección sin abrir red).
 func TestAbrirWebSocketWISPExigeConfigValidada(t *testing.T) {
 	if _, err := AbrirWebSocketWISP(NuevaConfigWISP()); err == nil || !strings.Contains(err.Error(), "desactivado") {
 		t.Fatalf("con el módulo desactivado dio %v", err)
@@ -276,14 +281,6 @@ func TestAbrirWebSocketWISPExigeConfigValidada(t *testing.T) {
 	cfg.Relay = "http://ejemplo.test/wisp/"
 	if _, err := AbrirWebSocketWISP(cfg); err == nil || !strings.Contains(err.Error(), "wss") {
 		t.Fatalf("con un relay inseguro dio %v", err)
-	}
-	cfg.Relay = RelaysWISP()[0]
-	_, err := AbrirWebSocketWISP(cfg)
-	if err == nil {
-		t.Fatal("en nativo AbrirWebSocketWISP debía fallar tras validar")
-	}
-	if strings.Contains(err.Error(), "desactivado") || !strings.Contains(err.Error(), "GOOS=js") {
-		t.Fatalf("la configuración válida no llegó al aviso de nativo: %v", err)
 	}
 }
 
