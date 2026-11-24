@@ -2756,7 +2756,7 @@ func (e *emisor) inicializador(f jcampo) error {
 	if err != nil {
 		return err
 	}
-	if d != desc {
+	if !e.cabeElInicializador(f.valor, d, desc) {
 		return fmt.Errorf("linea %d: el campo %s es %s y su inicializador deja %s", f.donde.linea, f.nombre, desc, d)
 	}
 	if f.esEstatico {
@@ -2765,6 +2765,21 @@ func (e *emisor) inicializador(f jcampo) error {
 		e.putfieldDe(idx, desc)
 	}
 	return nil
+}
+
+// cabeElInicializador: la política de asignación de JLS 5.2 al bajar el valor de un campo, que es la
+// misma de `cabeEn` —identidad y subida de referencias, con el interruptor `cabeSubidaDeReferencia`
+// que ya usa la escritura de campo— más el literal `null`. El `null` se comprueba aparte porque
+// `exp` lo devuelve como `Ljava/lang/Object;`: en la pila es un `aconst_null` sin tipo propio y javac
+// lo deja en cualquier hueco de referencia sin escribir nada (`List<App> l = null` es `aconst_null;
+// putfield`), así que compararlo por descriptor contra el del campo lo rechazaría por ser más general.
+// Sin esto, `private List<App> lista = new ArrayList<>();` daba «el campo lista es Ljava/util/List; y
+// su inicializador deja Ljava/util/ArrayList;» aunque javac no escriba ninguna conversión.
+func (e *emisor) cabeElInicializador(x jexpr, dv, hasta string) bool {
+	if esLiteralNulo(x) && esTipoDeReferencia(hasta) {
+		return true
+	}
+	return e.ctx.cabeEn(dv, hasta)
 }
 
 // invoca escribe el opcode con su indice (y el conteo, si es invokeinterface) y ajusta la pila simulada.
