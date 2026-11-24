@@ -11622,12 +11622,13 @@ suite de `Interfaz|Anonima|Acces|Captura` sale `ok … 5.293s`. Queda una pregun
 un `implementa` no resoluble descarta el padre en `asignableEstricto`
 (`apkc/javaemisor.go:1751`), y eso solo alcanza a fuentes inválidas.
 
-**ApkShare no compila: se para en la línea 97.** El build para en `MainActivity.java:97` con
+**ApkShare no compilaba: se paraba en la línea 97 (superado por `§269`).** El build paraba en
+`MainActivity.java:97` con
 `quedan -1 valores en la pila al cerrar el metodo`. Es un defecto **preexistente** —no lo introduce
 `8af90c2`— de pila en el paso `int`→`long` de `handler.postDelayed(runnable, AutoResearchDelay)`
 (`MainActivity.java:105`). Se reproduce con una clase mínima `class H { void f(long b){} }` y la
-llamada `h.f(n)`, que deja `-1` en la pila al cerrar el método. Ese frente está en curso; **no** se
-afirma que ApkShare compile.
+llamada `h.f(n)`, que deja `-1` en la pila al cerrar el método. Aquel era el estado en el momento de
+la medición; `§269` registra el build completo con `rc=0` y 21 clases.
 
 **El endurecimiento del núcleo WISP (`ae6bc0e`, `09d6de2`).** Aprobado: la cola baja de
 **31 MiB a 16 MiB** con `CLOSE`; los plazos despiertan en **50 ms**; el crédito se topa en
@@ -11969,11 +11970,11 @@ to String` o `no suitable constructor`).
 **La suite.** `ok github.com/ajinasokan/apkc 174.637s` del commit —medición del builder, salida
 transferida, no versionada; la reproduce `cd apkc && go test -count=1 .` sobre `f064e5f`.
 
-**Frontera viva.** Con `f064e5f` la 179 pasa y ApkShare se detiene en `MainActivity.java:198`,
-columna 50, en `Intent.ACTION_SEND` (constante `String` del `android.jar`) como argumento del
-constructor `new Intent(...)`; la midió el builder y aquí se transfiere sin re-ejecutarse. Otro
-frente la está corrigiendo, así que no se da por cerrada; las demás fronteras de `§262` (WISP
-inerte y sin cablear, y la publicación) siguen sin cambios.
+**Frontera del momento de la medición (superada por `§265`).** Con `f064e5f` la 179 pasaba y ApkShare
+se detenía en `MainActivity.java:198`, columna 50, en `Intent.ACTION_SEND` (constante `String` del
+`android.jar`) como argumento del constructor `new Intent(...)`; la midió el builder y aquí se
+transfiere sin re-ejecutarse. `§265` cerró esa parada y `§269` registra el build completo con `rc=0`;
+las demás fronteras de `§262` (WISP inerte y sin cablear, y la publicación) siguen sin cambios.
 
 ```sh
 cd apkc && go test -run 'ConcatComoArgumento|ConcatStringEntero|CuentaEnteraEnFile' -count=1 .
