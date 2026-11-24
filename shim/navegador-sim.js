@@ -282,7 +282,15 @@ const fsSim = {
   },
   unlink(calle, cb) {
     const a = absoluta(String(calle));
-    if (!raiz.get(a)) return void llamar(cb)(err("ENOENT", a));
+    const n = raiz.get(a);
+    if (!n) return void llamar(cb)(err("ENOENT", a));
+    // un directorio no se borra con unlink: Linux contesta EISDIR y os.Remove cae a rmdir (y
+    // rmdir, si queda algo dentro, contesta ENOTEMPTY, que es lo que hace recorrer a RemoveAll).
+    // Sin esto el shim borraba el nodo del directorio y dejaba los hijos huérfanos en el mapa:
+    // Stat seguía viendo `build/res/layout` —así MkdirAll no lo recreaba— y el open del recurso
+    // fallaba con ENOENT porque `build/res` ya no existía. Es el árbol que dejaba a medias el
+    // enlace de recursos tras vaciar `build/res` y escribir `build/res/layout/x.xml`
+    if (n.dir) return void llamar(cb)(err("EISDIR", a));
     raiz.delete(a);
     if (cb) cb(null);
   },
