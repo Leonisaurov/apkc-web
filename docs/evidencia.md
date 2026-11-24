@@ -12432,11 +12432,11 @@ dex, `rc=0`. `apksigner verify --verbose` da «Verifies» y v1/v2/v3 en `true`; 
 verified».
 
 **Deudas abiertas, no cerradas.** (1) 12 clases anidadas de `MainActivity`/`ApkAdapter$1` no son
-byte a byte contra javac por `StackMapTable` (`full_frame` frente a `same_frame`), una fila
+byte a byte contra javac **en `.class` crudo** por `StackMapTable` (`full_frame` frente a `same_frame`), una fila
 `line 159: 155` ausente y los `MethodParameters` de las anónimas; no tienen ninguna `ldc_w`, son
 preexistentes y no impiden que ApkShare compile (artefactos en `~/.cache/apkc-web/ldcw-w/`).
 La compresión de marcos y la `Signature` de la anónima se corrigieron después en `d94be90`
-(`apkc/jvmframes.go`, `TestElStackMapDeLaAnidadaEsElDeJavac17`): 12 de 21 clases byte a byte y APK
+(`apkc/jvmframes.go`, `TestElStackMapDeLaAnidadaEsElDeJavac17`): 12 de 21 clases byte a byte en `.class` crudo y APK
 verificado; ese commit no tiene `§` propio y queda aquí como pregunta abierta. (2)
 `apkc/lambda_fuente.go:449-451` conserva un mensaje viejo, que ya solo se dispara con el interruptor
 o con un pool de más de 65535. (3) Sin `--keystore` explícito, el paso de firma se queja con la ruta
@@ -12740,7 +12740,8 @@ contra `d8`.
 **Lo recontado aquí.** Sobre los artefactos del probe: 21 clases en cada directorio; con
 `MethodParameters` 7 en `clases-antes`, 0 en `clases-despues`, 0 en `clases-final` y 0 en `javac`.
 El dex baja de 16668 a 16520 B y el del oráculo mide 16504 (16 B de diferencia); `app.apk` mide
-305493 B. Del builder: 16 de las 21 clases dexan byte a byte como javac 17 (antes 12),
+305493 B. Del builder: 16 de las 21 clases dexan byte a byte como javac 17 (las 12 anteriores se
+medían sobre `.class` crudo),
 `apksigner verify --verbose` con v1/v2/v3 en `true`, suite `ok … 163.880s` y `go vet` limpio.
 
 **Las 5 que quedan** no bloquean la compilación: `access$000` frente a lambda en `MainActivity`,
@@ -13005,7 +13006,9 @@ interruptor `pliegaCampoSuelto` (`:3921`) revive el defecto para la falsificaci�
 las dos direcciones: encendido, dex igual a javac; apagado, `sipush i2l` y dex distinto.
 
 **El resultado, transferido.** `MainActivity$3.afterTextChanged` lleva `ldc2_w #42 // long 500l`,
-igual que javac. De 16 a **17 de 21** clases byte a byte. El dex mide **16516 B** frente a 16504 del
+igual que javac. De 16 a **17 de 21** clases byte a byte **en dex por clase** (`apkc dex` de cada
+`.class` nuestro y `cmp` contra el de javac 17; los `.class` crudos difieren por el orden del pool).
+El dex mide **16516 B** frente a 16504 del
 oráculo: la causa valía 4 B —de 16520 a 16516—, no los 8 que se habían estimado, y la brecha
 restante es de 12 B. El APK mide `305510 B` y `apksigner` da v1/v2/v3 en `true`. La suite del
 builder salió `ok … 168.066s`, con `gofmt` y `go vet` limpios; es salida transferida, no
