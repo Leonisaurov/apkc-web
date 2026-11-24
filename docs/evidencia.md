@@ -12033,6 +12033,90 @@ find ~/Downloads/ApkShare-main/build -name '*.apk' | wc -l
 grep -n 'is neither a PKCS#12' studio/app.js
 ```
 
+## 265. Las constantes `String` del classpath se doblan como su literal (`98dd864`)
+
+Registrado el 2026-11-23. Transfiere la medición del builder `ses_df3f1d206ffecDlPWv5WN2VDvd`,
+commit `98dd864`. Aquí se re-ejecutó solo el bloque «Comandos» —los `grep` y la prueba puntual— y
+no la suite: sin gate, sin chromium, sin red, sin push y sin publicación. Las citas
+`archivo:línea` son de este árbol (`e142747`, que ya contiene `98dd864`); lo que solo viene del
+informe va marcado como **transferido, no versionado**.
+
+**El bloqueo.** `apkc build --linker go --compiler go --sdk-version 34 --android-jar
+~/opt/android-sdk/platforms/android-34/android.jar` sobre
+`~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/` paraba en la 198, el
+`new Intent(Intent.ACTION_SEND)`, con el literal del informe:
+
+```
+[build] MainActivity.java: linea 175: linea 176: linea 198: linea 198, columna 50: al estimar el
+tipo de Intent.ACTION_SEND, la constante android/content/Intent.ACTION_SEND no es un entero:
+doblarla no esta medida
+```
+
+**La causa.** `campoResuelto` solo sabía viajar con un entero, `constante` y `valor int32`
+(`apkc/javaemisor.go:2052-2053`), y `buscarCampo` (`:2075`) trataba cualquier `ConstantValue`
+(`f.HasConst`, `:2139`) como entero: si `f.ConstTag != 3`, rechazaba con el literal «la constante
+%s.%s no es un entero: doblarla no esta medida». `cpString` es el tag 8 (`apkc/classfile.go:44`),
+así que `Intent.ACTION_SEND` —`ConstantValue` del `android.jar`, medido en `§130`— moría en esa
+comprobación antes de estimar o emitir nada.
+
+**La corrección.** El valor viaja en dos campos nuevos, `esCadena` y `cadena`
+(`javaemisor.go:2054-2058`), que acompañan al descriptor y no lo sustituyen. `buscarCampo` acepta
+ahora `case cpString` (`:2144-2152`): marca `constante`, `esCadena` y copia `f.ConstStr` en
+`cadena`; el `default` de `:2153-2154` se queda con el rechazo de lo que no es ni entero ni cadena.
+El interruptor `pliegaCadenaEstatica` (`:2066-2071`) es el de la falsificación y va encendido en el
+binario que se publica. Los tres consumidores distinguen las dos constantes:
+
+- `plegarConstante` (`:3863`) no pliega una cadena como número: si `cr.esCadena`, devuelve
+  `constNum{}, false` y la deja para el acceso estático.
+- `accesoEstatico` (`:4056`) emite `ldc` del literal en vez de `getstatic` (`:4081-4086`): `e.ldc`
+  de `cr.cadena`, `e.sube()` y el descriptor de vuelta, que es lo que hace `javac` con una
+  constante de compilación.
+- `descDeAccesoEstatico` (`:8251`) devuelve `cr.desc` para una cadena y `"I"` para un entero
+  (`:8269-8273`), así que estimar y emitir siguen de acuerdo sin emitir nada.
+
+**El oráculo.** `TestCadenaEstaticaDelAndroidJarContraJavac17`
+(`apkc/javaemisor_cadena_estatica_test.go:39`) compila un fuente con `Intent.ACTION_SEND`,
+`Intent.FLAG_GRANT_READ_URI_PERMISSION` y `Build.MODEL` contra `javac 17 --release 8
+-g:lines,source` por el mismo dexer, y exige el **dex entero byte a byte**. Además desarma los dos
+métodos: `comparte()` tiene 1 `ldc` de `sandroid.intent.action.SEND` y 0 `getstatic` —ACTION_SEND
+se dobla—, mientras `modelo()` tiene 1 `getstatic` y 0 `ldc`, porque `Build.MODEL` es `static final
+String` **sin** `ConstantValue` y se lee del campo. El `static final int`
+(`FLAG_GRANT_READ_URI_PERMISSION`) se sigue plegando como antes.
+
+**La falsificación.** `TestCadenaEstaticaFalsificacion` (`:117`) apaga `pliegaCadenaEstatica` y
+reproduce el literal del error. La salida de este worktree encadena las posiciones y acaba en
+`linea 8, columna 31: al estimar el tipo de Intent.ACTION_SEND, la constante
+android/content/Intent.ACTION_SEND no es un entero: doblarla no esta medida`, precedida de
+`Envio.java: linea 6: linea 7: linea 8:`. Que la columna sea la 31 del fuente sintético y no la 50
+del real no importa: lo que fija es que el camino vuelve a ser el de la estimación del argumento de
+`Intent(String)` y no otro rechazo.
+
+**La suite.** `ok github.com/ajinasokan/apkc 203.024s` y `go vet ./...` limpio, del commit
+—medición del builder, salida transferida, no versionada; la reproduce `cd apkc && go test
+-count=1 .` sobre `98dd864`. Aquí solo se ejecutó la prueba puntual:
+`ok github.com/ajinasokan/apkc 1.167s` con los tres `CadenaEstatica` en `PASS`.
+
+**Frontera viva.** Con `98dd864` la 198 pasa y ApkShare se detiene en `MainActivity.java:212`,
+columna 31, en `Intent.createChooser(sharedIntent, "Compartir con")`; la línea es la que imprime
+`sed -n '212p'` de la fuente real. La midió el builder y aquí se transfiere sin re-ejecutar el
+build. Otro frente la está corrigiendo, así que no se da por cerrada.
+
+**Observación del keystore, no un cierre.** Sin `--keystore`, `build --linker go --compiler go` no
+llama a `findSDKs` (`apkc/main.go:28-30`, por `sinProcesos`), así que el keystore queda vacío y el
+aviso de `§264` aparece; se va al pasar `--keystore ~/.android/debug.keystore`. Es una observación
+del builder y no una corrección de este `§`: el diagnóstico sigue siendo el de `§264`.
+
+```sh
+grep -n 'esCadena\|pliegaCadenaEstatica' apkc/javaemisor.go
+grep -n 'cpString' apkc/classfile.go apkc/javaemisor.go
+sed -n '2048,2072p;2138,2156p;3858,3866p;4080,4088p;8265,8275p' apkc/javaemisor.go
+grep -n 'func Test' apkc/javaemisor_cadena_estatica_test.go
+cd apkc && go test -run 'CadenaEstatica' -v -count=1 .
+sed -n '212p' \
+  ~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/src/share/apps/util/MainActivity.java
+sed -n '24,32p' apkc/main.go
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
