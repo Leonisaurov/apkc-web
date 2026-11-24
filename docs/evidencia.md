@@ -12844,18 +12844,58 @@ haya un cell con Termux y `rish` o `sudo`, ¿los cuatro veredictos del aparato q
 o se sustituyen por otra medida que no los necesite?
 
 **Reproducción.** El corte se reproduce en cualquier escritorio sin aparato. La mitad local son los
-pasos 1, 1b, 2, 3, 5 y 6 de `banco/banco.sh` sin ninguna llamada a `enAparato` (`:54-59`); la sonda
-del QA es exactamente eso, con las rutas de este escritorio. El banco entero necesita un cell con
-Termux y root, o Shizuku.
+pasos 1, 1b, 2, 3, 5 y 6 de `banco/banco.sh` sin ninguna llamada a `enAparato` (`:54-59`); los seis
+van **inlinados** abajo, copiados de la sonda del QA tal como se ejecutó aquí, para que el comando
+no dependa de un fichero de `~/.cache/apkc-web/` que la regla 12 permite borrar. `JDK`, `BT` y `JAR`
+son las rutas de este escritorio: en otro hay que ajustarlas. Esto es la mitad local, **no** el
+banco completo: el banco entero necesita un cell con Termux y root, o Shizuku.
 
 ```sh
 # 1. el corte: rc 1 en la guarda de :62, antes de compilar
 tcr -- sh tools/entorno.sh banco
 command -v rish; sudo -n true; pidof zygote64; adb devices
 
-# 2. la mitad local: binario del árbol y los pasos 1,1b,2,3,5,6 sin enAparato
+# 2. la mitad local (pasos 1,1b,2,3,5,6 sin enAparato), desde la raíz del repo
 sh -c 'cd apkc && go build -o "$HOME/.cache/apkc-web/banco/apkc" .'
-sh "$HOME/.cache/apkc-web/banco/sonda-local.sh"
+AQUI=$(pwd); APKC=$HOME/.cache/apkc-web/banco/apkc
+JAR=$HOME/opt/android-sdk/platforms/android-34/android.jar
+BT=$HOME/opt/android-sdk/build-tools/36.0.0
+JDK=$HOME/opt/jdk21
+T=$HOME/.cache/apkc-web/banco-sonda
+set -e
+rm -rf "$T"
+mkdir -p "$T/jc" "$T/scr" "$T/nuestro" "$T/d8" "$T/d8desde" "$T/todo"
+"$JDK/bin/javac" -d "$T/scr" "$AQUI/banco/src/p/Ver.java"
+"$JDK/bin/javac" -cp "$T/scr" -d "$T/jc" "$AQUI/banco/src/p/Arranque.java"
+"$APKC" compile --android-jar "$JAR" -o "$T/nuestro" \
+  "$AQUI/banco/src/p/Ver.java" >"$T/compile.log" 2>&1
+cp "$T/jc/p/Arranque.class" "$T/nuestro/p/"
+"$APKC" compile --android-jar "$JAR" -o "$T/todo" \
+  "$AQUI/banco/src/p/Ver.java" "$AQUI/banco/src/p/Arranque.java" >"$T/todo.log" 2>&1
+"$APKC" dex -o "$T/todo.dex" "$T/todo" >"$T/tododex.log" 2>&1
+"$APKC" dex -o "$T/nuestro.dex" "$T/nuestro" >"$T/dex.log" 2>&1
+"$BT/d8" --release --min-api 21 --lib "$JAR" --output "$T/d8" \
+  "$T/scr/p/"*.class "$T/jc/p/Arranque.class" >/dev/null 2>&1
+"$BT/d8" --release --min-api 21 --output "$T/d8desde" "$T/nuestro/p/"*.class \
+  >/dev/null 2>&1
+set +e
+out=$("$JDK/bin/java" -cp "$T/scr:$T/jc" p.Arranque 2>&1); jvm=$?
+set -e
+echo "  jvm (javac): rc=$jvm, salida: $(printf '%s' "$out" | tr '\n' '|')"
+echo "  nuestro.dex: $(wc -c < "$T/nuestro.dex") bytes; todo.dex: $(wc -c < "$T/todo.dex") bytes"
+dn=$(wc -c < "$T/d8/classes.dex"); dnn=$(wc -c < "$T/d8desde/classes.dex")
+echo "  d8(javac): $dn bytes; d8(nuestra Ver): $dnn bytes"
+mkdir -p "$T/mix/p"
+cp "$T/jc/p/Arranque.class" "$T/mix/p/"
+cp "$T/nuestro/p/Ver"*.class "$T/nuestro/p/Operable.class" "$T/mix/p/"
+set +e
+mix=$("$JDK/bin/java" -Xverify:all -cp "$T/mix" p.Arranque 2>&1); mrc=$?
+set -e
+if [ "$mrc" = "$jvm" ] && [ "$mix" = "$out" ]; then
+  echo "  jvm con nuestra clase emitida: rc=$mrc y salida igual a la JVM  ok"
+else
+  echo "  jvm con nuestra clase emitida: rc=$mrc contra $jvm  FALLO"; exit 1
+fi
 
 # 3. con aparato (Termux y root o Shizuku): el banco entero, con los cuatro veredictos
 sh -c 'cd apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
