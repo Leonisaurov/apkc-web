@@ -21,9 +21,12 @@ package main
 //
 // El oráculo es el de siempre: javac 17 con `--release 8 -g:lines,source`, el `onClick` instrucción a
 // instrucción y el dex entero byte a byte, también el constructor de la anónima: ya no escribe
-// `MethodParameters` y javac 17 tampoco (§100, corregido al fijar el oráculo en 17).
+// `MethodParameters` y javac 17 tampoco (§100, corregido al fijar el oráculo en 17). La prueba de
+// `usa(f("x"))` que pregunta a javac vive en `javaemisor_receptor_heredado_paridad_test.go` con
+// `//go:build !js`, porque bajo wasm no hay proceso que lanzar; aquí queda la que solo mira lo emitido.
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -160,37 +163,6 @@ public class Pantalla extends Activity {
 }
 `
 
-// TestSobrecargaExteriorContraJavac17: con dos sobrecargas de igual aridad en la clase exterior, el
-// estimador resuelve por el tipo de los argumentos —las mismas fases estricta→laxa que la emisión
-// (`elegirSobrecarga`)— y el `onClick` sale instrucción a instrucción y en dex byte a byte como el de
-// javac. La sobrecarga elegida se comprueba además en el descriptor: javac escribe
-// `invokevirtual p/Pantalla.usa:(Ljava/lang/String;)V`, no la de `int`.
-func TestSobrecargaExteriorContraJavac17(t *testing.T) {
-	jar := jarDelSDKExigido(t)
-	javac := javac17Exigido(t)
-	fuentes := fuentesReceptorHeredado(fuenteSobrecargaExterior)
-
-	nuestras, err := compilarProyectoJava(fuentes, jar)
-	if err != nil {
-		t.Fatalf("el emisor rechazó `usa(f(\"x\"))` con dos sobrecargas de igual aridad en la clase exterior: %v", err)
-	}
-
-	raiz := t.TempDir()
-	pon(t, raiz, "p/Pantalla.java", fuenteSobrecargaExterior)
-	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
-
-	nuestraAnonima, suyaAnonima := buscaLaClase(t, nuestras, "Lp/Pantalla$1;", deJavac)
-	comparaMetodos(t, nuestraAnonima, suyaAnonima)
-	nuestroOnClick := metodoDeClaseEmitida(t, nuestras, "p/Pantalla$1", "onClick", "(Landroid/view/View;)V")
-	suOnClick := metodoDeClaseLeida(t, deJavac, "Lp/Pantalla$1;", "onClick", "(Landroid/view/View;)V")
-	if err := comparaInstrucciones(nuestroOnClick.Code, suOnClick.Code); err != nil {
-		t.Fatalf("Pantalla$1.onClick no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
-	}
-	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
-		t.Fatalf("el dex de la sobrecarga exterior no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
-	}
-}
-
 // TestSobrecargaExteriorFalsificacion: apagado el filtro por tipos, el fuente que javac acepta vuelve a
 // rechazarse con el mensaje que veía el usuario, nombrando el fuente, la línea y las dos candidatas.
 func TestSobrecargaExteriorFalsificacion(t *testing.T) {
@@ -236,4 +208,32 @@ func TestReceptorInexistenteSigueRechazando(t *testing.T) {
 		t.Fatalf("el rechazo del nombre inexistente es %q, y se esperaba el de siempre %q", err, literal)
 	}
 	t.Logf("nombre inexistente: %v", err)
+}
+
+// TestSobrecargaExteriorResuelvePorElTipo: con dos sobrecargas de igual aridad en la clase exterior, el
+// estimador resuelve por el tipo de los argumentos —las mismas fases estricta→laxa que la emisión
+// (`elegirSobrecarga`)— sin javac de por medio: `f("x")` es `String`, así que la llamada que queda en el
+// `onClick` de la anónima es `usa:(Ljava/lang/String;)V` y no la de `int`. La paridad instrucción a
+// instrucción y en dex con javac 17 es `TestSobrecargaExteriorContraJavac17`, en
+// `javaemisor_receptor_heredado_paridad_test.go`.
+func TestSobrecargaExteriorResuelvePorElTipo(t *testing.T) {
+	jar := jarDelSDKExigido(t)
+	fuentes := fuentesReceptorHeredado(fuenteSobrecargaExterior)
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó `usa(f(\"x\"))` con dos sobrecargas de igual aridad en la clase exterior: %v", err)
+	}
+	anonima := porInterno(nuestras, "p/Pantalla$1")
+	if anonima == nil {
+		t.Fatalf("no salió la anónima Pantalla$1: %s", nombresDe(nuestras))
+	}
+	// en el `onClick` de la anónima solo entran `f("x")` y `usa(...)`; la forma `String` del descriptor
+	// es la que javac elige por el tipo del literal, y la de `int` no puede aparecer
+	if !bytes.Contains(anonima.datos, []byte("(Ljava/lang/String;)V")) {
+		t.Errorf("la anónima no llama a las sobrecargas de `String`: %s", volcadoDeClases(nuestras))
+	}
+	if bytes.Contains(anonima.datos, []byte("(I)V")) {
+		t.Errorf("la anónima cayó en las sobrecargas de `int`: %s", volcadoDeClases(nuestras))
+	}
 }

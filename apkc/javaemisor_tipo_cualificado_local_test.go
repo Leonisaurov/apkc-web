@@ -12,15 +12,15 @@ package main
 // contexto es lo que separa las dos cosas: en Java `a.b c;` no es ninguna expresión, y un acceso a
 // campo es receptor de una llamada o de una asignación, así que no llega a esta rama.
 //
-// El oráculo es javac 17 `--release 8 -g:lines,source`: los métodos y el dex entero byte a byte, con
+// El oráculo es javac 17 `--release 8 -g:lines,source`: los métodos y el dex entero byte a byte —esa
+// mitad vive en `javaemisor_tipo_cualificado_local_paridad_test.go` con `//go:build !js`, porque bajo
+// wasm no hay proceso que lanzar—, con
 // las otras formas del tipo cualificado que `pareceDeclaracion` no gobierna —campo, parámetro,
 // `new` e `instanceof`— en el mismo fuente, para que una resolución que se quedara en el primer
 // segmento se vea.
 
 import (
 	"bytes"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -82,14 +82,12 @@ func fuenteTipoCualificadoLinea218() string {
 	return strings.Join(lineas, "\n") + "\n"
 }
 
-// TestTipoCualificadoLocalContraJavac17: el `.class` de la declaración local con el tipo cualificado
-// tiene que decir lo mismo que el de javac 17 en los métodos, en la LineNumberTable y en el dex entero.
-func TestTipoCualificadoLocalContraJavac17(t *testing.T) {
+// TestTipoCualificadoLocalApuntaAlTipoAnidado: la declaración local con el tipo cualificado emite la
+// variable como el tipo anidado, `Landroid/app/AlertDialog$Builder;`, y no como el primer segmento. La
+// paridad con javac 17 —métodos, LineNumberTable y dex entero— es
+// `TestTipoCualificadoLocalContraJavac17`, en `javaemisor_tipo_cualificado_local_paridad_test.go`.
+func TestTipoCualificadoLocalApuntaAlTipoAnidado(t *testing.T) {
 	jar := jarDelSDKExigido(t)
-	javac := javac17Exigido(t)
-	raiz := t.TempDir()
-	pon(t, raiz, "src/share/apps/util/MainActivity.java", fuenteTipoCualificadoLocal)
-
 	nuestras, err := compilarProyectoJava([]fuenteJava{
 		{nombre: "src/share/apps/util/MainActivity.java", contenido: fuenteTipoCualificadoLocal},
 	}, jar)
@@ -103,23 +101,6 @@ func TestTipoCualificadoLocalContraJavac17(t *testing.T) {
 	// la variable es del tipo anidado, con el `$` con el que javac lo nombra: no el primer segmento
 	if !bytes.Contains(emitida.datos, []byte("Landroid/app/AlertDialog$Builder;")) {
 		t.Errorf("la declaración no apunta a android/app/AlertDialog$Builder: %s", volcadoDeClases(nuestras))
-	}
-
-	salida := filepath.Join(raiz, "javac-out")
-	cmd := exec.Command(javac, "--release", "8", "-g:lines,source", "-classpath", jar, "-d", salida,
-		filepath.Join(raiz, "src/share/apps/util/MainActivity.java"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("javac 17 rechazó el caso: %v\n%s", err, out)
-	}
-	deJavac, err := leeClases([]string{salida})
-	if err != nil {
-		t.Fatalf("leyendo lo de javac: %v", err)
-	}
-	nuestra, suya := buscaLaClase(t, nuestras, "Lshare/apps/util/MainActivity;", deJavac)
-
-	comparaMetodos(t, nuestra, suya)
-	if err := comparaDex(t, nuestras, deJavac); err != nil {
-		t.Fatal(err)
 	}
 }
 

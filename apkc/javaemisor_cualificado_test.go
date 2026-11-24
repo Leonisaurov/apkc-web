@@ -4,12 +4,12 @@ package main
 // se resolvía como el tipo `com` y el emisor se paraba con «el tipo com no se resuelve». El tipo es el
 // prefijo más largo de la cadena que resuelve a una clase, y lo que queda detrás son campos o el nombre
 // del método. El oráculo es javac 17 `--release 8 -g:lines,source` y el dex byte a byte, con dos clases
-// del mismo nombre simple en paquetes distintos para que una resolución perezosa al primero se vea.
+// del mismo nombre simple en paquetes distintos para que una resolución perezosa al primero se vea; esa
+// mitad vive en `javaemisor_cualificado_paridad_test.go` con `//go:build !js`, porque bajo wasm no hay
+// proceso que lanzar. Aquí queda la resolución del tipo, que no necesita javac.
 
 import (
 	"bytes"
-	"os/exec"
-	"path/filepath"
 	"testing"
 )
 
@@ -72,44 +72,5 @@ func TestEmisorReferenciaCualificada(t *testing.T) {
 	}
 	if bytes.Contains(main.datos, []byte("com/x/uno/Helper")) {
 		t.Errorf("la referencia cualificada cayó en el homónimo com/x/uno/Helper: %s", volcadoDeClases(nuestras))
-	}
-}
-
-// TestEmisorReferenciaCualificadaContraJavac17 fija la forma: los métodos y el dex entero, byte a byte.
-func TestEmisorReferenciaCualificadaContraJavac17(t *testing.T) {
-	jar := jarDelSDKExigido(t)
-	javac := javac17Exigido(t)
-	fuentes := []fuenteJava{
-		{nombre: "src/com/x/app/Main.java", contenido: fuenteMainCualificado},
-		{nombre: "src/com/x/dos/Helper.java", contenido: fuenteHelperCualificadoDos},
-		{nombre: "src/com/x/uno/Helper.java", contenido: fuenteHelperCualificadoUno},
-	}
-	nuestras, err := compilarProyectoJava(fuentes, jar)
-	if err != nil {
-		t.Fatalf("el emisor rechazó el caso: %v", err)
-	}
-
-	raiz := t.TempDir()
-	pon(t, raiz, "src/com/x/app/Main.java", fuenteMainCualificado)
-	pon(t, raiz, "src/com/x/dos/Helper.java", fuenteHelperCualificadoDos)
-	pon(t, raiz, "src/com/x/uno/Helper.java", fuenteHelperCualificadoUno)
-	salida := filepath.Join(raiz, "javac-out")
-	cmd := exec.Command(javac, "--release", "8", "-g:lines,source", "-classpath", jar, "-d", salida,
-		filepath.Join(raiz, "src/com/x/app/Main.java"),
-		filepath.Join(raiz, "src/com/x/dos/Helper.java"),
-		filepath.Join(raiz, "src/com/x/uno/Helper.java"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("javac 17 rechazó el caso: %v\n%s", err, out)
-	}
-	deJavac, err := leeClases([]string{salida})
-	if err != nil {
-		t.Fatalf("leyendo lo de javac: %v", err)
-	}
-	for _, nombre := range []string{"Lcom/x/app/Main;", "Lcom/x/dos/Helper;", "Lcom/x/uno/Helper;"} {
-		nuestra, suya := buscarClaseEmitida(t, nuestras, nombre, deJavac)
-		compararMetodos(t, nuestra, suya)
-	}
-	if err := compararDex(t, nuestras, deJavac); err != nil {
-		t.Fatal(err)
 	}
 }

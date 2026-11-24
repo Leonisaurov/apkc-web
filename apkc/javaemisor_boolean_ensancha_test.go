@@ -14,10 +14,12 @@ package main
 // `byte`, `short`, `char` e `int` **sí** ensanchan: son el control y siguen saliendo byte a byte
 // como javac 17. La falsificación vuelve a meter `Z` con `booleanEnsanchaEnArgumentos` y muestra que
 // el programa inválido se acepta otra vez.
+//
+// La mitad que pregunta a javac 17 si el fuente es válido vive en
+// `javaemisor_boolean_ensancha_paridad_test.go` con `//go:build !js`, porque bajo wasm no hay proceso
+// que lanzar; aquí queda el rechazo del emisor, que es la medida propia.
 
 import (
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,24 +36,13 @@ var booleanSondas = []struct{ nombre, fuente string }{
 	{"tres_sobrecargas_anchas", `public class S { void f(long a){} void f(float a){} void f(double a){} void t(S s){ s.f(true); } }`},
 }
 
-// TestElBooleanNoEnsanchaEnElArgumento: javac 17 rechaza las cinco sondas y el emisor también, con
-// un error que nombra el tipo (`boolean`, o `Z` en la lista de tipos llamados), lleva la línea y no
-// es el descuadre `quedan -1 valores…`.
+// TestElBooleanNoEnsanchaEnElArgumento: el emisor rechaza las cinco sondas, con un error que nombra el
+// tipo (`boolean`, o `Z` en la lista de tipos llamados), lleva la línea y no es el descuadre
+// `quedan -1 valores…`.
 func TestElBooleanNoEnsanchaEnElArgumento(t *testing.T) {
 	jar := jarDelSDKExigido(t)
-	javac := javac17Exigido(t)
 	for _, c := range booleanSondas {
 		t.Run(c.nombre, func(t *testing.T) {
-			raiz := t.TempDir()
-			pon(t, raiz, "S.java", c.fuente)
-			salida, errJavac := exec.Command(javac, "--release", "8", "-d", raiz, filepath.Join(raiz, "S.java")).CombinedOutput()
-			if errJavac == nil {
-				t.Fatalf("javac 17 aceptó %s: el oráculo no es el esperado", c.nombre)
-			}
-			if !strings.Contains(string(salida), "cannot be converted") && !strings.Contains(string(salida), "incompatible types") {
-				t.Logf("javac rechazó con: %s", salida)
-			}
-
 			_, errNuestro := compilarProyectoJava([]fuenteJava{{nombre: "src/S.java", contenido: c.fuente}}, jar)
 			if errNuestro == nil {
 				t.Fatalf("%s: el emisor aceptó `boolean` → ancho (regresión de af73a8a)", c.nombre)

@@ -2,18 +2,17 @@ package main
 
 // El emisor de `.class` también tiene que ensanchar la vuelta de un bucle cuando el cuerpo pasa de
 // 32 KB: el `goto` de tres bytes se queda corto y javac escribe `goto_w` (0xc8) con su
-// desplazamiento de 32 bits. Aquí se mide contra javac 17 byte a byte en el `Code`, contra su dex
-// byte a byte y se comprueba que el `goto_w` apunta hacia atrás, al principio del `while`.
+// desplazamiento de 32 bits. Aquí se mide que el emisor acepta el método y escribe la forma larga
+// apuntando hacia atrás, al principio del `while`; la paridad byte a byte con javac 17 —el `Code`, sus
+// cabeceras y el dex entero— vive en `javaemisor_atras_paridad_test.go` con `//go:build !js`, porque
+// bajo wasm no hay proceso que lanzar.
 //
 // Antes de este frente el emisor rechazaba el método con `un salto hacia atras de N bytes: goto_w
 // no esta medido`, y resolver la vuelta antes de cerrar el fin del bucle dejaba además el
 // desplazamiento corto en cuanto la condición de cabecera se ensanchaba por delante.
 
 import (
-	"bytes"
 	"fmt"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -45,9 +44,9 @@ func metodoDeLaClase(cf classFull, nombre string) (classMethod, bool) {
 	return classMethod{}, false
 }
 
-// TestGotoWLargoHaciaAtras: nuestro `.class` coincide con el de javac 17 en el cuerpo del método y
-// el dex que sale de las dos clases es el mismo byte a byte. Si el emisor no escribiera la forma
-// larga, `compilarProyectoJava` fallaría antes de llegar aquí (falsificación en el informe).
+// TestGotoWLargoHaciaAtras: el emisor acepta la vuelta larga y escribe el `goto_w` de 32 bits hacia la
+// cabecera del bucle. Si no escribiera la forma larga, `compilarProyectoJava` fallaría antes de llegar
+// aquí (falsificación en el informe). La comparación con javac 17 es la prueba de al lado.
 func TestGotoWLargoHaciaAtras(t *testing.T) {
 	jar := jarDelSDK(t)
 	fuente := fuenteGotoWAtras()
@@ -90,56 +89,6 @@ func TestGotoWLargoHaciaAtras(t *testing.T) {
 	if !encontrado {
 		t.Fatal("no hay un goto_w de vuelta a la cabecera del bucle")
 	}
-
-	// oráculo 1: javac 17 sobre el mismo fuente, mismo `Code` y mismas cabeceras
-	javac := javac17Exigido(t)
-	raiz := t.TempDir()
-	pon(t, raiz, "Atras32.java", fuente)
-	dirJavac := filepath.Join(raiz, "javac-out")
-	cmd := exec.Command(javac, "--release", "8", "-g:lines,source", "-d", dirJavac,
-		filepath.Join(raiz, "Atras32.java"))
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("javac 17 rechazó la sonda: %v\n%s", err, out)
-	}
-	deJavac, err := leeClases([]string{dirJavac})
-	if err != nil {
-		t.Fatalf("leyendo lo de javac: %v", err)
-	}
-	var suya classFull
-	for _, cf := range deJavac {
-		if cf.Name == "LAtras32;" {
-			suya = cf
-		}
-	}
-	if suya.Name == "" {
-		t.Fatal("javac no dejó LAtras32;")
-	}
-	esperado, ok := metodoDeLaClase(suya, "atras")
-	if !ok {
-		t.Fatal("javac no dejó `atras`")
-	}
-	if !bytes.Equal(metodo.Code, esperado.Code) {
-		t.Fatalf("el Code difiere del de javac: %d bytes contra %d\nnuestro: %s\njavac:   %s",
-			len(metodo.Code), len(esperado.Code), volcado(metodo.Code), volcado(esperado.Code))
-	}
-	if metodo.MaxStack != esperado.MaxStack || metodo.LocalCount != esperado.LocalCount {
-		t.Errorf("max_stack/locals %d/%d y javac %d/%d", metodo.MaxStack, metodo.LocalCount,
-			esperado.MaxStack, esperado.LocalCount)
-	}
-
-	// oráculo 2: el dex entero byte a byte (nuestro dexer sobre nuestras clases y sobre las suyas)
-	nuestroDex, err := dexDeClases([]classFull{nuestra})
-	if err != nil {
-		t.Fatalf("dexando lo nuestro: %v", err)
-	}
-	suDex, err := dexDeClases([]classFull{suya})
-	if err != nil {
-		t.Fatalf("dexando lo de javac: %v", err)
-	}
-	if !bytes.Equal(nuestroDex, suDex) {
-		t.Fatalf("el dex difiere: %d bytes contra %d", len(nuestroDex), len(suDex))
-	}
-
 }
 
 // volcado imprime los primeros bytes de un cuerpo para que un fallo diga dónde empieza a diferir.

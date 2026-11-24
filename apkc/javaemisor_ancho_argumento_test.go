@@ -134,16 +134,14 @@ public class AppAdapter {
 }
 `
 
-// TestElPostDelayedDeApkShareLlevaSuI2L: el bloque real compila —el `-1` que paraba ApkShare ya no
-// está— y el `afterTextChanged` de la anónima sale instrucción a instrucción como el de javac 17,
-// con su `max_stack` y sus huecos, y con el `i2l` de la 105 justo delante del `invokevirtual` de
-// `android.os.Handler.postDelayed:(Ljava/lang/Runnable;J)Z`. El constructor de la anónima ya no lleva
-// `MethodParameters`, así que `Retardo$1` dexa byte a byte; el dex entero sigue sin compararse porque
-// `Retardo$1$1` llama a `Editable.toString()` y ahí nuestro emisor elige `invoke-static` donde javac 17
-// escribe `invoke-virtual` (diferencia de la resolución del método, no del constructor ni de esta ruta).
-func TestElPostDelayedDeApkShareLlevaSuI2L(t *testing.T) {
+// TestElPostDelayedDeApkShareCompila: el bloque real de ApkShare compila —el `-1` que lo paraba ya no
+// está— y el `afterTextChanged` de la anónima lleva el `i2l` de la 105 justo delante del `invokevirtual`
+// de `android.os.Handler.postDelayed:(Ljava/lang/Runnable;J)Z`, que es el ensanchamiento del argumento
+// que este frente mide. La comparación instrucción a instrucción con javac 17, su `max_stack` y el dex
+// byte a byte de `Retardo$1` son `TestElPostDelayedDeApkShareLlevaSuI2L`, en
+// `javaemisor_ancho_argumento_paridad_test.go`.
+func TestElPostDelayedDeApkShareCompila(t *testing.T) {
 	jar := jarDelSDKExigido(t)
-	javac := javac17Exigido(t)
 	fuentes := []fuenteJava{
 		{nombre: "src/share/apps/util/Retardo.java", contenido: fuenteRetardoShare},
 		{nombre: "src/share/apps/util/AppAdapter.java", contenido: fuenteAppAdapterStub},
@@ -152,25 +150,12 @@ func TestElPostDelayedDeApkShareLlevaSuI2L(t *testing.T) {
 	if err != nil {
 		t.Fatalf("el bloque real de ApkShare no compila: %v", err)
 	}
-	raiz := t.TempDir()
-	for _, f := range fuentes {
-		pon(t, raiz, f.nombre[len("src/"):], f.contenido)
-	}
-	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
 
 	const (
 		clase = "share/apps/util/Retardo$1"
 		desc  = "(Landroid/text/Editable;)V"
 	)
 	nuestra := metodoDeClaseEmitida(t, nuestras, clase, "afterTextChanged", desc)
-	suya := metodoDeClaseLeida(t, deJavac, "L"+clase+";", "afterTextChanged", desc)
-	if err := comparaInstrucciones(nuestra.Code, suya.Code); err != nil {
-		t.Fatalf("afterTextChanged: %v", err)
-	}
-	if nuestra.MaxStack != suya.MaxStack || nuestra.LocalCount != suya.LocalCount {
-		t.Errorf("afterTextChanged: max_stack/locals %d/%d y javac %d/%d",
-			nuestra.MaxStack, nuestra.LocalCount, suya.MaxStack, suya.LocalCount)
-	}
 	instrucciones, err := walkJvmCode(nuestra.Code)
 	if err != nil {
 		t.Fatalf("nuestro `afterTextChanged` no se desarma: %v", err)
@@ -190,11 +175,6 @@ func TestElPostDelayedDeApkShareLlevaSuI2L(t *testing.T) {
 	if !visto {
 		t.Fatalf("no hay ningún `invokevirtual` en `afterTextChanged`: %v", instrucciones)
 	}
-	// y la anónima —la que lleva el `postDelayed`— dexa byte a byte el de javac 17: su constructor ya
-	// no arrastra el `MethodParameters` que se dejaba fuera antes
-	nuestraAnonima := dexDeUnaClase(t, claseEmitidaPorNombre(t, nuestras, "share/apps/util/Retardo$1"))
-	suyaAnonima := dexDeUnaClaseLeida(t, claseLeidaPorNombre(t, deJavac, "Lshare/apps/util/Retardo$1;"))
-	comparaDexByteAByte(t, nuestraAnonima, suyaAnonima, volcadoDeClases(nuestras))
 }
 
 // TestFalsificacionDelEnsanchamientoEnElArgumento: con el interruptor apagado vuelve el defecto
