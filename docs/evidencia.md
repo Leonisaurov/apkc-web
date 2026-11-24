@@ -11063,11 +11063,11 @@ clase en **2 116 B** en las dos partes, que es la cifra que reportó el frente.
 `method_info` idénticos `lambda$f$0(Ljava/lang/Object;)V`, un ClassFile inválido; lo destapó el crítico
 con su propia sonda (`TestCriticoColisionImplementadoresLambda`, que no está en el árbol). La causa era
 que `preparaMetodo` reiniciaba `lambdaN` en cada método: ahora el contador vive toda la emisión de la
-clase (`apkc/javaemisor.go:2184`, con el porqué en `:2176`) y javac numera igual —con `f(int)`,
+clase (`apkc/javaemisor.go:2426`, con el porqué en `:2418`) y javac numera igual —con `f(int)`,
 `f(String)` y `g(int)` escribe `lambda$f$0`, `lambda$f$1` y `lambda$g$2`, medido con `javap -p`—. El
 dex seguía sin coincidir por cuatro bytes y no era el contador: javac escribe los implementadores en el
 orden **inverso** al que los crea y el dex copia el orden del ClassFile, así que se emiten en ese orden
-(`apkc/javaemisor.go:7255`) y el dex de las dos sobrecargas sale idéntico a javac 17, checksum y firma
+(`apkc/javaemisor.go:8577`) y el dex de las dos sobrecargas sale idéntico a javac 17, checksum y firma
 incluidos.
 
 **La vuelta que faltaba al comparador.** `comparaMetodos` solo iteraba los métodos de javac, así que un
@@ -11101,7 +11101,7 @@ y asociativo a la derecha.
 `=` se lee en `expresion()` después del operando izquierdo, que tiene que ser un acceso o un índice. En
 la sentencia y en el paso del `for` el nodo se baja al `jasign` de siempre para no dejar el valor en la
 pila, así que lo ya medido no cambia. `asignacionValor` (`apkc/javaemisor.go:5909`) escribe el valor, lo
-duplica —`dup`, o `dup2` en un ancho— y lo guarda con `guardaDe` (`:2512`), que es lo que hace javac:
+duplica —`dup`, o `dup2` en un ancho— y lo guarda con `guardaDe` (`:2895`), que es lo que hace javac:
 `aload_1; aload_2; invokevirtual read([B)I; dup; istore 4; iconst_0; if_icmple`. Sobre un campo o un
 elemento de arreglo se rechaza por nombre, porque el duplicado pide `dup_x1`/`dup_x2` con el receptor
 debajo. De paso, una declaración sin inicializador ya no marca fila en la LineNumberTable: `int length;`
@@ -11112,7 +11112,7 @@ misma ruta y el emisor duplica dos veces el mismo valor (`dup; istore b; dup; is
 entero byte a byte contra javac 17 (`TestAsignacionAnidadaEnCondicionContraJavac17`,
 `apkc/javaemisor_asignacion_valor_test.go:136`). `long x; while ((x = f()) > 0)` lleva `dup2` y `lstore`
 y `lcmp` antes de la branquia; para elegir ese camino ancho antes de emitir hacía falta el tipo del
-operando, y se añadió `tipoPrevisto` para `jasignExp` (`apkc/javaemisor.go:4775` y la rama en `:4837`),
+operando, y se añadió `tipoPrevisto` para `jasignExp` (`apkc/javaemisor.go:5937` y la rama en `:5999`),
 que devuelve el descriptor del local —sin él el caso se rechazaba con «solo se midieron enteros»— y el
 dex sale también byte a byte (`:182`).
 
@@ -11215,8 +11215,8 @@ en `pareceDeclaracion` contando los segmentos unidos por puntos (`apkc/javafuent
 `(App) apps.getAdapter().getItem(positon)` se estima sin emitir su receptor (`apkc/javaemisor.go:4651`
 y `:4787`), que era el rechazo «el tipo de una expresion main.jcast no se puede estimar sin emitirla».
 La escritura de un campo acepta un subtipo de referencia sin `checkcast`, como la subida de javac
-(`cabeEn`, `:1664`, y el sitio de escritura `:3611`), y `if (llama())` o `if (b)` se branquean con
-`ifeq` sin invertir (`condicionBranca`, `:5220`, con `opuestoDeSalto` en `:5209`). Los tres cambios
+(`cabeEn`, `:1730`, y el sitio de escritura `:3611`), y `if (llama())` o `if (b)` se branquean con
+`ifeq` sin invertir (`condicionBranca`, `:6339`, con `opuestoDeSalto` en `:6318`). Los tres cambios
 del emisor comparan el dex con javac 17 `--release 8 -g:lines,source`, byte a byte o instrucción a
 instrucción, y las falsificaciones apagan el interruptor y devuelven el error literal del usuario.
 
@@ -11529,7 +11529,7 @@ build avanza y se para ahora en `MainActivity.java:99`:
 runnable es Ljava/lang/Runnable; y se le asigna un Lshare/apps/util/MainActivity$4$1;
 ```
 
-`superEInterfaces` (`apkc/javaemisor.go:1803-1806`) devuelve el padre de una clase propia pero deja
+`superEInterfaces` (`apkc/javaemisor.go:1824`) devuelve el padre de una clase propia pero deja
 `nil` como interfaces: descarta `propia.implementa`, así que `MainActivity$4$1` no consta como
 `Runnable` y la asignación se rechaza. Ese frente sigue en curso; **no** se afirma que ApkShare
 compile entero.
@@ -11585,7 +11585,7 @@ aunque el campo sea del exterior. `check` sobre la fuente real ya no emite
 `runnable es Ljava/lang/Runnable;` en la línea 99, y el build avanza a `MainActivity.java:97`. La
 suite de `Interfaz|Anonima|Acces|Captura` sale `ok … 5.293s`. Queda una pregunta **no bloqueante**:
 un `implementa` no resoluble descarta el padre en `asignableEstricto`
-(`apkc/javaemisor.go:1825-1837`), y eso solo alcanza a fuentes inválidas.
+(`apkc/javaemisor.go:1751`), y eso solo alcanza a fuentes inválidas.
 
 **ApkShare no compila: se para en la línea 97.** El build para en `MainActivity.java:97` con
 `quedan -1 valores en la pila al cerrar el metodo`. Es un defecto **preexistente** —no lo introduce
@@ -11686,22 +11686,22 @@ consta como `Runnable` y la anónima se asigna a su interfaz aunque el campo sea
 `check` sobre `src/share/apps/util/MainActivity.java` ya no emite el error de la línea 99, y
 ApkShare avanza a la 97. Aprobado con las condiciones cerradas: el crítico dio `ok … 5.293s` sobre
 `Interfaz|Anonima|Acces|Captura` y confirmó el paso 99→97. El interruptor
-`interfacesDeLaPropiaEnAsignable` (`:1806`) es la falsificación: apagado, la clase propia vuelve a
+`interfacesDeLaPropiaEnAsignable` (`:1814`) es la falsificación: apagado, la clase propia vuelve a
 devolver solo el padre (`javaemisor_interfaz_anonima_test.go:110`).
 
 **El `int`→`long` en argumentos (`af73a8a`, corregido en `3d74b2e`).** `necesitaConversionEn`
-(`apkc/javaemisor.go:4670`) y `conversionPrimitiva` (`:4759`) emiten `i2l` en el sitio de javac
+(`apkc/javaemisor.go:4719`) y `conversionPrimitiva` (`:4808`) emiten `i2l` en el sitio de javac
 cuando el parámetro pide un ensanchamiento, en vez de descontar el ancho después de emitir el
 argumento: las 15 sondas contra javac 17 coinciden byte a byte, y el `postDelayed` de ApkShare
 lleva el `i2l` en el pc 37 (`javaemisor_ancho_argumento_test.go:143`). La app pasa la línea 97. El
 auditor encontró un **CONFIRMADO**: `boolean` se trataba como `int` y ensanchaba. `3d74b2e` lo
-rechaza con la línea y nombra el tipo y el parámetro (JLS 5.1.2) en `apkc/javaemisor.go:4811`, con
+rechaza con la línea y nombra el tipo y el parámetro (JLS 5.1.2) en `apkc/javaemisor.go:4850`, con
 el control de los anchos que sí ensanchan (`javaemisor_boolean_ensancha_test.go:88`) y la
 falsificación con el interruptor `booleanEnsanchaEnArgumentos`
-(`apkc/javaemisor.go:4715`). Aprobado.
+(`apkc/javaemisor.go:4764`). Aprobado.
 
 **La llamada encadenada como argumento (`c0b40e9`).** `tipoSinEmitirCompleto`
-(`apkc/javaemisor.go:5303`) y `vueltaGenerica` (`:5410`) estiman el tipo de `app.apks.get(0)` sin
+(`apkc/javaemisor.go:5358`) y `vueltaGenerica` (`:5605`) estiman el tipo de `app.apks.get(0)` sin
 emitir el receptor; el genérico (`Apk`) se prefiere al borrado (`Object`). El dex de la sonda y el
 de la forma exacta de la línea 163 salen byte a byte contra `javac 17`
 (`javaemisor_llamada_argumento_test.go:161` y `:190`). ApkShare pasa la 163 y se para ahora en la
@@ -11763,13 +11763,13 @@ repiten; lo de abajo es el delta posterior y el estado final consolidado.
 **El receptor heredado sin receptor escrito (`58aaaed`).** `tipoPrevisto` y `tipoEstimado` solo
 miraban la clase actual, así que dentro de la anónima de `Runnable` de `MainActivity.java:179`
 `getApplicationContext()` no tenía candidatas y la línea paraba. `candidatasSinReceptor`
-(`apkc/javaemisor.go:5379`) busca entonces el nombre en las clases que la encierran, de dentro
-afuera (`clasesEnAlcance`, `:8671`), solo dentro de una anónima o una inner no estática (`:5384`),
+(`apkc/javaemisor.go:5446`) busca entonces el nombre en las clases que la encierran, de dentro
+afuera (`clasesEnAlcance`, `:8671`), solo dentro de una anónima o una inner no estática (`:5452`),
 y sin escribir ninguna instrucción. La vuelta de `getExternalFilesDir(String)` queda en
 `Ljava/io/File;` y `File(File, String)` encaja. El oráculo es `javac 17 --release 8` instrucción a
 instrucción y el dex byte a byte salvo el constructor de la anónima (§100)
 (`javaemisor_receptor_heredado_test.go:81`); la falsificación apaga `estimaMetodoDeExterior`
-(`apkc/javaemisor.go:5369`, sonda en `javaemisor_receptor_heredado_test.go:110`) y el control fija
+(`apkc/javaemisor.go:5433`, sonda en `javaemisor_receptor_heredado_test.go:110`) y el control fija
 que un nombre inexistente sigue rechazando con el mensaje anterior (`:138`). ApkShare pasa la línea
 179 y se para ahora en la columna 103, en `apk.name + ".apk"` como argumento (concatenación,
 `joperador`), frente en curso.
