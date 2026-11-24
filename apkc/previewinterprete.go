@@ -2927,6 +2927,30 @@ func (m *maquinaDalvik) handlerQueAcepta(d *dexFile, it *codeItem, tr tryItem, e
 	return 0, false, nil
 }
 
+// colocaArgumentos escribe cada argumento en su registro de entrada a partir de `pos`, con una
+// marca ancha detrás de `long` y `double`. Un fallo aquí es de la llamada, no del dex: se devuelve
+// como error normal (sin `malformado`) y con su propio recover, para que un índice inesperado nunca
+// se confunda con bytes rotos del code_item. La guarda de `ejecutaCuerpo` ya comprobó que caben.
+func colocaArgumentos(regs []any, pos int, args []any, tipos []string) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("los argumentos no caben en el marco de %d registros: %v", len(regs), r)
+		}
+	}()
+	for i, a := range args {
+		tipo := ""
+		if i < len(tipos) {
+			tipo = tipos[i]
+		}
+		regs[pos] = a
+		if anchoDe(tipo) == 2 && pos+1 < len(regs) {
+			regs[pos+1] = marcaAncha{}
+		}
+		pos += anchoDe(tipo)
+	}
+	return nil
+}
+
 // ejecutaCuerpo interpreta el code_item de un método con los argumentos dados. `tipos` dice el tipo
 // de cada argumento, que es lo que decide cuántas palabras ocupa en los registros.
 func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []any, tipos []string) (res any, err error) {
@@ -2952,7 +2976,8 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 	// El decodificador comprueba cada acceso a las palabras del code_item y rechaza por nombre lo que
 	// no cabe (payloads de switch incluidos). Este recover es la última red: si algo se escapa, se
 	// dice en qué unidad y con qué opcode, y se marca como dex malformado para que el comando lo
-	// rechace; no se disfraza de error de negocio ni se atribuye sin pruebas a los registros.
+	// rechace; no se disfraza de error de negocio ni se atribuye sin pruebas a los registros. Los
+	// argumentos no llegan aquí: se validan contra `insSize` y su fallo es error de llamada.
 	pcEnCurso, opEnCurso := 0, byte(0)
 	defer func() {
 		if r := recover(); r != nil {
@@ -2964,16 +2989,24 @@ func (m *maquinaDalvik) ejecutaCuerpo(clase string, met *metodoDalvik, args []an
 
 	regs := make([]any, it.registersSize)
 	pos := int(it.registersSize) - int(it.insSize)
-	for i, a := range args {
+	// Los argumentos no son bytes del dex: si no caben en el marco de entrada, la llamada está mal
+	// armada por quien invoca. Se comprueba antes del bucle para decirlo con el método y el conteo,
+	// sin caer en el recover de arriba, que marcaría el dex como malformado y taparía la causa real.
+	palabras := 0
+	for i := range args {
 		tipo := ""
 		if i < len(tipos) {
 			tipo = tipos[i]
 		}
-		regs[pos] = a
-		if anchoDe(tipo) == 2 && pos+1 < len(regs) {
-			regs[pos+1] = marcaAncha{}
-		}
-		pos += anchoDe(tipo)
+		palabras += anchoDe(tipo)
+	}
+	if pos < 0 || int(it.insSize) > len(regs) || palabras > int(it.insSize) {
+		return nil, fmt.Errorf(
+			"el método %s.%s declara %d registros de entrada (insSize) y la llamada pasa %d argumentos que ocupan %d palabras sobre un marco de %d registros: la llamada no cabe",
+			claseCorta(clase), met.nombre, it.insSize, len(args), palabras, it.registersSize)
+	}
+	if err := colocaArgumentos(regs, pos, args, tipos); err != nil {
+		return nil, fmt.Errorf("el método %s.%s: %v", claseCorta(clase), met.nombre, err)
 	}
 
 	ins := it.insns
