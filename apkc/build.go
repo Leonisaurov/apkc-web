@@ -1902,9 +1902,12 @@ func packagePlan(useAAB bool, depDexes []string, auxDigests map[string]string, l
 			LogD("build", "extractNativeLibs=false:", len(files)+len(nativos), "libs go in stored, and page aligned")
 		}
 	}
-	vistosLib := map[string]bool{}
+	// El que llega primero a un nombre se lo queda, y `vistosLib` recuerda quién fue para que el
+	// aviso nombre al ganador real. Sembrarlo solo con `lib/` del proyecto hacía que el segundo AAR
+	// con el mismo `.so` se anunciara como «ya lo aporta el proyecto» cuando había ganado el primero.
+	vistosLib := map[string]origenLib{}
 	for _, f := range files {
-		vistosLib[f] = true
+		vistosLib[f] = origenLib{proyecto: true}
 	}
 	for _, f := range files {
 		add(f, f, !libs.stored)
@@ -1913,32 +1916,71 @@ func packagePlan(useAAB bool, depDexes []string, auxDigests map[string]string, l
 	// Un `.so` que el proyecto ya tiene con la misma ruta se queda con el del proyecto: el mismo
 	// fichero no viaja dos veces y la prioridad no depende del orden de lectura
 	for _, e := range nativos {
-		if vistosLib[e.name] {
-			LogW("build", "el nativo", e.name, "de un AAR ya lo aporta el proyecto: se queda el del proyecto")
+		if previo, ya := vistosLib[e.name]; ya {
+			switch {
+			case previo.proyecto:
+				LogW("build", "el nativo", e.name, "del AAR", e.aar, "("+e.fichero+")", "ya lo aporta el proyecto: se queda el del proyecto")
+			case previo.aar == e.aar:
+				LogW("build", "el AAR", e.aar, "aporta", e.name, "dos veces: entradas", previo.fichero, "y", e.fichero+"; se queda la primera")
+			default:
+				LogW("build", "el nativo", e.name, "ya lo aporta el AAR", previo.aar, "("+previo.fichero+"): se queda el de", previo.aar+";", e.aar+" ("+e.fichero+") no lo sustituye")
+			}
 			continue
 		}
-		vistosLib[e.name] = true
+		vistosLib[e.name] = origenLib{aar: e.aar, fichero: e.fichero}
 		add(e.src, e.name, !libs.stored)
 	}
 	return plan
 }
 
+// origenLib recuerda de dónde salió el `.so` que ya ocupa un nombre del paquete, para que el aviso
+// de una colisión nombre al ganador real en lugar de suponer que fue el proyecto.
+type origenLib struct {
+	proyecto bool
+	aar      string
+	fichero  string
+}
+
+// nativoDeAar es un `.so` de un AAR con la entrada del paquete que llevará y de dónde salió. El
+// origen se guarda para nombrarlo en el aviso de colisión: dos AAR pueden aportar el mismo
+// `lib/<abi>/<fichero>.so`, y quien lee el build necesita saber cuál se quedó.
+type nativoDeAar struct {
+	bundleEntry
+	aar     string
+	fichero string
+}
+
 // nativosDeAars enumera los `.so` que los AAR de `jar/` aportan, con el nombre que tendrán dentro
 // del paquete (`lib/<abi>/<fichero>`, el que busca System.loadLibrary), no con la ruta de la
-// extracción. `getFiles` recorre en orden léxico, así que el plan es determinista.
-func nativosDeAars(aares []aarDelProyecto) []bundleEntry {
-	salida := []bundleEntry{}
+// extracción. Un AAR puede traer sus nativos en `lib/<abi>/` o en `jni/<abi>/`, que es el layout
+// que escribe el SDK: los dos se juntan aquí bajo el mismo nombre canónico. `getFiles` recorre en
+// orden léxico, así que el plan es determinista.
+func nativosDeAars(aares []aarDelProyecto) []nativoDeAar {
+	salida := []nativoDeAar{}
 	for _, aar := range aares {
-		if aar.lib == "" {
-			continue
-		}
-		ficheros, _ := getFiles(aar.lib, "", false)
-		for _, f := range ficheros {
-			rel, err := filepath.Rel(aar.lib, f)
-			if err != nil {
-				LogF("build", err)
+		for _, origen := range []struct {
+			dir     string
+			prefijo string
+		}{
+			{aar.lib, "lib/"},
+			{aar.jni, "jni/"},
+		} {
+			if origen.dir == "" {
+				continue
 			}
-			salida = append(salida, bundleEntry{src: f, name: "lib/" + filepath.ToSlash(rel)})
+			ficheros, _ := getFiles(origen.dir, "", false)
+			for _, f := range ficheros {
+				rel, err := filepath.Rel(origen.dir, f)
+				if err != nil {
+					LogF("build", err)
+				}
+				rel = filepath.ToSlash(rel)
+				salida = append(salida, nativoDeAar{
+					bundleEntry: bundleEntry{src: f, name: "lib/" + rel},
+					aar:         aar.aar,
+					fichero:     origen.prefijo + rel,
+				})
+			}
 		}
 	}
 	return salida
