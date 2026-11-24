@@ -688,3 +688,42 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   B por el lector y +365 037 B por el intérprete. Fronteras: aproximación declarada, sin `gravity`
   fino, imágenes ni tema, ids del framework como `@0x01030042`, e intérprete sin JNI, `.so`,
   multidex ni excepciones. Nada de WineDroid (GPL): es código propio MIT.
+- **El intérprete de `preview` se queda sin avisos y el modelo se acerca a la captura del cell
+  (§289, §290 y §293)**: dos stubs en `apkc/previewinterprete.go` —`checkSelfPermission` devuelve
+  `int32(0)` (`PERMISSION_GRANTED`) e `invalidate` el cero de `V` sin redibujar, porque
+  `pintaVistasPropias` (`apkc/previewdibujo.go:102-127`) corre el `onDraw` una sola vez con una
+  instancia nueva— bajan de 1 a 0 los avisos en `chatbt` y `lienzo`, sin mover las cinco capturas
+  (`Bluetooth listo - 0 vinculos - 2 mensajes`) ni las 17 operaciones (`fotograma 0`, `toques 0`).
+  `--locale es` lee `values-es` y `--locale es-MX` prefiere `values-es-rMX`: `id/saludo` dice `Hola!`
+  con flag y `Hello!` sin él, y el contador, sin bloque `es`, cae a la base; solo cambian valores, no
+  ids, rutas ni drawables. La captura real a 213 dpi (relleno gris ≈90×40 dp, área blanca 480×776 px)
+  destapó que agrandar el botón a 88 dp desplazaba su centro 12 dp: `modeloConMinimos` lo restituye
+  (el botón queda en (-12, 28, 88, 40)), con `ALTO_BOTON_DP=40`, `RADIO_BOTON_DP=4`, `clip(marcoRect)`
+  para que el quinto botón de `notas` no pinte sobre el editor y el panel como dueño único de
+  `#vista-previa`. Frontera: modelo aproximado (sin barra de estado, tema claro), CDP sobre
+  `apkc.wasm` local, sin publicación; el selector de idioma en la pestaña sigue fuera.
+- **Las diez plantillas compilan y se emulan dentro del gate (§291 y §292)**: `buildProject` de
+  `studio/app.js` siembra `hola`, `contador`, `ciclo`, `menu`, `traducido`, `lienzo`, `notas`,
+  `chatbt`, `tareas` y `cronometro`, y las diez pasan por `apkc build --linker go --compiler go` y
+  `apkc preview` sin `error`, con huellas de `Hello World!` y `Pulsos: 1` a `cuantas:1`,
+  `yo: hola`/`eco: hola` y `00:01.00`. Cuatro no salían tal cual —huecos 2 en `chatbt` y `notas`, 3
+  en `tareas`, y `lienzo` sin layout para `preview`— y las cinco nuevas no estaban en `e2e.sh`;
+  los contratos de emulación los fijaron commits del submódulo (`096aee7` … `b5ff4d9`). Los
+  commits `5cfb5b5` y `fb69a51` ampliaron el bucle 0b y añadieron el bloque 0d: el gate siembra,
+  compila y emula cada plantilla, `fixture_fresco` recompila si `app.js` es más nuevo que el APK y el
+  bloque 0d exige dimensiones positivas, nodos y pasos > 0 y ausencia de `error`. Frontera: `preview`
+  es un modelo aproximado, la comprobación es del guion de gate y no de la página en chromium (CDP en
+  §293), sin empujar el submódulo ni publicar.
+- **Dependencias pasa a vista de primer nivel sobre WISP (§294)**: el commit `3f2b0e9` del submódulo
+  saca la sección del panel inferior de Compilar y la deja como `<section id="deps">` hermana de las
+  demás, con dos botones `data-vista=deps` y el nombre `deps: "Dependencias"`; la prueba falsifica que
+  no quede `data-panel="deps"` ni `mostrarPanel("deps")`, sin ids duplicados y con `sw.js` intacto, y
+  en CDP las pestañas salen `["Inicio","Editor","Pantalla","Dependencias"]`. Al resolver,
+  `asegurarDecision()` → `resolverPorWisp()` (`studio/deps.js:512-522`) cae al índice local de
+  coordenadas si el núcleo WISP no está en la compilación y falla cerrado antes de abrir un socket:
+  la falsificación mide `sockets:0, llamadas:0` y el gate de red sigue sin abrir websockets ajenos al
+  origen. Frontera: WISP se mide con núcleo simulado en node y con el núcleo incrustado en CDP, nunca
+  contra un relay real; sin push del submódulo ni publicación.
+- **Hot swap del contador, pendiente**: el `40` no se reproduce; nativo y CDP dan
+  `4 -> swap -> 4 -> clic -> 9`. La firma automática sí apunta a la clase exterior, pero derivar
+  `MainActivity$1` sigue **pendiente** (plan escrito, sin implementar). No se cuenta como cerrado.
