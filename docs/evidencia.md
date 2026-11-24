@@ -12902,6 +12902,73 @@ sh -c 'cd apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
 tcr -j 1 -q -- sh tools/entorno.sh banco
 ```
 
+## 275. La constante `String` heredada se dobla con su literal, no como entero (`c56c51f`)
+
+Registrado el 2026-11-24 sobre `f64101e`. Transfiere la medición del builder
+`ses_df2a841bfffeaTS26JZz0Fjr33`, con la crítica `ses_df3e5cc0affe6QphBClHbIz3CU`, commit
+`c56c51f`, que es ancestro de este árbol (`git diff c56c51f HEAD -- apkc/javaemisor.go
+apkc/javaemisor_cadena_heredada_test.go` sale vacío). Aquí solo se ejecutaron los `grep`
+del bloque de comandos: sin compilar, sin gate, sin chromium, sin red, sin push y sin
+publicación. Las cifras de la suite son del builder y van marcadas como **transferidas, no
+versionadas**.
+
+**El síntoma.** La crítica del frente `98dd864` —el que dobló la constante `String` del
+classpath en `§265`— confirmó que `Hijo extends Base`, con un `static final String V = "hola"`
+en `Base` del classpath y `String dame() { return V; }`, emitía `iconst_0` con descriptor
+`Ljava/lang/String;`. El análisis de marcos lo paraba con el literal `pc 1 (areturn): se
+esperaba una referencia y hay entero`. Antes de `98dd864` se rechazaba limpio; después, el
+mismo nombre suelto pero heredado producía bytecode inválido en vez de un error.
+
+**El criterio: doblar, no rechazar.** El valor sí está disponible: `buscarCampo` recorre la
+clase y sus padres (`apkc/javaemisor.go:2077-2078`) y ya lee el `ConstantValue` tag 8 dejándolo
+en `campoResuelto.cadena` (`:2148-2156`), porque la rama de `cpString` de `§265` no distingue
+si el campo es de la clase actual o de un padre. Lo que faltaba era que el camino del nombre
+suelto mirase `esCadena`. El fail-safe queda al revés que antes: un descriptor que no viaja
+como entero y no es cadena se rechaza explícitamente (`:4300-4302`, «la constante %s no se
+puede doblar con el descriptor %s»), y nunca se emite un `iconst_*` con descriptor de
+referencia.
+
+**Los cambios.** `campoDeLaClaseActual` pasa a `(string, bool, error)` (`:4279`) para poder
+propagar el rechazo; la rama `cr.esCadena` (`:4285-4294`) emite `e.ldc(e.pool.cadena(cr.cadena))`
+y `e.sube()` (`:4291-4292`) y devuelve el descriptor de la cadena. El interruptor de la
+falsificación es `pliegaCadenaHeredada` (`:2070-2075`), encendido en el binario que se publica;
+apagado revive el defecto —`e.cargaEntero(cr.valor)` con `valor` a cero, que es el `iconst_0`
+del síntoma— y solo lo apaga la prueba. El llamador de `:3950` propaga el error como «al leer
+%s, %w» (`:3952`).
+
+**El oráculo.** `apkc/javaemisor_cadena_heredada_test.go` compila con `javac 17` un `Base` en
+un jar y un `Hijo` que lo extiende, y exige el dex **byte a byte**
+(`TestCadenaEstaticaHeredadaContraJavac17`, `:85`); además carga nuestro `Hijo` en la JVM con
+`-Xverify:all` desde una sonda (`verificaHeredadaContraLaJVM`, `:160`), comprueba 1 `ldc` de
+`shola` y 0 `getstatic` en `dame()` (`:112-127`), que el control `static final int` heredado se
+sigue plegando sin `getstatic` (`:130-136`) y que un `static final String` **sin**
+`ConstantValue` sale por `getstatic` (`mutable`, `:140-145`).
+`TestCadenaEstaticaHeredadaFalsificacion` (`:210`) apaga el interruptor y exige el error
+literal del síntoma, precedido de `Hijo.java: `.
+
+**Lo ejecutado por el builder, transferido.** La sonda `-overlay` original pasa con
+`heredada v: nuestro 18 176 | javac 18 176` —18 instrucciones y 176 bytes por los dos caminos—.
+La regresión acotada tardó `21.820 s`; la suite completa, `ok … 182.423s`, con `go vet` limpio.
+Es medición del builder, salida transferida, no versionada; la crítica sí ejecutó los tests
+puntuales y la sonda, y aquí no se re-ejecutó ninguno.
+
+**Frontera abierta, no bloqueante.** Un `ConstantValue` tag 8 con índice 0 o con el utf8
+ausente en un jar artesanal podría emitir `ldc ""`: `stringValue` (`apkc/classreader.go:566-572`)
+devuelve la cadena vacía para un índice que no está, y el emisor (`apkc/javaemisor.go:2154-2156`)
+no valida el índice antes de copiarlo. Queda fuera del classpath de confianza del modelo de
+amenazas. La constante heredada de una clase **del fuente** sigue rechazándose limpio; el
+informe lo atribuye a `TestSondaHeredadaFuente`, que no existe en este árbol
+(`grep -rn 'TestSondaHeredadaFuente' .` sin resultados), así que se transfiere sin verificar.
+
+```sh
+# los dos `go test` se ejecutan dentro de apkc/
+go test -run 'CadenaEstaticaHeredada' -count=1 -v .
+grep -n 'pliegaCadenaHeredada\|esCadena' apkc/javaemisor.go
+grep -n 'func Test' apkc/javaemisor_cadena_heredada_test.go
+# forma general: la sonda vive fuera del repo y entra por overlay
+go test -overlay="$SONDA/overlay.json" -run 'CadenaEstaticaHeredada' -count=1 -v .
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
