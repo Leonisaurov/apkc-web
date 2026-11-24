@@ -12383,3 +12383,32 @@ Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que 
    Dalvik de API ≤ 20 donde arrancar; hoy el oráculo es el contrato de bytes.
 5. **CI remoto y publicación:** los commits nuevos no se empujaron y `apkc-studio.surge.sh` no se
    actualizó; las Actions fijadas por SHA no se miden sin red.
+
+**Adjudicado el 2026-11-24 (`ses_df3cecf21ffekb35M5vY64tX8G`): el cruce del receptor heredado con
+concatenación no es defecto.** `usa(getPackageName() + resto)` no falsifica
+`estimaMetodoDeExterior` (`apkc/javaemisor.go:5472-5477`, §261): `esConcatenacion` (`:3508-3525`)
+tipa el `+` como `String` por el operando derecho, y `tieneCadena` decide con eso sin bajar al
+operando izquierdo, así que la estimación no llega a pedir el tipo de `getPackageName()` y
+`candidatasSinReceptor` (`:5496`) no interviene. El interruptor es de sonda, no de política, y la
+emisión (`:4390-4447`) ya coincide con javac: el camino del receptor implícito resuelve la clase que
+encierra, y el `javap` de la sonda lo enseña como
+`invokevirtual p/Pantalla.getPackageName:()Ljava/lang/String;` dentro de `Pantalla$1.onClick`. La
+frontera falsificable es el control **sin** concatenación, `usa(getPackageName())`, que sí rechaza
+en rojo (`apkc/javaemisor_receptor_heredado_test.go:110-134`, la falsificación del §261).
+
+**Lo que midió la sonda (`ses_df3d30ee4ffePBOIEWCOLHvSBu`)**, fuera del repo, en
+`~/.cache/apkc-web/auditoria-cruce/`, y metida con `-overlay`: con el interruptor encendido javac 17
+acepta el cruce, las instrucciones de `onClick` son idénticas y el dex también tras normalizar solo
+el `<init>` de la anónima (§100); con el interruptor apagado la compilación **sigue aceptándose** y
+el `onClick` sale byte a byte igual al de la ruta encendida; el control sin concatenación sí
+rechaza, con `no se puede estimar el tipo de getPackageName(): hay 0 candidatas…`;
+`filtraCandidatasPorTipos=false` también se acepta, porque la sobrecarga no depende de él en este
+cruce. Veredicto: **no defecto / condición de test**, y no hubo cambio de código.
+
+**Pregunta abierta.** ¿Se documenta esa distinción —la estimación con interruptor, la emisión ya
+convergente con javac— o se extiende el gating a la emisión?
+
+```sh
+# forma general: la sonda vive fuera del repo y entra por overlay
+cd apkc && go test -overlay=<overlay.json> -run TestAuditoriaCruce -count=1 -v .
+```
