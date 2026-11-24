@@ -11598,8 +11598,8 @@ afirma que ApkShare compile.
 **31 MiB a 16 MiB** con `CLOSE`; los plazos despiertan en **50 ms**; el crédito se topa en
 **1024**; las CAs se validan de forma estricta; y la trama se rechaza **antes de copiar**, medido
 con 48 MiB rechazados y `TotalAlloc +1736 B`. El módulo sigue **inerte y fuera del wasm**: el
-linker lo elimina y `nucleoDisponible` falla cerrado sin abrir ningún socket. Queda la allowlist F,
-en curso.
+linker lo elimina y `nucleoDisponible` falla cerrado sin abrir ningún socket. La allowlist F se
+implementó después en `b7d08ae` y se registra en `§259`.
 
 **Las CAs de la UI (`3794daf`, `c726329`, `36040e3`).** Las CAs se leen de un `File` local, el
 orden es CAs→relay y la huella es `sha256(pem entregado)`, con el BOM corregido. Aprobado con
@@ -11611,9 +11611,10 @@ registra `apkcWispCargarCAs`; hoy falla cerrado.
 proyecto cuando ganaba otro AAR. Otro frente lo está corrigiendo: **en corrección**, no cerrado.
 
 **Fronteras de este `§`.** 1) ApkShare **no** compila: el `postDelayed` deja `-1` en
-`MainActivity.java:97`. 2) WISP **no** está cableado a la página: faltan la allowlist F y el
-cableado del núcleo. 3) Quedan **dos gates** por pasar. 4) El sitio publicado no se actualizó.
-5) Los commits no se empujaron y el CI no se midió. 6) La deuda de resources sigue en corrección.
+`MainActivity.java:97`. 2) WISP **no** está cableado a la página: la allowlist F está hecha
+(`§259`), pero falta el cableado del núcleo. 3) Quedan **dos gates** por pasar. 4) El sitio
+publicado no se actualizó. 5) Los commits no se empujaron y el CI no se midió. 6) La deuda de
+resources se cerró en `3cc7fe7` (`jni/<abi>/` y aviso del ganador real).
 Nada de esto se re-ejecutó aquí; los oráculos citados son los de cada commit.
 
 ## 259. La allowlist de WISP y el cierre del vigilante de la preview
