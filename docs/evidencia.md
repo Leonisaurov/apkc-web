@@ -12969,6 +12969,101 @@ grep -n 'func Test' apkc/javaemisor_cadena_heredada_test.go
 go test -overlay="$SONDA/overlay.json" -run 'CadenaEstaticaHeredada' -count=1 -v .
 ```
 
+## 276. La constante suelta en un hueco largo se dobla como javac (`6e42499`)
+
+Registrado el 2026-11-24 sobre `e907433`, para el commit `6e42499`. La corrección viene del builder
+`ses_df38958e7ffefnS4nQqp3fNnOf`; este `§` **transfiere** su medición: el test del árbol reproduce
+la tabla y la falsificación, y las cifras de ApkShare —17 de 21 clases, `16516 B`, APK `305510 B`—
+son suyas y se citan sin re-ejecutarse en este árbol. La crítica sigue en curso: no se da por
+aprobada.
+
+**La regla de javac 17.0.21.** Con `--release 8 -g:lines,source`, un literal `long` solo usa
+`lconst_0`/`lconst_1` para 0 y 1; todo lo demás —`5`, `-1`, `127`, `32767`, `-32768`, `32768`,
+`-32769`, `2147483647L`, `5000000000L`— va por `ldc2_w`. El `i2l` no aparece con una constante:
+solo con un operando no constante (`iload; i2l`). La tabla completa está en
+`apkc/javaemisor_ldc2w_campo_test.go:29-71`; la comprobación, en `TestLaTablaDelLargoEsLaDeJavac17`
+(`:77`), que además desarma nuestro `.class` porque el dex no distingue `ldc2_w` de otra carga de
+tres bytes.
+
+**La causa.** `AutoResearchDelay` es un `static final int` suelto, no un nombre `Clase.CAMPO`, y no
+entraba por `plegarConstante` (`apkc/javaemisor.go:3725`): el camino de `jacceso` exigía una cadena
+de tipo. El emisor doblaba el campo a `int` y dejaba la promoción detrás, así que escribía
+`sipush 500; i2l` donde javac escribe `ldc2_w 500l`.
+
+**El cambio.** `plegarConstante` resuelve la constante suelta cuando el nombre tiene un solo
+segmento, no hay local del método y `tapaLaCaptura` no encuentra un `val$nombre` en la clase ni en
+sus exteriores; exige `static final`, entero (`esConstanteEntera`: `I`, `B`, `C`, `S`, sin `Z`) y no
+`String` (`javaemisor.go:3868-3882`). La promoción al hueco `long` la hace `expA`, no el plegado. El
+interruptor `pliegaCampoSuelto` (`:3921`) revive el defecto para la falsificación;
+`esConstanteEntera` está en `:3925` y `tapaLaCaptura` en `:3932`.
+`TestFalsificacionDelPlegadoDelCampoSuelto` (`apkc/javaemisor_ldc2w_campo_test.go:162`) comprueba
+las dos direcciones: encendido, dex igual a javac; apagado, `sipush i2l` y dex distinto.
+
+**El resultado, transferido.** `MainActivity$3.afterTextChanged` lleva `ldc2_w #42 // long 500l`,
+igual que javac. De 16 a **17 de 21** clases byte a byte. El dex mide **16516 B** frente a 16504 del
+oráculo: la causa valía 4 B —de 16520 a 16516—, no los 8 que se habían estimado, y la brecha
+restante es de 12 B. El APK mide `305510 B` y `apksigner` da v1/v2/v3 en `true`. La suite del
+builder salió `ok … 168.066s`, con `gofmt` y `go vet` limpios; es salida transferida, no
+versionada.
+
+**Las cuatro clases que quedan.** `Editable.toString` (`invokeinterface` donde javac emite
+`invokevirtual`) en `$3$1` y `$4`; `astore 4` frente a `astore_3` en `$6`; y en `MainActivity`,
+`ldc_w` frente a `ldc` más el reparto de la lambda.
+
+```sh
+# con el entorno del repo (javac 17, d8 y android.jar del SDK)
+cd apkc && go test -run \
+  'TestLaTablaDelLargo|TestElRetardoConstante|TestFalsificacionDelPlegado' -count=1 -v .
+# el oráculo de la regla, sin pasar por apkc: la forma que javac escribe en el hueco `long`
+# la sonda es `fuenteRetardoConstante` del test, copiada a disco como p/Retardo.java
+mkdir -p "$HOME/.cache/apkc-web/ldc2w"
+javac --release 8 -g:lines,source -d "$HOME/.cache/apkc-web/ldc2w" p/Retardo.java
+javap -c -p "$HOME/.cache/apkc-web/ldc2w/p/Retardo.class"
+```
+
+## 277. El shim respeta el modo de creación de `open` (`e907433`)
+
+Registrado el 2026-11-24 sobre `e907433`. Corrección del builder `ses_df29b25fbffeQbKHk2tRB1L4Mq`;
+este `§` **transfiere** su medición: la falsificación y los controles quedan reproducibles con los
+comandos de abajo, y las cifras se citan sin re-ejecutarse en este árbol. La crítica sigue en curso:
+no se da por aprobada.
+
+**El fallo.** `TestArgumentosDeFirmaNoLlevanLaPassword` (`apkc/paquetetemporal_test.go:181`) veía
+`0644` donde `os.CreateTemp` pide `0600` (`:207-208`). No era el test: `open()` llamaba a
+`nuevoNodo` sin pasar el `modo` y todo nodo nuevo nacía con `0644`. En todo el repo, el único sitio
+que compara permisos es esa comprobación (`:207`).
+
+**El cambio.** `shim/navegador-sim.js` define una sola `umask = 0o022` (`:55`), la misma que
+devuelve `process.umask` (`:391`); `nuevoNodo(calle, esDir, permiso)` (`:59`) compone el modo como
+`(base & 0o170000) | ((permiso & 0o7777) & ~umask)` (`:64`); y `open()` pasa
+`modo === undefined ? 0o666 : modo` en la rama `O_CREAT` (`:214`). Un `O_CREAT` sobre un fichero que
+ya existe no toca su modo, como en Linux.
+
+**La falsificación.** `shim/prueba-modo.js` compila una sonda fuera del repo y la corre por el
+shim: `CreateTemp` sin modo (0600), un `O_CREAT|O_EXCL` con 0600, un `O_CREAT` con 0666 sobre el que
+ya existe —debe seguir 0600— y un `WriteFile` con 0644. Con el shim viejo, 3 fallos: `CreateTemp =
+0600 — 0644`, `O_CREAT|O_EXCL con 0600 = 0600` y sigue `0600` tras reabrirlo con 0666; con el
+arreglo, las 5 comprobaciones en verde. La capa `wasm` baja de 20 a **19** fallos de nivel superior,
+sin aborto y sin el fallo de la contraseña.
+
+**Controles.** `shim/prueba-relink.js` 4/4, `shim/prueba-salida.js` 10/10, `create /miapp` con
+rc 0 y `node --check` limpio sobre el shim. Son cifras transferidas del builder.
+
+**Deuda abierta.** `mkdir` sigue tirando el modo (`nuevoNodo(a, true)` en `:282`) y ningún test
+compara permisos de directorio; no se cierra aquí.
+
+```sh
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" shim/wasm_exec.js
+node shim/prueba-modo.js
+# la falsificación, contra el shim anterior al arreglo
+mkdir -p "$HOME/.cache/apkc-web/falsif"
+git show e907433^:shim/navegador-sim.js > "$HOME/.cache/apkc-web/falsif/shim-0644.js"
+cp shim/wasm_exec.js "$HOME/.cache/apkc-web/falsif/"
+SHIM="$HOME/.cache/apkc-web/falsif/shim-0644.js" node shim/prueba-modo.js
+cd apkc && go test -run TestArgumentosDeFirmaNoLlevanLaPassword -count=1 -v .
+node --check shim/navegador-sim.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
