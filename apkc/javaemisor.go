@@ -2398,8 +2398,11 @@ type emisor struct {
 	vistas   map[string]bool
 
 	// del metodo actual
-	estatico  bool
-	desc      string
+	estatico bool
+	desc     string
+	// esCtor marca el metodo que se emite como el constructor de la clase: los marcos de antes de su
+	// `super`/`this` llevan `uninitializedThis`, y eso cambia la forma comprimida que javac elige.
+	esCtor    bool
 	vuelta    string
 	locales   map[string]localVar
 	siguiente int
@@ -9047,6 +9050,7 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	}
 	desc += ")V"
 	e.preparaMetodo(desc, false)
+	e.esCtor = true
 	e.reserva("", "L")
 	if !estatica {
 		e.reserva("", externo)
@@ -9083,12 +9087,14 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	}
 	attrs := attrInfo(e.pool, "Code", codigo)
 	conte := 1
-	// Una anonima dentro de otra no lleva MethodParameters: javac 17 lo escribe en la primera pero
-	// no en la que se crea dentro de ella (medido con `javap -v` sobre Capa$1 y Capa$1$1).
+	// Una anonima dentro de otra no lleva MethodParameters
 	bajoAnonima := e.c.encierre != nil && e.c.encierre.anonima
+	// MethodParameters: el `this$0` sale `final mandated` (0x8010) y cada `val$x`
+	// `final synthetic` (0x1010); medido en `Captura3$1` (parrafo 100) con javac 21, que es el `javac`
+	// de PATH en Termux. javac 17.0.21 NO lo escribe (medido: sin `-parameters`, ninguna anonima lo
+	// lleva), asi que la presencia del atributo depende del JDK con el que se compare: es la frontera
+	// que deja el frente de las anidadas.
 	if !estatica && !bajoAnonima {
-		// MethodParameters: el `this$0` sale `final mandated` (0x8010) y cada `val$x`
-		// `final synthetic` (0x1010); medido en `Captura3$1` (parrafo 100).
 		mp := []byte{byte(1 + len(e.c.capturas))}
 		mp = append(mp, u2be(0)...)
 		mp = append(mp, u2be(uint16(accFinal|accMandated))...)
@@ -9099,9 +9105,12 @@ func (e *emisor) initCaptura() ([]byte, error) {
 		attrs = append(attrs, attrInfo(e.pool, "MethodParameters", mp)...)
 		conte++
 	}
-	if bajoAnonima {
-		// el constructor de la anonima interior lleva `Signature: ()V`, que dexado es la anotacion
-		// `{"()V"}`; medido en Capa$1$1 con javac 17 --release 8
+	// `Signature: ()V`: javac la escribe —17 y 21 por igual— si y solo si el constructor recibe
+	// capturas de locales (`val$x`); con solo el exterior (`this$0`/`this$1`) no aparece. Medido con
+	// javac 17.0.21 sobre ApkShare (`MainActivity$1..$6` y `ApkAdapter$1` la llevan, `$2$1` y `$6$1`
+	// no), sobre `Anon$2` (captura en un metodo static), `Anon$3` (solo el exterior) y `Captura3$1`.
+	// Antes se ponia solo en la anonima creada dentro de otra, que es justo donde no va.
+	if len(e.c.capturas) > 0 {
 		attrs = append(attrs, attrInfo(e.pool, "Signature", u2be(uint16(e.pool.utf8("()V"))))...)
 		conte++
 	}
@@ -9115,6 +9124,7 @@ func (e *emisor) initInner() ([]byte, error) {
 	externo := "L" + e.encierreInterno() + ";"
 	desc := "(" + externo + ")V"
 	e.preparaMetodo(desc, false)
+	e.esCtor = true
 	e.reserva("", "L")
 	e.reserva("", externo)
 	e.marcaLinea(e.c.linea)
@@ -9287,6 +9297,7 @@ func (c *jclas) inicializadoresEstaticos() []jcampo {
 // es del metodo.
 func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.estatico = estatico
+	e.esCtor = false
 	e.desc = desc
 	e.vuelta = vueltaDe(desc)
 	e.locales = map[string]localVar{}
@@ -9317,7 +9328,7 @@ func (e *emisor) codeAttr() ([]byte, error) {
 	if err := e.resuelveSaltos(); err != nil {
 		return nil, err
 	}
-	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc, e.excepciones)
+	marcos, alto, err := framesDeMetodo(e.codigo, e.desc, e.estatico, e.interno, e.pool, e.maxLoc, e.excepciones, e.esCtor)
 	if err != nil {
 		return nil, err
 	}
@@ -9552,6 +9563,7 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 	// Un cuerpo vacio `{ }` no es abstracto: emite el `return` implicito con la linea de la llave.
 	e.preparaMetodo(desc, m.esEstatico)
 	e.metodo = m.nombre
+	e.esCtor = m.nombre == "<init>"
 	if !m.esEstatico {
 		e.reserva("", "L") // this en el hueco 0
 	}
@@ -9676,6 +9688,7 @@ func (e *emisor) initSintetico() ([]byte, error) {
 		return nil, err
 	}
 	e.preparaMetodo("()V", false)
+	e.esCtor = true
 	e.reserva("", "L")
 	e.marcaLinea(e.c.linea)
 	e.cargaDe(0, "L")
@@ -9708,6 +9721,7 @@ func (e *emisor) initSintetico() ([]byte, error) {
 func (e *emisor) initMarcador(marcador string) ([]byte, error) {
 	desc := "(L" + marcador + ";)V"
 	e.preparaMetodo(desc, false)
+	e.esCtor = true
 	e.reserva("", "L")
 	e.reserva("", "L"+marcador+";")
 	e.marcaLinea(e.c.linea)

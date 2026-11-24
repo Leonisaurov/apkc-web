@@ -137,6 +137,26 @@ func (l *lectorPool) refDe(i int) (string, string, error) {
 	return clase, desc, nil
 }
 
+// nombreDeMetodo: el nombre de un Methodref o InterfaceMethodref (el Utf8 del NameAndType). El
+// descriptor lo da `refDe`; para saber si un `invokespecial` llama a un `<init>` hace falta el nombre.
+func (l *lectorPool) nombreDeMetodo(i int) (string, error) {
+	e, err := l.entrada(i)
+	if err != nil {
+		return "", err
+	}
+	if len(e) < 5 || (e[0] != 9 && e[0] != 10 && e[0] != 11) {
+		return "", fmt.Errorf("la entrada %d del pool no es una referencia", i)
+	}
+	nt, err := l.entrada(u2De(e, 3))
+	if err != nil {
+		return "", err
+	}
+	if len(nt) < 5 || nt[0] != 12 {
+		return "", fmt.Errorf("la entrada %d del pool no es un NameAndType", u2De(e, 3))
+	}
+	return l.utf8(u2De(nt, 1))
+}
+
 // descDeSitioDinamico: el descriptor de fabrica de un CONSTANT_InvokeDynamic (tag 18), que es el del
 // NameAndType: el bootstrap (u2) y el indice del nombre y tipo.
 func (l *lectorPool) descDeSitioDinamico(i int) (string, error) {
@@ -1144,11 +1164,29 @@ func (a *analisis) aplica(in jvmInstr) ([]int, bool, error) {
 
 // framesDeMetodo devuelve el cuerpo del StackMapTable (sin el nombre ni el largo) y el alto maximo
 // que alcanzo la pila simulada. Si no hay ningun marco, el atributo no va.
-func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool *poolBuilder, maxLoc int, tries []entradaTry) ([]byte, int, error) {
+func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool *poolBuilder, maxLoc int, tries []entradaTry, esCtor bool) ([]byte, int, error) {
 	lector := pool.lector()
 	instrs, err := walkJvmCode(code)
 	if err != nil {
 		return nil, 0, err
+	}
+	// pcInicia: la primera llamada a un `<init>` de este constructor es la que inicializa el `this`
+	// (JVMS 4.10.1.9); hasta ahí, los marcos llevan `uninitializedThis`.
+	pcInicia := -1
+	if esCtor {
+		for _, in := range instrs {
+			if in.op != opInvokespec || len(in.ops) < 2 {
+				continue
+			}
+			nombre, err := lector.nombreDeMetodo(u2De(in.ops, 0))
+			if err != nil {
+				return nil, 0, err
+			}
+			if nombre == "<init>" {
+				pcInicia = in.pc
+				break
+			}
+		}
 	}
 	porPC := map[int]jvmInstr{}
 	siguiente := map[int]int{}
@@ -1309,48 +1347,136 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 	if len(orden) == 0 {
 		return nil, alto, nil
 	}
-	return codificaFrames(estados, orden, pool), alto, nil
+	return codificaFrames(estados, orden, pool, inicial, esCtor, pcInicia), alto, nil
 }
 
-// codificaFrames escribe `full_frame` para cada comienzo, con los locales que llegan (recortando los
-// `top` del final, que el verificador da por supuestos) y la pila entera. Necesita el pool para
-// internar la clase de cada referencia que nombre.
-func codificaFrames(estados map[int]estadoFrame, orden []int, pool *poolBuilder) []byte {
+// marcosSinComprimir es el interruptor de la falsificación: encendido, el escritor vuelve a poner un
+// `full_frame` en cada comienzo (lo que hacía este emisor antes) y el `.class` deja de coincidir con
+// javac aunque la JVM lo siga verificando.
+var marcosSinComprimir = false
+
+// verifNoIniciado es el `uninitializedThis` del JVMS (tag 6): el `this` de un constructor antes de la
+// llamada al `super`/`this`. javac lo escribe en el marco implícito y en los marcos previos a esa
+// llamada, y su comparación de tipos lo distingue de la clase ya inicializada (`ClassWriter.compare`
+// con `isSameType`), así que un marco posterior a la inicialización sale `full_frame` y no `same`.
+var verifNoIniciado = tipoVerif{etiqueta: 'u', clase: "this"}
+
+// codificaFrames escribe los marcos con la compresión de javac (JVMS 4.7.4): `same_frame`,
+// `same_locals_1_stack_item_frame`, `append_frame`, `chop_frame` y `full_frame` solo cuando ninguno de
+// los anteriores describe el marco. Los locales van recortados de los `top` del final, que el
+// verificador da por supuestos, y el marco de partida para la primera entrada es el implícito del
+// método (el `this` y los argumentos), porque `same_frame` se mide contra él.
+func codificaFrames(estados map[int]estadoFrame, orden []int, pool *poolBuilder, inicial estadoFrame, esCtor bool, pcInicia int) []byte {
 	cuerpo := u2be(uint16(len(orden)))
 	previo := -1
+	base := marcaDeIniciado(localesEscritos(inicial.locales), -1, pcInicia, esCtor)
 	for _, pc := range orden {
 		est := estados[pc]
 		delta := pc - previo - 1
 		if previo < 0 {
 			delta = pc
 		}
-		cuerpo = append(cuerpo, 255)
-		cuerpo = append(cuerpo, u2be(uint16(delta))...)
-		var lista []tipoVerif
-		for _, t := range est.locales {
-			if t.etiqueta == 's' {
-				// la segunda mitad de un ancho NO es una variable: javac escribe un solo `long` en la
-				// lista de locales y el hueco extra cuenta para max_locals (medido en `F.conRama`,
-				// donde el append dice `locals = [ long ]` para el local de los huecos 3 y 4)
+		locales := marcaDeIniciado(localesEscritos(est.locales), pc, pcInicia, esCtor)
+		if !marcosSinComprimir {
+			if b, ok := marcoComprimido(locales, est.pila, base, delta, pool); ok {
+				cuerpo = append(cuerpo, b...)
+				base = locales
+				previo = pc
 				continue
 			}
-			lista = append(lista, t)
 		}
-		n := len(lista)
-		for n > 0 && lista[n-1].etiqueta == 't' {
-			n--
-		}
-		cuerpo = append(cuerpo, u2be(uint16(n))...)
-		for _, t := range lista[:n] {
+		cuerpo = append(cuerpo, 255)
+		cuerpo = append(cuerpo, u2be(uint16(delta))...)
+		cuerpo = append(cuerpo, u2be(uint16(len(locales)))...)
+		for _, t := range locales {
 			cuerpo = append(cuerpo, codificaTipo(t, pool)...)
 		}
 		cuerpo = append(cuerpo, u2be(uint16(len(est.pila)))...)
 		for _, t := range est.pila {
 			cuerpo = append(cuerpo, codificaTipo(t, pool)...)
 		}
+		base = locales
 		previo = pc
 	}
 	return cuerpo
+}
+
+// marcaDeIniciado: en un constructor, el hueco 0 de los marcos anteriores a la llamada al `super`/`this`
+// es `uninitializedThis` y no la clase; después de esa llamada es la clase ya inicializada. Es lo que
+// hace que la comparación con el marco anterior falle y javac escriba `full_frame`.
+func marcaDeIniciado(locales []tipoVerif, pc, pcInicia int, esCtor bool) []tipoVerif {
+	if !esCtor || len(locales) == 0 || (pcInicia >= 0 && pc > pcInicia) {
+		return locales
+	}
+	out := append([]tipoVerif(nil), locales...)
+	out[0] = verifNoIniciado
+	return out
+}
+
+// localesEscritos: la lista de locales que va al marco. La segunda mitad de un ancho NO es una
+// variable —javac escribe un solo `long` y el hueco extra solo cuenta para max_locals, medido en
+// `F.conRama`— y los `top` del final no se escriben.
+func localesEscritos(locales []tipoVerif) []tipoVerif {
+	lista := make([]tipoVerif, 0, len(locales))
+	for _, t := range locales {
+		if t.etiqueta == 's' {
+			continue
+		}
+		lista = append(lista, t)
+	}
+	n := len(lista)
+	for n > 0 && lista[n-1].etiqueta == 't' {
+		n--
+	}
+	return lista[:n]
+}
+
+// marcoComprimido devuelve la forma corta que describe el marco frente al anterior, si alguna lo
+// describe. Las formas son las del JVMS: `same` (byte delta), `same_locals_1_stack_item` (64+delta),
+// `append` (252..254), `chop` (251..249) y sus variantes extendidas de dos bytes (251 y 247).
+func marcoComprimido(locales, pila, base []tipoVerif, delta int, pool *poolBuilder) ([]byte, bool) {
+	if mismosTipos(locales, base) {
+		switch len(pila) {
+		case 0:
+			if delta < 64 {
+				return []byte{byte(delta)}, true
+			}
+			return append([]byte{251}, u2be(uint16(delta))...), true
+		case 1:
+			if delta < 64 {
+				return append([]byte{byte(64 + delta)}, codificaTipo(pila[0], pool)...), true
+			}
+			b := append([]byte{247}, u2be(uint16(delta))...)
+			return append(b, codificaTipo(pila[0], pool)...), true
+		}
+		return nil, false
+	}
+	if len(pila) != 0 {
+		return nil, false
+	}
+	if k := len(locales) - len(base); k >= 1 && k <= 3 && mismosTipos(locales[:len(base)], base) {
+		b := append([]byte{byte(251 + k)}, u2be(uint16(delta))...)
+		for _, t := range locales[len(base):] {
+			b = append(b, codificaTipo(t, pool)...)
+		}
+		return b, true
+	}
+	if k := len(base) - len(locales); k >= 1 && k <= 3 && mismosTipos(locales, base[:len(locales)]) {
+		return append([]byte{byte(251 - k)}, u2be(uint16(delta))...), true
+	}
+	return nil, false
+}
+
+func mismosTipos(a, b []tipoVerif) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // codificaTipo escribe un verification_type_info: ITEM_Top 0, ITEM_Integer 1, ITEM_Null 5 e
@@ -1371,6 +1497,9 @@ func codificaTipo(t tipoVerif, pool *poolBuilder) []byte {
 			return []byte{5}
 		}
 		return append([]byte{7}, u2be(uint16(pool.clase(t.clase)))...)
+	case 'u':
+		// ITEM_UninitializedThis 6: el `this` de un constructor antes de su `super`/`this` (JVMS 4.7.4)
+		return []byte{6}
 	}
 	return []byte{0}
 }
