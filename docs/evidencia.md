@@ -11943,6 +11943,92 @@ cd apkc && go test -run 'ConcatComoArgumento|ConcatStringEntero|CuentaEnteraEnFi
 grep -n 'func Test' apkc/javaemisor_concat_argumento_test.go
 ```
 
+## 264. El aviso «ni PKCS#12 ni JKS» salta también si el keystore no existe
+
+Registrado el 2026-11-23. Transfiere la investigación `ses_df3efa15cffe1yUNMrBMUFbGxM`, que ejecutó
+el run de ApkShare; aquí no se re-ejecutó ese run, ni hubo gate, ni chromium, ni red, ni push, ni
+publicación. Lo que sí se re-ejecutó es el bloque «Comandos», y las citas `archivo:línea` son de
+este árbol (`4ff8a13`). Lo que solo viene del informe va marcado como **transferido, no
+versionado**.
+
+**Qué pregunta el aviso, y qué no.** `resolveSigner` (`apkc/gopackage.go:78`) solo decide con
+`--signer=auto`: un backend explícito se devuelve tal cual (`:79-81`), así que `--signer=jvm` y
+`--signer=go` nunca llegan a la comprobación. Con `auto`, `keystoreIsReadable`
+(`apkc/keystore.go:75`) abre la ruta, lee cuatro bytes con `io.ReadFull` (`:83`) y delega en
+`keystoreHeadIsReadable` (`:91-93`): es legible si `isJKSHead` reconoce `FEEDFEED` o si el primer
+byte es `0x30` (ASN.1, que cubre PKCS#12). Un JCEKS, un fichero cualquiera o una ruta que no abre
+devuelven `false`, y entonces no hay error: `LogD` con el literal de `:87` y `return signerJVM`
+(`:86-88`).
+
+**El defecto de diagnóstico.** Que `os.Open` falle (`keystore.go:76-78`) y que el formato sea ajeno
+devuelven lo mismo, así que un fichero ausente imprime «is neither a PKCS#12 nor a JKS keystore,
+and only the jvm backend reads the rest»: habla de formato sobre algo que no está. El mensaje que
+sí nombra la causa existe, `requireKeystore` (`keystore.go:101-105`, «there is no keystore at …»),
+pero se llama en la rama que ya va a escribir el paquete (`apkc/build.go:421`, `:427`, `:450`) y en
+`apkc/sign.go:71`, es decir **después** de `resolveSigner` (`build.go:212`). El comentario de
+`build.go:412-419` declara esa separación a propósito —quien pregunta por la firma es la rama que
+firma—, y la comprobación de `resolveSigner` la adelanta sin querer: un build que muera antes, en
+recursos o en Java, solo deja el aviso engañoso.
+
+**El orden del build.** `resolveSigner` en `build.go:212` va antes que `compileRes` (`:263`) y que
+`compileJava` (`:309`), así que el aviso sale al principio aunque el build muera mucho después en
+Java. `--compiler go` no cambia el enrutado; solo cambia quién compila (`build.go:177`, `:306-307`).
+
+**El keystore por defecto no lo dispara.** `doctor.go:162` resuelve `~/.android/debug.keystore`, y
+ese fichero empieza por `30`, así que cuenta como legible:
+
+```
+$ od -An -tx1 -N8 ~/.android/debug.keystore
+ 30 82 0a 66 02 01 03 30
+$ wc -c < ~/.android/debug.keystore
+2666
+```
+
+**Dónde sí aparece.** El `grep` de los registros de `~/.cache/apkc-web` solo encuentra el literal
+en los fixtures de `TestResolveSigner` (`absent.p12` y `old.jceks`) y en el arnés wasm, cuyo `HOME`
+simulado es `/home/usuario` (`shim/navegador-sim.js:372`) y que no monta nada en `~/.android`. El
+filtro del informe (`grep -v /home/usuario`) quitaba justo esas líneas, y son la prueba de la
+causa: allí la ruta del mensaje es la que resuelve `doctor` y no existe, y aun así se anuncia un
+formato. No aparece ningún run nativo con la ruta real.
+
+**El run de ApkShare no dejó paquete.** `~/Downloads/ApkShare-main/build` (mtime 21:43-21:50) no
+tiene `.class`, ni `classes.dex`, ni `.apk`: no hay paquete que verificar, y el aviso no bloquea
+nada porque el backend elegido (`jvm`) tampoco se llegó a usar. Los tres ceros vienen del informe
+(**transferido, no versionado**) y aquí se reprodujeron con `find`: 0, 0 y 0.
+
+**La página.** `studio/app.js:1796-1799` cataloga el literal como aviso de capa `entorno` y
+sugiere `--signer=jvm`, coherente con el fallback; el id de la entrada es `aar-not-read`, que no le
+pega, pero el `re` y el `lit` sí son los del mensaje. La cita de `studio/` viene del checkout
+principal, porque en este worktree el submódulo está sin inicializar.
+
+**Veredicto.** Benigno como decisión —elegir `jvm` es lo correcto cuando el lector Go no conoce el
+formato— y engañoso como diagnóstico, porque confunde «no existe» con «es de otro formato». La
+corrección está **en curso, otro frente**, y aquí no se da por hecha: separar los dos casos en
+`gopackage.go:86-88` y añadir a `TestResolveSigner` (`apkc/keystore_test.go:417`) un caso de ruta
+ausente que exija el texto de fichero ausente y no «neither a PKCS#12»; `:439` ya fija que
+`absent.p12` no es legible, que es la mitad de la pregunta.
+
+**Incertidumbre.** La ruta exacta que disparó el aviso en el run de ApkShare no quedó guardada
+(**INCIERTO**, transferido), y no se ejecutó `apksigner verify` porque no hay APK que verificar.
+
+```sh
+od -An -tx1 -N8 ~/.android/debug.keystore
+wc -c < ~/.android/debug.keystore
+sed -n '70,100p' apkc/gopackage.go
+sed -n '60,110p' apkc/keystore.go
+sed -n '170,182p;205,218p;258,266p;305,312p;405,455p' apkc/build.go
+sed -n '155,168p' apkc/doctor.go
+sed -n '410,445p' apkc/keystore_test.go
+grep -rn 'is neither a PKCS#12' ~/.cache/apkc-web --include='*.log' | grep -v /home/usuario
+grep -rn 'is neither a PKCS#12' ~/.cache/apkc-web --include='*.log' | grep /home/usuario
+grep -n 'home/usuario' shim/navegador-sim.js
+ls -la ~/Downloads/ApkShare-main/build
+find ~/Downloads/ApkShare-main/build -name '*.class' | wc -l
+find ~/Downloads/ApkShare-main/build -name '*.dex' | wc -l
+find ~/Downloads/ApkShare-main/build -name '*.apk' | wc -l
+grep -n 'is neither a PKCS#12' studio/app.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
