@@ -767,9 +767,15 @@ func (p *traduce) convierteEnAncho(in jvmInstr, op byte) {
 		return
 	}
 	// `int-to-long vA, vA`: el destino puede reutilizar el registro del int si su vecino está libre,
-	// que es lo que hace d8 y evita pedir un par cuando solo quedan sueltos bajos.
-	enSitio := fuente >= 0 && fuente <= 14 && !p.ocupado(fuente+1)
-	if !enSitio && fuente >= 0 && fuente <= 14 {
+	// que es lo que hace d8 y evita pedir un par cuando solo quedan sueltos bajos. Pero el vecino
+	// tiene que EXISTIR: `ocupado` indexa rejillas dispersas y contesta «libre» para cualquier
+	// registro fuera de `registers_size`, así que un `fuente` en el último registro del marco daba
+	// `int-to-long v1, v1` sobre un par (v1,v2) inexistente. ART lo corta entero con
+	// `wide register index out of range (1+1 >= 2)` (medido con `Ancho.id(int)` de javac 17); d8
+	// reserva el par bajo y deja `registers=4` con `int-to-long v0, v3`.
+	vecinoDentro := fuente >= 0 && fuente+1 < p.base+p.locales
+	enSitio := fuente >= 0 && fuente <= 14 && vecinoDentro && !p.ocupado(fuente+1)
+	if !enSitio && fuente >= 0 && fuente <= 14 && vecinoDentro {
 		// el vecino del par lo ocupa un valor que se puede mover (pila o local atado): se libera
 		if p.liberaRegistro(in, fuente+1) {
 			enSitio = !p.ocupado(fuente + 1)
