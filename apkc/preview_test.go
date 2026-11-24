@@ -15,6 +15,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"flag"
+	"io"
 	"strings"
 	"testing"
 )
@@ -526,5 +528,57 @@ func TestPreviewSobreUnAPKConTextoNoASCII(t *testing.T) {
 	}
 	if !strings.Contains(string(salida), "adiós ñ") {
 		t.Errorf("el JSON no trae el texto acentuado: %s", salida)
+	}
+}
+
+// TestElPreviewConservaLosEspaciosDelTextoEscrito: `--escribir` entrega el texto tal cual se tecleó,
+// con los espacios finales y los de en medio. Antes se recortaba el valor completo en el flag y el
+// texto llegaba podado al intérprete; solo se recortan los espacios delante del id y los de
+// `--avanzar`, que no son contenido.
+func TestElPreviewConservaLosEspaciosDelTextoEscrito(t *testing.T) {
+	set := flag.NewFlagSet("preview", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	guion := []eventoUsuario{}
+	set.Var(guionDeEntrada{tipo: "escribir", eventos: &guion}, "escribir", "")
+	set.Var(guionDeEntrada{tipo: "avanzar", eventos: &guion}, "avanzar", "")
+	err := set.Parse([]string{
+		"--escribir", "id/x/hola  ",
+		"--escribir", "id/x/  hola  ",
+		"--escribir", "id/x/a/b",
+		"--escribir", "  id/x/hola",
+		"--escribir", "id/",
+		"--avanzar", " 1000 ",
+	})
+	if err != nil {
+		t.Fatalf("el guion no se parsea: %v", err)
+	}
+	esperado := []eventoUsuario{
+		{Tipo: "escribir", Dato: "id/x/hola  "},
+		{Tipo: "escribir", Dato: "id/x/  hola  "},
+		{Tipo: "escribir", Dato: "id/x/a/b"},
+		{Tipo: "escribir", Dato: "id/x/hola"},
+		{Tipo: "escribir", Dato: "id/"},
+		{Tipo: "avanzar", Dato: "1000"},
+	}
+	if len(guion) != len(esperado) {
+		t.Fatalf("el guion tiene %d pasos y se esperaban %d: %+v", len(guion), len(esperado), guion)
+	}
+	for i := range esperado {
+		if guion[i].Tipo != esperado[i].Tipo || guion[i].Dato != esperado[i].Dato {
+			t.Errorf("el paso %d es %+v y se esperaba %+v", i, guion[i], esperado[i])
+		}
+	}
+	// `partirEscribir` entrega el texto sin podar: finales, internos, barras y el id sin texto. El
+	// valor con espacios delante del id se recorta solo ahí y el texto sigue siendo «hola».
+	textos := []string{"hola  ", "  hola  ", "a/b", "hola", ""}
+	for i, esperadoTexto := range textos {
+		_, texto := partirEscribir(guion[i].Dato)
+		if texto != esperadoTexto {
+			t.Errorf("--escribir %q entrega %q y se esperaba %q", guion[i].Dato, texto, esperadoTexto)
+		}
+	}
+	// un valor hecho solo de espacios no es un id y se sigue rechazando al parsear
+	if err := (guionDeEntrada{tipo: "escribir", eventos: &guion}).Set("   "); err == nil {
+		t.Error("--escribir aceptó un valor hecho solo de espacios")
 	}
 }

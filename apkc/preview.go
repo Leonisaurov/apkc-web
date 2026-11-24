@@ -409,8 +409,16 @@ func (g guionDeEntrada) String() string {
 }
 
 func (g guionDeEntrada) Set(v string) error {
-	dato := strings.TrimSpace(v)
-	if dato == "" {
+	// El texto de `--escribir` es contenido: conserva los espacios que se teclearon, incluidos los
+	// finales y los de en medio. Solo se recortan los que preceden al id, porque `partirEscribir`
+	// exige que `id/` empiece el valor; las demás órdenes llevan ids o números y se recortan todas.
+	dato := v
+	if g.tipo == "escribir" {
+		dato = strings.TrimLeft(v, " \t")
+	} else {
+		dato = strings.TrimSpace(v)
+	}
+	if strings.TrimSpace(dato) == "" {
 		return fmt.Errorf("--%s necesita un id: id/nombre, 0x7f010000 o su decimal", g.tipo)
 	}
 	if g.tipo == "escribir" {
