@@ -14254,7 +14254,15 @@ for c in ["g:a:1.0", "g:a:1.0:cls", "g:a:[1.0]", "g:a:[1.0,2.0]",
     except SystemExit as e:
         print(c, "-> SystemExit", e.code)
 PY
-cd studio && node --input-type=module -e 'import {parsearCoordenada} from "./deps-coordenada.js"; for (const c of ["g:a:1.0","g:a:1.0:cls","g:a:[1.0]","g:a:[1.0,2.0]","g:a","g:a:(,1.0],[1.2,)","g:../a:1.0"]) { const r = parsearCoordenada(c, {permitirBom:true}); console.log(c, "->", r.ok, r.coord || r.motivo); }'
+cd studio && node --input-type=module <<'JS'
+import { parsearCoordenada } from "./deps-coordenada.js";
+const casos = ["g:a:1.0", "g:a:1.0:cls", "g:a:[1.0]", "g:a:[1.0,2.0]",
+  "g:a", "g:a:(,1.0],[1.2,)", "g:../a:1.0"];
+for (const c of casos) {
+  const r = parsearCoordenada(c, { permitirBom: true });
+  console.log(c, "->", r.ok, r.coord || r.motivo);
+}
+JS
 ```
 
 ```text
