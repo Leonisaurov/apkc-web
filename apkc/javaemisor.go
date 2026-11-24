@@ -2051,12 +2051,24 @@ type campoResuelto struct {
 	dueño     string // el tipo contra el que se escribe el Fieldref, que es el que nombra javac
 	constante bool
 	valor     int32
+	// esCadena y cadena: un `static final String` con `ConstantValue` (tag 8). javac lo sustituye por
+	// un `ldc` de la cadena y no deja ni `getstatic` ni el Fieldref, así que el valor viaja como el
+	// literal, no como entero. Es el `Intent.ACTION_SEND` de ApkShare (§130 para el atributo).
+	esCadena bool
+	cadena   string
 	// generico es el tipo declarado del campo con sus argumentos (`List<Apk>`), cuando lo trae. Es lo
 	// que permite sustituir el tipo variable de la vuelta de un método genérico sin emitir el
 	// receptor: `app.apks.get(0)` con `apks` un `List<Apk>` devuelve `Apk` y no el borrado `Object`.
 	// Un campo del classpath lo deja a nil, y eso solo quiere decir «el descriptor y nada más».
 	generico *tipoArgumento
 }
+
+// pliegaCadenaEstatica es el interruptor de la falsificación de la constante `String` del classpath:
+// apagado, `Intent.ACTION_SEND` vuelve a rechazarse con «la constante ... no es un entero: doblarla no
+// esta medida», que es el error literal que leyó el usuario en `ApkShare` (`MainActivity.java:198`;
+// §130 midió el `ConstantValue` del atributo). Encendido en el binario que se publica; solo lo apaga
+// `TestCadenaEstaticaFalsificacion`.
+var pliegaCadenaEstatica = true
 
 // buscarCampo recorre la clase y sus padres. Una constante de compilacion trae el valor: javac la dobla en
 // el llamador y aqui no se escribe getstatic.
@@ -2125,11 +2137,22 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 			}
 			cr := campoResuelto{desc: f.Desc, acceso: f.Access, dueño: dueño}
 			if f.HasConst {
-				if f.ConstTag != 3 {
-					return campoResuelto{}, fmt.Errorf("la constante %s.%s no es un entero: doblarla no esta medida", actual, nombre)
+				switch f.ConstTag {
+				case cpInteger:
+					cr.constante = true
+					cr.valor = f.ConstInt
+				case cpString:
+					if !pliegaCadenaEstatica {
+						return campoResuelto{}, fmt.Errorf("la constante %s.%s no es un entero: doblarla no esta medida", actual, nombre)
+					}
+					// un `static final String` con `ConstantValue` es constante de compilación: javac la
+					// sustituye por su literal y el valor tiene que viajar como cadena, no como entero
+					cr.constante = true
+					cr.esCadena = true
+					cr.cadena = f.ConstStr
+				default:
+					return campoResuelto{}, fmt.Errorf("la constante %s.%s no es un entero ni una cadena: doblarla no esta medida", actual, nombre)
 				}
-				cr.constante = true
-				cr.valor = f.ConstInt
 			}
 			return cr, nil
 		}
@@ -3835,7 +3858,9 @@ func (e *emisor) plegarConstante(x jexpr) (constNum, bool) {
 			tipo = anidada
 		}
 		cr, err := e.ctx.buscarCampo(tipo, resto[len(resto)-1])
-		if err != nil || !cr.constante || cr.acceso&accStatic == 0 {
+		// una constante de `String` no pliega como número: se emite por `accesoEstatico`, que la
+		// escribe como `ldc` del literal
+		if err != nil || !cr.constante || cr.esCadena || cr.acceso&accStatic == 0 {
 			return constNum{}, false
 		}
 		// el pool se anota solo al final, cuando el plegado es seguro: es lo mismo que hace
@@ -4053,6 +4078,12 @@ func (e *emisor) accesoEstatico(interno string, segs []string, donde pos) (strin
 			return "", fmt.Errorf("%s: tras el campo %s no hay nada medido", donde.sitio(), seg)
 		}
 		if cr.constante {
+			if cr.esCadena {
+				// `Intent.ACTION_SEND`: javac escribe `ldc` de la cadena y no `getstatic` del campo
+				e.ldc(e.pool.cadena(cr.cadena))
+				e.sube()
+				return cr.desc, nil
+			}
 			e.cargaEntero(cr.valor)
 			return "I", nil
 		}
@@ -8233,6 +8264,11 @@ func (e *emisor) descDeAccesoEstatico(interno string, segs []string) (string, er
 			return "", err
 		}
 		if cr.constante {
+			// la constante entera se dobla como `int`; la de `String` conserva su descriptor y se
+			// emite como el literal, que es lo que hace javac
+			if cr.esCadena {
+				return cr.desc, nil
+			}
 			return "I", nil
 		}
 		return cr.desc, nil
