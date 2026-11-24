@@ -3125,14 +3125,23 @@ func (e *emisor) exp(x jexpr) (string, error) {
 	case jthis:
 		if v.nombre != "" {
 			// `Exterior.this` es leer el campo de captura: medido en el parrafo 42, `aload_0; getfield
-			// this$0:Lcom/hola/apkcstudio/MainActivity;` dentro de MainActivity$1
-			if !e.c.anonima || sinPaquete(e.encierreInterno()) != v.nombre {
+			// this$0:Lcom/hola/apkcstudio/MainActivity;` dentro de MainActivity$1. En una anonima
+			// anidada el exterior nombrado puede estar dos saltos arriba y se emite la cadena entera.
+			destino := ""
+			for _, c := range exteriores(e.c) {
+				interno := internoDe(c.paquete, c.nombre)
+				if sinPaquete(interno) == v.nombre {
+					destino = interno
+					break
+				}
+			}
+			if destino == "" {
 				return "", fmt.Errorf("linea %d: `%s.this` solo se mide dentro de la anonima que ese exterior crea", v.donde.linea, v.nombre)
 			}
-			externo := "L" + e.encierreInterno() + ";"
-			e.cargaDe(0, "L")
-			e.getfield(e.pool.campo(e.interno, "this$0", externo))
-			return externo, nil
+			if err := e.cargaDelExteriorHasta(destino); err != nil {
+				return "", fmt.Errorf("linea %d: al leer `%s.this`, %w", v.donde.linea, v.nombre, err)
+			}
+			return "L" + destino + ";", nil
 		}
 		if e.estatico {
 			return "", fmt.Errorf("linea %d: `this` en un metodo estatico no es Java", v.donde.linea)
@@ -3790,6 +3799,19 @@ func (e *emisor) acceso(a jacceso) (string, error) {
 		e.cargaDe(v.indice, v.desc)
 		return e.cadenaDeCampos(v.desc, segs[1:], donde)
 	}
+	// una local capturada por una anonima que encierra a esta: `adapter` dentro de `MainActivity$2$1`
+	// no es una local del `run()` de `MainActivity$2` ni un campo escrito en el fuente —el `val$adapter`
+	// lo puso javac en la anonima exterior—, asi que javac la lee por la cadena `this$N` hasta ese
+	// campo: `aload_0; getfield this$1:LMainActivity$2; getfield val$adapter:LAppAdapter;` (medido con
+	// javac 17 --release 8 sobre ApkShare). Va antes que el campo de la clase actual porque el nombre
+	// del fuente es el de la local, no el del campo sintetico.
+	if dueño, cr, ok := e.capturaDeExterior(segs[0]); ok {
+		if err := e.cargaDelExteriorHasta(dueño); err != nil {
+			return "", fmt.Errorf("%s: al leer %s, %w", donde.sitio(), strings.Join(segs, "."), err)
+		}
+		e.getfieldDe(e.pool.campo(dueño, "val$"+segs[0], cr.desc), cr.desc)
+		return e.cadenaDeCampos(cr.desc, segs[1:], donde)
+	}
 	if len(segs) == 1 {
 		if d, ok := e.campoDeLaClaseActual(segs[0], donde.linea); ok {
 			return d, nil
@@ -3997,40 +4019,116 @@ func (e *emisor) literalDeClase(v jclase) (string, error) {
 	return "Ljava/lang/Class;", nil
 }
 
-// campoDeLaClaseActual: `menu` suelto cuando fuera un campo de esta clase.
+// capturaDeLocalEnAnonimaAnidada es el interruptor de la sonda de la captura a traves de una anonima
+// anidada: apagado, `adapter` dentro de `MainActivity$2$1` se resuelve como un nombre de tipo y el
+// emisor se para con el error literal del usuario. Lo usa la falsificacion de
+// `javaemisor_captura_anidada_test.go`; encendido en el binario que se publica.
+var capturaDeLocalEnAnonimaAnidada = true
+
+// capturaDeExterior: `nombre` es una local que capturo una anonima que encierra a esta y devuelve la
+// clase que la guarda en su campo `val$nombre`, con el campo. Es la ruta de la anonima anidada: la
+// local no esta en los locales del metodo que crea la anonima interior —el de la exterior— sino en los
+// campos `val$x` de la exterior, que javac alcanza por la cadena `this$N`. Se mira primero la clase
+// actual (su propio `val$x`, que el fuente nombra igual) y despues los exteriores de dentro afuera.
+//
+// Puede pasar que la anonima exterior todavia no tenga el `val$x`: javac lo crea cuando la local se
+// nombra en cualquier punto de su cuerpo, tambien dentro de una anonima interior, y el analizador solo
+// lo daba de alta en la anonima donde se ve la referencia. Por eso, si la local esta en los locales del
+// metodo que creo esa anonima exterior —una exterior, no la clase actual: ahi la captura la registra el
+// analizador—, aqui se le da de alta antes de leerla (`registraCapturaEn`).
+func (e *emisor) capturaDeExterior(nombre string) (string, campoResuelto, bool) {
+	if !capturaDeLocalEnAnonimaAnidada {
+		return "", campoResuelto{}, false
+	}
+	campo := "val$" + nombre
+	for c := e.c; c != nil; {
+		interno := internoDe(c.paquete, c.nombre)
+		if cr, err := e.ctx.buscarCampo(interno, campo); err == nil {
+			return interno, cr, true
+		}
+		if c != e.c && c.anonima && c.metodoEncierre != nil && !tieneCampoPropio(c, nombre) {
+			if tipo, ok := c.metodoEncierre.locales[nombre]; ok {
+				registraCapturaEn(c, nombre, tipo)
+				if cr, err := e.ctx.buscarCampo(interno, campo); err == nil {
+					return interno, cr, true
+				}
+			}
+		}
+		if !tieneExterior(c) {
+			return "", campoResuelto{}, false
+		}
+		c = c.encierre
+	}
+	return "", campoResuelto{}, false
+}
+
+// tieneCampoPropio: la clase ya declara un campo con ese nombre del fuente o con su `val$`, asi que el
+// nombre suelto se resuelve en ella y no hay captura que bajar.
+func tieneCampoPropio(c *jclas, nombre string) bool {
+	for _, f := range c.campos {
+		if f.nombre == nombre || f.nombre == "val$"+nombre {
+			return true
+		}
+	}
+	return false
+}
+
+// registraCapturaEn: da de alta en `c` la captura de la local `nombre` del metodo que la creo, con su
+// campo `val$nombre`, igual que hace el analizador con `registraCaptura` cuando ve la referencia.
+// Hace falta aqui porque la unica referencia puede vivir en una anonima interior, que se emite antes:
+// javac baja `val$adapter` a MainActivity$2 aunque `adapter` solo se nombre en MainActivity$2$1.
+// Límite conocido: el campo se anade al final de los `val$` ya registrados, asi que si en la anonima
+// exterior una captura posterior en el fuente se registro antes, el orden de los campos no seria el de
+// javac; el oraculo del dex lo destaparia. En las capturas de ApkShare el orden coincide.
+func registraCapturaEn(c *jclas, nombre, tipo string) {
+	for _, cap := range c.capturas {
+		if cap.nombre == nombre {
+			return
+		}
+	}
+	c.capturas = append(c.capturas, captura{nombre: nombre, tipo: tipo})
+	c.campos = append(c.campos, jcampo{
+		nombre: "val$" + nombre, tipo: tipo, esFinal: true, esSintetico: true,
+		donde: pos{linea: c.linea},
+	})
+}
+
 // duenioDelCampo: donde vive un nombre suelto de asignacion o de lectura. Primero la clase actual; y
 // dentro de una anonima, si no es propio, el exterior: medido en el parrafo 54 sobre el contador, cuyo
 // `onClick` escribe `pulsos = pulsos + 1` y `total = total + pulsos` en campos de la Activity que creó
-// la anonima.
+// la anonima. Recorre la cadena entera de exteriores, no solo el inmediato: una anonima anidada puede
+// leer un campo de la clase de dos saltos arriba.
 func (e *emisor) duenioDelCampo(nombre string) (string, campoResuelto, bool) {
 	if cr, err := e.ctx.buscarCampo(e.interno, nombre); err == nil {
 		return e.interno, cr, true
 	}
-	if e.c.anonima || e.esInnerNoEstatica() {
-		externo := e.encierreInterno()
-		if cr, err := e.ctx.buscarCampo(externo, nombre); err == nil {
+	for _, ext := range clasesEnAlcance(e.c) {
+		interno := internoDe(ext.paquete, ext.nombre)
+		if cr, err := e.ctx.buscarCampo(interno, nombre); err == nil {
 			// si el campo del exterior es privado, javac no escribe el getfield contra el campo sino contra
 			// sus metodos sinteticos `access$NNN` (parrafo 72: `access$000` para leer, `access$002` para
 			// escribir, y el de escritura devuelve el valor, de ahi el `pop`); los dos llamadores lo
 			// distinguen por el flag y pasan por el accesor
-			return externo, cr, true
+			return interno, cr, true
 		}
 	}
 	return "", campoResuelto{}, false
 }
 
 // cargaDelDuenio: el receptor de un campo de instancia. En la clase actual es `aload_0`; dentro de una
-// anonima, si el campo es del exterior, javac pasa por la captura: `aload_0; getfield this$0:LExterior;`.
-// Medido dos veces en la misma linea del contador (`pulsos = pulsos + 1`), una por el receptor del
-// `putfield` y otra por la lectura del valor: javac no duplica el receptor con `dup`, lo vuelve a cargar.
+// anonima, si el campo es del exterior, javac pasa por la captura: `aload_0; getfield this$0:LExterior;`,
+// y en una anonima anidada por la cadena entera (`this$1` y luego `this$0`). Medido dos veces en la
+// misma linea del contador (`pulsos = pulsos + 1`), una por el receptor del `putfield` y otra por la
+// lectura del valor: javac no duplica el receptor con `dup`, lo vuelve a cargar.
 func (e *emisor) cargaDelDuenio(dueño string) {
-	e.cargaDe(0, "L")
-	if dueño == e.interno {
-		return
+	// el dueño salio de `duenioDelCampo`, que ya comprobo que se alcanza; el `aload_0` suelto es la
+	// clase actual, que es lo unico que quedo medido antes de la cadena
+	if err := e.cargaDelExteriorHasta(dueño); err != nil {
+		e.cargaDe(0, "L")
 	}
-	e.getfield(e.pool.campo(e.interno, "this$0", "L"+dueño+";"))
 }
 
+// campoDeLaClaseActual: `menu` suelto cuando fuera un campo de esta clase.
 func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 	dueño, cr, encontrado := e.duenioDelCampo(nombre)
 	if !encontrado {
@@ -4159,10 +4257,13 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		// clase que la creo (parrafo 72): un metodo no privado del exterior se llama con la captura
 		// (`aload_0; getfield this$0; invokevirtual`) y uno privado por su `access$NN0`, que es un
 		// `invokestatic` con la captura como primer argumento. Un estatico del exterior no lleva receptor.
+		// La busqueda sube por la cadena entera de exteriores: dentro de MainActivity$2$1 el
+		// `hide_loading_dialog()` es de la Activity, dos saltos arriba, y javac emite `aload_0; getfield
+		// this$1:LMainActivity$2; getfield this$0:LMainActivity; invokevirtual` (medido con javac 17
+		// --release 8 sobre ApkShare).
 		if e.c.anonima || e.esInnerNoEstatica() {
 			cands, err := e.ctx.candidatos(e.interno, l.nombre, argc)
 			if err == nil && len(cands) == 0 {
-				externo := e.encierreInterno()
 				tipos := make([]string, 0, argc)
 				for _, arg := range l.args {
 					d, err := e.tipoEstimado(arg)
@@ -4171,10 +4272,24 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 					}
 					tipos = append(tipos, d)
 				}
-				cand, err := e.ctx.buscarMetodo(externo, l.nombre, argc, tipos)
-				if err != nil {
+				externo := ""
+				var cand candidato
+				var primero error
+				for _, c := range clasesEnAlcance(e.c) {
+					interno := internoDe(c.paquete, c.nombre)
+					encontrado, err := e.ctx.buscarMetodo(interno, l.nombre, argc, tipos)
+					if err != nil {
+						if primero == nil {
+							primero = err
+						}
+						continue
+					}
+					cand, externo = encontrado, interno
+					break
+				}
+				if externo == "" {
 					return "", fmt.Errorf("linea %d: no existe %s con %d argumentos en %s ni en el exterior %s: %w",
-						l.donde.linea, l.nombre, argc, e.interno, externo, err)
+						l.donde.linea, l.nombre, argc, e.interno, e.encierreInterno(), primero)
 				}
 				if cand.acceso&accStatic != 0 {
 					n, err := e.argumentosDeLlamada(l.args, cand)
@@ -4190,8 +4305,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 					}
 					return vueltaDe(cand.desc), nil
 				}
-				e.cargaDe(0, "L")
-				e.getfield(e.pool.campo(e.interno, "this$0", "L"+externo+";"))
+				if err := e.cargaDelExteriorHasta(externo); err != nil {
+					return "", fmt.Errorf("linea %d: al llamar a %s, %w", l.donde.linea, l.nombre, err)
+				}
 				n, err := e.argumentosDeLlamada(l.args, cand)
 				if err != nil {
 					return "", err
@@ -4704,10 +4820,7 @@ func (e *emisor) nuevo(n jnuevo) (string, error) {
 	if externoDesc != "" {
 		if e.interno == externo {
 			e.cargaDe(0, "L")
-		} else if e.c.encierre != nil && internoDe(e.c.encierre.paquete, e.c.encierre.nombre) == externo {
-			e.cargaDe(0, "L")
-			e.getfield(e.pool.campo(e.interno, "this$0", externoDesc))
-		} else {
+		} else if err := e.cargaDelExteriorHasta(externo); err != nil {
 			return "", fmt.Errorf("linea %d: no se puede construir %s desde %s sin el exterior %s", n.donde.linea, interno, e.interno, externo)
 		}
 	}
@@ -5005,6 +5118,11 @@ func (e *emisor) tipoSinEmitir(x jexpr) (string, bool) {
 		} else if lv, ok := e.locales[segs[0]]; ok {
 			// una local tapa al tipo que se llame igual
 			actual = lv.desc
+			segs = segs[1:]
+		} else if _, cr, ok := e.capturaDeExterior(segs[0]); ok {
+			// una local capturada por una anonima que encierra a esta: el tipo es el del campo
+			// `val$nombre`, igual que al emitirla
+			actual = cr.desc
 			segs = segs[1:]
 		} else if len(segs) == 1 {
 			// un campo suelto de la clase actual o del exterior que captura la anónima
@@ -7994,12 +8112,13 @@ func (e *emisor) filaInner(internal string) ([]byte, error) {
 	return append(b, u2be(uint16(accesos))...), nil
 }
 
-// campoCaptura: el `final synthetic Tipo this$0;` con el que javac baja el exterior dentro de la anonima
-// (parrafo 42: flags 0x1010, descriptor del exterior y ningun atributo).
+// campoCaptura: el `final synthetic Tipo this$N;` con el que javac baja el exterior dentro de la anonima
+// (parrafo 42: flags 0x1010, descriptor del exterior y ningun atributo). El N no es siempre 0: una
+// anonima anidada guarda su exterior en `this$1` (ver `nivelDelExterior`).
 func (e *emisor) campoCaptura() []byte {
 	desc := "L" + e.encierreInterno() + ";"
 	b := u2be(uint16(accFinal | accSynthetic))
-	b = append(b, u2be(uint16(e.pool.utf8("this$0")))...)
+	b = append(b, u2be(uint16(e.pool.utf8(nombreDelExterior(e.c))))...)
 	b = append(b, u2be(uint16(e.pool.utf8(desc)))...)
 	return append(b, u2be(0)...)
 }
@@ -8009,6 +8128,88 @@ func (e *emisor) encierreInterno() string {
 		return "java/lang/Object"
 	}
 	return internoDe(e.c.encierre.paquete, e.c.encierre.nombre)
+}
+
+// tieneExterior: la clase guarda en un campo `this$N` la instancia que la creo. Es una anonima de un
+// metodo de instancia o una anidada con nombre no estatica; la anonima de un metodo `static` no tiene
+// exterior (parrafo 100).
+func tieneExterior(c *jclas) bool {
+	if c == nil || c.encierre == nil {
+		return false
+	}
+	if c.anonima {
+		return c.metodoEncierre != nil && !c.metodoEncierre.esEstatico
+	}
+	return !c.esEstatica
+}
+
+// nivelDelExterior: el N de `this$N` de `c`. No es la profundidad del fuente sino cuantos exteriores
+// encadenados hay por debajo: `MainActivity$2` guarda la Activity en `this$0` y `MainActivity$2$1`
+// guarda `MainActivity$2` en `this$1`; en cambio `Capa$1$1`, cuyo exterior se creo en un metodo
+// `static` y no tiene ninguno, lo guarda en `this$0`. Medido con javac 17 `--release 8 -g:lines,source`
+// sobre ApkShare (`javap -p` de MainActivity$2 y MainActivity$2$1) y sobre la sonda de
+// `javaemisor_anonima_anidada_test.go`.
+func nivelDelExterior(c *jclas) int {
+	if !tieneExterior(c) || !tieneExterior(c.encierre) {
+		return 0
+	}
+	return 1 + nivelDelExterior(c.encierre)
+}
+
+// nombreDelExterior: el nombre del campo sintetico con el que `c` guarda el exterior que la creo.
+func nombreDelExterior(c *jclas) string { return "this$" + itoa(nivelDelExterior(c)) }
+
+// exteriores: las clases que encierran a `c`, de dentro afuera, mientras haya una instancia que
+// alcanzar por `this$N`. Una anonima de un metodo `static` corta la cadena: no tiene exterior.
+func exteriores(c *jclas) []*jclas {
+	sal := []*jclas{}
+	for c != nil && tieneExterior(c) {
+		c = c.encierre
+		sal = append(sal, c)
+	}
+	return sal
+}
+
+// clasesEnAlcance: todas las clases que encierran a `c`, de dentro afuera, tenga o no instancia que
+// alcanzar. El ambito lexico de un nombre suelto las incluye todas —un `static` del exterior se llama
+// sin receptor aunque la anonima se creara en un metodo `static` (medido en `Capa$1$1`, que llama a
+// `Capa.getM()`)—; para un miembro de instancia, en cambio, hace falta la cadena `this$N` y
+// `cargaDelExteriorHasta` falla si se corta.
+func clasesEnAlcance(c *jclas) []*jclas {
+	sal := []*jclas{}
+	for c != nil && c.encierre != nil {
+		c = c.encierre
+		sal = append(sal, c)
+	}
+	return sal
+}
+
+// cargaDelExteriorHasta: deja en la pila la instancia de `destino` que se alcanza desde `this`:
+// `aload_0` y un `getfield this$N` por cada salto, con el nombre del campo y el tipo del exterior que
+// tocan en cada uno. En una anonima anidada son dos saltos: medido con javac 17 --release 8, el `run()`
+// de MainActivity$2$1 lee `aload_0; getfield this$1:LMainActivity$2; getfield
+// this$0:LMainActivity;` para llamar a un metodo de la Activity.
+func (e *emisor) cargaDelExteriorHasta(destino string) error {
+	if destino == "" {
+		return fmt.Errorf("no hay exterior que cargar en %s", e.interno)
+	}
+	if e.estatico {
+		return fmt.Errorf("`this` en un metodo estatico no es Java: no se alcanza %s desde %s", destino, e.interno)
+	}
+	dueño := e.interno
+	c := e.c
+	e.cargaDe(0, "L")
+	for dueño != destino {
+		if !tieneExterior(c) {
+			return fmt.Errorf("no se alcanza %s desde %s: la cadena de exteriores se corta", destino, e.interno)
+		}
+		ext := c.encierre
+		extInterno := internoDe(ext.paquete, ext.nombre)
+		e.getfield(e.pool.campo(dueño, nombreDelExterior(c), "L"+extInterno+";"))
+		dueño = extInterno
+		c = ext
+	}
+	return nil
 }
 
 // esInnerNoEstatica: una clase anidada con nombre que no es static ni anonima. javac le baja el exterior
@@ -8059,7 +8260,7 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	if !estatica {
 		e.cargaDe(0, "L")
 		e.cargaDe(1, externo)
-		idx := e.pool.campo(e.interno, "this$0", externo)
+		idx := e.pool.campo(e.interno, nombreDelExterior(e.c), externo)
 		e.emite(opPutfield, byte(idx>>8), byte(idx))
 		e.baja(2)
 	}
@@ -8109,8 +8310,8 @@ func (e *emisor) initCaptura() ([]byte, error) {
 	return e.methodInfo("<init>", desc, 0, attrs, conte), nil
 }
 
-// initInner: el constructor sintetizado de una anidada con nombre no estatica. Guarda `this$0` antes de
-// subir al padre (javap lo pone en la linea de la declaracion de la clase) y no lleva MethodParameters,
+// initInner: el constructor sintetizado de una anidada con nombre no estatica. Guarda su exterior antes
+// de subir al padre (javap lo pone en la linea de la declaracion de la clase) y no lleva MethodParameters,
 // a diferencia del de una anonima (§42).
 func (e *emisor) initInner() ([]byte, error) {
 	externo := "L" + e.encierreInterno() + ";"
@@ -8121,7 +8322,7 @@ func (e *emisor) initInner() ([]byte, error) {
 	e.marcaLinea(e.c.linea)
 	e.cargaDe(0, "L")
 	e.cargaDe(1, externo)
-	idx := e.pool.campo(e.interno, "this$0", externo)
+	idx := e.pool.campo(e.interno, nombreDelExterior(e.c), externo)
 	e.emite(opPutfield, byte(idx>>8), byte(idx))
 	e.baja(2)
 	e.cargaDe(0, "L")
