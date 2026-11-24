@@ -365,11 +365,10 @@ func metodoDeClaseLeida(t *testing.T, clases []classFull, clase, nombre, desc st
 // (`super(context, R.layout.app_layout, apps)`) y la 33 (`apps_filter = new ArrayList<>(apps)`), sale
 // instrucción a instrucción como el de javac 17 `--release 8`.
 //
-// El dex entero de esta clase **no** es el de javac todavía, y no es por estas líneas: faltan el
-// puente `getItem:(I)Ljava/lang/Object;` que javac sintetiza para el retorno covariante sobre
-// `ArrayAdapter<App>` y el `check-cast` que javac escribe tras el `List.get` borrado
-// (`AppAdapter.java:73`, `return apps_filter.get(position);`). Las dos son fronteras de otro frente y
-// se ven con `dexdump -d` sobre los dos dex.
+// El puente `getItem:(I)Ljava/lang/Object;` que javac sintetiza para el retorno covariante sobre
+// `ArrayAdapter<App>` y el `check-cast` tras el `List.get` borrado (`AppAdapter.java:73`) ya se
+// emiten (§251), y el dex de las seis clases de ApkShare es byte a byte el de javac 17
+// (`javaemisor_ambito_local_test.go`).
 func TestAppAdapterDeApkShareCompilaContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
 	javac := javac17(t)
