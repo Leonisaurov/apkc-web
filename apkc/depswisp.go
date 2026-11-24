@@ -158,17 +158,24 @@ func parseDestinoExtra(entrada string) (string, uint16, error) {
 	return host, uint16(puerto), nil
 }
 
-// hostMavenValido exige un nombre DNS con al menos un punto y etiquetas válidas.
-// Deja fuera los literales IP, `localhost` y los comodines: no son espejos de
-// Maven y convertirían la ampliación en una puerta hacia la red local.
+// hostMavenValido exige un nombre DNS con al menos dos etiquetas, etiquetas
+// válidas y un TLD alfabético de dos letras o más. El TLD alfabético es lo que
+// cierra las direcciones IPv4 en todas sus formas: la canónica (127.0.0.1), la
+// corta (127.1), la octal (0177.0.0.1), la hexadecimal (0x7f.0.0.1) y la entera
+// (2130706433), que `getaddrinfo`/`inet_aton` del relay pueden leer como
+// 127.0.0.1 aunque `net.ParseIP` no las reconozca. No es una garantía de
+// destino: cualquier nombre DNS puede resolverse a loopback en el relay, y el
+// blindaje real contra eso es el interruptor `PermitirDestinosPersonalizados`,
+// que nace en false.
 func hostMavenValido(host string) bool {
 	if host == "" || net.ParseIP(host) != nil || host == "localhost" {
 		return false
 	}
-	if !strings.Contains(host, ".") {
+	etiquetas := strings.Split(host, ".")
+	if len(etiquetas) < 2 {
 		return false
 	}
-	for _, etiqueta := range strings.Split(host, ".") {
+	for _, etiqueta := range etiquetas {
 		if etiqueta == "" || len(etiqueta) > 63 {
 			return false
 		}
@@ -180,6 +187,15 @@ func hostMavenValido(host string) bool {
 			if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
 				continue
 			}
+			return false
+		}
+	}
+	tld := etiquetas[len(etiquetas)-1]
+	if len(tld) < 2 {
+		return false
+	}
+	for i := 0; i < len(tld); i++ {
+		if tld[i] < 'a' || tld[i] > 'z' {
 			return false
 		}
 	}

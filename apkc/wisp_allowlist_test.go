@@ -560,3 +560,82 @@ func TestDestinosExtraRechazaRedLocal(t *testing.T) {
 	}
 	t.Logf("falsificación: 0.0.0.0:25 y host:0443 parsean; solo hostMavenValido, el puerto 443 y el decimal canónico los rechazan")
 }
+
+// hostMavenSinFiltroTLD reproduce la comprobación anterior a esta corrección:
+// `net.ParseIP` más la forma de las etiquetas. Solo existe para falsificar que
+// las IPv4 en forma corta, octal y hexadecimal la pasaban y que el TLD
+// alfabético es lo que ahora las detiene.
+func hostMavenSinFiltroTLD(host string) bool {
+	if host == "" || net.ParseIP(host) != nil || host == "localhost" {
+		return false
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	for _, etiqueta := range strings.Split(host, ".") {
+		if etiqueta == "" || len(etiqueta) > 63 {
+			return false
+		}
+		if etiqueta[0] == '-' || etiqueta[len(etiqueta)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(etiqueta); i++ {
+			c := etiqueta[i]
+			if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
+// TestDestinoExtraRechazaIPv4NoCanonica cubre el CONFIRMADO de la re-auditoría:
+// `127.1` y `0177.0.0.1` pasaban `net.ParseIP` y el relay podía leerlas como
+// 127.0.0.1. El TLD alfabético de dos letras cierra todas las formas numéricas.
+func TestDestinoExtraRechazaIPv4NoCanonica(t *testing.T) {
+	formas := []string{
+		"127.1",
+		"0177.0.0.1",
+		"0x7f.0.0.1",
+		"2130706433",
+		"127.0.0.1",
+	}
+	for _, host := range formas {
+		if hostMavenValido(host) {
+			t.Fatalf("hostMavenValido(%q) aceptó una dirección IPv4", host)
+		}
+		if _, _, err := parseDestinoExtra(host + ":443"); err == nil {
+			t.Fatalf("parseDestinoExtra(%q:443) aceptó una dirección IPv4", host)
+		}
+	}
+
+	// Falsificación: sin el TLD alfabético, las formas corta, octal y hexadecimal
+	// pasan la comprobación anterior. La forma entera, sin punto, ya la detenía.
+	for _, host := range []string{"127.1", "0177.0.0.1", "0x7f.0.0.1"} {
+		if !hostMavenSinFiltroTLD(host) {
+			t.Fatalf("la falsificación esperaba que %q pasara sin el filtro de TLD", host)
+		}
+		t.Logf("falsificación: %s:443 pasaba sin el TLD alfabético y ahora se rechaza", host)
+	}
+	if hostMavenSinFiltroTLD("2130706433") {
+		t.Fatal("la forma entera ya debía rechazarse por no tener punto")
+	}
+
+	// Positivos: los espejos de Maven, también el que se añade en DestinosExtra,
+	// siguen pasando.
+	cfg := ConfigWISP{
+		Habilitado:                     true,
+		Relay:                          RelaysWISP()[0],
+		PermitirDestinosPersonalizados: true,
+		DestinosExtra:                  []string{"espejo.maven.org:443"},
+	}
+	if err := cfg.Validar(); err != nil {
+		t.Fatalf("espejo.maven.org:443 debía valer como destino extra: %v", err)
+	}
+	for _, host := range []string{"espejo.maven.org", "repo1.maven.org", "repo.maven.apache.org"} {
+		if err := cfg.ValidarDestino(host, 443); err != nil {
+			t.Fatalf("el espejo %q debía seguir autorizado: %v", host, err)
+		}
+	}
+}
