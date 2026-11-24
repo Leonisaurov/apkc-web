@@ -16,7 +16,7 @@ package main
 // emisión sigue yendo a `exp` → `concatenar`, que es la ruta ya medida (StringBuilder) y no cambia el
 // orden de evaluación. El oráculo es el de siempre: javac 17 con `--release 8 -g:lines,source` por el
 // mismo dexer, las instrucciones de `run()V` y el dex entero. La única diferencia conocida es el
-// atributo del constructor de la anónima (§100), que se normaliza.
+// atributo del constructor de la anónima (§100), que se normalizaba; ya no, desde d123135.
 
 import (
 	"os/exec"

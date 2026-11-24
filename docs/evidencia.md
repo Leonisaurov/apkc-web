@@ -11948,7 +11948,9 @@ interruptor de la falsificación y va encendido en el binario que se publica.
 (`apkc/javaemisor_concat_argumento_test.go:103`) compila las líneas 171-179 reales, con la anónima
 que captura `apk`, contra `javac 17 --release 8 -g:lines,source`: `javac` elige `File(File,String)`
 (`(Ljava/io/File;Ljava/lang/String;)V`), el `run()V` sale instrucción a instrucción igual y el dex
-entero byte a byte salvo `MethodParameters` del constructor de la anónima, que se normaliza (§100).
+entero byte a byte salvo `MethodParameters` del constructor de la anónima, que en el momento de la
+medición se normalizaba (§100); desde `d123135` el emisor ya no lo escribe y la comparación es byte a
+byte sin normalizar.
 `TestConcatStringEnteroContraJavac17` (`:141`) fija que `int + String` (`i + ".apk"`) también se
 estima como `String` y que el dex sale byte a byte, con el `append(I)` del entero.
 `TestConcatComoArgumentoFalsificacion` (`:170`) apaga el interruptor y comprueba que reaparece el

@@ -274,8 +274,8 @@ func TestLlamadaEncadenadaComoArgumentoContraJavac17(t *testing.T) {
 }
 
 // TestLlamadaEncadenadaEnAnonimaContraJavac17: la línea 163 tal cual, dentro de la anónima que captura
-// `app`. Se comparan las instrucciones de `onClick` y el dex entero con el constructor de la anónima
-// normalizado, que es la única diferencia conocida entre javac y este emisor (§100).
+// `app`. Se comparan las instrucciones de `onClick` y el dex entero, sin normalizar desde d123135
+// (antes se normalizaba el constructor de la anónima, §100).
 func TestLlamadaEncadenadaEnAnonimaContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
 	javac := javac17(t)

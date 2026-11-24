@@ -205,8 +205,7 @@ func llevaI2lAntesDeInvocacion(t *testing.T, code []byte, op byte) bool {
 
 // TestEstaticaCualificadaEnAnonimaContraJavac17: la línea 212 tal cual, dentro de la anónima que captura
 // el `Intent` y resuelve `startActivity` en la Activity exterior. Se comparan las instrucciones de `run`
-// y el dex entero con el constructor de la anónima normalizado, que es la única diferencia conocida entre
-// javac y este emisor (§100).
+// y el dex entero, sin normalizar desde d123135 (antes se normalizaba el constructor de la anónima, §100).
 func TestEstaticaCualificadaEnAnonimaContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
 	javac := javac17(t)
