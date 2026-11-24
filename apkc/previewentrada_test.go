@@ -11,6 +11,8 @@ package main
 // arrastrar texto y portapapeles.
 
 import (
+	"archive/zip"
+	"bytes"
 	"fmt"
 	"strings"
 	"testing"
@@ -527,5 +529,248 @@ func TestElGuionDeEntradaNoTieneTope(t *testing.T) {
 	}
 	if n := nodoDeEntrada(m.Raiz, idEntradaAcepto); n == nil || n.Marcado == nil || *n.Marcado {
 		t.Errorf("la casilla tenía que quedar desmarcada por la última orden: %+v", n)
+	}
+}
+
+// Los ids del layout de los dos EditText de la prueba del navegador: el segundo deja un hueco para
+// reproducir los idRef que se vieron en el emulador, 0x7f010000 y 0x7f010002.
+const (
+	idNombreVacio   = 0x7f010000
+	idApellidoVacio = 0x7f010002
+	idEnviarVacio   = 0x7f010003
+	idGuardaVacio   = 0x7f020000
+)
+
+// tablaDeLosDosEditText es la tabla del caso: cuatro ids —el nombre y el apellido en las posiciones
+// 0 y 2, para que sus idRef sean distintos—, un @string con «Enviar» y el layout por su ruta.
+func tablaDeLosDosEditText() tablaEscribir {
+	ids := make([]entradaEscribir, 4)
+	for i := range ids {
+		ids[i] = entradaEscribir{clave: i, flags: 0x0004,
+			valor: valorEscribir{tipo: 0x12, datos: 0}}
+	}
+	return tablaEscribir{
+		idPaquete:     0x7f,
+		nombrePaquete: "com.myapp",
+		global:        []string{"Enviar", "res/layout/main.xml"},
+		globalUTF8:    true,
+		nombresTipo:   []string{"id", "string", "layout"},
+		nombresUTF8:   false,
+		claves:        []string{"nombre", "eco", "apellido", "enviar", "guarda", "main"},
+		clavesUTF8:    true,
+		tipos: []tipoEscribir{
+			{id: 1, specFlags: make([]uint32, len(ids)),
+				bloques: []bloqueEscribir{{entradas: ids}}},
+			{id: 2, specFlags: []uint32{0}, bloques: []bloqueEscribir{{entradas: []entradaEscribir{
+				{clave: 4, valor: valorEscribir{tipo: tipoCadena, datos: 0}},
+			}}}},
+			{id: 3, specFlags: []uint32{0}, bloques: []bloqueEscribir{{entradas: []entradaEscribir{
+				{clave: 5, valor: valorEscribir{tipo: tipoCadena, datos: 1}},
+			}}}},
+		},
+	}
+}
+
+// layoutDeLosDosEditText reproduce el layout de `prueba-pestana.js`: dos EditText con android:text=""
+// y un Button cuyo texto viene de un @string, que es la guarda de que las referencias siguen
+// resolviendo como antes del arreglo del texto vacío.
+func layoutDeLosDosEditText() documentoAXML {
+	ancho := func(datos uint32) atributoEscribir {
+		return atributoDeEntrada("layout_width", 0x010100f4, tipoEnteroDec, datos, "")
+	}
+	alto := func(datos uint32) atributoEscribir {
+		return atributoDeEntrada("layout_height", 0x010100f5, tipoEnteroDec, datos, "")
+	}
+	editText := func(id uint32, linea int) *elementoEscribir {
+		return &elementoEscribir{
+			nombre: "EditText",
+			linea:  linea,
+			attrs: []atributoEscribir{
+				atributoDeEntrada("id", 0x010100d0, tipoReferencia, id, ""),
+				ancho(0xffffffff), alto(0xfffffffe),
+				atributoDeEntrada("text", 0x0101014f, tipoCadena, 0, ""),
+			},
+		}
+	}
+	return documentoAXML{
+		ns:   []declaracionNS{{prefijo: "android", uri: uriAndroid, linea: 2}},
+		utf8: true,
+		raiz: &elementoEscribir{
+			nombre: "LinearLayout",
+			linea:  2,
+			attrs: []atributoEscribir{
+				atributoDeEntrada("orientation", 0x010100c4, tipoEnteroDec, 1, ""),
+				ancho(0xffffffff), alto(0xffffffff),
+			},
+			hijos: []*elementoEscribir{
+				editText(idNombreVacio, 4),
+				editText(idApellidoVacio, 9),
+				{
+					nombre: "Button",
+					linea:  14,
+					attrs: []atributoEscribir{
+						atributoDeEntrada("id", 0x010100d0, tipoReferencia, idEnviarVacio, ""),
+						ancho(0xfffffffe), alto(0xfffffffe),
+						atributoDeEntrada("text", 0x0101014f, tipoReferencia, idGuardaVacio, ""),
+					},
+				},
+			},
+		},
+	}
+}
+
+// Tabla y AXML del caso, ya leídos por las dos pruebas.
+func casoDeLosDosEditText(t *testing.T) ([]byte, *tablaRecursos) {
+	t.Helper()
+	datos, err := escribeAXML(layoutDeLosDosEditText())
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDeLosDosEditText())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	tabla, err := leeTabla(arsc)
+	if err != nil {
+		t.Fatalf("la tabla del fork no se deja leer: %v", err)
+	}
+	return datos, tabla
+}
+
+// TestElTextoVacioDelEditText cierra el texto prestado del emulador: los dos EditText declaran
+// android:text="", y antes del arreglo el escritor apuntaba al pool[0], que es «orientation».
+func TestElTextoVacioDelEditText(t *testing.T) {
+	datos, tabla := casoDeLosDosEditText(t)
+	a, err := leeAXML(datos)
+	if err != nil {
+		t.Fatalf("el AXML del fork no se deja leer: %v", err)
+	}
+	ctx := &contextoVista{axml: a, tabla: tabla}
+	arbol, err := ctx.arbol()
+	if err != nil {
+		t.Fatalf("el árbol: %v", err)
+	}
+	if len(arbol.hijos) != 3 {
+		t.Fatalf("el layout tiene %d hijos y se esperaban dos EditText y un Button", len(arbol.hijos))
+	}
+	for _, c := range []struct {
+		nombre string
+		nodo   *elementoLeido
+		texto  string
+	}{
+		{"raíz", arbol, ""},
+		{"primer EditText", arbol.hijos[0], ""},
+		{"segundo EditText", arbol.hijos[1], ""},
+		{"Button", arbol.hijos[2], "Enviar"},
+	} {
+		if n := ctx.nodoDe(c.nodo); n.Texto != c.texto {
+			t.Errorf("el texto de %s es %q y se esperaba %q", c.nombre, n.Texto, c.texto)
+		}
+	}
+	// El atributo se lee vacío en el pool del propio AXML, que es lo que `preparaVistasDelLayout`
+	// siembra; la siembra no puede inventar «orientation» ni texto para los EditText.
+	for _, e := range arbol.hijos[:2] {
+		v, ok := e.atributo(uriDeRecursos, "text")
+		if !ok || v.tipo != tipoCadena || ctx.texto(v) != "" {
+			t.Errorf("android:text de %s se lee como %+v (%q)", e.nombre, v, ctx.texto(v))
+		}
+	}
+	apk := zipDeEntradas(t, map[string][]byte{"res/layout/main.xml": datos})
+	zr, err := zip.NewReader(bytes.NewReader(apk), int64(len(apk)))
+	if err != nil {
+		t.Fatalf("el zip del layout: %v", err)
+	}
+	m := nuevaMaquina(&programaDalvik{dex: &dexFile{}, clases: map[string]*claseDalvik{}}, tabla)
+	preparaVistasDelLayout(m, zr, tabla, "")
+	if len(m.textosDeLayout) != 1 || m.textosDeLayout[idEnviarVacio] != "Enviar" {
+		t.Errorf("la siembra dejó %v y solo debía dejar el texto del Button", m.textosDeLayout)
+	}
+	for id, texto := range m.textosDeLayout {
+		if texto == "orientation" {
+			t.Errorf("la siembra puso «orientation» como texto de %#08x", id)
+		}
+	}
+}
+
+// TestLosDosEditTextConservanSuIdRef comprueba que el arreglo no mezcla las dos vistas: cada idRef
+// sale de la tabla, dos escrituras distintas llegan a capturas distintas y anotaTextoDinamico
+// estampa cada texto en su nodo.
+func TestLosDosEditTextConservanSuIdRef(t *testing.T) {
+	datos, tabla := casoDeLosDosEditText(t)
+	a, err := leeAXML(datos)
+	if err != nil {
+		t.Fatalf("el AXML del fork no se deja leer: %v", err)
+	}
+	ctx := &contextoVista{axml: a, tabla: tabla}
+	arbol, err := ctx.arbol()
+	if err != nil {
+		t.Fatalf("el árbol: %v", err)
+	}
+	editables := []struct {
+		clave string
+		id    uint32
+		nodo  *nodoVista
+	}{}
+	for i, c := range []struct {
+		clave string
+		id    uint32
+	}{{"nombre", idNombreVacio}, {"apellido", idApellidoVacio}} {
+		id, ok := tabla.idDeNombre("id", c.clave)
+		if !ok || id != c.id {
+			t.Fatalf("%s resuelve a %#08x (ok=%v) y se esperaba %#08x", c.clave, id, ok, c.id)
+		}
+		n := ctx.nodoDe(arbol.hijos[i])
+		if n.IDRef != refDeEntrada(id) {
+			t.Errorf("%s publica el idRef %q y se esperaba %q", c.clave, n.IDRef, refDeEntrada(id))
+		}
+		editables = append(editables, struct {
+			clave string
+			id    uint32
+			nodo  *nodoVista
+		}{c.clave, id, n})
+	}
+	if editables[0].nodo.IDRef == editables[1].nodo.IDRef {
+		t.Fatalf("los dos EditText comparten el idRef %q", editables[0].nodo.IDRef)
+	}
+	idParte, texto := partirEscribir("0x7f010000/García")
+	if idParte != refDeEntrada(idNombreVacio) || texto != "García" {
+		t.Errorf("partirEscribir dio %q y %q", idParte, texto)
+	}
+	m := nuevaMaquina(&programaDalvik{dex: &dexFile{}, clases: map[string]*claseDalvik{}}, tabla)
+	m.tiposVista[idNombreVacio] = "EditText"
+	m.tiposVista[idApellidoVacio] = "EditText"
+	res := &resultadoEjecucion{}
+	for _, e := range []eventoUsuario{
+		{Tipo: "escribir", Dato: "0x7f010000/García"},
+		{Tipo: "escribir", Dato: "0x7f010002/López"},
+	} {
+		if err := m.entregaEvento(tabla, e, res); err != nil {
+			t.Fatalf("la orden %+v falló: %v", e, err)
+		}
+	}
+	if len(m.capturas) != 2 {
+		t.Fatalf("las capturas son %+v y se esperaban dos", m.capturas)
+	}
+	vistos := map[string]bool{}
+	for _, c := range m.capturas {
+		if c.Origen != "usuario.escribir" {
+			t.Errorf("la captura %+v no es del tecleo del usuario", c)
+		}
+		vistos[c.IDRef] = true
+	}
+	for _, c := range editables {
+		if !vistos[c.nodo.IDRef] {
+			t.Errorf("no hay captura para el idRef %q de %s", c.nodo.IDRef, c.clave)
+		}
+	}
+	res.Capturas = m.capturas
+	for _, c := range editables {
+		anotaTextoDinamico(c.nodo, res)
+	}
+	if editables[0].nodo.TextoDinamico != "García" {
+		t.Errorf("el primer EditText dice %q y se esperaba «García»", editables[0].nodo.TextoDinamico)
+	}
+	if editables[1].nodo.TextoDinamico != "López" {
+		t.Errorf("el segundo EditText dice %q y se esperaba «López»", editables[1].nodo.TextoDinamico)
 	}
 }

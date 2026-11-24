@@ -118,6 +118,11 @@ func escribeAXML(doc documentoAXML) ([]byte, error) {
 
 	conId := map[string]uint32{} // nombre de atributo que va al mapa
 	demas := map[string]bool{}   // el resto de las cadenas
+	// Un valor de texto vacío no entra al pool por `meter`, pero el atributo sigue apuntando a la
+	// posición 0 del mapa, que en un layout es el primer nombre con id (orientation). Si hay algún
+	// tipoCadena vacío se reserva una celda "" al final, para que w.idx("") apunte a una cadena
+	// vacía de verdad sin mover el orden medido del resto del pool.
+	hayTextoVacio := false
 	meter := func(s string) {
 		if s != "" {
 			demas[s] = true
@@ -166,6 +171,9 @@ func escribeAXML(doc documentoAXML) ([]byte, error) {
 			}
 			if a.tipo == tipoCadena {
 				meter(a.texto)
+				if a.texto == "" {
+					hayTextoVacio = true
+				}
 			}
 		}
 		for _, h := range e.hijos {
@@ -192,6 +200,9 @@ func escribeAXML(doc documentoAXML) ([]byte, error) {
 	}
 	sort.Strings(resto)
 	cadenas := append(append([]string{}, nombres...), resto...)
+	if hayTextoVacio {
+		cadenas = append(cadenas, "")
+	}
 	posicion := map[string]int{}
 	for i, s := range cadenas {
 		if _, ok := posicion[s]; !ok {
