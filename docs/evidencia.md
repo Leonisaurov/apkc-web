@@ -10079,8 +10079,9 @@ form at pc 3`; restaurado el código, vuelven a verde.
 
 **Suite y wasm.** La suite completa da `ok … 69.558s` y el wasm compila.
 
-**Frontera de este `§`, cerrada en `§235`.** El emisor de `.class` rechazaba un `goto` hacia atrás de
-más de 32 767 **bytes** —el arreglo de este commit es del dexer, no del emisor de `.class`—; ya no:
+**Frontera de este `§`, cerrada en `§235`.** El emisor de `.class` rechazaba un `goto` hacia
+atrás de más de 32 767 **bytes** —el arreglo de este commit es del dexer, no del emisor de
+`.class`—; ya no:
 `resuelveAtras` (`apkc/javaemisor.go:7059-7065`) delega en `resuelveSaltos`, que ensancha a `goto_w`
 (`:2619-2622`), y `TestGotoWLargoHaciaAtras` (`apkc/javaemisor_atras_test.go:51`) lo mide con una
 vuelta de 36 009 B. No se corrió gate, chromium, red ni publicación.
@@ -11951,7 +11952,7 @@ grep -n 'func Test' apkc/javaemisor_concat_argumento_test.go
 Registrado el 2026-11-23. Transfiere la investigación `ses_df3efa15cffe1yUNMrBMUFbGxM`, que ejecutó
 el run de ApkShare; aquí no se re-ejecutó ese run, ni hubo gate, ni chromium, ni red, ni push, ni
 publicación. Lo que sí se re-ejecutó es el bloque «Comandos», y las citas `archivo:línea` son de
-este árbol (`4ff8a13`). Lo que solo viene del informe va marcado como **transferido, no
+este árbol (`91744fe`). Lo que solo viene del informe va marcado como **transferido, no
 versionado**.
 
 **Qué pregunta el aviso, y qué no.** `resolveSigner` (`apkc/gopackage.go:78`) solo decide con
