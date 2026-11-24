@@ -4207,9 +4207,11 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		// clase (parrafo 91). La delegacion no baja los inicializadores de campo; eso lo hace el
 		// constructor al que se delega.
 		e.cargaDe(0, "L")
-		if e.hayEmpaquetadoEn(e.interno, "<init>", l.args) {
+		if e.hayEmpaquetadoEn(e.interno, "<init>", l.args) || e.necesitaConversionEn(e.interno, "<init>", l.args) {
 			// un `this(...)` con un constructor varargs: la aridad del fuente no es la del descriptor,
-			// asi que se resuelve con los tipos estimados antes de bajar los argumentos (§194)
+			// asi que se resuelve con los tipos estimados antes de bajar los argumentos (§194). El
+			// ensanchamiento entra por la misma puerta: `S(long)` llamado con `this(n)` es
+			// `aload_0; iload_1; i2l; invokespecial` y el `int` ocupa una palabra y no dos.
 			cand, n, err := e.argumentosResueltos(e.interno, "<init>", l.args)
 			if err != nil {
 				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
@@ -4225,6 +4227,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 		}
+		if err := revisaAnchosDeArgumentos(tipos, cand.desc, l.donde.linea); err != nil {
+			return "", err
+		}
 		e.invoca(opInvokespec, e.interno, "<init>", cand.desc, argc+1)
 		return "V", nil
 	}
@@ -4237,8 +4242,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
 		}
 		e.cargaDe(0, "L")
-		if e.hayEmpaquetadoEn(dueño, l.nombre, l.args) {
-			// `super(...)` con un constructor varargs del padre: mismo orden que `this(...)`
+		if e.hayEmpaquetadoEn(dueño, l.nombre, l.args) || e.necesitaConversionEn(dueño, l.nombre, l.args) {
+			// `super(...)` con un constructor varargs del padre: mismo orden que `this(...)`, y por la
+			// misma cuenta el ensanchamiento de un argumento también se resuelve antes de bajarlo
 			cand, n, err := e.argumentosResueltos(dueño, l.nombre, l.args)
 			if err != nil {
 				return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
@@ -4253,6 +4259,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		cand, err := e.ctx.buscarMetodo(dueño, l.nombre, argc, tipos)
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+		}
+		if err := revisaAnchosDeArgumentos(tipos, cand.desc, l.donde.linea); err != nil {
+			return "", err
 		}
 		e.invoca(opInvokespec, dueño, l.nombre, cand.desc, argc+1)
 		return vueltaDe(cand.desc), nil
@@ -4402,7 +4411,7 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 			if ok && len(resto) == 0 {
 				// el mismo orden que en el receptor de instancia: con un primitivo que cae en un
 				// parametro de referencia hay que estimar y boxear antes de invocar (§194)
-				if e.hayEmpaquetadoEn(interno, l.nombre, l.args) || e.necesitaBoxingEn(interno, l.nombre, l.args) {
+				if e.hayEmpaquetadoEn(interno, l.nombre, l.args) || e.necesitaConversionEn(interno, l.nombre, l.args) {
 					cand, n, err := e.argumentosResueltos(interno, l.nombre, l.args)
 					if err != nil {
 						return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
@@ -4420,6 +4429,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 				cand, err := e.ctx.buscarMetodo(interno, l.nombre, argc, tipos)
 				if err != nil {
 					return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+				}
+				if err := revisaAnchosDeArgumentos(tipos, cand.desc, l.donde.linea); err != nil {
+					return "", err
 				}
 				if cand.acceso&accStatic == 0 {
 					return "", fmt.Errorf("linea %d: %s.%s no es estatico y no se puede llamar sobre el tipo", l.donde.linea, interno, l.nombre)
@@ -4439,7 +4451,7 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 	receptor := d[1 : len(d)-1]
 	var cand candidato
 	n := argc
-	if e.hayEmpaquetadoEn(receptor, l.nombre, l.args) || e.necesitaBoxingEn(receptor, l.nombre, l.args) {
+	if e.hayEmpaquetadoEn(receptor, l.nombre, l.args) || e.necesitaConversionEn(receptor, l.nombre, l.args) {
 		// una candidata varargs del receptor, o una de aridad fija con un parametro de referencia
 		// donde el fuente pone un primitivo: los tipos hay que estimarlos antes, porque la aridad
 		// del `invoke` la fija el descriptor y no el fuente, y porque el boxing (`Integer.valueOf`)
@@ -4457,6 +4469,9 @@ func (e *emisor) llamada(l jllamada) (string, error) {
 		cand, err = e.ctx.buscarMetodo(receptor, l.nombre, argc, tipos)
 		if err != nil {
 			return "", fmt.Errorf("linea %d: %w", l.donde.linea, err)
+		}
+		if err := revisaAnchosDeArgumentos(tipos, cand.desc, l.donde.linea); err != nil {
+			return "", err
 		}
 	}
 	accesosReceptor, err := e.ctx.accesosDe(receptor)
@@ -4635,15 +4650,19 @@ func (e *emisor) hayEmpaquetadoEn(clase, nombre string, args []jexpr) bool {
 	return e.hayEmpaquetado(args, cands)
 }
 
-// necesitaBoxingEn: si la candidata de `clase.nombre` para estos tipos estimados pide una conversion
-// que solo aparece en la fase laxa —boxing o desenvuelto—, o si elige una varargs que hay que
-// empaquetar. Es la pregunta que decide, en una llamada con receptor explicito, si hay que resolver
-// ANTES de bajar los argumentos: con boxing el `Integer.valueOf` se escribe entre el valor y el
-// `invoke`, y con desenvuelto pasa lo mismo con el `intValue()`. Bajar primero el literal dejaria
-// sobre la pila un valor que el descriptor rechaza (§194).
+// necesitaConversionEn: si la candidata de `clase.nombre` para estos tipos estimados pide una conversion
+// que se escribe entre el valor y el `invoke`: boxing, desenvuelto o el ensanchamiento primitivo que
+// cambia de ancho o escribe un opcode (`i2l`, `i2f`, `i2d`…). Es la pregunta que decide, en una llamada
+// con receptor explicito, si hay que resolver ANTES de bajar los argumentos: con boxing el
+// `Integer.valueOf` se escribe entre el valor y el `invoke`, y con desenvuelto pasa lo mismo con el
+// `intValue()`. Bajar primero el literal dejaria sobre la pila un valor que el descriptor rechaza (§194).
+// El ensanchamiento entra por la misma puerta y por una razón de cuenta: el `int` ocupa UNA palabra y el
+// parámetro `long` DOS, así que bajar los argumentos primero y descontar después el descriptor deja el
+// saldo en -1 —«quedan -1 valores en la pila al cerrar el metodo»— en vez del `i2l` de javac (JLS 5.1.2).
 // Lo que no se puede prever sin emitir devuelve falso y deja el camino de siempre, que baja los
-// argumentos y resuelve con sus descriptores reales.
-func (e *emisor) necesitaBoxingEn(clase, nombre string, args []jexpr) bool {
+// argumentos y resuelve con sus descriptores reales; allí `revisaAnchosDeArgumentos` impide que ese
+// desajuste se cuele en silencio.
+func (e *emisor) necesitaConversionEn(clase, nombre string, args []jexpr) bool {
 	tipos := make([]string, 0, len(args))
 	for _, arg := range args {
 		d, err := e.tipoEstimado(arg)
@@ -4664,6 +4683,14 @@ func (e *emisor) necesitaBoxingEn(clase, nombre string, args []jexpr) bool {
 		if i >= len(tipos) {
 			break
 		}
+		if tipos[i] == ps[i] {
+			continue
+		}
+		// el ensanchamiento primitivo es de la fase estricta, asi que no lo detecta el `asignable`
+		// laxo de abajo: se pregunta aparte y solo cuando de verdad escribe algo
+		if ajustaAnchosDeArgumento && conversionPrimitiva(tipos[i], ps[i]) {
+			return true
+		}
 		if e.ctx.asignableEstricto(tipos[i], ps[i]) {
 			continue
 		}
@@ -4673,6 +4700,63 @@ func (e *emisor) necesitaBoxingEn(clase, nombre string, args []jexpr) bool {
 		}
 	}
 	return false
+}
+
+// conversionPrimitiva: si pasar un valor del descriptor `desde` a un parámetro `hasta` escribe una
+// conversión numérica (JLS 5.1.2). El `byte`, el `short`, el `char` y el `boolean` suben a `int` sin
+// opcode y desde ahí a los anchos; el resto es la rejilla de `codigosConversion`. Identidad y la
+// subida B/C/S/Z a `I` devuelven falso.
+func conversionPrimitiva(desde, hasta string) bool {
+	if len(desde) != 1 || len(hasta) != 1 {
+		return false
+	}
+	base := desde[0]
+	if strings.IndexByte("BCSZ", base) >= 0 {
+		base = 'I'
+	}
+	if base == hasta[0] {
+		return false
+	}
+	_, ok := codigosConversion[[2]byte{base, hasta[0]}]
+	return ok
+}
+
+// ajustaAnchosDeArgumento es el interruptor de la sonda del ensanchamiento en los argumentos. Apagado,
+// la llamada vuelve a bajar los argumentos antes de resolver y a descontar después el descriptor ancho,
+// que es el defecto medido —«quedan -1 valores en la pila al cerrar el metodo»—: el `int` deja una
+// palabra, el `long` descuenta dos y el `i2l` de javac no se escribe. La guarda de palabras se apaga
+// con el para que el saldo llegue al cierre del método y el error sea el original. Encendido en el
+// binario que se publica; lo apaga `javaemisor_ancho_argumento_test.go`.
+var ajustaAnchosDeArgumento = true
+
+// palabrasDeTipos: las palabras de pila que ocupan unos descriptores que ya se emitieron, con la misma
+// cuenta que `palabrasDeArgs` (un `long` o un `double` cuentan por dos).
+func palabrasDeTipos(tipos []string) int {
+	n := 0
+	for _, t := range tipos {
+		if esAncho(t) {
+			n += 2
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// revisaAnchosDeArgumentos: el descriptor elegido pide las mismas palabras de pila que dejaron los
+// argumentos ya emitidos. El camino que baja los argumentos antes de resolver la sobrecarga no puede
+// escribir una conversión detrás de un valor ya emitido —la conversión va en el sitio de javac, no al
+// final de la lista—, así que un parámetro más ancho que su argumento se rechaza aquí, con la línea, en
+// vez de dejar el saldo descuadrado en `-1` o `-2` al cerrar el método.
+func revisaAnchosDeArgumentos(tipos []string, desc string, linea int) error {
+	if !ajustaAnchosDeArgumento {
+		return nil
+	}
+	quiere, dejan := palabrasDeArgs(desc), palabrasDeTipos(tipos)
+	if quiere != dejan {
+		return fmt.Errorf("linea %d: %s pide %d palabras y los argumentos dejan %d: falta la conversion y el tipo del argumento no se pudo estimar antes de emitirlo", linea, desc, quiere, dejan)
+	}
+	return nil
 }
 
 // argumentosResueltos: estima los tipos de los argumentos (sin escribir nada), resuelve la sobrecarga
@@ -5470,8 +5554,9 @@ func (e *emisor) tipoPrevisto(x jexpr) (string, bool) {
 	return "", false
 }
 
-// expA: emite la expresion y, si el hueco que hay que llenar es ancho y lo que sale es un entero, mete
-// el `i2l` (0x85) que javac pone en su lugar.
+// expA: emite la expresion y, si el hueco que hay que llenar es de otro tipo, escribe la conversion de
+// javac en su sitio: `i2l` (0x85) para un entero que llena un `long`, `i2f`/`i2d` para los flotantes y
+// la subida de `byte`/`short`/`char`, que en la pila ya es un entero, sin opcode de por medio.
 func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	// La promocion de un literal se hace **sobre la constante**, antes de elegir su forma: medido en el
 	// parrafo 85, `d + 1` es `dconst_1`, `l + 2` es `ldc2_w 2l` y `f * -2` es `ldc -2.0f`, ninguno con la
@@ -5548,6 +5633,14 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 	// javac 17 de `Estrecha.e` es `iload_0; iload_1; iadd`, sin conversiones.
 	if len(d) == 1 && strings.IndexByte("BCSZ", d[0]) >= 0 && deseado == "I" {
 		return "I", nil
+	}
+	// `byte`, `short`, `char` y `boolean` viven en la pila como enteros de una palabra (JVMS 2.11.1):
+	// su subida a `int` no escribe nada y hacia un ancho el opcode es el mismo que desde `int`, sin
+	// `i2b`/`i2s`/`i2c` de por medio. Medido con javac 17: `f(long)` con un `byte b` es `iload; i2l`,
+	// con un `short` lo mismo, y `g(double)` con un `char c` `iload; i2d`.
+	if len(d) == 1 && strings.IndexByte("BCSZ", d[0]) >= 0 && len(deseado) == 1 &&
+		strings.IndexByte("JFD", deseado[0]) >= 0 && e.convierte("I", deseado) {
+		return deseado, nil
 	}
 	if len(d) == 1 && len(deseado) == 1 && e.convierte(d, deseado) {
 		return deseado, nil
