@@ -130,11 +130,9 @@ func TestElPlegadoDeBitsContraJavac17(t *testing.T) {
 // abierto sale como un solo `sipush 129` y la LineNumberTable del constructor no se mueve: la fila de
 // la sentencia sigue apuntando al primer byte de la llamada, que es lo que escribe javac.
 //
-// El dex del proyecto de seis clases **no** se compara byte a byte aquí todavía, y no es por el
-// plegado: `Apk.<init>` reserva un hueco de local de más que javac (seis frentes cinco, `locals=6`
-// frente a `locals=5`) porque `reserva` no reutiliza el hueco de `ApplicationInfo appInfo` al cerrar
-// su bloque, y eso corre todos los registros del método (`apkc/javaemisor.go:2569`). Es otra frontera:
-// con el plegado ya igual, lo único que separa ese dex del de javac es ese reparto de huecos.
+// El dex del proyecto de seis clases **no** se compara byte a byte aquí: lo compara
+// `TestElDexDeLasSeisClasesDeApkShareEsElDeJavac17`, que llegó después de cerrar el reparto de huecos
+// de los bloques. Aquí se mide solo el plegado, que es de este fichero.
 func TestElApkDeApkSharePlegaElOrDeLosDosPermisos(t *testing.T) {
 	jar := jarDelSDK(t)
 	javac := javac17(t)
@@ -160,8 +158,8 @@ func TestElApkDeApkSharePlegaElOrDeLosDosPermisos(t *testing.T) {
 	if !llevaSipush(t, nuestro.Code, 129) {
 		t.Fatalf("el constructor no dobló el `|` a 129\n%s", volcadoDeClases(nuestras))
 	}
-	// el mismo programa que javac, instrucción a instrucción: la única diferencia medida es el número
-	// del hueco de la local `name` (frontera de `reserva`, no del plegado)
+	// el mismo programa que javac, instrucción a instrucción: ahora también el mismo hueco para
+	// `name`, que es lo que cerró el reparto de bloques (ver `javaemisor_ambito_local_test.go`)
 	if a, b := string(opcodesDe(t, nuestro.Code)), string(opcodesDe(t, suyo.Code)); a != b {
 		t.Fatalf("los opcodes de `Apk.<init>` no son los de javac:\nnuestro %v\njavac   %v", []byte(a), []byte(b))
 	}

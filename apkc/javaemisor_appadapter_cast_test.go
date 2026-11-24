@@ -39,10 +39,11 @@ func claseLeidaPorNombre(t *testing.T, clases []classFull, nombre string) classF
 	return classFull{}
 }
 
-// dexDeUnaClase: el dex de esa única clase. Sirve para comparar byte a byte una clase suelta cuando
-// el proyecto entero trae otras fronteras abiertas: el `Apk.java` de ApkShare pliega
-// `GET_ACTIVITIES | GET_META_DATA` a 129 y nuestro emisor todavía escribe el `or-int` (otro frente),
-// y eso no tiene nada que ver con `AppAdapter`.
+// dexDeUnaClase: el dex de esa única clase. Sirve para comparar byte a byte una clase suelta sin
+// arrastrar las demás del proyecto: sirvió cuando el dex de las seis clases de ApkShare todavía traía
+// fronteras abiertas en otra clase. Desde `javaemisor_ambito_local_test.go` ya no hace falta para
+// eso —el dex entero de las seis es el de javac— pero sigue siendo la forma barata de mirar una sola
+// clase cuando lo que se mide es suya.
 func dexDeUnaClase(t *testing.T, datos []byte) []byte {
 	t.Helper()
 	leida, err := readClassFull(datos)

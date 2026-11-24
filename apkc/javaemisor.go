@@ -2334,11 +2334,18 @@ type emisor struct {
 	vuelta    string
 	locales   map[string]localVar
 	siguiente int
-	codigo    []byte
-	lineas    []parLinea
-	prof      int
-	maxProf   int
-	maxLoc    int
+	// ambitos es la pila de bloques abiertos: al cerrar cada uno se devuelve `siguiente` a lo que
+	// valía al abrirlo, que es el reparto de javac (ver `ambito`).
+	ambitos []ambito
+	// picos son los altos que hay que vigilar aunque los bloques devuelvan su hueco: cada `try` con
+	// `finally` deja abierto uno para saber dónde pone javac el local del manejador `any`, que va en
+	// el registro más alto que alcanzó el cuerpo (ver `intenta`).
+	picos   []int
+	codigo  []byte
+	lineas  []parLinea
+	prof    int
+	maxProf int
+	maxLoc  int
 	// truncado avisa que un indice del pool no cabia en el byte de un `ldc`: el fichero ya no es correcto y
 	// el metodo se rechaza por nombre en vez de escribir un operando roto.
 	truncado bool
@@ -2395,6 +2402,26 @@ type parcheSalto4 struct {
 type localVar struct {
 	indice int
 	desc   string
+}
+
+// ambito es un bloque abierto del fuente: el reparto de locales con el que empezó y los nombres que
+// declaró dentro, para devolver las dos cosas al cerrarlo. Es lo que javac hace con `endScopes`: el
+// registro de una local se libera al cerrar el bloque donde se declaró, y el siguiente local del
+// mismo método vuelve a caer en ese hueco. Medido en el `Apk.<init>` de ApkShare, donde `String name`
+// (`Apk.java:27` del zip) ocupa el hueco que deja `ApplicationInfo appInfo` (`Apk.java:19`) al cerrar
+// el `if` de la línea 18 (`astore 4` de javac frente a nuestro `astore 5`).
+type ambito struct {
+	siguiente int
+	// previos guarda, por cada nombre que este bloque volvió a declarar, lo que había antes: una
+	// local exterior del mismo nombre o nada. Se devuelve en orden inverso al cerrar.
+	previos []nombreAnterior
+}
+
+// nombreAnterior: lo que la tabla de locales decía de ese nombre antes de que el bloque lo declarara.
+type nombreAnterior struct {
+	nombre   string
+	anterior localVar
+	habia    bool
 }
 
 type parLinea struct {
@@ -2683,10 +2710,90 @@ func (e *emisor) reserva(nombre string, desc string) int {
 	if e.siguiente > e.maxLoc {
 		e.maxLoc = e.siguiente
 	}
+	for i := range e.picos {
+		if e.siguiente > e.picos[i] {
+			e.picos[i] = e.siguiente
+		}
+	}
 	if nombre != "" {
+		e.apuntaNombre(nombre)
 		e.locales[nombre] = localVar{indice: i, desc: desc}
 	}
 	return i
+}
+
+// apuntaNombre deja anotado, en el bloque abierto más interno, lo que la tabla de locales decía de ese
+// nombre antes de declararlo aquí: al cerrar el bloque se devuelve, para que una local exterior del
+// mismo nombre vuelva a verse y una declarada solo aquí desaparezca.
+func (e *emisor) apuntaNombre(nombre string) {
+	if len(e.ambitos) == 0 {
+		return
+	}
+	a := &e.ambitos[len(e.ambitos)-1]
+	for _, p := range a.previos {
+		if p.nombre == nombre {
+			// ya se declaró en este mismo bloque: lo que hay que devolver es lo de más afuera, que es
+			// lo que ya está apuntado
+			return
+		}
+	}
+	anterior, habia := e.locales[nombre]
+	a.previos = append(a.previos, nombreAnterior{nombre: nombre, anterior: anterior, habia: habia})
+}
+
+// abreAmbito marca el reparto de locales con el que empieza un bloque.
+func (e *emisor) abreAmbito() {
+	e.ambitos = append(e.ambitos, ambito{siguiente: e.siguiente})
+}
+
+// abrePico y cierraPico vigilan el alto que alcanza el reparto desde aquí aunque los bloques de
+// dentro devuelvan su hueco. Lo necesita el manejador `any` de un `try` con `finally`: javac lo pone
+// en el registro más alto que usó el cuerpo (ver `intenta`).
+func (e *emisor) abrePico() { e.picos = append(e.picos, e.siguiente) }
+
+// pico devuelve el alto vigilado más interno, que nunca baja.
+func (e *emisor) pico() int {
+	if len(e.picos) == 0 {
+		return 0
+	}
+	return e.picos[len(e.picos)-1]
+}
+
+// cierraPico devuelve el alto vigilado y lo saca de la pila.
+func (e *emisor) cierraPico() int {
+	p := e.pico()
+	if len(e.picos) > 0 {
+		e.picos = e.picos[:len(e.picos)-1]
+	}
+	return p
+}
+
+// reutilizaHuecos es el interruptor de la falsificación: apagado, el bloque no devuelve su reparto de
+// locales al cerrarse y el siguiente local del método vuelve a subir el contador, que es lo que hacía
+// `reserva` antes. La prueba de la frontera mide con él las dos caras: el dex de las seis clases de
+// ApkShare byte a byte con él encendido y distinto (y con `locals=6` en vez de 5) apagado.
+var reutilizaHuecos = true
+
+// cierraAmbito devuelve el reparto y los nombres al punto en que el bloque se abrió. `maxLoc` no se
+// toca: es el alto que alcanzó el método, y los marcos apilados lo necesitan tal cual.
+func (e *emisor) cierraAmbito() {
+	if !reutilizaHuecos {
+		return
+	}
+	if len(e.ambitos) == 0 {
+		return
+	}
+	a := e.ambitos[len(e.ambitos)-1]
+	e.ambitos = e.ambitos[:len(e.ambitos)-1]
+	e.siguiente = a.siguiente
+	for i := len(a.previos) - 1; i >= 0; i-- {
+		p := a.previos[i]
+		if p.habia {
+			e.locales[p.nombre] = p.anterior
+			continue
+		}
+		delete(e.locales, p.nombre)
+	}
 }
 
 func (e *emisor) cargaDe(indice int, desc string) {
@@ -6732,6 +6839,7 @@ func (e *emisor) intenta(v jtry) error {
 		}
 	}
 	base := e.siguiente
+	e.abrePico()
 	alto := base
 	salida := e.nuevaEtiqueta()
 	// las filas `any` del cuerpo y de los cuerpos del catch, con el manejador por rellenar al final
@@ -6757,9 +6865,10 @@ func (e *emisor) intenta(v jtry) error {
 	}
 	// un `try` anidado ya usó huecos por su cuenta: el temporal del `finally` de arriba va en el
 	// mas alto que haya visto el metodo (medido en `Fini.anidado`, donde el interior usa el 2 y el
-	// `any` exterior escribe `astore_3`)
-	if e.siguiente > alto {
-		alto = e.siguiente
+	// `any` exterior escribe `astore_3`). El pico se consulta y no `e.siguiente`, porque los bloques
+	// de dentro ya han devuelto su hueco al cerrarse y el alto de javac no baja.
+	if p := e.pico(); p > alto {
+		alto = p
 	}
 	fin = len(e.codigo)
 	if finalmente == nil {
@@ -6837,8 +6946,8 @@ func (e *emisor) intenta(v jtry) error {
 		if finalmente != nil {
 			e.finalmente = e.finalmente[:len(e.finalmente)-1]
 		}
-		if e.siguiente > alto {
-			alto = e.siguiente
+		if p := e.pico(); p > alto {
+			alto = p
 		}
 		if finalmente == nil {
 			// el ultimo `catch` cae a la salida del constructo: no lleva `goto`, medido en
@@ -6900,6 +7009,8 @@ func (e *emisor) intenta(v jtry) error {
 			filas = append(filas, f)
 		}
 	}
+	// el pico de este `try` se cierra aquí: el reparto de lo que venga después va por su cuenta
+	e.cierraPico()
 	e.cierra(salida)
 	e.excepciones = append(e.excepciones, filas...)
 	return nil
@@ -7230,11 +7341,16 @@ func (e *emisor) stm(s jstmt) error {
 		}
 		return nil
 	case jbloque:
+		// el bloque del fuente abre un ámbito: lo que declare dentro devuelve su hueco al cerrar, que
+		// es el reparto de javac (`endScopes`). Un `return` dentro del bloque deja el método emitido y
+		// el ámbito abierto no se cierra, pero ya no se emite nada más del método.
+		e.abreAmbito()
 		for _, st := range v.sentencias {
 			if err := e.stm(st); err != nil {
 				return err
 			}
 		}
+		e.cierraAmbito()
 		return nil
 	case jif:
 		return e.branca(v)
@@ -8176,6 +8292,8 @@ func (e *emisor) preparaMetodo(desc string, estatico bool) {
 	e.vuelta = vueltaDe(desc)
 	e.locales = map[string]localVar{}
 	e.siguiente = 0
+	e.ambitos = nil
+	e.picos = nil
 	e.codigo = nil
 	e.lineas = nil
 	e.parches = nil
