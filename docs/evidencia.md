@@ -13574,6 +13574,76 @@ git diff --check af7686b^ af7686b
 git diff --name-only 7cb559b^ 7cb559b -- 'apkc/*_test.go' | xargs gofmt -l   # sin nombres
 ```
 
+## 284. La capa wasm deja de saltarse oráculos y queda sin fallos
+
+Registrado el 2026-11-24 sobre `8d93ada`. Dos frentes se cierran en este `§`: `4bbbf080`
+(integrado como `8d93ada`) y `8e0b849` (integrado como `7f24a12`). Las cifras de la capa wasm
+y de la suite nativa están transferidas de los builders y de las críticas; no se re-ejecutaron
+ni la capa wasm ni ninguna suite en esta sesión, que es solo de documentación.
+
+**A. 87 oráculos sin skip silencioso.** Antes, `grep -rn 'javac17(t)' apkc/*_test.go` daba
+74 call sites en 33 ficheros; con el cierre transitivo —cinco ayudantes— afectaba a 87 pruebas
+en 37 ficheros, todas `SKIP` silencioso bajo wasm. Después: **0** call sites. Los oráculos usan
+`javac17Exigido` (`apkc/dependencias_test.go:41`), que termina en `t.Fatalf` y no en `t.Skip`:
+sin `javac` la prueba falla en vez de disfrazarse de verde.
+
+**Dónde quedan.** Las 87 pruebas pasan a ficheros `*_paridad_test.go` con `//go:build !js`
+en `:1`, y las contrapartidas puras-Go sin tag se conservan. El árbol final tiene 43 ficheros
+nuevos con esa cabecera, 99 `func Test` y 85 call sites de `javac17Exigido`, todos confinados
+en ficheros `!js` (las dos líneas restantes del `grep` son la definición y su comentario).
+
+**Lo que midió el builder (transferido).** La capa wasm pasa de 116 `SKIP` a 29, con `PASS`
+746 sin cambio y **2 `--- FAIL`**: los dos `multidex`, ya corregidos en `web` por `7f24a12`,
+y sin aborto. En nativo, `ok … 173.030s`, 871 `PASS`, 0 `FAIL` y 6 `SKIP` ajenos.
+
+**Veredicto de la crítica de A (transferido).** 265 funciones comparadas en 43 pares,
+**0 aserciones perdidas ni cambiadas**; el `grep -c 't.Skip'` del diff da 3 por reubicación de
+un guard preexistente, no skips nuevos. `go vet` nativo y wasm limpios; `gofmt -l` solo nombra
+el preexistente `javaemisor_constantvalue_long_test.go`.
+
+**B. Los dos últimos fallos, multidex.** `TestCompilaAppPre21ConDemasiadasClasesAborta` y
+`TestCompilaAppSinUsesSdkConDemasiadasClasesAborta` venían de `exec.Command(os.Args[0])`
+(`apkc/multidex_app_test.go:386`), imposible bajo wasm, donde no hay proceso que relanzar.
+Pasan a `apkc/multidex_app_proceso_test.go` (`//go:build !js`) con el cuerpo idéntico. Sus
+contrapartidas puras-Go, `TestDexPrimarioPre21QueNoCabeSeRechazaEnGo` (`:341`) y
+`TestDexPrimarioSinUsesSdkQueNoCabeSeRechazaEnGo` (`:375`), comprueban los mismos mensajes
+(`main-dex`, `65536`, `API 19`/`API 1`, `classes2.dex`) con 0 dex escritos.
+
+**Medición transferida y crítica en curso.** El builder dio capa wasm `rc=0` y 0 `FAIL`, y
+nativo `ok … 192.981s`, con `vet` y `gofmt` limpios. La crítica sigue revisando este frente.
+
+**Condición pendiente.** QA (`ses_df1f12649ffeGtpp1o1HfFooeh`) ejecuta la capa wasm final para
+confirmar 0 `FAIL` y 29 `SKIP`; el veredicto se integrará al cerrar. Hasta que llegue, este `§`
+no se da por auditado.
+
+**Deuda por diseño del tag.** Que el hijo real aborta el build solo se prueba en nativo.
+
+```sh
+# cero oráculos con skip silencioso, y el helper con Fatalf
+grep -rn 'javac17(t)' apkc/*_test.go                       # 0
+grep -n 'func javac17Exigido' apkc/dependencias_test.go     # :41
+```
+
+```sh
+# 43 cabeceras !js en :1, 99 pruebas y 85 call sites confinados
+for f in apkc/*_paridad_test.go; do head -n1 "$f"; done | sort | uniq -c
+grep -h 'func Test' apkc/*_paridad_test.go | wc -l
+grep -rn 'javac17Exigido' apkc/*_test.go | grep -v 'paridad_test.go' | wc -l   # 0
+```
+
+```sh
+# el frente multidex: el proceso queda fuera del tag, las contrapartidas dentro
+head -n1 apkc/multidex_app_proceso_test.go
+grep -n '^func Test' apkc/multidex_app_test.go apkc/multidex_app_proceso_test.go
+git show 7f24a12^:apkc/multidex_app_test.go | sed -n '386p'
+```
+
+```sh
+# capa wasm y suite nativa, tal como las midieron los builders (no re-ejecutadas aquí)
+tcr -r 256M -- sh tools/entorno.sh wasm
+JAVAC17=/ruta/al/javac17 tcr -- sh tools/entorno.sh test
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
