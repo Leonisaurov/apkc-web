@@ -8,7 +8,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 
 | Ruta | Qué es | Cómo se comprueba |
 | --- | --- | --- |
-| `docs/evidencia.md` | lo medido, cada afirmación con su comando | leerlo |
+| `docs/evidencia.md` | índice de las 297 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
 | `docs/situacion.md` | el recap de lo medido, bullet por bullet (movido desde este fichero el 2026-11-03); el original es el `§` que cada bullet cita | leerlo y comprobar que su `§` existe |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
@@ -60,11 +60,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
    Todo cambio ya confirmado —código, documentación o configuración— se cierra con su commit: no se
    deja trabajo confirmado sin commitear.
 7. **El registro tiene tres sitios y no son intercambiables.** Una medición nueva es un `§` en
-   `docs/evidencia.md`, con el comando que la reproduce. Si cambia lo que el subconjunto acepta o rechaza,
-   se actualiza **la fila** del inventario de la Fase 5 en `docs/plan.md` (y la tabla Estado del plan si
-   cambia el estado de una fase). Este fichero **no admite bullets de hallazgos**: reglas, mapa, entorno,
-   gate y la tabla de áreas — y no pasa de ~130 líneas, porque se lee entero en cada sesión. Lo ya escrito
-   no se copia aquí: `docs/situacion.md` es el recap de las mediciones.
+   `docs/evidencia/NN-*.md`, con el comando que la reproduce; `docs/evidencia.md` solo enruta y su tabla
+   se actualiza con ese `§`. Si cambia lo que el subconjunto acepta o rechaza, actualiza **la fila** del
+   inventario de la Fase 5 en `docs/plan.md` (y la tabla Estado del plan si cambia el estado de una fase).
+   Este fichero **no admite bullets de hallazgos**: reglas, mapa, entorno, gate y la tabla de áreas — y no
+   pasa de ~130 líneas: se lee entero en cada sesión; lo ya escrito está en `docs/situacion.md`, el recap.
 8. **Verificación por capas: la punta primero, el gate al integrar.** `tools/entorno.sh` separa
    `test` (suite Go), `wasm` (hospedador de Node), `banco` (los cinco caminos) y `gate` (todo,
    con chromium). Al iterar, ejecuta primero el comando puntual del cambio —p. ej.
@@ -108,6 +108,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      (`~/Develop/Go/apkc-web/`) o bajo su prefijo de temporales (`$HOME/.cache/apkc-web/…`) puedes
      borrarlo sin pedir confirmación cada vez**; conserva solo la evidencia ya registrada en `docs/`
      y lo que tenga un proceso vivo o sirva a la sesión actual.
+ 13. **El orquestador administra, no ejecuta.** El diagnóstico y la implementación se delegan: un plan
+     del `planificador` pasa por `critico` **antes** de delegarse; cada `builder` que escribe se abre en
+     worktree propio con su sesión movida allí, y el auditor no lleva worktree. En el encargo se dice
+     «tú eres el subagente, yo soy el orquestador; no delegues, ejecuta y verifica en tu ruta». Los
+     gates solo se corren con autorización expresa del usuario; para iterar, pruebas focales.
 
 ## Entorno (Termux/Android aarch64)
 
