@@ -13868,6 +13868,55 @@ sensors
 ps -ef | grep droidloom-applications
 ```
 
+## 288. Consola acoplable y teclado en los `EditText` del emulador
+
+Registrado el 2026-11-24 por transferencia de dos frentes de la pestaña: la consola acoplable
+(builder `ses_df1a71f64ffeK5MEMIR4sBHEhg`, `cee1bc5`/`bf6a688`) y el teclado en los `EditText`
+del emulador (builder `ses_df1a60ad7ffeZM2piCQa6kqw7T`, `95dd4b3`/`75cf6c7`). Las mediciones
+son de los builders y de las críticas; no se re-ejecutó aquí ningún CDP, build ni suite. Sin
+gate final, chromium, red, push ni publicación: solo documentación. La temperatura está medida
+en `§287` y no se repite aquí; solo se remite a ella.
+
+**A. Consola acoplable (`cee1bc5`/`bf6a688`).** Antes solo se podía acoplar a izquierda o
+derecha y no había tiradores; después hay cuatro bordes (`previa-panel.js:84-104`), ocho
+tiradores (`index.html:635-666`, `previa-panel.js:1182-1199`), persistencia en `localStorage`
+y botón Soltar. La crítica `ses_df19bfbddffekF81pC8TN5cLmC` RECHAZÓ un fallo de especificidad:
+`style.css:700` (`pointer-events:none`, especificidad 0,3,0 por los `:not()`) ganaba a `:702`
+(0,2,0), así que ningún tirador recibía el puntero. Se arregló repitiendo la clase en el
+selector (`.tirador-previa.tirador-previa`) y fijándolo en `prueba.js`; corregido en
+`f252838`/`06583ac`. `node prueba.js` → `prueba: todo en orden`.
+
+**Deuda de la consola.** Las ventanas ≤760 px ocultan los tiradores por una regla existente;
+acoplar y redimensionar en navegador no está verificado (CDP no ejecutada por temperatura).
+
+**B. Teclado en los `EditText` (`95dd4b3`/`75cf6c7`).** Builder
+`ses_df1a60ad7ffeZM2piCQa6kqw7T`; crítica `ses_df19b08d1ffePGFWQT6U6OEgpS` APROBAR.
+`apkc preview` ya acepta `--escribir id/texto` (`apkc/preview.go:267`, `:319-320`, `:869-897`);
+la página añade `editableEnPunto` (`previa-panel.js:475`), `textosEscritos` (`:720`), campo
+real (`:2660`), foco y cierre (`:2749-2762`, `:4876`), y reenvía el guion (`:2613`). No muta el
+documento ni OPFS (contrato `AGENTS.md:188`). `node --check` ×4 y `node prueba.js` sin fallos.
+
+**Deuda del teclado.** La CDP no se ejecutó; el parser recorta los espacios al principio y al
+final del texto.
+
+**Fronteras de este `§`.** Ni la consola ni el teclado se dan por verificados en navegador:
+la CDP no se ejecutó en A ni en B por temperatura (medida en `§287`). La crítica de A RECHAZÓ
+un fallo de especificidad ya corregido; la de B APROBÓ. Siguen abiertas las deudas de la consola
+(≤760 px y acoplar/redimensionar sin verificar) y del teclado (CDP y espacios recortados). Sin
+gate, chromium, red, push ni publicación.
+
+```sh
+# consola: prueba focalizada
+cd studio && node prueba.js
+# teclado: sintaxis de cuatro .js y prueba focalizada
+cd studio && node --check …
+cd studio && node prueba.js
+# ids y claves citados en los dos frentes
+grep -rn 'tirador-previa\|editableEnPunto\|textosEscritos' studio/
+grep -rn -- '--escribir' apkc/
+# temperatura: remitida a §287
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por
