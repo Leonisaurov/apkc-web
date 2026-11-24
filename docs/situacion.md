@@ -29,6 +29,10 @@ PREFIX=$HOME/.cache/apkc-web-clicker-final sh tools/entorno.sh gate
 # e2e: todo en orden
 ```
 
+Esas cifras son las de `§202` (2026-11-22). El gate posterior sobre el árbol del 2026-11-23 (`§242`)
+subió a **36 comprobaciones** en crear y **229** en pestaña; lo que este recorrido describe no cambió,
+solo el recuento del gate.
+
 El recorrido, en el orden en que se hace:
 
 1. **Inicio** crea el proyecto en OPFS desde el formulario (nombre, `package` e icono opcional) y
@@ -58,7 +62,8 @@ El recorrido, en el orden en que se hace:
 Lo que ese recorrido **no** hace, con su comando o su `§`: ART y Safari reales en CI (§194), el
 host real con truncamiento (§196, §198) y los dos advisories del detector de interfaz
 (`INFORMA-SEGURIDAD.md`). El incremental propio (`docs/plan-incremental-web.md`) ya está activo:
-I1 e I2 hechas e I3 hecha en parte, con I4 e I5 pendientes. El `android.jar` propio ya existe y
+I1 e I2 hechas, I3 cerrada en `d3803bb`, I4 hecha en el camino nativo con el gate pendiente e I5 medida
+por debajo del criterio. El `android.jar` propio ya existe y
 tiene un run de GitHub Actions en verde (`docs/plan-android-jar-propio.md`, J4 cerrada); **no se
 usa para compilar en la página**: la pestaña sigue cargando el `android.jar` de la SDK del usuario
 o del servidor (`/android-jar` → `/sdk/android.jar`, 26.361.808 bytes), y el jar generado solo se
@@ -204,7 +209,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   trae `LocalVariableTable`, y **no** se toman de `MethodParameters` (recompilada la sonda con
   `-parameters` el área sale idéntica y lo único que cambia es la anotación
   `Ldalvik/annotation/MethodParameters;`); y la posición se marca con el especial
-  `0x0a + 15·Δpc + (Δlínea + 4)`, Δlínea en [-4, +10]. Emisor en `apkc/dexdebug.go`, área `0x2003` detrás
+  `0x0a + 15·dpc + (dlinea + 4)`, dlinea en [-4, +10]. Emisor en `apkc/dexdebug.go`, área `0x2003` detrás
   de `0x2001`, `debug_info_off` parcheado al conocer la base, e items idénticos compartiendo offset (nueve
   cuerpos del fixture → ocho items). Dos de tres métodos salen **idénticos byte a byte** a `d8`. Prueba en
   el teléfono: una variante que divide por cero imprime
