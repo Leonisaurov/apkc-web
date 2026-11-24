@@ -13661,7 +13661,7 @@ JAVAC17=/ruta/al/javac17 tcr -- sh tools/entorno.sh test
 ## 285. La página permite activar o desactivar la compilación incremental
 
 Registrado el 2026-11-24 por transferencia del builder `ses_df1d6c613ffeGmQsTnaFzeaRCi`
-(commit del submódulo `551a478`, puntero `c324611` en este repo) y de la crítica
+(commit del submódulo `551a478`, gitlink actualizado por `c324611` en el superproyecto) y de la crítica
 `ses_df1c97e9bffe9Azxx7mOzRggVb`, que APROBÓ sin `CONFIRMADO`. Solo documentación: no se
 re-ejecutó nada aquí, sin gate final, chromium, red ni publicación.
 
@@ -13670,7 +13670,7 @@ podían pedir `{incremental:false}`. Ahora `index.html:849-850` ofrece la casill
 `#inc-compilar`, marcada por defecto (`checked`), con la nota «Reutiliza las cachés del build
 anterior; destildarlo fuerza una compilación completa».
 
-**La regla de prioridad.** `pestana.js:3033-3043` decide con la expresión siguiente:
+**La regla de prioridad.** `pestana.js:3043-3045` decide con la expresión siguiente:
 
 ```js
 const inc = opciones.incremental === undefined
