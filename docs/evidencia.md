@@ -11974,8 +11974,8 @@ transferida, no versionada; la reproduce `cd apkc && go test -count=1 .` sobre `
 ApkShare se detenía en `MainActivity.java:198`, columna 50, en `Intent.ACTION_SEND` (constante
 `String` del `android.jar`) como argumento del constructor `new Intent(...)`; la midió el builder y
 aquí se transfiere sin re-ejecutarse. `§265` cerró esa parada y `§269` registra el build completo
-con `rc=0`;
-las demás fronteras de `§262` (WISP inerte y sin cablear, y la publicación) siguen sin cambios.
+con `rc=0`; las demás fronteras de `§262` (WISP inerte y sin cablear, y la publicación) siguen sin
+cambios.
 
 ```sh
 cd apkc && go test -run 'ConcatComoArgumento|ConcatStringEntero|CuentaEnteraEnFile' -count=1 .
@@ -13172,7 +13172,7 @@ de nivel superior —más 6 subtests dentro de los dos `Dedupe*`— y ningún `p
 `(apkc devolvio 1)` de la última línea es la propagación del rc del propio test.
 
 **La comparación.** El log previo de 20 fallos (`~/.cache/apkc-web/despues-verboso.txt`) contiene
-exactamente estos 15 más cinco que ahora pasan:
+exactamente estos 15 más cinco que ya no figuran en rojo (no se re-ejecutaron con `-test.v`):
 `TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase`,
 `TestCompilarEnGoDexaIgualQueJavacConUnaDependencia`,
 `TestRunRechazaManifiestoInyectadoAntesDeLaShell`,
@@ -13185,7 +13185,8 @@ layout montados da `--- PASS` en ambas y `RC=0`; en particular ya no aparece el 
 `build/res/layout/deps_fila.xml` que abortaba el run del `§278`.
 
 **Las causas de los 15.** Once son el oráculo de `javac 17`: `javac17Exigido`
-(`dependencias_test.go:41-47`) llama a `exec.Command` y el binario `js` no puede lanzarlo. Son
+(`dependencias_test.go:38-48`) llama a `buscarJavac17()` y, al no encontrar javac en el hospedador
+(`exec.LookPath`/`exec.Command` no funcionan bajo `js`), aborta con `t.Fatalf`. Son
 `TestNewDeOtraClaseContraJavac17` (`javaemisor_alcance_test.go:65`), `TestNewConTipoDeJar`
 (`:178`), `TestHerenciaDeOtraClaseSubePorSuPadre` (`:348`),
 `TestElPostDelayedDeApkShareLlevaSuI2L` (`javaemisor_ancho_argumento_test.go:146`),
@@ -13226,7 +13227,7 @@ grep -c '^--- FAIL' "$HOME/.cache/apkc-web/despues-verboso.txt"
 ```
 
 ```sh
-J="$HOME/Android/platforms/android-34/android.jar"
+J="$HOME/opt/android-sdk/platforms/android-34/android.jar"   # la ruta que usó el log
 node shim/navegador-sim.js \
   --montar "$J:/android/platforms/android-34/android.jar" \
   --montar apkc/testdata/vista-propia/main.xml:/testdata/vista-propia/main.xml \
