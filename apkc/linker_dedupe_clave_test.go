@@ -9,7 +9,6 @@ package main
 
 import (
 	"archive/zip"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,25 +55,13 @@ func marcoDelSdkDePrueba(t *testing.T) *marcoRecursos {
 }
 
 // avisosDurante corre `hacer` con la salida estándar desviada y devuelve lo que se escribió, que es
-// donde `LogW` publica el aviso de una clave repetida.
+// donde `LogW` publica el aviso de una clave repetida. La captura la hace `capturarSalida`, que
+// desvía `os.Stdout` a un fichero temporal: una tubería de `os.Pipe` no existe en el hospedador
+// wasm (`os/pipe_wasm.go` devuelve ENOSYS y la prueba moría con `pipe: not implemented on js`), así
+// que con el fichero se mide exactamente lo mismo en nativo y en la pestaña.
 func avisosDurante(t *testing.T, hacer func()) string {
 	t.Helper()
-	viejo := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = w
-	hacer()
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = viejo
-	datos, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(datos)
+	return capturarSalida(t, hacer)
 }
 
 // entradasDeClave cuenta las entradas de `clave` dentro del tipo `tipo` en la tabla escrita: la
