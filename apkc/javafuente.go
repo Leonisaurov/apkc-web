@@ -2372,7 +2372,15 @@ func asignacion(destino jexpr, op string, valor jexpr, donde pos) jstmt {
 	}
 }
 
-// pareceDeclaracion: `Tipo nombre` (dos identificadores seguidos) o `final Tipo nombre`.
+// leeTipoCualificadoDeclaracion es el interruptor de la sonda del tipo cualificado en una declaración
+// local: apagado, `pareceDeclaracion` solo acepta un nombre de tipo suelto y la línea 218 del zip de
+// ApkShare —`AlertDialog.Builder builder = new AlertDialog.Builder(this);`— vuelve a fallar con el
+// mensaje literal que leyó el usuario. Lo usa la falsificación de
+// `javaemisor_tipo_cualificado_local_test.go`; encendido en el binario que se publica.
+var leeTipoCualificadoDeclaracion = true
+
+// pareceDeclaracion: `Tipo nombre` (dos identificadores seguidos, con el tipo suelto o cualificado) o
+// `final Tipo nombre`.
 func (a *analizadorJava) pareceDeclaracion() bool {
 	i := a.i
 	if a.toks[i].kind == 'k' && a.toks[i].valor == "final" {
@@ -2383,6 +2391,18 @@ func (a *analizadorJava) pareceDeclaracion() bool {
 		return false
 	}
 	i++
+	// el tipo cualificado (`AlertDialog.Builder builder`, `android.os.Bundle estado`): los segmentos
+	// del tipo van unidos por puntos y el nombre de la variable es el que va detrás del último. Lo que
+	// separa la declaración del acceso a un campo es el contexto: en Java `a.b c;` no es ninguna
+	// expresión, y un acceso es receptor de una llamada o de una asignación —`System.out.println(…)`
+	// trae `(` detrás del último segmento y `builder.setView(x)` no trae un nombre detrás—, así que ni
+	// uno ni otro llega a esta rama.
+	if leeTipoCualificadoDeclaracion {
+		for i+1 < len(a.toks) && a.toks[i].kind == 'p' && a.toks[i].valor == "." &&
+			(a.toks[i+1].kind == 'i' || (a.toks[i+1].kind == 'k' && esNombreDeTipo(a.toks[i+1].valor))) {
+			i += 2
+		}
+	}
 	// los argumentos de tipo del tipo declarado (`List<Apk> xs`, `Map<String,List<Apk>> xs`). Se cuentan
 	// los `<` y los `>`, y el `>>` del tokenizador cierra dos; si no cierran, no es una declaración
 	// (`a < b` es una comparación) y se vuelve a la ruta de la expresión.
