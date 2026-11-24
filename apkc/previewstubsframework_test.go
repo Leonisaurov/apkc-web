@@ -84,6 +84,14 @@ func TestElContextoDevueltoEncadena(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("getApplicationContext: ok=%v err=%v", ok, err)
 	}
+	// el contexto de la app no es la actividad: en el framework es un Application propio, y el
+	// intérprete no debe devolver el mismo objeto que recibió
+	if ctx == nil {
+		t.Fatal("getApplicationContext devolvió el cero")
+	}
+	if ctx == actividad {
+		t.Error("getApplicationContext devolvió la propia Activity en vez de un Application distinto")
+	}
 	pm, ok, err := m.intentaStub([]string{"Lshare/apps/util/MainActivity;"},
 		"getPackageManager", "()Landroid/content/pm/PackageManager;", nil, ctx)
 	if err != nil || !ok {
@@ -91,6 +99,9 @@ func TestElContextoDevueltoEncadena(t *testing.T) {
 	}
 	if pm == nil {
 		t.Error("getPackageManager sobre el Application devolvió el cero")
+	}
+	if avisos := strings.Join(m.avisos, "\n"); strings.Contains(avisos, "no está en el dex ni en los stubs") {
+		t.Errorf("el encadenamiento cayó en el aviso de stub ausente: %s", avisos)
 	}
 }
 
@@ -134,6 +145,10 @@ func TestElBuilderEncadenaComoEnElFramework(t *testing.T) {
 // `post`, en vez de devolver el cero y reventar al llamarlo.
 func TestElEjecutorEncolaElRunnable(t *testing.T) {
 	m := maquinaDeStubs()
+	// el reloj y el mapa de clases son lo que necesita la cola para despachar el run() al vencer
+	reloj := int64(0)
+	m.reloj = &reloj
+	m.prog = &programaDalvik{clases: map[string]*claseDalvik{}}
 	ejecutor := objDe("Ljava/util/concurrent/ExecutorService;")
 	runnable := objDe("Lshare/apps/util/MainActivity$1;")
 	v, ok, err := m.intentaStub([]string{"Ljava/util/concurrent/ExecutorService;"},
@@ -149,6 +164,29 @@ func TestElEjecutorEncolaElRunnable(t *testing.T) {
 	}
 	if m.cola[0].runnable != runnable {
 		t.Error("execute encoló un Runnable distinto del que recibió")
+	}
+	// execute solo encola: el Runnable no corre en la llamada, aunque la tarea venza en el instante
+	// cero. Antes de mover el reloj no se ejecutó ninguna tarea ni se despachó ningún run().
+	if m.tareas != 0 {
+		t.Fatalf("execute ejecutó %d tareas de inmediato; el Runnable debe esperar al reloj", m.tareas)
+	}
+	if avisos := strings.Join(m.avisos, " "); strings.Contains(avisos, "no declara run()V") {
+		t.Fatalf("execute despachó el run() antes de avanzar el reloj: %s", avisos)
+	}
+	if err := m.avanza(1); err != nil {
+		t.Fatalf("avanzar el reloj falló: %v", err)
+	}
+	if !m.vence(m.ahora()) {
+		t.Fatal("al avanzar el reloj no se ejecutó la tarea encolada")
+	}
+	if m.tareas != 1 {
+		t.Errorf("tras avanzar se ejecutaron %d tareas y se esperaba 1", m.tareas)
+	}
+	if len(m.cola) != 0 {
+		t.Errorf("tras avanzar quedan %d tareas en la cola", len(m.cola))
+	}
+	if avisos := strings.Join(m.avisos, " "); !strings.Contains(avisos, "no declara run()V") {
+		t.Errorf("al vencer no se despachó el run() del Runnable: %s", avisos)
 	}
 }
 
