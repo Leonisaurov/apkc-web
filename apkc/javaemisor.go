@@ -1550,7 +1550,37 @@ func (ctx *contextoJava) aplicablesDe(cands []candidato, tipos []string, cabe fu
 
 // masEspecificaDe: la unica candidata que cabe en todas las demas (JVMS 15.12.2.5). Devuelve falso si
 // no hay ninguna o si hay empate.
+//
+// Con varias máximas por parámetros —lo normal es que los parámetros sean idénticos, que es el caso de
+// un método heredado y redefinido— se desempata por el tipo de vuelta, como javac: de las máximas se
+// queda la que devuelve un tipo que cabe en la vuelta de todas las demás (la más estrecha). Medido con
+// javac 17 sobre `ListView.getAdapter()` de ApkShare, que ve dos declaraciones sin parámetros: la de
+// `AbsListView`, que devuelve `ListAdapter`, y la genérica de `AdapterView`, que borra a `Adapter`; javac
+// escribe `()Landroid/widget/ListAdapter;`. Si los retornos no están emparentados no hay desempate y la
+// llamada sigue siendo ambigua.
 func (ctx *contextoJava) masEspecificaDe(cands []candidato) (candidato, bool) {
+	mas := ctx.maximasPorParametros(cands)
+	if len(mas) == 1 {
+		return mas[0], true
+	}
+	if len(mas) > 1 && desempataPorVuelta {
+		if unica, ok := ctx.masEstrictaPorVuelta(mas); ok {
+			return unica, true
+		}
+	}
+	return candidato{}, false
+}
+
+// desempataPorVuelta es el interruptor de la sonda del desempate por retorno covariante. Apagado, dos
+// máximas de parámetros iguales vuelven a ser ambiguas y el emisor devuelve el error literal de
+// `ListView.getAdapter` de ApkShare; lo usa la falsificación de
+// `javaemisor_vuelta_covariante_test.go`. Encendido en el binario que se publica.
+var desempataPorVuelta = true
+
+// maximasPorParametros: las candidatas que caben en todas las demás por su lista de parámetros
+// (JVMS 15.12.2.5, la regla de siempre). Con parámetros idénticos las deja todas: el desempate por
+// vuelta es otro paso.
+func (ctx *contextoJava) maximasPorParametros(cands []candidato) []candidato {
 	mas := []candidato{}
 	for _, a := range cands {
 		especifica := true
@@ -1560,6 +1590,34 @@ func (ctx *contextoJava) masEspecificaDe(cands []candidato) (candidato, bool) {
 			}
 			especifica = false
 			break
+		}
+		if especifica {
+			mas = append(mas, a)
+		}
+	}
+	return mas
+}
+
+// masEstrictaPorVuelta: entre máximas de parámetros iguales, la única cuya vuelta cabe en la de todas
+// las demás (JVMS 4.6.5, `R1 <: R2`). Es el caso de un método redefinido con retorno covariante: el
+// `getAdapter` de `AbsListView` (`ListAdapter`) gana al de `AdapterView` (`Adapter`), y ese es el
+// descriptor que javac escribe en el `invokevirtual` porque es el único que lleva la firma del DEX.
+// Solo entre referencias: `int` no es más estrecho que `long` para esto, y además dos sobrecargas de
+// parámetros iguales no pueden diferir en un primitivo sin colisionar en la firma.
+func (ctx *contextoJava) masEstrictaPorVuelta(cands []candidato) (candidato, bool) {
+	mas := []candidato{}
+	for _, a := range cands {
+		ra := vueltaDe(a.desc)
+		especifica := true
+		for _, b := range cands {
+			rb := vueltaDe(b.desc)
+			if a.desc == b.desc || (ra == rb && esTipoDeReferencia(ra)) {
+				continue
+			}
+			if !esTipoDeReferencia(ra) || !esTipoDeReferencia(rb) || !ctx.asignableEstricto(ra, rb) {
+				especifica = false
+				break
+			}
 		}
 		if especifica {
 			mas = append(mas, a)
@@ -1868,17 +1926,28 @@ func (ctx *contextoJava) candidatosDe(interno, nombre string, argc int, conVarar
 	return sal, nil
 }
 
-// candidatosDelJar: lo mismo sobre las clases del classpath, subiendo por la cadena de padres. La
-// cadena puede cruzar de un jar a otro (una dependencia que extiende una clase del `android.jar`), y
-// por eso la búsqueda de la clase siguiente también pasa por el classpath y no por un solo jar.
+// candidatosDelJar: lo mismo sobre las clases del classpath, subiendo por la cadena de padres y, después,
+// por las superinterfaces. La cadena puede cruzar de un jar a otro (una dependencia que extiende una
+// clase del `android.jar`), y por eso la búsqueda de la clase siguiente también pasa por el classpath y
+// no por un solo jar.
+//
+// Las interfaces se recorren en anchura y se añaden detrás de la cadena de padres: un método heredado de
+// una superinterfaz es tan candidato como uno heredado de una superclase, y javac los ve todos. Sin este
+// recorrido, `ListAdapter.getItem(posicion)` no encontraba nada —`ListAdapter` no lo declara, lo hereda
+// de `Adapter`—, que es el eslabón siguiente al desempate de `getAdapter` (§253).
 func (cp *classpathDeClases) candidatosDelJar(interno, nombre string, argc int, conVarargs bool) ([]candidato, error) {
 	sal := []candidato{}
 	vistas := map[string]bool{}
-	actual := interno
-	for visits := 0; actual != "" && visits < 32; visits++ {
+	visitadas := map[string]bool{}
+	// recorre lee una clase una sola vez: apunta sus candidatas y devuelve su padre y sus interfaces.
+	recorre := func(actual string) (padre string, interfaces []string, err error) {
+		if visitadas[actual] {
+			return "", nil, nil
+		}
+		visitadas[actual] = true
 		c, err := cp.claseDelJar(actual)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		for _, m := range c.Methods {
 			varargs := m.Access&accVarargs != 0
@@ -1892,10 +1961,46 @@ func (cp *classpathDeClases) candidatosDelJar(interno, nombre string, argc int, 
 			vistas[m.Desc] = true
 			sal = append(sal, candidato{desc: m.Desc, acceso: m.Access, varargs: varargs})
 		}
-		if c.Super == "" {
+		for _, i := range c.Interfaces {
+			interfaces = append(interfaces, internoDeDescriptor(i))
+		}
+		if c.Super != "" {
+			padre = internoDeDescriptor(c.Super)
+		}
+		return padre, interfaces, nil
+	}
+
+	// primero la cadena de padres, como antes de este cambio
+	pendientes := []string{}
+	actual := interno
+	for visits := 0; actual != "" && visits < 32; visits++ {
+		padre, interfaces, err := recorre(actual)
+		if err != nil {
+			return nil, err
+		}
+		pendientes = append(pendientes, interfaces...)
+		if padre == "" || visitadas[padre] {
 			break
 		}
-		actual = internoDeDescriptor(c.Super)
+		actual = padre
+	}
+	// y después las superinterfaces, en anchura
+	for len(pendientes) > 0 {
+		actual := pendientes[0]
+		pendientes = pendientes[1:]
+		padre, interfaces, err := recorre(actual)
+		if err != nil {
+			return nil, err
+		}
+		// el padre de una interfaz es `java/lang/Object`, que ya trae la cadena de arriba
+		if padre != "" && !visitadas[padre] {
+			pendientes = append(pendientes, padre)
+		}
+		for _, i := range interfaces {
+			if !visitadas[i] {
+				pendientes = append(pendientes, i)
+			}
+		}
 	}
 	return sal, nil
 }
