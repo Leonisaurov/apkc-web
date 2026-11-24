@@ -13349,6 +13349,59 @@ grep -n 'avisosDurante\|capturarSalida' apkc/linker_dedupe_clave_test.go \
 grep -n 'os.Pipe\|"io"' apkc/linker_dedupe_clave_test.go   # sin resultados
 ```
 
+## 281. Los dos gates WISP pasan con el núcleo inerte y sin contactar relays
+
+Registrado el 2026-11-24 sobre `50952c0`, con la QA `ses_df274db9affe0VViKHbR0zm4op`. Los dos gates
+del módulo WISP salen en verde con el módulo **inerte**: no se abre ningún socket hacia un relay
+real. Este `§` deja las cifras, las aserciones que lo falsifican y la comprobación de egreso por
+separado.
+
+**El gate por defecto.** `tcr -- sh tools/entorno.sh wisp` sale `rc=0` con **25 `ok`** y cierra con
+«falsificación: los dos gates rechazan lo que tienen que rechazar». No hay red ni navegador:
+`studio/prueba-wisp-gates.mjs` no contiene `fetch(` ni un `new WebSocket(` real —solo el
+`socketFalso` de `:44-60`—, y las URL con host son literales de clasificación, no destinos que se
+abran. Aserciones citadas del run: «gate por defecto: las URLs del propio origen, `data:` y `blob:`
+pasan — 4 locales, cero ajenas»; la falsificación 1 mete `wss://relay-ajeno.example/wisp/` y el modo
+externo sin núcleo responde
+`{"motivo":"núcleo WISP no disponible en esta compilación","sockets":0,"llamadas":0}`; la
+falsificación 2 usa un relay fuera de la lista; y el handshake cubre CONTINUE y DATA.
+
+**El gate externo.** El primer intento con el `chromium` del sistema falló por ABI:
+`/usr/lib/chromium/chromium: error while loading shared libraries: libsimdutf.so.36` (el sistema
+tiene `.37`; `chromium --version` falla igual, `rc=127`). Es una causa **ambiental preexistente**,
+no del cambio. Repetido con
+`CHROME_BIN=/usr/bin/brave APKC_WISP_EXTERNO=1 tcr -- sh tools/entorno.sh wisp-externo` sale `rc=0`
+con **`237 comprobaciones bien, 0 mal`**, sobre Brave 157.1.99.57 headless, con perfil propio y CDP
+en 9345.
+
+**Lo que vio el externo.** `wisp-relays.json trae 6 relays verificados`; sin núcleo falla cerrado
+(`sockets:0`, `llamadas:0`, `nuevas:0`); con el módulo activo el `Resolver` falla con su motivo y
+`peticiones:0`; el gate de red ve el `wss://sonda-ajena-del-gate.invalid/relay` de la sonda
+deliberada, que se crea y se cierra **antes** de resolver DNS (dominio `.invalid`, RFC 6761);
+`481 peticiones, 0 websockets, todas locales`; y la cobertura alcanza `1 service_worker, 1 page,
+2 worker`.
+
+**El egreso, comprobado aparte.** Un muestreo de `ss -tnp` cada 200 ms dejó
+`~/.cache/apkc-web/tmp/conexiones-brave.log` (3522 líneas) y **ninguna IP de los seis relays**
+(`wisp.mercurywork.shop`, `terbiumon.top`, `anura.pro`, `lichology.com`, `wisp.waved.site`,
+`gointospace.app`) aparece en las conexiones del proceso de la prueba. Matiz honesto: Brave abrió
+HTTPS propio del navegador (telemetría y actualizaciones) a otras IP, ajenas a la pestaña y a los
+relays; el tráfico que mide el CDP son las 481 peticiones locales.
+
+**Estado del entorno.** `APKC_WISP_EXTERNO` no queda exportado: la única asignación es inline en
+`tools/entorno.sh:155`, y el guard que sale `rc=2` sin ella está en `:146`. No quedaron procesos
+`prueba-pestana` ni `chromium` colgados, y el Brave del usuario sigue intacto.
+
+**Veredicto.** VERDE con semántica de fallo cerrado: el externo pasa **porque el módulo está
+inerte**, no porque se haya abierto un socket a un relay real. WISP sigue siendo excepción opt-in y
+no está activado por defecto.
+
+```sh
+tcr -- sh tools/entorno.sh wisp
+CHROME_BIN=/usr/bin/brave APKC_WISP_EXTERNO=1 tcr -- sh tools/entorno.sh wisp-externo
+wc -l "$HOME/.cache/apkc-web/tmp/conexiones-brave.log"
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
