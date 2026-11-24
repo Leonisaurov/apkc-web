@@ -408,10 +408,12 @@ func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rut
 		return r
 	}
 	// el fuente pedido es el que se diagnostica. Si el primer fallo es de otro `.java` del proyecto,
-	// no se cuela en su lista: se dice en `aviso` y no se da el pedido por comprobado, salvo que el
-	// fallo sea de emisión, porque entonces el pedido —que va primero— ya se emitió sin error.
+	// no se cuela en su lista: se dice en `aviso` y no se da el pedido por comprobado. Solo cuenta
+	// como comprobado si el fallo es de emisión **y** el pedido ya se había emitido entero antes
+	// (`antes` > 0): un fallo de registro —dos fuentes con la misma clase— no emite nada, y el
+	// pedido tampoco está comprobado entonces.
 	if de := fuenteDelError(err); de != nil && !esDelFuentePedido(de, nombreFuente) {
-		if de.etapa == "emisor" {
+		if de.etapa == "emisor" && de.antes > 0 {
 			r.Emisor = true
 		}
 		r.Aviso = "otro fuente del proyecto no compila: " + de.fuente + ": " + de.err.Error()
@@ -424,8 +426,8 @@ func revisarFuenteJavaEn(contenido, nombreFuente, nombreInforme, rutaFuente, rut
 // esDelFuentePedido decide si un error del proyecto nació en el fuente pedido. Un fallo de parser trae
 // el nombre con el que entró el fichero, así que se compara tal cual: dos `Helper.java` de paquetes
 // distintos comparten el nombre base, y compararlos por él atribuía al pedido el fallo del hermano. Los
-// de la etapa de emisión solo traen el nombre base —es lo que el emisor pone en el SourceFile— y ahí
-// esa comparación sigue siendo la única disponible.
+// de las etapas de registro y de emisión solo traen el nombre base —es lo que el emisor pone en el
+// SourceFile— y ahí esa comparación sigue siendo la única disponible.
 func esDelFuentePedido(de *errorDeFuente, nombreFuente string) bool {
 	if de.fuente == nombreFuente || filepath.Clean(de.fuente) == filepath.Clean(nombreFuente) {
 		return true

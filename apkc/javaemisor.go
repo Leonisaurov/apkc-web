@@ -597,6 +597,25 @@ type contextoJava struct {
 	// clase marcador que javac añade (Exterior$1). La clave es el nombre interno de la anidada.
 	ctorSintetico map[string]string
 	registrando   *jclas // la clase cuyo arbol se esta recorriendo en registrar
+	// origen guarda, por nombre interno de clase, la ruta del fuente que la declaró: dos fuentes que
+	// declaren la misma clase se quedaban con la última en `propias`, así que al emitir el fuente
+	// pedido sus nombres se resolvían contra la clase del otro fichero; javac rechaza esa doble
+	// definición y el build no puede escribir dos veces el mismo nombre. `duplicada` es la primera que
+	// aparece y el llamador la convierte en error antes de emitir nada. La clave lleva la ruta
+	// completa (`fuente`) y no el nombre base (`archivo`), que es el SourceFile y no distingue dos
+	// homónimos de carpetas distintas.
+	origen    map[string]string
+	duplicada *claseRepetida
+	// fuente es la ruta con la que entró el fuente que se está registrando, para poder nombrar los
+	// dos ficheros de una clase repetida.
+	fuente string
+}
+
+// claseRepetida: la clase que declararon dos fuentes del proyecto, con las dos rutas para nombrarlas.
+type claseRepetida struct {
+	clase string // nombre interno
+	antes string // el fuente que la declaró primero
+	ahora string // el que la vuelve a declarar
 }
 
 // accesorSintetico: un `access$NNN` del exterior. El cuerpo se deduce del miembro y del sentido: leer
@@ -637,7 +656,15 @@ func (ctx *contextoJava) registrar(c *jclas) {
 	// descriptor suyo desde otro fichero se usa éste, no el del llamador
 	c.imports = ctx.imports
 	c.unidad = ctx.unidad
-	ctx.propias[internoDe(c.paquete, c.nombre)] = c
+	interno := internoDe(c.paquete, c.nombre)
+	if ctx.origen == nil {
+		ctx.origen = map[string]string{}
+	}
+	if antes, visto := ctx.origen[interno]; visto && antes != ctx.fuente && ctx.duplicada == nil {
+		ctx.duplicada = &claseRepetida{clase: interno, antes: antes, ahora: ctx.fuente}
+	}
+	ctx.origen[interno] = ctx.fuente
+	ctx.propias[interno] = c
 	antes := ctx.registrando
 	ctx.registrando = c
 	for _, m := range c.metodos {
@@ -2017,8 +2044,12 @@ func compilarProyectoJava(fuentes []fuenteJava, rutaJar string) ([]claseEmitida,
 // pedido de uno de otro fichero del proyecto sin adivinarlo por el texto.
 type errorDeFuente struct {
 	fuente string // el nombre con el que entró el fuente, tal cual
-	etapa  string // "parser" o "emisor"
-	err    error
+	etapa  string // "parser", "registro" o "emisor"
+	// antes cuenta los fuentes que ya se emitieron enteros cuando nació el fallo. El pedido va
+	// primero en la lista, así que un fallo de emisión con `antes` > 0 no es suyo; sin este dato,
+	// `check` daba por comprobado un fuente por el mero hecho de que el fallo fuera de emisión.
+	antes int
+	err   error
 }
 
 func (e *errorDeFuente) Error() string { return e.fuente + ": " + e.err.Error() }
@@ -2050,13 +2081,23 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 		// el paquete y los imports se ponen antes de registrar para que cada clase se quede con los de su
 		// fuente: un descriptor suyo se resuelve después con ese alcance aunque lo pida otro fichero
 		ctx.paquete, ctx.imports, ctx.archivo, ctx.unidad = a.paquete, a.imports, baseDeNombre(f.nombre), i
+		ctx.fuente = f.nombre
 		for _, c := range a.clases {
 			ctx.registrar(c)
 		}
 		todos = append(todos, parseado{a, baseDeNombre(f.nombre), i})
 	}
+	// Dos fuentes que declaren la misma clase no llegan a emitirse: el mapa de clases propias se
+	// quedaba con la última, y el diagnóstico del fuente pedido resolvía sus nombres contra la clase
+	// del otro fichero. javac rechaza la doble definición y el build tampoco puede escribirla dos
+	// veces, así que el fallo es del proyecto y el fuente pedido no se da por comprobado.
+	if d := ctx.duplicada; d != nil {
+		return nil, &errorDeFuente{fuente: d.ahora, etapa: "registro",
+			err: fmt.Errorf("la clase %s ya está definida en %s: dos fuentes del proyecto no pueden declarar la misma clase",
+				strings.ReplaceAll(d.clase, "/", "."), d.antes)}
+	}
 	var salida []claseEmitida
-	for _, p := range todos {
+	for i, p := range todos {
 		ctx.paquete = p.a.paquete
 		ctx.imports = p.a.imports
 		ctx.archivo = p.nomb
@@ -2064,7 +2105,7 @@ func compilarProyectoJavaConClasspath(fuentes []fuenteJava, rutas []string) ([]c
 		for _, c := range p.a.clases {
 			hechas, err := ctx.emmitirArbol(c)
 			if err != nil {
-				return nil, &errorDeFuente{fuente: p.nomb, etapa: "emisor", err: err}
+				return nil, &errorDeFuente{fuente: p.nomb, etapa: "emisor", antes: i, err: err}
 			}
 			salida = append(salida, hechas...)
 		}

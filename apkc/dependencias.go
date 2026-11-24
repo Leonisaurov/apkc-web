@@ -49,10 +49,18 @@ func entradasDelClasspath(rutaAndroidJar string) ([]entradaClasspath, error) {
 // no en el directorio de trabajo. `compile` y `build` pasan vacío porque trabajan sobre el cwd;
 // `check` diagnostica un fichero que puede estar fuera de él y tiene que ver las dependencias de su
 // proyecto, no las del directorio desde el que se invocó.
+// Antes de devolverlas comprueba que ninguna clase la definan dos dependencias, con la misma guarda
+// que usa el build (`claseDuplicadaEntreJars`): d8 aborta en ese caso y el dexer de este fork se
+// quedaba con una de las dos copias, así que `check` tampoco puede resolver al primero por orden
+// léxico y decir que el proyecto compila. El `android.jar` queda fuera de la comprobación porque no
+// es una entrada dexable: ni `build` lo abre ahí y su directorio central son miles de nombres en cada
+// pasada del diagnóstico.
 func entradasDelClasspathEn(raiz, rutaAndroidJar string) ([]entradaClasspath, error) {
 	entradas := []entradaClasspath{{abrir: rutaAndroidJar, huella: huellaDelJarTexto(rutaAndroidJar)}}
+	dependencias := []string{}
 	for _, jar := range jarsEn(raiz) {
 		entradas = append(entradas, entradaClasspath{abrir: jar, huella: huellaDelJarTexto(jar)})
+		dependencias = append(dependencias, jar)
 	}
 	for _, aar := range aarsEn(raiz) {
 		classes, err := classesJarDelAar(aar)
@@ -64,6 +72,10 @@ func entradasDelClasspathEn(raiz, rutaAndroidJar string) ([]entradaClasspath, er
 			continue
 		}
 		entradas = append(entradas, entradaClasspath{abrir: classes, huella: huellaDelJarTexto(aar)})
+		dependencias = append(dependencias, classes)
+	}
+	if err := claseDuplicadaEntreJars(dependencias); err != nil {
+		return nil, err
 	}
 	return entradas, nil
 }
