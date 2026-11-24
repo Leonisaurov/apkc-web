@@ -166,6 +166,34 @@ func voltear(fuentes []fuenteXML) []fuenteXML {
 	return out
 }
 
+// enlazaConAvisos enlaza y devuelve también lo que se escribió por `LogW`, que es donde sale el
+// aviso de una clave repetida.
+func enlazaConAvisos(t *testing.T, m *marcoRecursos, valores, layouts, ficheros []fuenteXML, manifiesto fuenteXML) (*proyectoEnlazado, string) {
+	t.Helper()
+	var salida *proyectoEnlazado
+	avisos := avisosDurante(t, func() {
+		var err error
+		salida, err = enlazarProyecto(valores, layouts, ficheros, manifiesto, m,
+			opcionesDeEnlace{compileSdkVersion: 34, compileSdkCodename: "14"})
+		if err != nil {
+			t.Fatalf("el enlace: %v", err)
+		}
+	})
+	return salida, avisos
+}
+
+// styleablesDeLaTabla devuelve las declaraciones de `nombre` que quedaron en la tabla: un
+// `<declare-styleable>` no lleva configuración, así que su nombre es su clave.
+func styleablesDeLaTabla(tabla tablaEscribir, nombre string) []styleableEscribir {
+	out := []styleableEscribir{}
+	for _, st := range tabla.styleables {
+		if st.nombre == nombre {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
 func TestDedupeDeValuesPorClave(t *testing.T) {
 	t.Run("dos AAR: gana el de nombre anterior y la clave queda una vez", func(t *testing.T) {
 		m := marcoDelSdkDePrueba(t)
@@ -346,6 +374,118 @@ func TestDedupeDeValuesPorClave(t *testing.T) {
 		}
 		if copias != 1 {
 			t.Errorf("el values idéntico salió %d veces y debe leerse una sola vez", copias)
+		}
+	})
+}
+
+// TestDedupeDeStyleablesPorClave mide la otra mitad de la deuda: un `<declare-styleable>` no se
+// deduplicaba, y dos fuentes que declaran «Vista» producían dos clases en R.java, que javac rechaza
+// por el identificador repetido. Su nombre es la clave y se resuelve con la misma prioridad y el
+// mismo aviso que los values.
+func TestDedupeDeStyleablesPorClave(t *testing.T) {
+	const vistaDelProyecto = `<resources>
+    <attr name="propio" format="integer"/>
+    <declare-styleable name="Vista"><attr name="propio"/></declare-styleable>
+</resources>`
+	const vistaDelAar = `<resources>
+    <attr name="ajeno" format="color"/>
+    <declare-styleable name="Vista"><attr name="ajeno"/></declare-styleable>
+</resources>`
+
+	t.Run("dos AAR: gana el de nombre anterior y Vista queda una vez", func(t *testing.T) {
+		m := marcoDelSdkDePrueba(t)
+		dir := proyecto(t, map[string]string{
+			"AndroidManifest.xml": manifestMinimo,
+			"res/values/app.xml":  valuesMinimo,
+		})
+		aarConValues(t, dir, "a.aar", `<resources>
+    <attr name="foo" format="integer"/>
+    <declare-styleable name="Vista"><attr name="foo"/></declare-styleable>
+</resources>`)
+		aarConValues(t, dir, "b.aar", `<resources>
+    <attr name="bar" format="color"/>
+    <declare-styleable name="Vista"><attr name="bar"/></declare-styleable>
+</resources>`)
+		valores, layouts, ficheros, manifiesto, err := fuentesDelProyecto(dir)
+		if err != nil {
+			t.Fatalf("las fuentes: %v", err)
+		}
+		for _, entrada := range [][]fuenteXML{valores, voltear(valores)} {
+			salida, avisos := enlazaConAvisos(t, m, entrada, layouts, ficheros, manifiesto)
+			t.Logf("aviso: %s", strings.TrimSpace(avisos))
+			vueltas := styleablesDeLaTabla(salida.tabla, "Vista")
+			if len(vueltas) != 1 {
+				t.Fatalf("Vista salió %d veces y debe quedar una", len(vueltas))
+			}
+			if got := strings.Join(vueltas[0].attrs, ","); got != "foo" {
+				t.Errorf("Vista quedó con los attrs %q y se esperaba foo, el del AAR a.aar", got)
+			}
+			if n := strings.Count(salida.r, "int[] Vista="); n != 1 {
+				t.Errorf("R.java declara Vista %d veces y solo cabe una", n)
+			}
+			if !strings.Contains(salida.r, "Vista_foo") || strings.Contains(salida.r, "Vista_bar") {
+				t.Errorf("R.java no se queda con los attrs de la ganadora:\n%s", salida.r)
+			}
+			for _, quiero := range []string{"styleable/Vista", "el AAR a.aar", "el AAR b.aar", "gana el AAR a.aar"} {
+				if !strings.Contains(avisos, quiero) {
+					t.Errorf("el aviso no nombra %q: %s", quiero, avisos)
+				}
+			}
+		}
+	})
+
+	t.Run("el proyecto gana al AAR", func(t *testing.T) {
+		m := marcoDelSdkDePrueba(t)
+		dir := proyecto(t, map[string]string{
+			"AndroidManifest.xml": manifestMinimo,
+			"res/values/app.xml":  vistaDelProyecto,
+		})
+		aarConValues(t, dir, "a.aar", vistaDelAar)
+		valores, layouts, ficheros, manifiesto, err := fuentesDelProyecto(dir)
+		if err != nil {
+			t.Fatalf("las fuentes: %v", err)
+		}
+		for _, entrada := range [][]fuenteXML{valores, voltear(valores)} {
+			salida, avisos := enlazaConAvisos(t, m, entrada, layouts, ficheros, manifiesto)
+			vueltas := styleablesDeLaTabla(salida.tabla, "Vista")
+			if len(vueltas) != 1 {
+				t.Fatalf("Vista salió %d veces y debe quedar una", len(vueltas))
+			}
+			if got := strings.Join(vueltas[0].attrs, ","); got != "propio" {
+				t.Errorf("Vista quedó con los attrs %q y se esperaba propio, el del proyecto", got)
+			}
+			if strings.Contains(salida.r, "Vista_ajeno") {
+				t.Error("el attr del AAR llegó a la clase styleable")
+			}
+			for _, quiero := range []string{"styleable/Vista", "el proyecto", "el AAR a.aar", "gana el proyecto"} {
+				if !strings.Contains(avisos, quiero) {
+					t.Errorf("el aviso no nombra %q: %s", quiero, avisos)
+				}
+			}
+		}
+	})
+
+	t.Run("el mismo styleable en dos configuraciones no duplica la clase", func(t *testing.T) {
+		m := marcoDelSdkDePrueba(t)
+		dir := proyecto(t, map[string]string{
+			"AndroidManifest.xml":   manifestMinimo,
+			"res/values/app.xml":    vistaDelProyecto,
+			"res/values-es/app.xml": `<resources><declare-styleable name="Vista"><attr name="propio"/></declare-styleable></resources>`,
+		})
+		valores, layouts, ficheros, manifiesto, err := fuentesDelProyecto(dir)
+		if err != nil {
+			t.Fatalf("las fuentes: %v", err)
+		}
+		salida, _ := enlazaConAvisos(t, m, valores, layouts, ficheros, manifiesto)
+		vueltas := styleablesDeLaTabla(salida.tabla, "Vista")
+		if len(vueltas) != 1 {
+			t.Fatalf("Vista salió %d veces con dos configuraciones y debe quedar una", len(vueltas))
+		}
+		if got := strings.Join(vueltas[0].attrs, ","); got != "propio" {
+			t.Errorf("Vista quedó con los attrs %q", got)
+		}
+		if n := strings.Count(salida.r, "int[] Vista="); n != 1 {
+			t.Errorf("R.java declara Vista %d veces y solo cabe una", n)
 		}
 	})
 }

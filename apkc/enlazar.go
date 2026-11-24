@@ -313,6 +313,10 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 	declaradas := make([][]recursoEntabla, len(valores))
 	estilosDe := make([][]styleableEscribir, len(valores))
 	gana := map[string]declaracion{}
+	// Un `<declare-styleable>` no lleva configuración: su nombre es la clave. Dos AAR que declaran
+	// «Vista» producían dos clases en R.java (javac rechaza el identificador repetido), así que se
+	// resuelve con la misma prioridad y el mismo desempate que los values.
+	ganaEstilo := map[string]declaracion{}
 	for i, f := range valores {
 		nuevos, estilos, err := recursosYStyleables(f, m)
 		if err != nil {
@@ -322,6 +326,25 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 			nuevos[j].config = f.config
 		}
 		declaradas[i], estilosDe[i] = nuevos, estilos
+		for j, e := range estilos {
+			antes, yaHay := ganaEstilo[e.nombre]
+			if !yaHay {
+				ganaEstilo[e.nombre] = declaracion{fichero: i, entrada: j}
+				continue
+			}
+			if antes.fichero == i {
+				// el mismo styleable repetido dentro de un fichero: se queda el último, sin aviso
+				ganaEstilo[e.nombre] = declaracion{fichero: i, entrada: j}
+				continue
+			}
+			clave := recursoEntabla{tipo: "styleable", clave: e.nombre}
+			if !prefiereA(f, valores[antes.fichero]) {
+				avisarClaveRepetida(clave, valores[antes.fichero], f)
+				continue
+			}
+			avisarClaveRepetida(clave, f, valores[antes.fichero])
+			ganaEstilo[e.nombre] = declaracion{fichero: i, entrada: j}
+		}
 		for j, r := range nuevos {
 			k := r.tipo + "\x00" + r.clave + "\x00" + f.config
 			antes, yaHay := gana[k]
@@ -349,7 +372,12 @@ func enlazarProyecto(valores, layouts, ficheros []fuenteXML, manifiesto fuenteXM
 			}
 			recursos = append(recursos, r)
 		}
-		styleables = append(styleables, estilosDe[i]...)
+		for j, e := range estilosDe[i] {
+			if ganaEstilo[e.nombre] != (declaracion{fichero: i, entrada: j}) {
+				continue
+			}
+			styleables = append(styleables, e)
+		}
 	}
 	// primera pasada por los arboles: descubrir los ids que declaran
 	arbolManifesto, err := leerArbolDe(manifiesto)
