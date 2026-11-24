@@ -60,7 +60,7 @@ El recorrido, en el orden en que se hace:
    recarga; el proyecto vive en OPFS y se exporta e importa como `.zip`.
 
 Lo que ese recorrido **no** hace, con su comando o su `§`: ART y Safari reales en CI (§194), el
-host real con truncamiento (§196, §198) y los dos advisories del detector de interfaz
+host real con truncamiento (§196, §198) y un advisory del detector (contraste calculado; §197)
 (`INFORMA-SEGURIDAD.md`). El incremental propio (`docs/plan-incremental-web.md`) ya está activo:
 I1 e I2 hechas, I3 cerrada en `d3803bb`, I4 hecha en el camino nativo con el gate pendiente e I5 medida
 por debajo del criterio. El `android.jar` propio ya existe y
@@ -668,8 +668,9 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
 - **Deuda abierta (§194), con dos puntos cerrados en §199**: varargs en sobrecargas y
   `try-with-resources` con varios recursos y `addSuppressed` ya están medidos y cerrados, igual que
   el diagnóstico/paleta versionado (§197) y el host a 10/10 (§196 y §198). Siguen abiertos los jobs
-  `art`/`safari` informativos, dos hallazgos del informe de seguridad sin prueba versionada y dos
-  advisories del detector de interfaz. Lo demás no se cuenta como cerrado.
+  `art`/`safari` informativos, un hallazgo del informe de seguridad sin prueba versionada
+  (`wasm_exec.js`, §198) y un advisory del detector (contraste calculado; §197). Lo demás no se
+  cuenta como cerrado.
 - **Punto de entrada, en su día (§198)**: gate en verde con 87 comprobaciones de pestaña, sitio local y
   host real 10/10 por HTTP/2, hash del gz publicado verificado y submódulo alineado. Sirve por sus
   comandos de reproducción, no por sus cifras: el punto de entrada vigente es el recorrido de arriba
@@ -724,7 +725,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   la falsificación mide `sockets:0, llamadas:0` y el gate de red sigue sin abrir websockets ajenos al
   origen. Frontera: WISP se mide con núcleo simulado en node y con el núcleo incrustado en CDP, nunca
   contra un relay real; sin push del submódulo ni publicación.
-- **Hot swap del contador, pendiente**: el `40` no se reproduce; nativo y CDP dan
+- **Hot swap del contador, pendiente (superdado por el bullet siguiente, `677af8e`)**: el `40` no se reproduce; nativo y CDP dan
   `4 -> swap -> 4 -> clic -> 9`. La firma automática sí apunta a la clase exterior, pero derivar
   `MainActivity$1` sigue **pendiente** (plan escrito, sin implementar). No se cuenta como cerrado.
 - **Hot swap del contador, sobre §295**: lo que no se reproduce sigue siendo el `40` —es un reporte
@@ -752,5 +753,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `TestLosDosEditTextConservanSuIdRef`) reproducen dos `EditText` con idRefs distintos
   (`0x7f010000` y `0x7f010002`) y un `Button` con `@string` «Enviar» de guarda: la siembra deja solo
   el texto del botón, cada idRef publica su texto y dos escrituras llegan a dos capturas distintas.
-  Frontera: no se da por pasado `e2e.sh` (sigue en `254 bien, 2 mal`, cifra del encargo).
+  Frontera: `e2e.sh` sigue **en verificación** (`docs/plan.md:60`): el gate autorizado sobre el árbol final dio `e2e: 1 problemas` (`TypeError` en `proyecto.js:99` desde `leerZip :146`, bloque `--inc`); dos ejecuciones focales consecutivas del builder del WISP dejaron el 12c en verde con `256 comprobaciones bien, 0 mal`, rc=0, pero el gate completo no se ha repetido. Logs: `~/.cache/apkc-web/tmp/pestana-focal-final.log` y `~/.cache/apkc-web/tmp/pestana-focal-final2.log`.
 - §298: puente `wisp-get` de reposo, lienzo con coordenadas y colores reales, pista del `EditText` en `notas` y descripciones de las diez plantillas; suite Go completa pendiente, sin gate final, CI ni publicación.
+- §299: el wasm vuelve a compilar (`cff8013` quita el `"net"` huérfano de `apkc/puente_wisp_js.go`; `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build` sin salida, rc 0), la suite Go completa da `ok github.com/ajinasokan/apkc 184.017s` con `tcr -c 3 -m 2G -r 200M` (el guardia por defecto mató el primer intento con 137), el corredor queda centralizado en `tools/entorno.sh` con `tools/correr.sh` (`GUARDIA_MB=300`, `LD_LIBRARY_PATH=…/shimlib`, falsificación WISP rechazada) y 297 `§` se reparten en 14 ficheros con `docs/evidencia.md` como índice. Frontera: el gate autorizado dio `e2e: 1 problemas` (`TypeError` en `proyecto.js:99` desde `leerZip :146`, bloque `--inc`); dos ejecuciones focales consecutivas del builder del WISP dejaron el 12c en verde con `256 comprobaciones bien, 0 mal`, rc=0, pero el gate completo no se ha repetido. Sin CDP final, segundo gate, push, CI ni publicación; `e2e.sh` sigue en verificación (`docs/plan.md:60`).
+- §310: ApkShare compila hoy con `--compiler go --linker go`, con y sin `--inc`: 21 clases y dex de `16504 B` idéntico byte a byte en nativo y wasm (SHA-256 `69fdb658…82db9` en los cuatro dex), APK de `305501`/`305500`/`305502 B` y `apksigner verify --verbose` con `Verifies` y v1/v2/v3 `true`; la segunda vuelta con `--inc` tardó `10.935453ms` y dio `the package did not change`. Frontera: la pestaña real con chromium no se re-ejecutó (§285 es transferida), sin suite Go completa ni gate aquí; `TestSondaHeredadaFuente` de §275 sigue sin verificar.

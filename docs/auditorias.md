@@ -110,8 +110,8 @@ hecho por analogía (regla 11).
 - `deps-index.json` no existe en el repo ni en local ni en el sitio publicado: el botón «Resolver»
   responde 404. `deps-maven.yml` solo sube un artefacto.
 - El job `publicar` de `gate.yml:270-282` solo hace `zip` + `gh release create`; no despliega.
-- `docs/plan.md:69` dice del jar «escrito y sin ejecutar», mientras
-  `docs/plan-android-jar-propio.md:5-7,244-279` da J4 cerrada con el run `45062792689`.
+- Retirado: `plan.md:86` y §204 citan el run real `45062792689` (J4 cerrada, J5 hecha en local); el
+  404 fue falso diagnóstico y el jar sigue sin cablearse en la pestaña.
 - **Corrección:** el 404 de `/android-jar` en Surge **no** prueba J5; hay selector de fichero y el
   endpoint es del servidor local.
 
@@ -149,8 +149,8 @@ en su worktree con tres casos nuevos en `prueba.js`.
    crítico `ses_df9f4b884ffepDlg2y2VQsIBYZ` en **APROBAR**. Queda de ella la prueba de navegación
    en pestaña (D7), que sigue pendiente, y la pregunta `INCIERTA` del redirect sin layout, sin probe.
    Después, E4.
-6. F4: abortar el import si `borradoDelDisco === false`. Decidir `deps-index.json` y corregir
-   `docs/plan.md:69`.
+6. F4: abortar el import si `borradoDelDisco === false`. Decidir `deps-index.json`; la corrección de
+   `docs/plan.md:69` quedó retirada (run real en §204).
 
 ## 4. Estado verificado
 

@@ -1,6 +1,6 @@
 # Plan de vista previa de APK en apkc-studio
 
-**Estado: objetivo próximo, sin implementar.** Fase 0 registrada; fases 1 a 4 pendientes. Este
+**Estado: implementado y cerrado en §203**; fases 1-4 hechas, canónico en `docs/plan.md`. Este
 fichero es un plan, no evidencia: lo que aquí se afirme sobre coste, compatibilidad o formato es una
 hipótesis y lleva el comando con el que se comprobará. Cuando haya mediciones reales, van a
 `docs/evidencia.md` como un apartado nuevo con su comando, y el estado de las fases a `docs/plan.md`

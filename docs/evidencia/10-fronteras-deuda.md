@@ -279,12 +279,12 @@ no confundir «frontera escrita» con «hecho». Los puntos 1 y 2 se cerraron de
 3. **CI sin ART ni Safari reales**. Los jobs `art` y `safari` son informativos: ART sí se verificó en
    la Blackview (§192), pero un runner no tiene esa tableta; en macOS Playwright ejecuta su WebKit,
    no `Safari.app`. `publicar` depende solo de `pesado`.
-4. **Host publicado verificado solo al 8/10 desde este entorno**. HTTP/2 trunca el wasm (§191); el
-   sitio empaquetado en local da 10/10. No se afirma que el host falle para otros navegadores ni que
-   esté 10/10 desde aquí.
-5. **Dos hallazgos del informe de seguridad sin cerrar**: el nombre de la política de Trusted Types
-   no está fijado por una prueba versionada (`tt.js` usa `apkc-studio` y el head usa `apkc-sw`), y
-   `wasm_exec.js` no se fija por hash. B1 (meta CSP) y B4 (cota de ZIP) sí están cerrados.
+4. **Host publicado verificado 10/10 por HTTP/2 en §196 y §198**. HTTP/2 trunca el wasm (§191), pero
+   el 8/10 quedó superado por la recuperación por rangos; el sitio sirve aún la build anterior
+   (§242 y §252).
+5. **Hallazgos del informe de seguridad**: el nombre de la política de Trusted Types quedó fijado en
+   `d5efe3d` (§237); `wasm_exec.js` sigue sin fijarse por hash (§198), deuda que queda abierta. B1
+   (meta CSP) y B4 (cota de ZIP) sí están cerrados.
 6. **Pruebas no versionadas**: el diagnóstico en vivo y la paleta se verificaron con un guion CDP
    temporal; no hay prueba committed para ellos. `pestaña.js` sí tiene la prueba de redacción de
    contraseñas.
@@ -414,7 +414,7 @@ db1bf7ca36e39c24bbf00353d358d31d5da6864add486bb8351dfb4b79813aa3`, configuració
 válida. `origin/web` y `origin/main` del submódulo están alineados; los worktrees están limpios y
 `studio-test.zip` se ignora. Deuda consciente, no cerrada: §194 (varargs y TWR múltiple cerrados
 después en §199; jobs
-informativos, dos advisories del detector, pruebas no versionadas resueltas en §197, hash de
+informativos, un advisory del detector (contraste calculado; §197), pruebas no versionadas resueltas en §197, hash de
 `wasm_exec.js`), §178 (ART real sí en la Blackview, no en CI) y §181/§185 (firma, sí cerrada).
 
 ## 199. Cierre de la deuda Java: varargs y `try-with-resources` múltiple
@@ -860,8 +860,9 @@ modo editar no reparenta nodos, no conoce `ConstraintLayout`, estilos ni temas, 
 **Pantalla** sigue siendo de solo lectura a propósito: el lápiz vive en el panel del editor. (4) No
 se probó con un SDK que solo tenga 35/36 instalado: ahí la compilación de la pestaña falla con el
 mensaje de tabla rala, que es una frontera del enlazador, no un defecto de la interfaz. (5) De los dos
-planes abiertos, el incremental sigue sin implementar (`docs/plan-incremental-web.md`, I1-I5) y el
-`android.jar` propio tiene generador validado en local (`tools/androidjar/`, J2 y J3) pero su
+planes abiertos, el incremental tiene I1 e I2 hechas, I3 cerrada en `d3803bb`, I4 hecha en nativo con
+el gate pendiente (en verificación) e I5 medida por debajo del criterio (`docs/plan-incremental-web.md`);
+el `android.jar` propio tiene generador validado en local (`tools/androidjar/`, J2 y J3) pero su
 workflow no se ha ejecutado en GitHub (J4 y J5): este `§` no afirma que ese job esté verde.
 ## 203. El emulador enlaza `android:onClick` y separa sus tres secciones
 

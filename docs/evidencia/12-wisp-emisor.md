@@ -726,12 +726,9 @@ cliente no espera. Son **pruebas, no auditoría**: nadie revisó quién opera es
 `epoxy-tls` **sin `LICENSE`**; `libcurl.js` sin verificar. Con un cliente propio solo queda la
 atribución **CC-BY** a la spec.
 
-**Fronteras de este `§`.** El módulo **no está implementado** ni se probó en la pestaña: no se
-afirma que funcione. Quedan abiertos el núcleo WISP+TLS (en curso), la UI y el aviso, el
-`wisp-relays.json`, los dos gates —el de por defecto con **cero peticiones ajenas** y el del modo
-externo— y la publicación. El sitio público no está actualizado y el push y el CI siguen pendientes
-de orden. El sondeo de relays no se versionó: se hizo con un cliente mínimo en Node 26 sobre el
-gist citado, y versionarlo sigue pendiente para que el número se reproduzca sin él.
+**Fronteras de este `§`.** El módulo se implementó y sus gates pasan (§281, §§294-297). Quedan el
+relay real, el push y la publicación; el sondeo está versionado en `wisp-relays.json`. El sitio
+público no está actualizado.
 
 ```sh
 curl http://repo1.maven.org/maven2/

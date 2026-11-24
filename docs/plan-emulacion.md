@@ -1,6 +1,6 @@
 # Plan de emulación de apps propias en la vista previa
 
-**Estado: plan abierto.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
+**Estado: plan cerrado.** E1 (ciclo de vida y navegación entre actividades propias) está **hecha** y
 medida en §205, con sus correcciones de auditoría (E1.1) cerradas en §206; E3 y E4 están
 **cerradas** en §207 y §208; E2 está **cerrada** en §209; E5 y E7 están **cerradas** en §210 y
 §211; E6 está **cerrada** en §212: todas las fases del plan están cerradas. Este fichero es un

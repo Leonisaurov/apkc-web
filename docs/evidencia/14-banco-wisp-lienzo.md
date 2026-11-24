@@ -1,4 +1,4 @@
-# Evidencia — §274-§298
+# Evidencia — §274-§310
 
 ## 274. El banco no es verificable en este escritorio; su mitad local sí
 
@@ -1049,9 +1049,9 @@ Medido con `sensors`/`ps`.
 
 **Fronteras de este `§`.** El CDP no se ejecutó en A, B ni C (por temperatura), así que ninguna de
 las tres se da por verificada en navegador; la crítica de C sigue en curso y la de B aprobó con
-condición CDP. Siguen abiertas las deudas del emulador (radio, acento, barras, densidad y tema) y
-del hot swap (primera compilación, swap de clase entera). Sin gate, chromium, red, push ni
-publicación.
+condición CDP. La geometría (radio, acento, recorte) quedó cerrada en §293; siguen abiertas la
+densidad de renderizado, la barra de estado y el tema, y las del hot swap (primera compilación,
+swap de clase entera). Sin gate, chromium, red, push ni publicación.
 
 ```sh
 # emulador: medición del cell (captura transferida)
@@ -1602,7 +1602,7 @@ cd studio && node prueba-wisp-gates.mjs
 falsificación: los dos gates rechazan lo que tienen que rechazar
 ```
 
-**Frontera de `§296`.** `e2e.sh` no se registra en verde: sigue en `254 bien, 2 mal`. El puente se
+**Frontera de `§296`.** `e2e.sh` no se registra en verde: sigue **en verificación** (`docs/plan.md:60`), con `e2e: 1 problemas` en el gate autorizado por el `TypeError` del bloque `--inc` y `256 comprobaciones bien, 0 mal` (rc=0) en dos ejecuciones focales consecutivas del builder del WISP; el gate completo no se ha repetido (logs `~/.cache/apkc-web/tmp/pestana-focal-final.log` y `~/.cache/apkc-web/tmp/pestana-focal-final2.log`). El puente se
 mide con núcleo simulado, nunca contra relays reales. Sin push del submódulo ni publicación.
 
 ## 297. Content-Length menor que el cuerpo en el puente WISP
@@ -1702,3 +1702,119 @@ plantillas entran con `b11c08d` (selector, `LEEME.txt` y prueba).
 
 **Frontera de `§298`.** La suite Go completa queda pendiente; no se
 ejecutó gate final, CI, publicación ni resolución contra un relay real.
+
+## 299. El wasm vuelve a compilar, el corredor se centraliza y el gate destapa el bloque `--inc`
+
+Medido el 2026-11-24 sobre `HEAD 0379182`. Cuatro frentes con evidencia de esta sesión: el binario
+wasm, la suite Go completa, el corredor de tareas y el gate autorizado que destapó el bloque `--inc`.
+
+### El import huérfano de `net`
+
+`cff8013`: quitar `"net"` sin uso de `apkc/puente_wisp_js.go` (import huérfano desde `8956450`); el
+vigilante de preview llevaba desde 20:05 UTC fallando con
+`./puente_wisp_js.go:23:2: "net" imported and not used` y servía un wasm de ocho commits atrás.
+
+```sh
+cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-wasm.wasm" .
+```
+
+```text
+(sin salida, rc 0)
+```
+
+### Suite Go completa
+
+```sh
+cd apkc && tcr -c 3 -m 2G -r 200M -- go test ./...
+```
+
+```text
+ok github.com/ajinasokan/apkc 184.017s
+```
+
+El guardia de RAM por defecto mató el primer intento con 137; `-r 200M` lo resolvió.
+
+### Corredor
+
+`e516bc2` mete el envoltorio de `tcr` y el `LD_LIBRARY_PATH` de chromium en `tools/gate-local.sh`;
+`f5839e1` lo centraliza en `tools/entorno.sh`, con `tools/correr.sh` como punto de entrada único
+para seleccionar la tarea.
+
+```sh
+sh tools/correr.sh tareas
+sh tools/correr.sh corredor
+```
+
+```text
+TCR=…/corredor/tcr
+GUARDIA_MB=300
+LD_LIBRARY_PATH=…/shimlib
+```
+
+```sh
+sh tools/correr.sh wisp
+```
+
+```text
+falsificación: los dos gates rechazan lo que tienen que rechazar
+```
+
+`node --check` limpio.
+
+### Reparto
+
+`bced0a4` reparte 297 `§` en 14 ficheros y convierte `docs/evidencia.md` en índice; verificación con
+`awk`-diff rc 0, preámbulo rc 0, 297/297 y `comm` con solo `0` y `78`; regla 13 en `AGENTS.md`, regla
+de force y 8 subagentes (`3fb0905`, `0379182`).
+
+### Gate autorizado
+
+```sh
+sh tools/gate-local.sh
+```
+
+```text
+e2e: 1 problemas
+FALLO: la pestaña con apkc.wasm
+TypeError: Cannot read properties of null (reading 'buffer') en proyecto.js:99 desde leerZip :146, bloque 12c (--inc)
+```
+
+Prueba focal posterior: 12c en verde, `256 comprobaciones bien, 0 mal` y rc=0 en dos ejecuciones
+consecutivas del builder del WISP (`~/.cache/apkc-web/tmp/pestana-focal-final.log`, `~/.cache/apkc-web/tmp/pestana-focal-final2.log`). El gate
+completo no se ha repetido: **no** se da `e2e` por verde.
+
+**Frontera de `§299`.** Sin CDP final, sin segundo gate autorizado, sin push, CI ni publicación.
+
+## 310. ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm
+
+Evidencia del investigador `ses_df0259c8dffeLhsY3BGfwNGW1M` y del QA `ses_df021ac1bffe2cDvBr6Et6b4cV`,
+sobre binarios compilados desde `HEAD 0379182`. Los artefactos y scripts están en
+`~/.cache/apkc-web/apkshare-hoy/`; el repo no se tocó.
+
+**Nativo sin `--inc`.**
+
+```text
+6 fuentes de Java en Go -> 21 clases
+21 clases -> 16504 bytes en build/classes.dex
+```
+
+APK `305501 B`; `apksigner verify --verbose` → `Verifies`, v1/v2/v3 `true`.
+
+**Nativo con `--inc`.** Mismo dex byte a byte; segunda vuelta en el mismo directorio:
+
+```text
+10.935453ms
+reutilización de clases
+the package did not change
+```
+
+**Wasm con `--inc`.** `21 clases`, `16504 B`, `cmp` del dex contra el nativo sin salida; APK
+`305500 B`.
+
+**Wasm sin `--inc` (cuarta celda).** `16504 B`, SHA-256 `69fdb658…82db9` idéntico en los cuatro dex,
+`cmp rc=0` contra nativo y wasm con `--inc`, APK `305502 B`, `apksigner verify --verbose` →
+`Verifies`, v1/v2/v3 `true`.
+
+**Frontera de `§310`.** La pestaña real con chromium no se re-ejecutó (§285 es transferida), la suite
+Go completa y el gate no se corrieron aquí; `TestSondaHeredadaFuente` de §275 sigue sin verificar y
+es independiente.
