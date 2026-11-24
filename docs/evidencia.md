@@ -14287,46 +14287,41 @@ de la lista versionada, no una medición de red. Sin push del submódulo ni publ
 
 ### Hot swap
 
-El `40` del hot swap **no se reproduce**: nativo y CDP dan
-`4 → swap → 4 → clic → 9`. Es un reporte del usuario: no hay comando
-que lo reproduzca y por eso no se registra como medido. Se corrigió
-la firma automática para derivar `MainActivity$1.onClick` (commit
-submódulo `677af8e`). En CDP salen `navegador: todo en orden` y el
-timeline `["Pulsos: 0","1","2","3","4","4","9"]`.
+El `40` del hot swap es un **reporte del usuario**, no una medición:
+nativo y CDP con el APK restituido dan `4 → swap → 4 → clic → 9`, pero
+la crítica (modo A) confirmó que `prueba-navegador.js:767,791-794`
+restituía el APK `+1` antes del swap, de modo que esa verde no cubre
+la ruta real. Se corrigió la firma automática para derivar
+`MainActivity$1.onClick` (commit submódulo `677af8e`); el requisito
+abierto es guardar el estado y aplicar el código nuevo sin replay.
 
 ```text
-4 → swap → 4 → clic → 9
-navegador: todo en orden
-["Pulsos: 0","1","2","3","4","4","9"]
+nativo y CDP con APK restituido: 4 → swap → 4 → clic → 9
+cobertura real: NO demostrada (crítica, modo A)
 ```
 
 ### Puente WISP
 
-Puente WISP en wasm: commit `f841220`, `apkc/puente_wisp_js.go`.
-El proxy página-worker entra con el commit submódulo `d02b2da`
-(`wisp-puente.js`) y se activa solo con el contrato `apkc-wisp/1`.
-La validación de la respuesta del núcleo entra con el commit
-submódulo `de92a63` (`wisp.js:294-323`): cuatro falsificaciones
-rechazadas. La forma de relay entra con el commit submódulo
-`2146846`: tres casos rechazados y seis relays del JSON siguen
-pasando.
+Los commits `f841220` (puente en wasm), `d02b2da` (proxy página-worker),
+`de92a63` (validación de respuesta), `2146846` (forma del relay), `2146846`
+y `6edde93` (destino canónico) se enumeran aquí como referencia; sus
+comandos y salidas están en `§296`, no se repiten como medición nueva.
 
 ### Gates
 
-Gate wasm `tools/entorno.sh wasm` en verde. La sonda con
-`apkc-wisp/2` y el relay ajeno quedan rechazados con `websockets=0`
-(log de QA). El gate de la página da 29/29 `ok` y, sin núcleo,
-`sockets:0, llamadas:0`.
-
 ```sh
-node prueba-wisp-gates.mjs
+cd studio && node prueba-wisp-gates.mjs
 ```
 
 ```text
-29/29 ok
-sockets:0, llamadas:0
-websockets=0
+falsificación: los dos gates rechazan lo que tienen que rechazar
+modo externo: sin núcleo falla con el motivo y sin abrir socket — {"motivo":"núcleo WISP no disponible en esta compilación","sockets":0,"llamadas":0}
 ```
+
+La cifra `29/29 ok` y el `websockets=0` de la sonda CDP son recuentos
+de los logs de QA, no salidas del comando anterior; se citan como
+informe, no como medición de este bloque. `tools/entorno.sh wasm` y
+la sonda de versión/relay están registrados en `§296`.
 
 **Frontera de `§295`.** Gate final, CI y publicación quedan fuera.
 El puente real contra Maven solo se probó con núcleo simulado, no
@@ -14462,3 +14457,45 @@ coordenada válida; la política sigue siendo la allowlist de `ConfigWISP.Valida
 
 **Frontera de `§297`.** Sin relay real, sin CDP, sin gate y sin publicación: solo `net.Pipe()` y la
 suite nativa, además de la compilación `GOOS=js GOARCH=wasm` del lado registrado.
+
+## 298. Cierre del puente de reposo, lienzo, pista y descripciones
+
+```sh
+cd apkc && tcr -c 3 -m 2G go test -run 'TestPuenteWisp|TestWispGet' -count=1 -v .
+tcr -c 3 -m 2G node shim/prueba-wisp-get.js
+cd studio && node prueba.js
+```
+
+```text
+PASS / ok 0.012s
+11 comprobaciones ok; la petición nunca viaja en argv; huella inválida => 0 WebSocket
+prueba: todo en orden
+```
+
+`wisp-get` entra con los commits `8956450` (fork) y `80fc9d0` (submódulo):
+un solo disparo con la petición en `go.env`, salida silenciada y bytes
+transferidos como `ArrayBuffer`. La sonda CDP registró 7 peticiones,
+ninguna fuera del origen, y 0 WebSocket sin activación.
+
+El lienzo entra con `24b3462` (fork) y `82a93f5` (submódulo). Antes
+`getWidth/getHeight/Color.rgb` daban cero y todo era `#00000000`;
+después el centro es `(180,320)` y los colores son `#12161e`,
+`#46beff`, `#ffb43c`, `#f0f0f0` y `#78f096`.
+
+```sh
+cd apkc && tcr -c 4 -m 3G go test -run TestPreviewLienzo -v .
+```
+
+```text
+--- PASS: TestPreviewLienzo (0.13s)
+ok github.com/ajinasokan/apkc 0.139s
+```
+
+`notas` entra con `82be596`: el nodo `id/editor` traía `pista:"Escribe
+una nota"` y `texto:""`, que el pintor ignoraba. La sonda sobre el
+modelo real, sin `textoDinamico`, pasó de `sinGuion:[]` a
+`sinGuion:["Escribe una nota"]`. Las descripciones de las diez
+plantillas entran con `b11c08d` (selector, `LEEME.txt` y prueba).
+
+**Frontera de `§298`.** La suite Go completa queda pendiente; no se
+ejecutó gate final, CI, publicación ni resolución contra un relay real.

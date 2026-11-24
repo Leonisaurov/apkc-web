@@ -753,3 +753,4 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   (`0x7f010000` y `0x7f010002`) y un `Button` con `@string` «Enviar» de guarda: la siembra deja solo
   el texto del botón, cada idRef publica su texto y dos escrituras llegan a dos capturas distintas.
   Frontera: no se da por pasado `e2e.sh` (sigue en `254 bien, 2 mal`, cifra del encargo).
+- §298: puente `wisp-get` de reposo, lienzo con coordenadas y colores reales, pista del `EditText` en `notas` y descripciones de las diez plantillas; suite Go completa pendiente, sin gate final, CI ni publicación.
