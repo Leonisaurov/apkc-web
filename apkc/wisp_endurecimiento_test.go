@@ -277,7 +277,7 @@ func TestAbrirWebSocketWISPExigeConfigValidada(t *testing.T) {
 	if _, err := AbrirWebSocketWISP(cfg); err == nil || !strings.Contains(err.Error(), "wss") {
 		t.Fatalf("con un relay inseguro dio %v", err)
 	}
-	cfg.Relay = "wss://ejemplo.test/wisp/"
+	cfg.Relay = RelaysWISP()[0]
 	_, err := AbrirWebSocketWISP(cfg)
 	if err == nil {
 		t.Fatal("en nativo AbrirWebSocketWISP debía fallar tras validar")

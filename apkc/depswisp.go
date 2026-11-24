@@ -30,8 +30,18 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+)
+
+// Errores centinela de las allowlists. Se envuelven con el detalle del host o
+// del destino rechazado, para que la interfaz pueda distinguir un rechazo de
+// política de un fallo de red y enseñar el motivo sin interpretar el texto.
+var (
+	ErrRelayNoAutorizado   = errors.New("wisp: relay no autorizado")
+	ErrDestinoNoAutorizado = errors.New("wisp: destino no autorizado")
+	ErrCoordenadaInvalida  = errors.New("wisp: coordenada Maven inválida")
 )
 
 // AtribucionWISP es el crédito que exige la licencia CC-BY-4.0 de la spec.
@@ -64,6 +74,80 @@ func RelaysWISP() []string {
 	return append([]string(nil), relaysWISP...)
 }
 
+// destinoWISP es una pareja host/puerto que el camino seguro puede abrir.
+type destinoWISP struct {
+	Host   string
+	Puerto uint16
+}
+
+// destinosWISP son los destinos que `AbrirTLSWISP` abre por defecto: los dos
+// espejos de Maven Central que se midieron durante la investigación. El puerto es
+// 443 porque encima del flujo WISP se monta TLS de punta a punta: el relay solo
+// ve registros cifrados y no puede leer ni alterar los artefactos. Abrir el mismo
+// host en un puerto en claro (80, o cualquier otro) delataría el tráfico al relay
+// y rompería esa promesa, así que la lista autoriza la pareja host:puerto, no el
+// host suelto.
+var destinosWISP = []destinoWISP{
+	{Host: "repo1.maven.org", Puerto: 443},
+	{Host: "repo.maven.apache.org", Puerto: 443},
+}
+
+// DestinosWISP devuelve una copia de los destinos autorizados por defecto.
+func DestinosWISP() []destinoWISP {
+	return append([]destinoWISP(nil), destinosWISP...)
+}
+
+// listaDestinos autoriza esta pareja host/puerto si está en la lista base o, con
+// `PermitirDestinosPersonalizados`, en `DestinosExtra`. La comparación no
+// distingue mayúsculas ni un punto final en el host, que son la misma dirección
+// DNS, pero exige el puerto exacto.
+func (c ConfigWISP) listaDestinos(host string, puerto uint16) bool {
+	normalizado := normalizarHost(host)
+	for _, d := range destinosWISP {
+		if normalizado == d.Host && puerto == d.Puerto {
+			return true
+		}
+	}
+	if !c.PermitirDestinosPersonalizados {
+		return false
+	}
+	for _, entrada := range c.DestinosExtra {
+		h, p, err := parseDestinoExtra(entrada)
+		if err != nil {
+			continue
+		}
+		if h == normalizado && p == puerto {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizarHost deja el nombre comparable: minúsculas y sin el punto final que
+// a veces se escribe para fijar la raíz DNS.
+func normalizarHost(host string) string {
+	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// parseDestinoExtra exige la forma «host:puerto», con el puerto explícito: un
+// destino sin puerto sería ambiguo (¿443 por defecto?) y la ambigüedad es justo
+// lo que una allowlist no puede permitirse.
+func parseDestinoExtra(entrada string) (string, uint16, error) {
+	host, textoPuerto, err := net.SplitHostPort(entrada)
+	if err != nil {
+		return "", 0, fmt.Errorf("wisp: destino extra %q inválido: se espera host:puerto: %w", entrada, err)
+	}
+	host = normalizarHost(host)
+	if host == "" {
+		return "", 0, fmt.Errorf("wisp: destino extra %q sin host", entrada)
+	}
+	puerto, err := strconv.ParseUint(textoPuerto, 10, 16)
+	if err != nil || puerto == 0 {
+		return "", 0, fmt.Errorf("wisp: destino extra %q con puerto %q no válido (1-65535)", entrada, textoPuerto)
+	}
+	return host, uint16(puerto), nil
+}
+
 // ConfigWISP configura una conexión. `Habilitado` es el interruptor opt-in y
 // nace en false. `RootCAs` es obligatorio en `js/wasm`, donde no hay almacén del
 // sistema; en nativo, si es nil se usa el del sistema.
@@ -84,6 +168,21 @@ type ConfigWISP struct {
 
 	// Plazo acota el handshake TLS. Cero usa el valor por defecto.
 	Plazo time.Duration
+
+	// PermitirRelaysPersonalizados abre la allowlist de relays. Sin esto solo
+	// valen las seis URLs verificadas por handshake: un relay ajeno vería a qué
+	// hosts se conecta el usuario con su reputación. Se activa a mano, igual que
+	// el módulo.
+	PermitirRelaysPersonalizados bool
+
+	// PermitirDestinosPersonalizados abre la allowlist de destinos y habilita
+	// `DestinosExtra`. Sin esto, el camino seguro solo abre los dos espejos de
+	// Maven Central en 443.
+	PermitirDestinosPersonalizados bool
+
+	// DestinosExtra amplía la allowlist cuando `PermitirDestinosPersonalizados`
+	// está activo. Cada entrada es «host:puerto», con el puerto explícito.
+	DestinosExtra []string
 }
 
 // NuevaConfigWISP devuelve la configuración por defecto: desactivada y con el
@@ -170,8 +269,9 @@ func CargarCAsPEMFijadas(bundle []byte, huella [sha256.Size]byte) (*x509.CertPoo
 	return CargarCAsPEM(bundle)
 }
 
-// Validar comprueba que el módulo está activado y que la URL del relay tiene la
-// forma que exige WISP: WebSocket seguro y terminado en «/».
+// Validar comprueba que el módulo está activado, que la URL del relay tiene la
+// forma que exige WISP (WebSocket seguro y terminado en «/»), que el relay está
+// en la allowlist y que los destinos extra, si los hay, están bien formados.
 func (c ConfigWISP) Validar() error {
 	if !c.Habilitado {
 		return errors.New("wisp: el módulo está desactivado (ConfigWISP.Habilitado = false)")
@@ -180,16 +280,29 @@ func (c ConfigWISP) Validar() error {
 	if err != nil {
 		return fmt.Errorf("wisp: URL de relay inválida: %w", err)
 	}
+	if err := validarFormaRelay(u, c.Relay); err != nil {
+		return err
+	}
+	if err := c.validarRelayAutorizado(u); err != nil {
+		return err
+	}
+	return c.validarDestinosExtra()
+}
+
+// validarFormaRelay comprueba la forma de la URL sin mirar la allowlist. Está
+// separada para que las pruebas puedan falsificar que un relay ajeno pasa todos
+// los controles de forma y solo lo rechaza la lista.
+func validarFormaRelay(u *url.URL, relay string) error {
 	if u.Scheme != "wss" {
 		if u.Scheme != "ws" || !esHostLocal(u.Hostname()) {
-			return fmt.Errorf("wisp: el relay debe usar wss:// (o ws:// en localhost); recibido %q", c.Relay)
+			return fmt.Errorf("wisp: el relay debe usar wss:// (o ws:// en localhost); recibido %q", relay)
 		}
 	}
 	if u.Host == "" {
 		return errors.New("wisp: la URL del relay no tiene host")
 	}
 	if !strings.HasSuffix(u.Path, "/") {
-		return fmt.Errorf("wisp: la URL del relay debe acabar en «/»; recibido %q", c.Relay)
+		return fmt.Errorf("wisp: la URL del relay debe acabar en «/»; recibido %q", relay)
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("wisp: la URL del relay no admite query ni fragmento")
@@ -197,10 +310,190 @@ func (c ConfigWISP) Validar() error {
 	return nil
 }
 
+// validarRelayAutorizado exige que la URL sea una de las verificadas, salvo que
+// el usuario haya activado `PermitirRelaysPersonalizados`. La comparación es por
+// URL canónica (esquema, autoridad y ruta), no por host suelto: cambiar la ruta
+// de un relay conocido también lo convierte en otro relay.
+func (c ConfigWISP) validarRelayAutorizado(u *url.URL) error {
+	if c.PermitirRelaysPersonalizados {
+		return nil
+	}
+	canonica := relayCanonico(u)
+	for _, autorizado := range relaysWISP {
+		au, err := url.Parse(autorizado)
+		if err != nil {
+			continue
+		}
+		if relayCanonico(au) == canonica {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: el relay %q (host %q) no figura entre los %d verificados; activa ConfigWISP.PermitirRelaysPersonalizados para usar uno propio",
+		ErrRelayNoAutorizado, c.Relay, u.Hostname(), len(relaysWISP))
+}
+
+// relayCanonico reduce una URL de relay a la forma comparable: minúsculas en el
+// esquema y el host, sin el puerto que ya implica el esquema y sin el punto final
+// del host.
+func relayCanonico(u *url.URL) string {
+	esquema := strings.ToLower(u.Scheme)
+	host := normalizarHost(u.Hostname())
+	puerto := u.Port()
+	if (esquema == "wss" && puerto == "443") || (esquema == "ws" && puerto == "80") {
+		puerto = ""
+	}
+	autoridad := host
+	if puerto != "" {
+		autoridad = net.JoinHostPort(host, puerto)
+	}
+	return esquema + "://" + autoridad + u.Path
+}
+
+// validarDestinosExtra comprueba la forma de la lista ampliada. Una lista puesta
+// sin el interruptor es un error y no un campo ignorado: quien la escribió cree
+// que autoriza destinos y no lo hace.
+func (c ConfigWISP) validarDestinosExtra() error {
+	if len(c.DestinosExtra) == 0 {
+		return nil
+	}
+	if !c.PermitirDestinosPersonalizados {
+		return errors.New("wisp: ConfigWISP.DestinosExtra exige PermitirDestinosPersonalizados = true")
+	}
+	for _, entrada := range c.DestinosExtra {
+		if _, _, err := parseDestinoExtra(entrada); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ValidarDestino decide si el camino seguro puede abrir `host:puerto`. Se llama
+// antes de mandar el CONNECT, de modo que un destino prohibido no llega a tocar
+// el relay. El mensaje nombra el destino y el motivo.
+func (c ConfigWISP) ValidarDestino(host string, puerto uint16) error {
+	if strings.TrimSpace(host) == "" {
+		return fmt.Errorf("%w: host vacío", ErrDestinoNoAutorizado)
+	}
+	if puerto == 0 {
+		return fmt.Errorf("%w: %s:0 no es un puerto válido", ErrDestinoNoAutorizado, host)
+	}
+	if c.listaDestinos(host, puerto) {
+		return nil
+	}
+	permitidos := make([]string, 0, len(destinosWISP)+len(c.DestinosExtra))
+	for _, d := range destinosWISP {
+		permitidos = append(permitidos, fmt.Sprintf("%s:%d", d.Host, d.Puerto))
+	}
+	if c.PermitirDestinosPersonalizados {
+		permitidos = append(permitidos, c.DestinosExtra...)
+	}
+	return fmt.Errorf("%w: el destino %s:%d no está autorizado; el camino seguro solo abre %s",
+		ErrDestinoNoAutorizado, host, puerto, strings.Join(permitidos, ", "))
+}
+
 func esHostLocal(host string) bool {
 	switch strings.ToLower(host) {
 	case "localhost", "127.0.0.1", "::1", "[::1]":
 		return true
+	}
+	return false
+}
+
+// maxLargoCampoMaven acota cada campo de la coordenada. Los nombres reales de
+// Maven no pasan de unas decenas de caracteres; un campo enorme solo sirve para
+// agotar memoria o para colar bytes raros al construir rutas.
+const maxLargoCampoMaven = 128
+
+// extensionesMaven son las únicas que el camino seguro acepta al nombrar el
+// artefacto. Se listan en vez de aceptar cualquier sufijo para que la extensión
+// tampoco sea una vía de escape.
+var extensionesMaven = map[string]bool{"aar": true, "jar": true, "pom": true}
+
+// campoMavenValido acepta letras ASCII, dígitos, punto, guion y guion bajo; el
+// más (+) solo en la versión, donde Maven lo usa. Nada de «/», «\», «:», «..»,
+// espacios, controles ni caracteres de otros alfabetos: cualquier cosa de esas
+// podría cambiar la ruta que se construye después.
+func campoMavenValido(campo string, permiteMas bool) bool {
+	if campo == "" || len(campo) > maxLargoCampoMaven {
+		return false
+	}
+	for i := 0; i < len(campo); i++ {
+		c := campo[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		case c == '.', c == '_', c == '-':
+		case permiteMas && c == '+':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// grupoMavenValido exige segmentos no vacíos separados por un punto, de modo que
+// «com..example», «.com» o «com.» se rechazan y el grupo se puede convertir en
+// directorios sin ambigüedad.
+func grupoMavenValido(grupo string) bool {
+	if !campoMavenValido(grupo, false) {
+		return false
+	}
+	for _, segmento := range strings.Split(grupo, ".") {
+		if segmento == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidarCoordenadaMaven comprueba que la coordenada tiene exactamente la forma
+// `grupo:artefacto:version` y que cada campo solo lleva caracteres permitidos.
+// Rechaza `/`, `..`, esquemas de URL y cualquier otro adorno antes de que la
+// coordenada se use para construir una ruta.
+func ValidarCoordenadaMaven(coordenada string) (grupo, artefacto, version string, err error) {
+	partes := strings.Split(coordenada, ":")
+	if len(partes) != 3 {
+		return "", "", "", fmt.Errorf("%w: %q no tiene la forma grupo:artefacto:version", ErrCoordenadaInvalida, coordenada)
+	}
+	grupo, artefacto, version = partes[0], partes[1], partes[2]
+	if !grupoMavenValido(grupo) {
+		return "", "", "", fmt.Errorf("%w: el grupo %q no es válido", ErrCoordenadaInvalida, grupo)
+	}
+	if !campoMavenValido(artefacto, false) || artefacto == "." || artefacto == ".." {
+		return "", "", "", fmt.Errorf("%w: el artefacto %q no es válido", ErrCoordenadaInvalida, artefacto)
+	}
+	if !campoMavenValido(version, true) || version == "." || version == ".." {
+		return "", "", "", fmt.Errorf("%w: la versión %q no es válida", ErrCoordenadaInvalida, version)
+	}
+	return grupo, artefacto, version, nil
+}
+
+// RutaDependenciaMaven construye la ruta del artefacto bajo `deps/`, con el
+// diseño de Maven Central: `deps/<grupo>/<artefacto>/<versión>/<artefacto>-<versión>.<ext>`.
+// La validación va antes de unir nada: un campo hostil no llega a formar parte de
+// la ruta y, por si acaso, el resultado se comprueba otra vez contra el traversal.
+func RutaDependenciaMaven(coordenada, extension string) (string, error) {
+	if !extensionesMaven[extension] {
+		return "", fmt.Errorf("%w: la extensión %q no está permitida (aar, jar o pom)", ErrCoordenadaInvalida, extension)
+	}
+	grupo, artefacto, version, err := ValidarCoordenadaMaven(coordenada)
+	if err != nil {
+		return "", err
+	}
+	ruta := "deps/" + strings.ReplaceAll(grupo, ".", "/") + "/" + artefacto + "/" + version + "/" + artefacto + "-" + version + "." + extension
+	if contieneTraversal(ruta) {
+		return "", fmt.Errorf("%w: la ruta %q se sale de deps/", ErrCoordenadaInvalida, ruta)
+	}
+	return ruta, nil
+}
+
+// contieneTraversal busca un componente «..» en una ruta con separador «/».
+// Es la última red: la validación de campos ya lo impide, pero un cambio futuro
+// en `campoMavenValido` no debe convertir esta función en una puerta abierta.
+func contieneTraversal(ruta string) bool {
+	for _, parte := range strings.Split(ruta, "/") {
+		if parte == ".." {
+			return true
+		}
 	}
 	return false
 }
@@ -225,6 +518,12 @@ func AbrirTLSWISP(cliente *ClienteWISP, host string, puerto uint16, cfg ConfigWI
 	if err := cfg.Validar(); err != nil {
 		return nil, err
 	}
+	// El destino se comprueba antes de tocar el almacén de CAs y antes de mandar
+	// el CONNECT: un puerto prohibido no debe llegar al relay ni siquiera como
+	// intento.
+	if err := cfg.ValidarDestino(host, puerto); err != nil {
+		return nil, err
+	}
 	raices := cfg.RootCAs
 	if raices == nil {
 		var err error
@@ -234,7 +533,7 @@ func AbrirTLSWISP(cliente *ClienteWISP, host string, puerto uint16, cfg ConfigWI
 		}
 	}
 
-	bruto, err := cliente.AbrirTCP(host, puerto)
+	bruto, err := cliente.AbrirTCPAutorizado(cfg, host, puerto)
 	if err != nil {
 		return nil, fmt.Errorf("wisp: no se pudo abrir el flujo hacia %s:%d: %w", host, puerto, err)
 	}

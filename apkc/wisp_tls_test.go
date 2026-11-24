@@ -82,10 +82,13 @@ func servirTLSDevuelveEco(t *testing.T, cert tls.Certificate) func(uint32) net.C
 
 func configTLSDePrueba(pool *x509.CertPool) ConfigWISP {
 	return ConfigWISP{
-		Habilitado: true,
-		Relay:      "wss://ejemplo.test/wisp/",
-		RootCAs:    pool,
-		Plazo:      5 * time.Second,
+		Habilitado:                     true,
+		Relay:                          "wss://ejemplo.test/wisp/",
+		RootCAs:                        pool,
+		Plazo:                          5 * time.Second,
+		PermitirRelaysPersonalizados:   true,
+		PermitirDestinosPersonalizados: true,
+		DestinosExtra:                  []string{"ejemplo.test:443"},
 	}
 }
 
