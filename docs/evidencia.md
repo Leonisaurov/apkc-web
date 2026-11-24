@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§252`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§253`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11137,12 +11137,141 @@ cd apkc && go test -run 'TestAsignacionComoValorContraJavac17|TestAsignacionAnid
 nada aquí, no hubo gate ni chromium, y el oráculo es javac 17 más el dex byte a byte (o instrucción a
 instrucción en el bloque del zip).
 
+## 253. El cierre de la ronda de auditorías: firmas, cotas, `check`, pestaña y compilador
+
+Medido el 2026-11-23 sobre la tanda que va de `b9ed7ff` a `6157786`, más el commit `4514231` del
+submódulo `studio/` (puntero en `7d55e18`). La ronda abrió cinco críticas —compilador, pestaña,
+seguridad, dependencias y documentación—; cuatro volvieron `RECHAZAR` y una `APROBAR CON
+CONDICIONES`, y de ellas salieron los `CONFIRMADO` que se cierran aquí. Lo que sigue no se
+re-ejecutó al escribir este `§`: cada bloque cita el comando del frente que lo midió y el commit que
+lo integra, y los que quedaron abiertos se dicen como tales.
+
+**Seguridad (`e837d46`).** Cuatro hallazgos, cada uno con su PoC armada en el test con `archive/zip`
+y `bytes` (no se versiona ningún binario, regla 2). El bloque de firmas de 16 B anunciaba un tamaño
+que no cubre ni su propia magia: `largo-24` desbordaba y el verificador moría con `panic:
+makeslice`, rc=2 y traza. Ahora el tamaño se mira antes de reservar y el veredicto es «el bloque de
+firmas no tiene tamaño válido», rc=1, sin pánico; se cubren 16, 20 y 23 bytes y un bloque de 1 TiB
+(`apkc/verificar_hostil_test.go:67`). El barrido de la v1 se quedaba con el último `.SF` y el último
+`.RSA`, así que un paquete con una firma buena y un segundo `.SF` salía `v1 ok`: ahora dos `.SF` o
+dos `.RSA` se rechazan con «varios firmantes v1: no medido» (`apkc/verificar.go:258` y
+`verificar_hostil_test.go:96`). Al re-firmar, `carryPlan` (`apkc/sign.go:312`) rechaza un nombre con
+barra inicial o `..`, y `../../evil.txt` sale con su nombre (`apkc/sign_hostil_test.go:18`). Y el
+descarte de una entrada `META-INF` que parece firma ya no es silencioso: `META-INF/services/x.MF`
+avisa por `LogW` (`apkc/sign.go:327`, test `:43`). Además, `verificarApk` convierte cualquier pánico
+en un error con el prefijo «paquete hostil:» (`apkc/verificar.go:81`).
+
+**Residuos (`d66eb0d`, `072725b`, `acf6866`).** R2: el `.idsig` y el apk se leían enteros con
+`os.ReadFile`, y un fichero de gigabytes agotaba la memoria del worker —un OOM de Go no es un pánico
+y el `recover` no lo atrapa—. Ahora los dos tamaños se miran con `os.Stat` y la lectura lleva su
+corte con `LimitReader`: 1 GiB para el apk en nativo (`apkc/v4verify.go:31`) y 256 MiB cuando
+`runtime.GOARCH == "wasm"` desde `init` (`:39-42`); el tope del `.idsig` se deriva del tamaño del apk
+y se aprieta solo (`:53`). R3: `FuzzVerificarApkNoMuere` daba por bueno cualquier error, así que
+medía «no se cae el test» y no «no hay pánico»; ahora `falloDelPaquete` falla con el prefijo y una
+sonda comprueba en cada corrida que el detector lo ve (`verificar_hostil_test.go:171` y `:226`). R5:
+el prefijo vive en una sola fuente, `prefijoPaqueteHostil` (`apkc/verificar.go:81`), y
+`TestLaSondaSigueAlPrefijoDeProduccion` (`verificar_hostil_test.go:253`) falsifica un literal
+duplicado. R6: en wasm el tope se aplica antes de leer, con un apk disperso de 300 MiB y un `.idsig`
+de 80 MiB (`TestVerificarV4RespetaLaCotaDeWasm`, `apkc/v4tope_wasm_test.go:49`); en wasm32/Node se
+alcanzan **3 GiB de `heapSys`** con la RAM y el swap de un escritorio (`apkc/v4verify.go:33-38`),
+pero los 256 MiB de un renderer móvil **siguen siendo HIPÓTESIS**: no están medidos en Chromium, y
+por eso `verificar_hostil_test.go:13-15` deja escrito que la cota no se baja sin esa medición.
+
+**`check` (`50d9213`, `b2973c9`).** Antes, `check` armaba el classpath con el primer `jar/` por orden
+léxico y solo marcaba `emisor:true` si el fallo venía del emisor y el pedido ya se había emitido
+(`apkc/check.go:416`); una clase definida en dos jars, dos fuentes con la misma clase, o un fuente
+que redefinía una clase del jar salían `emisor:true` con cero errores. Ahora
+`entradasDelClasspathEn` llama a `claseDuplicadaEntreJars` (`apkc/dependencias.go:77`), el registro
+rechaza dos fuentes con la misma clase (`apkc/javaemisor.go:2125`) y contrasta cada nombre registrado
+con el índice de los artefactos ya abiertos (`:2136`, `jarDe` en `:483`). El tercer caso se midió con
+el jar real `android-support-v4.jar` y `android.support.v4.text.TextUtilsCompat`: sin la guarda,
+`emisor:true` y cero errores; con ella, `emisor:false` y un mensaje que nombra clase, fuente y jar.
+Tests: `TestCheckAbortaConDosJarsQueDefinenLaMismaClase`,
+`TestCheckAbortaConAarYJarQueDefinenLaMismaClase`, `TestCheckRechazaDosFuentesConLaMismaClase` y
+`TestCheckAbortaConUnFuenteQueRedefineUnaClaseDelJarReal` (este se salta con un mensaje si el jar no
+está).
+
+**Pestaña (`4514231` en `studio/`, puntero `7d55e18`).** Cinco defectos. El worker que no cargaba —un
+404, un import roto, COOP/COEP ausente— o que se quedaba mudo dejaba `pedir` sin resolver y el velo
+de carga encima: ahora escucha `error` y `messageerror`, cada petición lleva un vigilante de 20 s que
+se reinicia con cada mensaje del worker y el fallo se recuerda hasta «Detener» (`studio/pestana.js:46`
+y `:96`). El `Toast` contaba emisiones de `ejecucion`, así que un aviso repetido con el mismo texto no
+reiniciaba la cuenta y se ocultaba a los 3 s del primero; ahora cuenta `toastFecha` por identidad del
+modelo (`studio/previa-panel.js:701` y `:1808-1821`). Un drop con varios ficheros atendía solo a
+`files[0]` y el resto desaparecía; ahora se atiende al primero y se dice qué se ignora, con su nombre
+(`previa-panel.js:4208-4215`). Los `.catch(() => {})` de refresco, swap, imagen, historial,
+diagnóstico y caché pasan por `falloSilencioso` (`studio/pestana.js:32`). Y la lámina de lectura del
+inspector no captura el puntero (`studio/style.css:696`): `previa-seccion-consola` volvía a tapar el
+clic del canvas que `§242` había destapado.
+
+**Compilador (`b9ed7ff`, `159b6ea`, `7867884`, `3f8325e`).** `ejecutaCuerpo` copiaba cada argumento a
+`regs[pos]` sin mirar el marco: con `insSize` 1 y tres argumentos desbordaba el slice y el `recover`
+del intérprete lo disfrazaba de «dex malformado». Ahora `colocaArgumentos` cuenta las palabras y las
+compara con `insSize` y `registersSize` antes del bucle, y el fallo es un error de contrato de llamada
+con método, número de argumentos y palabras, sin pasar por el `recover` (`apkc/previewinterprete.go:2930`
+y `:3003`); un `code_item` que escribe fuera del marco sigue siendo dex malformado. La asignación
+anidada y la ancha ya se cerraron en `§252` (`0936c32`) y no se re-midieron aquí. El tipo cualificado
+de `MainActivity.java:218`, `AlertDialog.Builder builder = new AlertDialog.Builder(this)`, se acepta
+en `pareceDeclaracion` contando los segmentos unidos por puntos (`apkc/javafuente.go:2382`). El molde
+`(App) apps.getAdapter().getItem(positon)` se estima sin emitir su receptor (`apkc/javaemisor.go:4651`
+y `:4787`), que era el rechazo «el tipo de una expresion main.jcast no se puede estimar sin emitirla».
+La escritura de un campo acepta un subtipo de referencia sin `checkcast`, como la subida de javac
+(`cabeEn`, `:1664`, y el sitio de escritura `:3611`), y `if (llama())` o `if (b)` se branquean con
+`ifeq` sin invertir (`condicionBranca`, `:5220`, con `opuestoDeSalto` en `:5209`). Los tres cambios
+del emisor comparan el dex con javac 17 `--release 8 -g:lines,source`, byte a byte o instrucción a
+instrucción, y las falsificaciones apagan el interruptor y devuelven el error literal del usuario.
+
+**ApkShare avanza, no compila.** El `check --proyecto` del fuente real pasó la 156, la 187, la 218 y
+`AppAdapter.java:21/29/33`; el build se para ahora en `MainActivity.java:52/53/55`, **columna 44**: al
+leer `apps`, el tipo no se resuelve porque es la captura de una local en posición de receptor dentro
+de una anónima (`apkc/javafuente.go:2924`). Después siguen fuera, medidos con `dexdump`, el puente
+`getItem:(I)Ljava/lang/Object;` del retorno covariante y el `check-cast` tras el `List.get` borrado.
+**No compila entero**: ninguna de estas piezas se presenta como cierre del build.
+
+**Docs (`e2fe7f1`, `8bd46da`).** Los nueve defectos de la crítica: I1, I2 e I3 con su estado real de
+cerradas; I4 hecha en nativo con el gate pendiente; I5 medida; J4 cerrada con el run `45062792689`
+—J5, local, con el sitio pendiente, en el mismo plan (`docs/plan-android-jar-propio.md:4-8` y
+`:93-98`)—; la UI del hot swap cerrada en `§249`; la numeración histórica con el hueco del `§78` y el
+desorden 80/81 y 213/215, anotada sin renumerar cabeceras; y la fórmula con la letra griega delta —y
+sus cifras 35/184— sustituida por `dpc`/`dlinea` (`docs/situacion.md:212`) y **36 comprobaciones en
+`crear` y 229 en pestaña** (`docs/situacion.md:33`).
+
+**WISP.** Se descartó como módulo por defecto: rompe la regla 4 y la auditoría de peticiones fuera
+del origen, y por CDP no se ven los frames cifrados de un WebSocket. El usuario decidió abrirlo como
+**módulo opcional opt-in, con aviso y dos gates**; la investigación sigue en curso y **no hay nada
+implementado**: la única mención en el repo es `docs/plan-deps-red.md:44`, y `grep -rni wisp` sobre
+`*.go`, `*.js` y `*.html` no devuelve una sola línea.
+
+**`deps-index` (`6157786` en el repo, `d70b8e7` en `studio/`).** El generador local
+`studio/deps-index-local.mjs` produce un índice mínimo y reproducible **sin red** —coordenada,
+fichero, bytes, `sha256`, `licencia` y `fecha`— con un jar sintético o uno real y siempre en un
+directorio temporal; el panel muestra la licencia y dice «sin declarar» si falta. El frente corrió
+`node studio/prueba.js` y `APKC_WASM=… node studio/prueba-pestana.js` con **216 comprobaciones bien,
+0 mal** y **cero peticiones fuera del origen**; la falsificación del 404 quita el índice y el panel lo
+dice en vez de inventar datos. El **sitio público no está actualizado** con el índice: falta la
+publicación, que queda pendiente de orden (`studio/DEPS.md`, «Estado»).
+
+**Fronteras de este `§`.** Un `.aar` real con `res/` y `lib/` sigue sin empaquetarlos: `classes.jar`
+se dexa, pero los recursos y las bibliotecas nativas quedan fuera de la pieza a propósito
+(`apkc/dependencias.go:12-14`). El opt-in de WISP no tiene especificación escrita, y el push, el CI
+remoto y la publicación de `apkc-studio.surge.sh` siguen pendientes de orden. No se re-ejecutó nada
+aquí, no hubo gate ni chromium; el oráculo de cada bloque es el que cita: los tests de paquete hostil,
+javac 17 con el dex comparado y las comprobaciones de `studio/`.
+
+```sh
+cd apkc && go test -run 'TestVerificarRechazaBloqueDeFirmasConTamanoImposible|TestVerificarRechazaDosFirmantesV1|TestSignRechazaNombreQueSaleDelPaquete|TestSignAvisaAlDescartarUnaFirmaEscondida' -v .
+cd apkc && go test -run 'TestVerificarV4NoLeeUnIdsigEnorme|TestVerificarV4NoLeeUnApkPorEncimaDelTope|TestTopeV4PorPlataforma|TestLaSondaSigueAlPrefijoDeProduccion|TestElDetectorDePanicosDelFuzz' -v .
+cd apkc && go test -run 'TestCheckAbortaConDosJarsQueDefinenLaMismaClase|TestCheckAbortaConAarYJarQueDefinenLaMismaClase|TestCheckRechazaDosFuentesConLaMismaClase|TestCheckAbortaConUnFuenteQueRedefineUnaClaseDelJarReal' -v .
+cd apkc && go test -run 'TestLaLlamadaConArgumentosDeMasSeRechazaPorContrato|TestTipoCualificadoLocalContraJavac17|TestMoldeDeArgumentoContraJavac17|TestAppAdapterDeApkShareCompilaContraJavac17|TestLaSubidaDeUnaReferenciaAlEscribirUnCampoDexaComoJavac17' -v .
+cd studio && node prueba.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
 
-1. **ApkShare no compila entero.** Pasa la 187 y se para en `MainActivity.java:218`; quedan
-   `AppAdapter.java:21/29/33`.
+1. **ApkShare no compila entero.** En `§253` pasó la 187, la 218 y `AppAdapter`, y se para en
+   `MainActivity.java:52/53/55`, columna 44, con la captura de `apps` en una anónima; después
+   quedan el puente `getItem` del retorno covariante y su `check-cast`.
 2. **Asignación como valor sobre campo o arreglo**, rechazada por nombre, pendiente del
    `dup_x1`/`dup2_x1` (y del `dup_x2` del elemento).
 3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual sin
