@@ -13064,6 +13064,94 @@ cd apkc && go test -run TestArgumentosDeFirmaNoLlevanLaPassword -count=1 -v .
 node --check shim/navegador-sim.js
 ```
 
+## 278. El fs simulado deja de dejar huérfanos y las pruebas ajenas a la pestaña salen por tag
+
+Registrado el 2026-11-24 sobre `9f29d88`, con dos frentes que van juntos porque el primero es lo
+que dejó ver el segundo: la corrección del fs simulado (`2420922`, builder
+`ses_df3c42d40ffeqQ5mKEpK7pdwrP`) y la separación por build tags (`f64101e`, builder
+`ses_df3bc24abffehGK5ieAcRCpuET`), las dos con crítica APROBAR. Lo ejecutado aquí va marcado como
+tal; las cifras del run completo de la suite wasm son del builder y se citan sin re-ejecutar.
+
+**Parte A, el síntoma.** `sh tools/entorno.sh wasm` abortaba en
+`TestRecursosDeDependenciaEnElApk`: el `open` de `build/res/layout/deps_fila.xml` no encontraba el
+fichero —«No such file or directory»— y `LogF` llama a `os.Exit(1)`, así que solo 118 de 853
+pruebas de nivel superior llegaban a correr y el resto del rojo quedaba invisible.
+
+**La causa.** `fsSim.unlink` borraba también nodos de directorio y devolvía `nil`. El
+`os.RemoveAll` de `build/res` se daba por hecho al ver el `nil`, dejaba los hijos huérfanos en el
+mapa del shim y el `Stat` del huérfano —`build/res/layout`— hacía que `MkdirAll` cortocircuitara
+sin recrear la rama; el `open` del recurso recién escrito fallaba con ENOENT.
+
+**El arreglo (`2420922`).** `shim/navegador-sim.js:294-307` —en ese commit, `:283-296`— hace que
+`unlink` conteste `EISDIR` a un directorio (`:298-304`), como Linux: `os.Remove` cae a `rmdir`, el
+`ENOTEMPTY` de un directorio con hijos hace recorrer a `RemoveAll` y el árbol queda coherente.
+`shim/prueba-relink.js` es la sonda: escribe un recurso, vacía `build/res`, rehace
+`build/res/layout`, reescribe y relee, y comprueba aparte la semántica de `unlink`/`rmdir`.
+
+**Lo ejecutado aquí (A).** Con el shim del árbol, `node shim/prueba-relink.js` da sus 4
+comprobaciones en verde; con el shim de `2420922^` en un directorio aparte da 4 fallos, con
+`stat de .../build/res/layout tras RemoveAll -> <nil>` y `(apkc devolvio 2)`. La crítica no vio
+regresión en `--montar`/`--exportar` ni en `shim/prueba-salida.js` (10/10), y los 101 SKIP del run
+son guards de SDK/javac/d8 que ya existían: el aborto los enmascaraba, no hay `t.Skip` nuevos.
+
+**Después (A).** La suite wasm llega al final: 854 pruebas de nivel superior, 733 PASS, 20 FAIL,
+101 SKIP y sin aborto; el rc 1 es de los fallos propios de wasm (exec de javac, `os.Pipe`, re-exec
+del binario, permisos 0644, WISP), no del fs.
+
+**Parte B, los cinco movimientos.** `dependencias_paridad_test.go` (`!js`),
+`device_paquete_proceso_test.go` (`!js`), `dependencias_dup_proceso_test.go` (`!js`) y
+`wisp_endurecimiento_nativo_test.go` (`!js`) dejan de compilarse en el binario wasm;
+`wisp_endurecimiento_js_test.go` (`js && wasm`) es la mitad nueva. La doctrina de
+`dependencias_test.go:5-8` prohíbe `t.Skip`: se excluye por tag, no se salta, porque un SKIP deja
+la suite en verde sin haber medido nada.
+
+**Lo que no se movió, a propósito.** `javac17Exigido` sigue sin tag en
+`dependencias_test.go:37-48` porque nueve ficheros sin tag lo usan: al moverlo, `go vet` con
+`GOOS=js GOARCH=wasm` daba `undefined: javac17Exigido`. Y la prueba compartida de WISP suelta la
+asignación `cfg.Relay = RelaysWISP()[0]`, que era preparativo y no aserción;
+`TestAbrirWebSocketWISPExigeConfigValidada` (`wisp_endurecimiento_test.go:268-285`) se queda con
+las dos aserciones que se deciden antes de tocar un socket.
+
+**Lo ejecutado aquí (B).** Compilado el binario de pruebas con `GOOS=js GOARCH=wasm` y ejecutado
+con `/usr/lib/go/lib/wasm/go_js_wasm_exec`, los cuatro grupos movidos contestan
+`testing: warning: no tests to run` seguido de `PASS` (rc 0); el control positivo, las dos pruebas
+de WISP sin tag, dan `PASS`
+con rc 0; y `GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .` sale limpio con rc 0. Es la verificación
+de la QA `ses_df29342e7ffeozUcSMbYgovw9m`, reproducida aquí.
+
+**La red que ya no se abre.** El test js guarda el `WebSocket` del global, lo pone en
+`Undefined()` y lo restaura con `defer` (`wisp_endurecimiento_js_test.go:5-27`), así que no hay
+conexión real al relay aunque Node 26 exponga `WebSocket` (undici). Antes del split esa prueba
+abría red: una dependencia externa oculta que ahora no existe.
+
+**Deuda abierta, fuera de este frente.** Las nueve pruebas `javaemisor_*` que invocan `javac`
+siguen compilándose bajo `js` y merecen el mismo tratamiento por tag.
+
+```sh
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" shim/wasm_exec.js
+node shim/prueba-relink.js
+mkdir -p "$HOME/.cache/apkc-web/falsif/2420922-prev"
+V="$HOME/.cache/apkc-web/falsif/2420922-prev"
+git show 2420922^:shim/navegador-sim.js > "$V/navegador-sim.js"
+cp shim/wasm_exec.js "$V/"
+SHIM="$V/navegador-sim.js" node shim/prueba-relink.js
+sh tools/entorno.sh wasm
+```
+
+```sh
+cd apkc
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$HOME/.cache/apkc-web/docs278/t.wasm" .
+L="$HOME/.cache/apkc-web/docs278/t.wasm"
+W=/usr/lib/go/lib/wasm/go_js_wasm_exec
+"$W" "$L" -test.v -test.run TestCompilarEnGoDexaIgualQueJavacConUnaDependencia
+"$W" "$L" -test.v -test.run TestRunRechazaManifiestoInyectadoAntesDeLaShell
+"$W" "$L" -test.v -test.run TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase
+"$W" "$L" -test.v -test.run TestAbrirWebSocketWISPConConfigValidaAvisaDeNativo
+"$W" "$L" -test.v -test.run TestAbrirWebSocketWISPRechazaLaDireccionSinAbrirRed
+"$W" "$L" -test.v -test.run TestAbrirWebSocketWISPExigeConfigValidada
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
