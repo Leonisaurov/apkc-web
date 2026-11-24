@@ -375,7 +375,9 @@ type bloqueTipo struct {
 }
 
 // tablaRecursos es el resources.arsc leido: pool global, paquete, sus dos tablas de nombres y los
-// bloques de tipo en el orden en que aparecen en el fichero.
+// bloques de tipo en el orden en que aparecen en el fichero. locale es el idioma pedido a la vista
+// previa; leeTabla lo deja vacio, que es el contrato de siempre: resolver contra la configuracion
+// base. Solo se usa al elegir valores, nunca al resolver ids, rutas ni drawables.
 type tablaRecursos struct {
 	global           tablaCadenas
 	idPaquete        uint32
@@ -385,6 +387,7 @@ type tablaRecursos struct {
 	bloques          []bloqueTipo
 	especificaciones int
 	tamaño           int
+	locale           string
 }
 
 func leeTabla(b []byte) (*tablaRecursos, error) {
@@ -636,6 +639,84 @@ func (tr *tablaRecursos) entradaDeId(id uint32) (bloqueTipo, entradaRecurso, boo
 	return *bl, bl.entradas[indice], true
 }
 
+// partesLocale separa `es` y `es-MX`/`es-rMX` en idioma y pais, tal como el calificador
+// `values-xx-rYY` se escribe en el proyecto (parrafo 107). El idioma y el pais de un
+// ResTable_config son dos letras ASCII en los offsets +8/+9 y +10/+11 (parrafos 94 y 107).
+func partesLocale(locale string) (idioma, pais string) {
+	partes := strings.SplitN(strings.Replace(strings.TrimSpace(locale), "_", "-", 1), "-", 2)
+	idioma = strings.ToLower(partes[0])
+	if len(partes) == 2 {
+		pais = strings.ToUpper(strings.TrimPrefix(strings.ToLower(partes[1]), "r"))
+	}
+	return idioma, pais
+}
+
+// dosLetras lee un campo de dos letras del ResTable_config. Un campo sin calificar esta a cero y
+// se devuelve vacio; es la forma que distingue `values-es` de `values-es-rMX`.
+func dosLetras(b []byte) string {
+	if len(b) < 2 {
+		return ""
+	}
+	return strings.TrimRight(string(b[:2]), "\x00")
+}
+
+// bloqueDeTipoParaValores elige de que bloque se leen los valores. Sin locale se comporta como
+// bloqueDeTipo (base, o el primero), que es el contrato actual. Con locale se queda con un bloque
+// cuyo idioma coincida: prefiere el pais exacto, despues el pais vacio (`values-es`) y, si no hay
+// ninguno con ese idioma, cae a la base y al primer bloque. No toca bloqueDeTipo: los ids, las rutas
+// y los drawables siguen resolviendose contra la configuracion base.
+func (tr *tablaRecursos) bloqueDeTipoParaValores(tipo uint32) *bloqueTipo {
+	base := tr.bloqueDeTipo(tipo)
+	if tr.locale == "" {
+		return base
+	}
+	idioma, pais := partesLocale(tr.locale)
+	if idioma == "" {
+		return base
+	}
+	var exacto, generico *bloqueTipo
+	for i := range tr.bloques {
+		bl := &tr.bloques[i]
+		if uint32(bl.id) != tipo || len(bl.config) < 12 {
+			continue
+		}
+		if dosLetras(bl.config[8:10]) != idioma {
+			continue
+		}
+		if pais != "" && dosLetras(bl.config[10:12]) == pais {
+			if exacto == nil {
+				exacto = bl
+			}
+		} else if dosLetras(bl.config[10:12]) == "" && generico == nil {
+			generico = bl
+		}
+	}
+	if exacto != nil {
+		return exacto
+	}
+	if generico != nil {
+		return generico
+	}
+	return base
+}
+
+// entradaDeIdLocalizada es la vuelta de entradaDeId para los valores: el mismo id, pero leyendo el
+// bloque que corresponde al idioma pedido en lugar de la configuracion base.
+func (tr *tablaRecursos) entradaDeIdLocalizada(id uint32) (bloqueTipo, entradaRecurso, bool) {
+	if id>>24 != tr.idPaquete&0xff {
+		return bloqueTipo{}, entradaRecurso{}, false
+	}
+	bl := tr.bloqueDeTipoParaValores((id >> 16) & 0xff)
+	if bl == nil {
+		return bloqueTipo{}, entradaRecurso{}, false
+	}
+	indice := int(id & 0xffff)
+	if indice >= len(bl.entradas) {
+		return bloqueTipo{}, entradaRecurso{}, false
+	}
+	return *bl, bl.entradas[indice], true
+}
+
 // nombreDeId devuelve el tipo y la clave del recurso, que es como se nombra una referencia en el
 // modelo (`id/total`, `string/hola`).
 func (tr *tablaRecursos) nombreDeId(id uint32) (tipo, clave string, ok bool) {
@@ -666,10 +747,16 @@ func (tr *tablaRecursos) idDeNombre(tipo, clave string) (uint32, bool) {
 	return 0, false
 }
 
-// valorDeId da el Res_value de una entrada simple. Un valor complejo (un estilo) no tiene uno y se
-// rechaza: su nombre lo da nombreDeId.
+// valorDeId da el Res_value de una entrada simple, en el idioma pedido: primero intenta el bloque
+// localizado y, si la entrada falta, esta ausente o es compleja, vuelve a la configuracion base. Un
+// valor complejo (un estilo) tampoco tiene Res_value en la base y se rechaza: su nombre lo da
+// nombreDeId. Los cuatro consumidores, incluido el interprete, llegan aqui sin cambiar su llamada.
 func (tr *tablaRecursos) valorDeId(id uint32) (valor, bool) {
-	_, e, ok := tr.entradaDeId(id)
+	_, e, ok := tr.entradaDeIdLocalizada(id)
+	if ok && !e.ausente && !e.compleja {
+		return e.valor, true
+	}
+	_, e, ok = tr.entradaDeId(id)
 	if !ok || e.ausente || e.compleja {
 		return valor{}, false
 	}

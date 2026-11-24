@@ -264,12 +264,14 @@ func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
 	set.Usage = func() {
-		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--menu]… [--menu-item menu/N]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… [--intercambiar clase/metodo(proto)=fichero.dex]… app.apk
+		fmt.Fprint(os.Stderr, `usage: apkc preview [--layout nombre] [--locale idioma] [--sin-ejecutar] [--pulsar id]… [--recrear]… [--menu]… [--menu-item menu/N]… [--escribir id/texto]… [--marcar id]… [--desmarcar id]… [--avanzar ms]… [--intercambiar clase/metodo(proto)=fichero.dex]… app.apk
 
 Read one apk and print, as one line of JSON on stdout, the model of its first screen: type, id,
-text, children and an approximate rectangle for every node. The layout is chosen by name (main by
-default) unless the app's onCreate calls setContentView with a resource id, which the Dalvik
-interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and stops
+text, children and an approximate rectangle for every node. --locale idioma reads the values from
+that language's values-xx block (with its region, as in es-MX), falling back to the default values
+when a string is missing; ids, layout paths and drawables are unaffected. The layout is chosen by
+name (main by default) unless the app's onCreate calls setContentView with a resource id, which the
+Dalvik interpreter of Phase 2 reads from classes.dex and follows. The interpreter runs onCreate and stops
 there: it does NOT touch anything on its own. An android:onClick="metodo" declared in the layout is
 bound before any click, as the framework does on inflate, so --pulsar reaches it. The orders are
 delivered in the order given and inside the same run (id/pulsar, 0x7f010000 or its decimal):
@@ -308,6 +310,7 @@ process is started and nothing is written, so it runs inside the tab.
 `)
 	}
 	layout := set.String("layout", "", "nombre del recurso layout que se lee (por defecto main)")
+	locale := set.String("locale", "", "idioma cuyos valores se leen (p. ej. es o es-MX; por defecto los valores base)")
 	sinEjecutar := set.Bool("sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
 	// el guion conserva el orden de la línea de comandos: flag llama a Set en ese orden, así que
 	// `--pulsar a --escribir b/hola --recrear --pulsar c` se entrega como se escribió, y la lista de
@@ -356,7 +359,7 @@ process is started and nothing is written, so it runs inside the tab.
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
-	modelo, err := modeloVistaDeAPKConEventos(datos, *layout, !*sinEjecutar, guion)
+	modelo, err := modeloVistaDeAPKConEventos(datos, *layout, !*sinEjecutar, guion, *locale)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
@@ -599,7 +602,7 @@ func modeloVistaDeAPKConPulsos(datos []byte, layout string, ejecutar bool, pulso
 	for _, p := range pulsos {
 		eventos = append(eventos, eventoUsuario{Tipo: ordenPulsarTipo, Dato: p})
 	}
-	return modeloVistaDeAPKConEventos(datos, layout, ejecutar, eventos)
+	return modeloVistaDeAPKConEventos(datos, layout, ejecutar, eventos, "")
 }
 
 // modeloVistaDeAPKConOrdenes es la misma llamada con la forma clásica de órdenes (`--pulsar` y
@@ -609,14 +612,15 @@ func modeloVistaDeAPKConOrdenes(datos []byte, layout string, ejecutar bool, orde
 	for _, o := range ordenes {
 		eventos = append(eventos, eventoUsuario{Tipo: o.Tipo, Dato: o.Valor})
 	}
-	return modeloVistaDeAPKConEventos(datos, layout, ejecutar, eventos)
+	return modeloVistaDeAPKConEventos(datos, layout, ejecutar, eventos, "")
 }
 
 // modeloVistaDeAPKConEventos es el mismo cuerpo con el guion de entrada completo (`--pulsar`,
 // `--escribir`, `--marcar`, `--desmarcar`, `--recrear` y `--avanzar`), en el orden en que se pidió.
 // Una orden que no se puede entregar devuelve error, por el mismo motivo: no se publica una pantalla
-// a medias.
-func modeloVistaDeAPKConEventos(datos []byte, layout string, ejecutar bool, eventos []eventoUsuario) (*modeloVista, error) {
+// a medias. locale es opcional para no cambiar la llamada de las pruebas de la Fase 2: los envoltorios
+// pasan una cadena vacia, que es el contrato de siempre (valores de la configuracion base).
+func modeloVistaDeAPKConEventos(datos []byte, layout string, ejecutar bool, eventos []eventoUsuario, locale ...string) (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(datos), int64(len(datos)))
 	if err != nil {
 		return nil, fmt.Errorf("el apk no es un zip: %w", err)
@@ -635,6 +639,10 @@ func modeloVistaDeAPKConEventos(datos []byte, layout string, ejecutar bool, even
 	if arsc, err := entradaDeZip(zr, "resources.arsc"); err == nil {
 		if tabla, err = leeTabla(arsc); err != nil {
 			return nil, fmt.Errorf("el resources.arsc: %w", err)
+		}
+		// el idioma solo cambia los valores: la tabla sigue resolviendo ids y rutas como siempre
+		if len(locale) > 0 {
+			tabla.locale = locale[0]
 		}
 	}
 

@@ -13971,3 +13971,49 @@ convergente con javac— o se extiende el gating a la emisión?
 # forma general: la sonda vive fuera del repo y entra por overlay
 cd apkc && go test -overlay=<overlay.json> -run TestAuditoriaCruce -count=1 -v .
 ```
+
+## 289. `apkc preview --locale`: idioma en los valores, sin cambiar la identidad de los recursos
+
+Medición previa, en `46a9a792`: la APK de `traducido` (`string/saludo`) mostraba `Hello!` en el
+modelo de `apkc preview` mientras `aapt2 dump resources` ya veía `(es) "Hola!"`. El lector elegía
+la configuración base (`apkc/recursos.go:604`, `:624`), no había flag (`apkc/preview.go:267`) y
+`esConfiguracionBase` (`apkc/preview.go:2537`) excluía `values-es`. Ahora `tablaRecursos` lleva
+`locale` (`apkc/recursos.go:379`), que el flag asigna tras `leeTabla` (`apkc/preview.go:636`), y
+`valorDeId` (`apkc/recursos.go:671`) elige el bloque por `language` en +8/+9 y `country` en +10/+11
+(§94, §107): prefiere el país exacto al país vacío y cae a la base si la entrada localizada falta,
+está `ausente` o es compleja. No se tocaron `bloqueDeTipo` ni `entradaDeId`, así que los ids, las
+rutas y los drawables siguen resolviéndose contra la base; el idioma solo cambia valores. Sin flag,
+la cadena vacía conserva el contrato anterior. El binario se construyó con
+`tcr -c 3 -m 2G -- go build -o "$HOME/.cache/apkc-web/apkc-preview" .` desde `apkc/`.
+
+Cinco comandos sobre el árbol final, con `APKC="$HOME/.cache/apkc-web/apkc-preview"`,
+`APK="$HOME/.cache/apkc-web/tmp/studio-e2e-traducido/com.hola.traducido/build/app.apk"` y
+`CONTADOR="$HOME/.cache/apkc-web/tmp/studio-e2e-contador/com.hola.contador/build/app.apk"`. Las
+salidas de `preview` se resumen al nodo `id/saludo` (o a los dos nodos del contador) y se omite la
+línea de tiempo, que varía entre ejecuciones:
+
+```sh
+cd apkc && go test -run TestPreviewLeeValoresDelIdioma -v .
+cd apkc && go test ./...
+"$APKC" preview --locale es "$APK" | python3 -c 'import json,sys; m=json.load(sys.stdin); n=m["raiz"]["hijos"][0]; print(n["id"], n["texto"])'
+"$APKC" preview "$APK" | python3 -c 'import json,sys; m=json.load(sys.stdin); n=m["raiz"]["hijos"][0]; print(n["id"], n["texto"])'
+"$APKC" preview --locale es "$CONTADOR" | python3 -c 'import json,sys; m=json.load(sys.stdin); print([(n["id"], n["texto"]) for n in m["raiz"]["hijos"]])'
+```
+
+```text
+=== RUN   TestPreviewLeeValoresDelIdioma
+--- PASS: TestPreviewLeeValoresDelIdioma (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	(cached)
+ok  	github.com/ajinasokan/apkc	235.323s
+id/saludo Hola!
+id/saludo Hello!
+[('id/total', 'Pulsos: 0'), ('id/pulsar', 'Pulsar')]
+```
+
+`--locale es` lee `values-es` y `--locale es-MX` prefiere `values-es-rMX` (comprobado además por
+`TestPreviewLeeValoresDelIdioma` con la sonda escrita por el propio fork). Sin flag el nodo sigue
+diciendo `Hello!`, y el contador, que no tiene bloque `es`, sigue funcionando con `--locale es` por
+el respaldo a la base. Frontera: el selector de idioma en la pestaña y las regiones compuestas
+(junto a idioma, densidad o orientación) quedan fuera de este párrafo; tampoco se repitió aquí el
+gate con chromium ni se publicó nada.
