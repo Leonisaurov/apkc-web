@@ -4702,16 +4702,61 @@ func (e *emisor) necesitaConversionEn(clase, nombre string, args []jexpr) bool {
 	return false
 }
 
+// booleanEnsanchaEnArgumentos es el interruptor de la falsificación del rechazo de `boolean` como
+// argumento que ensancha. Apagado (el binario que se publica), `boolean` **no** tiene ensanchamiento
+// numérico (JLS 5.1.2) y `f(long)` con `f(true)` se rechaza con su línea. Encendido, `Z` vuelve a
+// tratarse como `int` y el programa inválido se acepta con `iload; i2l`, que es la regresión que midió
+// el crítico. Lo usa `javaemisor_boolean_ensancha_test.go`.
+var booleanEnsanchaEnArgumentos = false
+
+// subeAIntParaAncho: si un descriptor de una palabra sube a `int` para escribir después la conversión
+// al ancho. `byte`, `short` y `char` sí (JVMS 2.11.1: viven en la pila como int y su subida no escribe
+// opcode). `boolean` ocupa una palabra igual, pero no ensancha a nada; solo entra con el interruptor de
+// la falsificación. Sin él, esta función es la lista `BCS`.
+func subeAIntParaAncho(d string) bool {
+	if len(d) != 1 {
+		return false
+	}
+	if strings.IndexByte("BCS", d[0]) >= 0 {
+		return true
+	}
+	return d == "Z" && booleanEnsanchaEnArgumentos
+}
+
+// nombrePrimitivo: cómo se llama en el fuente un descriptor primitivo, para los errores de conversión.
+// Un descriptor que no sea primitivo se devuelve tal cual.
+func nombrePrimitivo(d string) string {
+	switch d {
+	case "Z":
+		return "boolean"
+	case "B":
+		return "byte"
+	case "C":
+		return "char"
+	case "S":
+		return "short"
+	case "I":
+		return "int"
+	case "J":
+		return "long"
+	case "F":
+		return "float"
+	case "D":
+		return "double"
+	}
+	return d
+}
+
 // conversionPrimitiva: si pasar un valor del descriptor `desde` a un parámetro `hasta` escribe una
-// conversión numérica (JLS 5.1.2). El `byte`, el `short`, el `char` y el `boolean` suben a `int` sin
-// opcode y desde ahí a los anchos; el resto es la rejilla de `codigosConversion`. Identidad y la
-// subida B/C/S/Z a `I` devuelven falso.
+// conversión numérica (JLS 5.1.2). El `byte`, el `short` y el `char` suben a `int` sin opcode y desde
+// ahí a los anchos; el resto es la rejilla de `codigosConversion`. Identidad y la subida B/C/S a `I`
+// devuelven falso. `boolean` **no** ensancha a nada: `conversionPrimitiva("Z", "J")` es falso.
 func conversionPrimitiva(desde, hasta string) bool {
 	if len(desde) != 1 || len(hasta) != 1 {
 		return false
 	}
 	base := desde[0]
-	if strings.IndexByte("BCSZ", base) >= 0 {
+	if subeAIntParaAncho(desde) {
 		base = 'I'
 	}
 	if base == hasta[0] {
@@ -4752,11 +4797,30 @@ func revisaAnchosDeArgumentos(tipos []string, desc string, linea int) error {
 	if !ajustaAnchosDeArgumento {
 		return nil
 	}
-	quiere, dejan := palabrasDeArgs(desc), palabrasDeTipos(tipos)
-	if quiere != dejan {
-		return fmt.Errorf("linea %d: %s pide %d palabras y los argumentos dejan %d: falta la conversion y el tipo del argumento no se pudo estimar antes de emitirlo", linea, desc, quiere, dejan)
+	_, _, ps := splitDescriptor(desc)
+	// un `boolean` contra un hueco numérico no es Java (JLS 5.1.2) aunque ocupe las mismas palabras
+	// que un `float`: se nombra el tipo aquí en vez de dejar que lo pare el verificador de la pila con
+	// un mensaje que no habla de `boolean`.
+	for i := 0; i < len(ps) && i < len(tipos); i++ {
+		if tipos[i] == "Z" && len(ps[i]) == 1 && ps[i][0] != 'Z' {
+			return fmt.Errorf("linea %d: el argumento %d es boolean y el parámetro %s no lo acepta: boolean no ensancha a ningún tipo numérico (JLS 5.1.2)", linea, i+1, nombrePrimitivo(ps[i]))
+		}
 	}
-	return nil
+	quiere, dejan := palabrasDeArgs(desc), palabrasDeTipos(tipos)
+	if quiere == dejan {
+		return nil
+	}
+	// el primer argumento cuyo ancho no cuadra se nombra en el error; antes decía «no se pudo estimar»
+	// aunque el tipo sí se hubiera estimado.
+	detalle := ""
+	for i := 0; i < len(ps) && i < len(tipos); i++ {
+		if esAncho(ps[i]) == esAncho(tipos[i]) {
+			continue
+		}
+		detalle = fmt.Sprintf(": el argumento %d es %s y el parámetro %s pide una conversión que no se pudo escribir antes de emitirlo", i+1, nombrePrimitivo(tipos[i]), nombrePrimitivo(ps[i]))
+		break
+	}
+	return fmt.Errorf("linea %d: %s pide %d palabras y los argumentos dejan %d%s", linea, desc, quiere, dejan, detalle)
 }
 
 // argumentosResueltos: estima los tipos de los argumentos (sin escribir nada), resuelve la sobrecarga
@@ -5628,17 +5692,26 @@ func (e *emisor) expA(x jexpr, deseado string) (string, error) {
 		}
 		return deseado, nil
 	}
+	// `boolean` no ensancha a ningún tipo numérico (JLS 5.1.2): `long x = true` y `f(true)` con
+	// `f(long)` no son Java. Si un hueco primitivo distinto de `Z` llega aquí con un `boolean` en la
+	// pila, se rechaza con su línea en vez de emitir el `i2l`/`i2d` que deja el saldo descuadrado —o,
+	// peor, un `.class` que ART ejecuta sobre un programa que javac no compila—. El interruptor solo
+	// existe para la falsificación.
+	if d == "Z" && !booleanEnsanchaEnArgumentos && len(deseado) == 1 && deseado[0] != 'Z' {
+		return "", fmt.Errorf("linea %d: el argumento es boolean y el parámetro %s no lo acepta: boolean no ensancha a ningún tipo numérico (JLS 5.1.2)", lineaDeExpr(x), nombrePrimitivo(deseado))
+	}
 	// Enschar un `char` a `int` no escribe nada: `int n = c;` es `iload_0; istore_1` y `aEntero(char)` es
 	// `iload_0; ireturn`, medidos en el parrafo 87. Lo mismo vale para `byte` y `short`: la sonda
 	// javac 17 de `Estrecha.e` es `iload_0; iload_1; iadd`, sin conversiones.
-	if len(d) == 1 && strings.IndexByte("BCSZ", d[0]) >= 0 && deseado == "I" {
+	if subeAIntParaAncho(d) && deseado == "I" {
 		return "I", nil
 	}
-	// `byte`, `short`, `char` y `boolean` viven en la pila como enteros de una palabra (JVMS 2.11.1):
-	// su subida a `int` no escribe nada y hacia un ancho el opcode es el mismo que desde `int`, sin
+	// `byte`, `short` y `char` viven en la pila como enteros de una palabra (JVMS 2.11.1): su subida a
+	// `int` no escribe nada y hacia un ancho el opcode es el mismo que desde `int`, sin
 	// `i2b`/`i2s`/`i2c` de por medio. Medido con javac 17: `f(long)` con un `byte b` es `iload; i2l`,
-	// con un `short` lo mismo, y `g(double)` con un `char c` `iload; i2d`.
-	if len(d) == 1 && strings.IndexByte("BCSZ", d[0]) >= 0 && len(deseado) == 1 &&
+	// con un `short` lo mismo, y `g(double)` con un `char c` `iload; i2d`. `boolean` no entra (el
+	// guardia de arriba lo rechaza).
+	if subeAIntParaAncho(d) && len(deseado) == 1 &&
 		strings.IndexByte("JFD", deseado[0]) >= 0 && e.convierte("I", deseado) {
 		return deseado, nil
 	}
