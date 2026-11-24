@@ -2067,6 +2067,13 @@ type campoResuelto struct {
 // `TestCadenaEstaticaFalsificacion`.
 var pliegaCadenaEstatica = true
 
+// pliegaCadenaHeredada es el interruptor de la falsificación de la constante `String` heredada sin
+// receptor: un nombre suelto (`V`) que resuelve a un `static final String` con `ConstantValue` de un
+// padre del classpath. Encendido emite `ldc` de la cadena; apagado revive el defecto anterior —un
+// `iconst` con el descriptor de referencia— y el análisis del marco lo para con «se esperaba una
+// referencia y hay entero». Solo lo apaga `TestCadenaEstaticaHeredadaFalsificacion`.
+var pliegaCadenaHeredada = true
+
 // buscarCampo recorre la clase y sus padres. Una constante de compilacion trae el valor: javac la dobla en
 // el llamador y aqui no se escribe getstatic.
 func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, error) {
@@ -3940,7 +3947,11 @@ func (e *emisor) acceso(a jacceso) (string, error) {
 		return e.cadenaDeCampos(cr.desc, segs[1:], donde)
 	}
 	if len(segs) == 1 {
-		if d, ok := e.campoDeLaClaseActual(segs[0], donde.linea); ok {
+		d, ok, err := e.campoDeLaClaseActual(segs[0], donde.linea)
+		if err != nil {
+			return "", fmt.Errorf("%s: al leer %s, %w", donde.sitio(), segs[0], err)
+		}
+		if ok {
 			return d, nil
 		}
 	}
@@ -4261,15 +4272,34 @@ func (e *emisor) cargaDelDuenio(dueño string) {
 	}
 }
 
-// campoDeLaClaseActual: `menu` suelto cuando fuera un campo de esta clase.
-func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
+// campoDeLaClaseActual: `menu` suelto cuando fuera un campo de esta clase o de un padre suyo. Devuelve
+// el descriptor del valor que dejó en la pila. Un `static final String` con `ConstantValue` heredado de
+// un padre del classpath (`Hijo extends Base` y `Base.V`) se dobla como `ldc` del literal, igual que el
+// cualificado; nunca como entero con descriptor de referencia.
+func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool, error) {
 	dueño, cr, encontrado := e.duenioDelCampo(nombre)
 	if !encontrado {
-		return "", false
+		return "", false, nil
 	}
 	if cr.constante {
-		e.cargaEntero(cr.valor)
-		return cr.desc, true
+		if cr.esCadena {
+			if !pliegaCadenaHeredada {
+				// la falsificación: el defecto anterior, un entero con descriptor de referencia
+				e.cargaEntero(cr.valor)
+				return cr.desc, true, nil
+			}
+			e.ldc(e.pool.cadena(cr.cadena))
+			e.sube()
+			return cr.desc, true, nil
+		}
+		switch cr.desc {
+		case "I", "C", "S", "B", "Z":
+			e.cargaEntero(cr.valor)
+			return cr.desc, true, nil
+		}
+		// una constante que no viaja como entero no tiene forma de plegarse por esta ruta: emitir un
+		// `iconst` con el descriptor de referencia produce bytecode inválido, así que se rechaza
+		return "", false, fmt.Errorf("la constante %s no se puede doblar con el descriptor %s", nombre, cr.desc)
 	}
 	estatico := cr.acceso&accStatic != 0
 	if dueño != e.interno && cr.acceso&accPrivate != 0 {
@@ -4279,25 +4309,25 @@ func (e *emisor) campoDeLaClaseActual(nombre string, linea int) (string, bool) {
 		enPila := 0
 		if !estatico {
 			if e.estatico {
-				return "", false
+				return "", false, nil
 			}
 			e.cargaDelDuenio(dueño)
 			enPila = 1
 		}
 		e.invoca(opInvokestat, dueño, nombreAcc, descAcc, enPila)
-		return cr.desc, true
+		return cr.desc, true, nil
 	}
 	if estatico {
 		idx := e.pool.campo(dueño, nombre, cr.desc)
 		e.getstaticDe(idx, cr.desc)
-		return cr.desc, true
+		return cr.desc, true, nil
 	}
 	if e.estatico {
-		return "", false
+		return "", false, nil
 	}
 	e.cargaDelDuenio(dueño)
 	e.getfieldDe(e.pool.campo(dueño, nombre, cr.desc), cr.desc)
-	return cr.desc, true
+	return cr.desc, true, nil
 }
 
 // llamada: los cuatro casos del subconjunto, con el Methodref en el sitio que pone javac (parrafo 40).
