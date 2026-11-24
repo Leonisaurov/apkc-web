@@ -12688,7 +12688,6 @@ sh tools/entorno.sh wasm        # compila el wasm y corre la suite en el hospeda
 grep -n 'MONTAJES\|android-34/android.jar\|aviso: sin android.jar' tools/entorno.sh
 sed -n '86,110p' apkc/sign_hostil_test.go
 sed -n '225,240p' apkc/deps_recursos_test.go
->>>>>>> 622cd6c (docs(evidencia): registra los montajes del jar y la captura sin tubería (272))
 ```
 ## 273. El oráculo javac 17 no escribe `MethodParameters` en las anónimas
 
@@ -12790,6 +12789,78 @@ done
 stat -c '%s %n' dex-antes.apkc dex-final.apkc dex-javac.apkc apkshare/build/app.apk
 ```
 
+## 274. El banco no es verificable en este escritorio; su mitad local sí
+
+Medido el 2026-11-24 por el QA `ses_df3bea524ffeDQGKHjPG2s75Ny` sobre `HEAD d0610bf` —la sesión
+arrancó en `29f6ace` y otro commit llegó con la corrida en marcha—. Este `§` **transfiere** esa
+medición: aquí se re-ejecutaron la mitad local y el corte de entorno, con las cifras idénticas; los
+cuatro veredictos del aparato siguen sin ejecutarse, allí y aquí.
+
+**El corte.** `tcr -- sh tools/entorno.sh banco` sale con `rc=1` antes de compilar nada, en la
+guarda de `banco/banco.sh:62`:
+
+```text
+banco: ni rish (Shizuku) ni sudo en el PATH; sin uno de los dos el banco no puede ejecutar dex
+```
+
+La guarda busca `rish` (`:31`) y, si no, un `sudo` que valide sin contraseña (`:33`,
+`sudo -n true`). En este escritorio no hay `rish`; `/usr/sbin/sudo` existe pero responde
+«a password is required» con `rc=1`, así que `RISH` queda vacío y el guion aborta. `pidof zygote64`
+sale con `rc=1` —no hay `app_process64` al que entregar el dex— y `adb devices` imprime solo
+`List of devices attached`, sin un aparato. El cell no estaba activo y el agente no lo arrancó.
+
+**Segunda limitación, también de entorno.** Aunque hubiera root, el guion no correría aquí sin
+adaptarlo: `banco/banco.sh:15` fija `P=/data/data/com.termux/files/usr`, que no existe en un
+escritorio, y `:64-67` exige que `TRABAJO` cuelgue de `$P/tmp`, y si no aborta con
+`banco: TRABAJO tiene que estar bajo $P/tmp`. No se adaptó el guion: es una decisión de diseño, no
+un cierre de este `§`.
+
+**Lo que sí se ejecutó.** Con `apkc` compilado del árbol
+(`cd apkc && go build -o ~/.cache/apkc-web/banco/apkc .`, `rc=0`), JDK 21, `build-tools/36.0.0` y
+`android-34/android.jar`, los pasos 1, 1b, 2, 3 y 6 del banco —todo lo que no sale del
+escritorio, con los dos `d8` del 5 comparados solo por tamaño— dieron esto, con la sonda del QA
+repetida aquí sin cambios:
+
+- `jvm (javac)`: `rc=102`, con la salida del programa de prueba
+  `total 7|total 9|total 102|10|3|2|4|7|-1|10|6|8|306|22|7|10|101|8|3.0|6|7|10|32|2|21|21|21|9|6|5`.
+- `nuestro.dex: 7192 bytes`, `todo.dex: 7192 bytes`, `d8(javac): 7064 bytes` y
+  `d8(nuestra Ver): 6920 bytes`.
+- `jvm con nuestra clase emitida` (`-Xverify:all`): `rc=102` y salida **idéntica** a la de la JVM.
+
+La tercera línea es la que sostiene la mitad local: los `.class` que emite el compilador pasan la
+verificación estricta de la JVM y dan el mismo resultado que javac. Lo que no se midió es lo que
+solo el aparato puede decir: si ese mismo código **corre** en ART.
+
+**Veredicto: NO VERIFICABLE, ni verde ni rojo.** Los cuatro `veredicto()` de
+`banco/banco.sh:154-157` —`nuestro dex (Go de punta a punta)`, `d8 sobre javac`,
+`d8 sobre nuestra Ver` y `nuestro dex con nuestro main (sin javac ni d8)`— no llegaron a
+ejecutarse: suben el dex a `/data/local/tmp`, lo corren con `app_process64` y lo verifica
+`dexdump`; sin `rish` ni `sudo` no hay ninguno de los tres. El fallo es de entorno, no del
+código, y por eso no se escribe como rojo.
+
+**Preguntas abiertas, no cierres.** (1) ¿Se adapta `banco/banco.sh` a un escritorio —`:15` y
+`:64-67`— para poder apuntar la mitad del aparato a un emulador? Aquí no se tocó. (2) Mientras no
+haya un cell con Termux y `rish` o `sudo`, ¿los cuatro veredictos del aparato quedan fuera del gate,
+o se sustituyen por otra medida que no los necesite?
+
+**Reproducción.** El corte se reproduce en cualquier escritorio sin aparato. La mitad local son los
+pasos 1, 1b, 2, 3, 5 y 6 de `banco/banco.sh` sin ninguna llamada a `enAparato` (`:54-59`); la sonda
+del QA es exactamente eso, con las rutas de este escritorio. El banco entero necesita un cell con
+Termux y root, o Shizuku.
+
+```sh
+# 1. el corte: rc 1 en la guarda de :62, antes de compilar
+tcr -- sh tools/entorno.sh banco
+command -v rish; sudo -n true; pidof zygote64; adb devices
+
+# 2. la mitad local: binario del árbol y los pasos 1,1b,2,3,5,6 sin enAparato
+sh -c 'cd apkc && go build -o "$HOME/.cache/apkc-web/banco/apkc" .'
+sh "$HOME/.cache/apkc-web/banco/sonda-local.sh"
+
+# 3. con aparato (Termux y root o Shizuku): el banco entero, con los cuatro veredictos
+sh -c 'cd apkc && go build -o "$PREFIX/tmp/apkc-gate" .'
+tcr -j 1 -q -- sh tools/entorno.sh banco
+```
 
 ## Fronteras del bloque, sin cerrar
 
