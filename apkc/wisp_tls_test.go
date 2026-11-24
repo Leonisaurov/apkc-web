@@ -175,7 +175,7 @@ func TestWISPSinTLSElPlaintextAparece(t *testing.T) {
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
 
-	conexion, err := cliente.AbrirTCP("ejemplo.test", 443)
+	conexion, err := cliente.abrirTCPCrudo("ejemplo.test", 443)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}

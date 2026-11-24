@@ -15,7 +15,7 @@ func TestWISPSetReadDeadlineDespiertaLectura(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 8, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("mudo.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("mudo.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestWISPSetDeadlineDespiertaLectura(t *testing.T) {
 	_, extremo := nuevoRelayPrueba(t, 8, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("mudo2.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("mudo2.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestWISPSetWriteDeadlineDespiertaEscritura(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 0, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("sincredito.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("sincredito.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}

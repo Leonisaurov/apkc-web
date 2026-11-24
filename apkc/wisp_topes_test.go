@@ -48,7 +48,7 @@ func TestWISPColaPorFlujoAcotada(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 1<<20, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("lento.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("lento.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -113,11 +113,11 @@ func TestWISPColaGlobalAcotada(t *testing.T) {
 	cliente.topeGlobal = nuevoTopeBytes(2 << 20)
 	defer cliente.Cerrar()
 
-	primera, err := cliente.AbrirTCP("uno.test", 80)
+	primera, err := cliente.abrirTCPCrudo("uno.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP (1): %v", err)
 	}
-	segunda, err := cliente.AbrirTCP("dos.test", 80)
+	segunda, err := cliente.abrirTCPCrudo("dos.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP (2): %v", err)
 	}
@@ -176,7 +176,7 @@ func TestWISPPaqueteMayorQueLaCola(t *testing.T) {
 	cliente := NuevoClienteWISP(extremo)
 	cliente.topeFlujo = 1 << 20
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("grande.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("grande.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -199,7 +199,7 @@ func TestWISPLecturaParcialNoDuplica(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 1<<20, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("parcial.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("parcial.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestWISPCreditoAcotado(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 0xFFFFFFFF, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("credito.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("credito.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}

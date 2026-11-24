@@ -25,7 +25,7 @@ func TestWISPPonerNoCopiaAlRechazar(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 1<<20, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("sinhueco.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("sinhueco.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestWISPContabilidadDeFlujoCerrado(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 1<<20, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("drenar.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("drenar.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestWISPCloseSueltaPendientes(t *testing.T) {
 	relay, extremo := nuevoRelayPrueba(t, 1<<20, false, nil)
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
-	conexion, err := cliente.AbrirTCP("abandonar.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("abandonar.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -232,11 +232,11 @@ func TestWISPCLOSEDeDesbordeNoBloqueaElReparto(t *testing.T) {
 	defer cliente.Cerrar()
 	defer close(tapon.soltar)
 
-	desborda, err := cliente.AbrirTCP("desborde.test", 80)
+	desborda, err := cliente.abrirTCPCrudo("desborde.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP (desborde): %v", err)
 	}
-	vivo, err := cliente.AbrirTCP("vivo.test", 80)
+	vivo, err := cliente.abrirTCPCrudo("vivo.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP (vivo): %v", err)
 	}

@@ -413,15 +413,15 @@ func (c *ClienteWISP) despachar(p paqueteWISP) bool {
 	return true
 }
 
-// AbrirTCP abre un flujo WISP hacia `host:puerto`. Espera el CONTINUE inicial,
-// elige el streamID (el cliente es quien lo elige) y manda CONNECT. El flujo
-// devuelto implementa net.Conn.
+// abrirTCPCrudo abre un flujo WISP hacia `host:puerto`. Espera el CONTINUE
+// inicial, elige el streamID (el cliente es quien lo elige) y manda CONNECT. El
+// flujo devuelto implementa net.Conn.
 //
-// Esta es la primitiva del protocolo y no aplica la allowlist: los tests abren
-// destinos arbitrarios contra un relay en memoria. El camino seguro es
-// `AbrirTCPAutorizado` (o `AbrirTLSWISP`, que lo usa), que comprueba el destino
-// antes de mandar el CONNECT.
-func (c *ClienteWISP) AbrirTCP(host string, puerto uint16) (net.Conn, error) {
+// Es la primitiva del protocolo y no aplica la allowlist: los tests de framing
+// abren destinos arbitrarios contra un relay en memoria. La única entrada
+// pública es `AbrirTCPAutorizado` (o `AbrirTLSWISP`, que la usa), que comprueba
+// el destino antes de mandar el CONNECT.
+func (c *ClienteWISP) abrirTCPCrudo(host string, puerto uint16) (net.Conn, error) {
 	if host == "" {
 		return nil, errors.New("wisp: hostname vacío")
 	}
@@ -466,7 +466,7 @@ func (c *ClienteWISP) AbrirTCPAutorizado(cfg ConfigWISP, host string, puerto uin
 	if err := cfg.ValidarDestino(host, puerto); err != nil {
 		return nil, err
 	}
-	return c.AbrirTCP(host, puerto)
+	return c.abrirTCPCrudo(host, puerto)
 }
 
 // enviar serializa los mensajes del WebSocket: un WS no admite dos escrituras a

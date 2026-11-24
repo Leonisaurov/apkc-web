@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -284,7 +285,7 @@ func TestFalsificacionDestinoProhibidoSeAbreSinLaLista(t *testing.T) {
 		t.Fatalf("el camino seguro debía rechazar smtp-ajeno.test:25: %v", err)
 	}
 
-	conexion, err := cliente.AbrirTCP("smtp-ajeno.test", 25)
+	conexion, err := cliente.abrirTCPCrudo("smtp-ajeno.test", 25)
 	if err != nil {
 		t.Fatalf("AbrirTCP crudo: %v", err)
 	}
@@ -386,4 +387,176 @@ func TestFalsificacionRutaSinValidacionSeSaleDeDeps(t *testing.T) {
 		t.Fatalf("la unión ingenua no se salió de deps/: %q", ingenua)
 	}
 	t.Logf("falsificación: sin validar, %q se resuelve en %q", coordenada, ingenua)
+}
+
+// TestRelaySinFragmentoNiQuery cubre la corrección 1: el «#» y el «?» literales
+// se rechazan aunque estén vacíos, porque el navegador lanza SyntaxError al
+// construir el WebSocket y ese pánico mataría la instancia wasm.
+func TestRelaySinFragmentoNiQuery(t *testing.T) {
+	casos := []string{
+		"wss://wisp.mercurywork.shop/wisp/#",
+		"wss://wisp.mercurywork.shop/wisp/?",
+		"wss://wisp.mercurywork.shop/wisp/#/",
+		"wss://wisp.mercurywork.shop/wisp/?x=1",
+		"wss://wisp.mercurywork.shop/wisp/#x",
+	}
+	for _, relay := range casos {
+		cfg := ConfigWISP{Habilitado: true, Relay: relay}
+		err := cfg.Validar()
+		if err == nil {
+			t.Fatalf("Validar(%q) aceptó una URL que el navegador rechaza", relay)
+		}
+		if !strings.Contains(err.Error(), "«#» ni «?»") {
+			t.Fatalf("el rechazo de %q no nombra el carácter: %v", relay, err)
+		}
+	}
+
+	// Falsificación: `url.Parse` deja `Fragment` y `RawQuery` vacíos para estos
+	// casos, así que las comprobaciones antiguas no podían verlos.
+	for _, relay := range casos[:2] {
+		u, err := url.Parse(relay)
+		if err != nil {
+			t.Fatalf("url.Parse(%q): %v", relay, err)
+		}
+		if u.Fragment != "" || u.RawQuery != "" {
+			t.Fatalf("url.Parse(%q) sí expone fragmento o query; la falsificación no mide el hueco: %q %q", relay, u.Fragment, u.RawQuery)
+		}
+		if !strings.ContainsAny(relay, "#?") {
+			t.Fatalf("%q debía contener el carácter literal", relay)
+		}
+	}
+	t.Logf("falsificación: url.Parse no distingue %q de la URL limpia; ContainsAny sí", casos[0])
+}
+
+// TestRelayRutaEscapadaRechazada cubre la corrección 2: la ruta se compara sin
+// decodificar, para que `/%77isp/` no pase como `/wisp/`.
+func TestRelayRutaEscapadaRechazada(t *testing.T) {
+	casos := []string{
+		"wss://wisp.mercurywork.shop/%77isp/",
+		"wss://wisp.mercurywork.shop/wis%70/",
+		"wss://wisp.mercurywork.shop/wisp%2f",
+	}
+	for _, relay := range casos {
+		cfg := ConfigWISP{Habilitado: true, Relay: relay}
+		if err := cfg.Validar(); !errors.Is(err, ErrRelayNoAutorizado) {
+			t.Fatalf("Validar(%q) = %v, se esperaba ErrRelayNoAutorizado", relay, err)
+		}
+	}
+
+	// Falsificación: el `Path` decodificado sí coincide con el de un relay
+	// autorizado; lo que lo separa es `EscapedPath`.
+	autorizado, err := url.Parse(RelaysWISP()[0])
+	if err != nil {
+		t.Fatalf("url.Parse del relay autorizado: %v", err)
+	}
+	for _, relay := range casos[:2] {
+		u, err := url.Parse(relay)
+		if err != nil {
+			t.Fatalf("url.Parse(%q): %v", relay, err)
+		}
+		if u.Path != autorizado.Path {
+			t.Fatalf("la falsificación esperaba que %q decodificara a %q, dio %q", relay, autorizado.Path, u.Path)
+		}
+		if u.EscapedPath() == autorizado.EscapedPath() {
+			t.Fatalf("%q conserva la ruta escapada del relay autorizado", relay)
+		}
+	}
+	t.Logf("falsificación: %q decodifica a %q y solo EscapedPath lo distingue", casos[0], autorizado.Path)
+}
+
+// TestRelayUserinfoRechazado cubre la corrección 3: el navegador mandaría la
+// credencial como `Authorization: Basic`, así que una URL con usuario no entra.
+func TestRelayUserinfoRechazado(t *testing.T) {
+	const relay = "wss://evil@wisp.mercurywork.shop/wisp/"
+	cfg := ConfigWISP{Habilitado: true, Relay: relay}
+	err := cfg.Validar()
+	if err == nil {
+		t.Fatal("Validar aceptó un relay con credenciales de usuario")
+	}
+	if !strings.Contains(err.Error(), "credenciales") {
+		t.Fatalf("el rechazo no nombra las credenciales: %v", err)
+	}
+
+	// Falsificación: el hostname es el legítimo y el canónico coincide con el del
+	// relay autorizado; solo la comprobación de `u.User` lo separa.
+	u, err := url.Parse(relay)
+	if err != nil {
+		t.Fatalf("url.Parse(%q): %v", relay, err)
+	}
+	autorizado, err := url.Parse(RelaysWISP()[0])
+	if err != nil {
+		t.Fatalf("url.Parse del relay autorizado: %v", err)
+	}
+	if u.Hostname() != autorizado.Hostname() || relayCanonico(u) != relayCanonico(autorizado) {
+		t.Fatalf("la falsificación esperaba el mismo host y canónico; host=%q canónico=%q", u.Hostname(), relayCanonico(u))
+	}
+	t.Logf("falsificación: %q tiene el host %q y el canónico del relay autorizado; solo u.User lo distingue", relay, u.Hostname())
+}
+
+// TestDestinosExtraRechazaRedLocal cubre las correcciones 4 y 5: la ampliación
+// es para otros espejos de Maven en 443, no para IP, loopback, comodines ni
+// puertos alternativos, y el puerto se escribe en decimal canónico.
+func TestDestinosExtraRechazaRedLocal(t *testing.T) {
+	entradas := []string{
+		"127.0.0.1:443",
+		"0.0.0.0:25",
+		"[::1]:443",
+		"localhost:443",
+		"*:443",
+		"maven:443",
+		"maven.ejemplo.test:25",
+		"maven.ejemplo.test:80",
+		"maven.ejemplo.test:4443",
+		"maven.ejemplo.test:0443",
+		"maven.ejemplo.test:+443",
+		"maven.ejemplo.test:443 ",
+		"-mal.ejemplo.test:443",
+		"mal-.ejemplo.test:443",
+	}
+	for _, entrada := range entradas {
+		if _, _, err := parseDestinoExtra(entrada); err == nil {
+			t.Fatalf("parseDestinoExtra(%q) aceptó una entrada que no es un espejo Maven en 443", entrada)
+		}
+	}
+
+	cfg := ConfigWISP{
+		Habilitado:                     true,
+		Relay:                          RelaysWISP()[0],
+		PermitirDestinosPersonalizados: true,
+		DestinosExtra:                  []string{"0.0.0.0:25"},
+	}
+	if err := cfg.Validar(); err == nil {
+		t.Fatal("Validar aceptó DestinosExtra con la red local y el puerto 25")
+	}
+	if err := cfg.ValidarDestino("0.0.0.0", 25); !errors.Is(err, ErrDestinoNoAutorizado) {
+		t.Fatalf("ValidarDestino(0.0.0.0:25) = %v, se esperaba rechazo", err)
+	}
+	if err := cfg.ValidarDestino("smtp-ajeno.test", 443); !errors.Is(err, ErrDestinoNoAutorizado) {
+		t.Fatalf("la entrada inválida no debe autorizar otros hosts: %v", err)
+	}
+
+	// Positivo: un nombre DNS de otro espejo en 443 sí vale.
+	bueno := ConfigWISP{
+		Habilitado:                     true,
+		Relay:                          RelaysWISP()[0],
+		PermitirDestinosPersonalizados: true,
+		DestinosExtra:                  []string{"maven.ejemplo.test:443"},
+	}
+	if err := bueno.Validar(); err != nil {
+		t.Fatalf("un espejo Maven en 443 debía valer: %v", err)
+	}
+	if err := bueno.ValidarDestino("maven.ejemplo.test", 443); err != nil {
+		t.Fatalf("el espejo Maven en 443 debía autorizarse: %v", err)
+	}
+
+	// Falsificación: `net.SplitHostPort` y la conversión numérica aceptan
+	// «0.0.0.0:25» y «host:0443»; lo que los rechaza son las comprobaciones
+	// nuevas de host y de forma decimal.
+	if host, puerto, err := net.SplitHostPort("0.0.0.0:25"); err != nil || host != "0.0.0.0" || puerto != "25" {
+		t.Fatalf("la falsificación esperaba que 0.0.0.0:25 parseara: %q %q %v", host, puerto, err)
+	}
+	if n, err := strconv.ParseUint("0443", 10, 16); err != nil || n != 443 {
+		t.Fatalf("la falsificación esperaba que 0443 valga 443: %d %v", n, err)
+	}
+	t.Logf("falsificación: 0.0.0.0:25 y host:0443 parsean; solo hostMavenValido, el puerto 443 y el decimal canónico los rechazan")
 }

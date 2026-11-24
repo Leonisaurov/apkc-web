@@ -63,6 +63,10 @@ func AbrirWebSocketWISP(cfg ConfigWISP) (TransporteWISP, error) {
 		return nil, err
 	}
 	direccion := cfg.Relay
+	ws, err := abrirWebSocketJS(direccion)
+	if err != nil {
+		return nil, err
+	}
 	t := &transporteWebSocket{
 		cerrada: make(chan struct{}),
 		aviso:   make(chan struct{}, 1),
@@ -116,7 +120,6 @@ func AbrirWebSocketWISP(cfg ConfigWISP) (TransporteWISP, error) {
 		return nil
 	})
 
-	ws := js.Global().Get("WebSocket").New(direccion)
 	ws.Set("binaryType", "arraybuffer")
 	ws.Set("onopen", onAbrir)
 	ws.Set("onmessage", onMensaje)
@@ -140,6 +143,22 @@ func AbrirWebSocketWISP(cfg ConfigWISP) (TransporteWISP, error) {
 		t.cerrarCon(err)
 		return nil, err
 	}
+}
+
+// abrirWebSocketJS construye el WebSocket del navegador y convierte en error la
+// excepción de JavaScript. `new WebSocket(direccion)` lanza `SyntaxError` con una
+// URL que el navegador no acepta; sin este `recover`, el pánico cruza el límite
+// de `syscall/js` y mata la instancia wasm entera. La validación de `Validar`
+// rechaza los casos conocidos (query, fragmento, credenciales), pero el
+// `recover` es la red que impide que un caso nuevo tumbe la pestaña.
+func abrirWebSocketJS(direccion string) (ws js.Value, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			ws = js.Undefined()
+			err = fmt.Errorf("wisp: el navegador rechazó la dirección del relay %q: %v", direccion, r)
+		}
+	}()
+	return js.Global().Get("WebSocket").New(direccion), nil
 }
 
 func (t *transporteWebSocket) encolar(mensaje []byte) {

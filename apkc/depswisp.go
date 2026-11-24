@@ -129,23 +129,61 @@ func normalizarHost(host string) string {
 	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
-// parseDestinoExtra exige la forma «host:puerto», con el puerto explícito: un
-// destino sin puerto sería ambiguo (¿443 por defecto?) y la ambigüedad es justo
-// lo que una allowlist no puede permitirse.
+// parseDestinoExtra exige la forma «host:puerto», con el puerto explícito y en
+// decimal canónico: un destino sin puerto sería ambiguo (¿443 por defecto?) y un
+// «0443» es la misma cifra escrita de otra forma, que no debe colarse por la
+// lista. Además, la ampliación es para otros espejos de Maven: se rechazan los
+// literales IP, el loopback y los comodines, porque apuntarían a la red del
+// usuario a través del relay, y cualquier puerto que no sea 443, porque el camino
+// seguro monta TLS de punta a punta.
 func parseDestinoExtra(entrada string) (string, uint16, error) {
 	host, textoPuerto, err := net.SplitHostPort(entrada)
 	if err != nil {
 		return "", 0, fmt.Errorf("wisp: destino extra %q inválido: se espera host:puerto: %w", entrada, err)
 	}
 	host = normalizarHost(host)
-	if host == "" {
-		return "", 0, fmt.Errorf("wisp: destino extra %q sin host", entrada)
+	if !hostMavenValido(host) {
+		return "", 0, fmt.Errorf("wisp: destino extra %q: se espera un nombre DNS con punto; no se admiten IP, loopback ni comodines", entrada)
 	}
 	puerto, err := strconv.ParseUint(textoPuerto, 10, 16)
 	if err != nil || puerto == 0 {
 		return "", 0, fmt.Errorf("wisp: destino extra %q con puerto %q no válido (1-65535)", entrada, textoPuerto)
 	}
+	if textoPuerto != strconv.FormatUint(puerto, 10) {
+		return "", 0, fmt.Errorf("wisp: destino extra %q: el puerto debe escribirse en decimal canónico, sin ceros a la izquierda", entrada)
+	}
+	if puerto != 443 {
+		return "", 0, fmt.Errorf("wisp: destino extra %q: el camino seguro solo abre el puerto 443 (TLS)", entrada)
+	}
 	return host, uint16(puerto), nil
+}
+
+// hostMavenValido exige un nombre DNS con al menos un punto y etiquetas válidas.
+// Deja fuera los literales IP, `localhost` y los comodines: no son espejos de
+// Maven y convertirían la ampliación en una puerta hacia la red local.
+func hostMavenValido(host string) bool {
+	if host == "" || net.ParseIP(host) != nil || host == "localhost" {
+		return false
+	}
+	if !strings.Contains(host, ".") {
+		return false
+	}
+	for _, etiqueta := range strings.Split(host, ".") {
+		if etiqueta == "" || len(etiqueta) > 63 {
+			return false
+		}
+		if etiqueta[0] == '-' || etiqueta[len(etiqueta)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(etiqueta); i++ {
+			c := etiqueta[i]
+			if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 // ConfigWISP configura una conexión. `Habilitado` es el interruptor opt-in y
@@ -293,6 +331,15 @@ func (c ConfigWISP) Validar() error {
 // separada para que las pruebas puedan falsificar que un relay ajeno pasa todos
 // los controles de forma y solo lo rechaza la lista.
 func validarFormaRelay(u *url.URL, relay string) error {
+	// `url.Parse` no distingue un «#» o un «?» vacíos de su ausencia, pero el
+	// navegador sí: `new WebSocket("…/wisp/#")` lanza SyntaxError. Se rechaza el
+	// carácter literal antes de mirar el resto, y así el error nombra el motivo.
+	if strings.ContainsAny(relay, "#?") {
+		return fmt.Errorf("wisp: la URL del relay no admite «#» ni «?»; recibido %q", relay)
+	}
+	if u.User != nil {
+		return fmt.Errorf("wisp: la URL del relay no admite credenciales de usuario; recibido %q", relay)
+	}
 	if u.Scheme != "wss" {
 		if u.Scheme != "ws" || !esHostLocal(u.Hostname()) {
 			return fmt.Errorf("wisp: el relay debe usar wss:// (o ws:// en localhost); recibido %q", relay)
@@ -334,7 +381,9 @@ func (c ConfigWISP) validarRelayAutorizado(u *url.URL) error {
 
 // relayCanonico reduce una URL de relay a la forma comparable: minúsculas en el
 // esquema y el host, sin el puerto que ya implica el esquema y sin el punto final
-// del host.
+// del host. La ruta se compara con `EscapedPath`, no con `Path`: `/%77isp/` se
+// decodifica a `/wisp/`, pero el navegador pide una ruta distinta y no debe
+// colarse por la lista.
 func relayCanonico(u *url.URL) string {
 	esquema := strings.ToLower(u.Scheme)
 	host := normalizarHost(u.Hostname())
@@ -346,7 +395,7 @@ func relayCanonico(u *url.URL) string {
 	if puerto != "" {
 		autoridad = net.JoinHostPort(host, puerto)
 	}
-	return esquema + "://" + autoridad + u.Path
+	return esquema + "://" + autoridad + u.EscapedPath()
 }
 
 // validarDestinosExtra comprueba la forma de la lista ampliada. Una lista puesta

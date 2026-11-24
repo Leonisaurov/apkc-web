@@ -306,7 +306,7 @@ func TestWISPControlDeFlujo(t *testing.T) {
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
 
-	conexion, err := cliente.AbrirTCP("eco.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("eco.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestWISPCierreDelRelay(t *testing.T) {
 		cliente := NuevoClienteWISP(extremo)
 		defer cliente.Cerrar()
 
-		conexion, err := cliente.AbrirTCP("cerrado.test", 80)
+		conexion, err := cliente.abrirTCPCrudo("cerrado.test", 80)
 		if err != nil {
 			t.Fatalf("AbrirTCP: %v", err)
 		}
@@ -368,7 +368,7 @@ func TestWISPCierreDelRelay(t *testing.T) {
 		cliente := NuevoClienteWISP(extremo)
 		defer cliente.Cerrar()
 
-		conexion, err := cliente.AbrirTCP("fin.test", 80)
+		conexion, err := cliente.abrirTCPCrudo("fin.test", 80)
 		if err != nil {
 			t.Fatalf("AbrirTCP: %v", err)
 		}
@@ -386,7 +386,7 @@ func TestWISPPlazos(t *testing.T) {
 	cliente := NuevoClienteWISP(extremo)
 	defer cliente.Cerrar()
 
-	conexion, err := cliente.AbrirTCP("lento.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("lento.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestWISPClienteCerrado(t *testing.T) {
 	_, extremo := nuevoRelayPrueba(t, 8, true, nil)
 	cliente := NuevoClienteWISP(extremo)
 
-	conexion, err := cliente.AbrirTCP("cierre.test", 80)
+	conexion, err := cliente.abrirTCPCrudo("cierre.test", 80)
 	if err != nil {
 		t.Fatalf("AbrirTCP: %v", err)
 	}
@@ -423,7 +423,7 @@ func TestWISPClienteCerrado(t *testing.T) {
 	}
 
 	cliente.Cerrar()
-	if _, err := cliente.AbrirTCP("otro.test", 80); err == nil {
+	if _, err := cliente.abrirTCPCrudo("otro.test", 80); err == nil {
 		t.Fatal("AbrirTCP después de Cerrar el cliente debía fallar")
 	}
 }
@@ -442,7 +442,7 @@ func TestWISPFlujosConcurrentes(t *testing.T) {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
-			conexion, err := cliente.AbrirTCP("concurrente.test", uint16(9000+id))
+			conexion, err := cliente.abrirTCPCrudo("concurrente.test", uint16(9000+id))
 			if err != nil {
 				errores <- err
 				return
