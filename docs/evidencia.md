@@ -14071,3 +14071,179 @@ diciendo `Hello!`, y el contador, que no tiene bloque `es`, sigue funcionando co
 el respaldo a la base. Frontera: el selector de idioma en la pestaña y las regiones compuestas
 (junto a idioma, densidad o orientación) quedan fuera de este párrafo; tampoco se repitió aquí el
 gate con chromium ni se publicó nada.
+
+## 291. Las diez plantillas compilan y se emulan con `apkc preview`
+
+Medido el 2026-11-24 sobre el generador `buildProject` de `studio/app.js`: las diez plantillas
+`hola`, `contador`, `ciclo`, `menu`, `traducido`, `lienzo`, `notas`, `chatbt`, `tareas` y
+`cronometro` producen un proyecto que `apkc build --linker go --compiler go` convierte en APK y
+que `apkc preview` emula sin `error`. Cuatro no salían tal cual: `chatbt` dejaba el hueco 2 en
+`pedirPermisos` (`203fce6`), `notas` el hueco 2 (`0920540`), `tareas` el hueco 3 (`2376185`) y
+`lienzo` no tenía layout para `preview` (`d1bd8ab`); además, las cinco plantillas nuevas
+(`lienzo`, `notas`, `chatbt`, `tareas`, `cronometro`) no figuraban en `e2e.sh`. Los contratos de
+emulación los fijaron `096aee7` (lienzo), `be8ea8c` (cronómetro), `c374a14` (contador), `92b1b6d`
+(menú), `c933421` (notas), `1e3d365` (chatbt) y `b5ff4d9` (tareas), todos del submódulo `studio/`.
+
+La receta es la de `studio/e2e.sh:86-116`: sembrar con el propio `buildProject`, compilar con el
+compilador Go y rehacer el APK si el generador es más nuevo que él. Cada plantilla elige su guion
+en `studio/e2e.sh:288-301`, y el bloque 0d (`studio/e2e.sh:302-333`) comprueba el JSON resultante.
+
+```sh
+# studio/e2e.sh:86-116
+sembrar_proyecto "$destino" "$paquete" "$plantilla"
+#   FIXTURE_DIR/FIXTURE_PKG/FIXTURE_TEMPLATE → node --input-type=module -e
+#   import { buildProject } from "./studio/app.js" → escribe p.files y p.dirs
+compilar_fixture "$destino"
+#   (cd "$destino" && "$APKC" build --linker go --compiler go \
+#     --android-jar "$ANDROID_JAR" --sdk-version 34 --codename 14 \
+#     --keystore "$HOME/.android/debug.keystore")
+fixture_fresco "$destino"   # siembra otra vez si app.js es más nuevo que build/app.apk
+# studio/e2e.sh:288-312
+guion=$(guion_de "$plantilla")
+"$APKC" preview $guion "$destino/build/app.apk" \
+  >"$TMP/studio-emular-$plantilla.json" 2>"$TMP/studio-emular-$plantilla.log"
+# el JSON debe traer pantalla con ancho y alto > 0, nodos > 0, pasos > 0 y sin error
+```
+
+Las huellas leídas en los JSON de `preview`, con el APK recién compilado (se omite la línea de
+tiempo, que varía entre ejecuciones):
+
+| plantilla | guion de `preview` | APK (bytes) | huella medida |
+| --- | --- | --- | --- |
+| `hola` | `--avanzar 1000` | 9205 | `Hello World!` |
+| `contador` | `--pulsar id/pulsar` | 10238 | `Pulsos: 1` |
+| `ciclo` | `--recrear` | 9401 | `onCreate,onStart` |
+| `menu` | `--menu --menu-item menu/0` | 9674 | `Menu pulsado` |
+| `traducido` | (ninguno) | 9846 | `Hello!` |
+| `lienzo` | (ninguno) | 11563 | 17 operaciones de dibujo |
+| `notas` | `--escribir id/editor/TextoDePrueba --pulsar id/guardar` | 12943 | `cuantas:1` |
+| `chatbt` | `--escribir id/entrada/hola --pulsar id/enviar` | 13498 | `yo: hola` + `eco: hola` |
+| `tareas` | `--escribir id/nueva/Comprar --pulsar id/agregar` | 13581 | `Comprar leche` |
+| `cronometro` | `--pulsar id/iniciar --avanzar 1000` | 12667 | `00:01.00` |
+
+```text
+lienzo  11563 B  17 operaciones
+notas   12943 B  cuantas:1
+chatbt  13498 B  yo: hola / eco: hola
+tareas  13581 B  Comprar leche
+cronometro 12667 B  00:01.00
+contador 10238 B  Pulsos: 1
+menu    9674 B  Menu pulsado
+ciclo   9401 B  onCreate,onStart
+traducido 9846 B  Hello!
+hola    9205 B  Hello World!
+```
+
+**Frontera de `§291`.** `preview` es un modelo aproximado, no ART: la huella prueba que el guion
+llega al nodo esperado, no que la app se vea igual en el aparato (eso lo mide `§293`). No se
+repitió aquí el gate con chromium ni se publicó nada; los APK salen del directorio de temporales
+del gate, no del sitio publicado.
+
+## 292. `e2e.sh` compila y emula las diez plantillas en un solo gate
+
+Los commits `5cfb5b5` y `fb69a51` (submódulo `studio/`) ampliaron el bucle 0b a las diez plantillas
+y añadieron el bloque 0d: ya no basta con que `prueba.js` acepte el generador, el gate siembra cada
+proyecto, compila su APK con `--linker go --compiler go` y ejecuta `apkc preview` con el guion de
+`guion_de`. `fixture_fresco` (`studio/e2e.sh:113-116`) recompila cuando `app.js` es más nuevo que
+`build/app.apk`, así que un APK prestado de otra sesión no puede disfrazar el generador vigente.
+El bloque 0d (`studio/e2e.sh:316-332`) exige pantalla con dimensiones positivas, al menos un nodo,
+pasos de ejecución mayores que cero y ausencia de `error`; imprime el resumen de nodos, pasos y
+avisos por plantilla (`studio/e2e.sh:326-327`). `fb69a51` corrigió el guion de `Tareas` para
+ejercitar `id/nueva` y `id/agregar`, en vez de un id que ya no existe.
+
+```sh
+sh -n studio/e2e.sh
+node studio/prueba.js
+# desde studio/, con APKC, ANDROID_JAR y BUILD_TOOLS del entorno
+sh e2e.sh
+```
+
+```text
+sh -n: sin salida, rc 0
+prueba: todo en orden
+```
+
+**Frontera de `§292`.** La comprobación es del guion de gate, no de la página en chromium: el CDP
+queda fuera de este párrafo y lo cubre `§293`. Los oráculos de firma y alineación del bucle 0b se
+ejecutan sobre los APK sembrados aquí; no se empujó el submódulo ni se publicó el sitio.
+
+## 293. Fidelidad del emulador web frente a la captura real de Droidloom
+
+El commit `ed7db79` (submódulo `studio/`) cierra la deuda que `§287` dejó abierta. La captura real
+del cell, con `wm size 1920x1080` y `wm density 213` (1,33125 px/dp), da un relleno gris `#d6d7d7`
+en x=178..297 e y=408..460 px (≈119×52 px, ≈90×40 dp) y el área blanca en 480×776 px
+(≈360×583 dp), no una pantalla de 360×640 dp. En cambio `apkc preview Contador.apk` entregaba
+`Button(148, 308, 64, 48)` con centro en 180 dp: agrandar esa caja a 88 dp sin restituir el centro
+desplazaba el botón 12 dp respecto de ART.
+
+Los cambios están en `studio/vista-previa.js:31-32` (`ALTO_BOTON_DP=40` y `RADIO_BOTON_DP=4`),
+`:197-226` (`modeloConMinimos` copia el modelo y restituye el centro: el botón queda en
+(-12, 28, 88, 40)), `:286-295` (radio de 4 dp) y `:523-531` (`clip(marcoRect)`, para que el quinto
+botón de `notas`, en x=359..447 dp, no pinte sobre el editor); en `studio/previa-panel.js:424-426`
+(`modeloParaEmulador = modeloConPantalla(modeloConMinimos(modelo))`, mínimos antes de escalar),
+`:2316` (limpieza del canvas cuando falla `preview`) y `:3053` (`modeloDelEmulador` usa ese mismo
+modelo para el clic); y en `studio/vistas.js:29-34` el panel es el dueño único de `#vista-previa`.
+
+```sh
+# medición en el cell (captura transferida)
+wm size
+wm density
+"$APKC" preview "$HOME/.cache/apkc-web/emular/contador/com.hola.contador/build/app.apk"
+cd studio && node prueba.js && node prueba-navegador.js
+# CDP sobre el wasm del árbol final
+cd studio && CHROME_BIN=/usr/bin/brave \
+  APKC_WASM="$HOME/.cache/apkc-web/cdp-final/apkc.wasm" node prueba-navegador.js
+```
+
+```text
+Button(148, 308, 64, 48) → (-12, 28, 88, 40) → (-6, 14, 44, 20) a media pantalla
+prueba: todo en orden
+navegador: todo en orden
+```
+
+**Frontera de `§293`.** El CDP se ejecutó con `CHROME_BIN=/usr/bin/brave` y el `apkc.wasm` de
+`~/.cache/apkc-web/cdp-final/`, no sobre el sitio publicado; el modelo sigue siendo aproximado
+(sin barra de estado, tema claro fijo) y la densidad 213 se usa para interpretar la captura, no
+para renderizar en la pestaña. Sin publicación.
+
+## 294. La sección de Dependencias pasa a primer nivel sobre WISP
+
+El commit `3f2b0e9` del submódulo `studio/` saca Dependencias del panel inferior de Compilar y la
+coloca como vista de primer nivel: dos botones `data-vista=deps` (barra y franja), una sección
+`<section id="deps">` hermana de las demás y el nombre `deps: "Dependencias"` en `vistas.js`
+(`studio/index.html:124`, `:163`, `:1156`, `studio/prueba.js:734-742`). La prueba falsifica que
+siga enganchada al panel (`studio/prueba.js:775-777`): no hay `data-panel="deps"` ni
+`mostrarPanel("deps")`, los ids no se duplican y `sw.js` queda intacto. En CDP las pestañas salen
+`["Inicio","Editor","Pantalla","Dependencias"]`.
+
+Al resolver, el camino es `asegurarDecision()` → `resolverPorWisp()` (`studio/deps.js:512-522`):
+si el núcleo WISP no está en esta compilación, se cae al índice local de coordenadas
+(`studio/deps-coordenada.js`) y falla cerrado antes de abrir un socket; la falsificación
+`studio/prueba-wisp-gates.mjs:163-172` mide `sockets:0, llamadas:0` sin núcleo y el motivo
+acordado. El gate de red en CDP sigue sin abrir websockets ajenos al origen.
+
+```sh
+cd studio && node prueba.js
+cd studio && node prueba-navegador.js
+cd studio && node prueba-wisp-gates.mjs
+```
+
+```text
+prueba: todo en orden
+navegador: todo en orden
+falsificación: los dos gates rechazan lo que tienen que rechazar
+sockets:0, llamadas:0
+```
+
+**Frontera de `§294`.** La resolución por WISP se mide con un núcleo simulado en node y con el
+núcleo incrustado en CDP, nunca contra un relay real: los seis relays y sus latencias son datos
+de la lista versionada, no una medición de red. Sin push del submódulo ni publicación.
+
+## Cuadro de las cuatro mediciones nuevas
+
+| § | commit | qué mide |
+| --- | --- | --- |
+| §291 | `096aee7` … `b5ff4d9` (11; ver §291) | diez plantillas: APK y huella |
+| §292 | `5cfb5b5`, `fb69a51` | `e2e.sh` compila y emula las diez plantillas en un gate |
+| §293 | `ed7db79` | fidelidad del emulador frente a Droidloom y CDP en verde |
+| §294 | `3f2b0e9` (submódulo) | Dependencias como vista de primer nivel sobre WISP |
