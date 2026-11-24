@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§255`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§256`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11471,13 +11471,55 @@ export CLASSPATH=/data/local/tmp/ancho-nuevo.dex; \
 droidloomctl stop
 ```
 
+## 256. El dex de las 6 clases de ApkShare, byte a byte, y el dedupe de los `styleables`
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `211754c` y `87fc662` —el dex de las 6
+clases— y la de `56fb021` —el dedupe de `styleables`—; aquí no se re-ejecutó nada: sin gate, sin
+chromium, sin red, sin push y sin publicación. El sujeto del primer bloque son **6 clases**, no la
+app entera: ApkShare **sigue sin compilar completo**, como dice la frontera de abajo.
+
+**El dex de las 6 clases (`211754c`, `87fc662`).** Las 4 fuentes reales de
+`~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/src/share/apps/util/` se compilaron con
+`apkc compile` + `apkc dex` y su dex se comparó con el oráculo
+`javac 17 --release 8 -g:lines,source`. `cmp` no encuentra ni una diferencia y los dos ficheros
+pesan **5244 B**:
+
+```sh
+cmp final-nuestro.dex final-javac.dex
+```
+
+`Apk.<init>` queda con `locals=5` y `registers 9`; antes eran 5240 B, `locals=6` y `registers 13`.
+La causa del cambio es que `javaemisor.go` devuelve el hueco de la local al cerrar su bloque
+(`ambito`/`picos`, `jbloque`, `intenta`). La falsificación no es vacua: con
+`reutilizaHuecos=false` salen los 5240 B, `locals=6` y `registers 13` de antes, y el `code_item`
+cambia de longitud, **69 code units frente a 70** entre la falsificación y el árbol corregido.
+Durante el desarrollo se rompieron **tres tests de `finally`** y se corrigieron con `picos`: el
+manejador `any` bajaba a `astore_0` donde javac escribe `astore_3` (`87fc662` solo actualiza el
+comentario del dex de `AppAdapter`).
+
+**El dedupe de `styleables` (`56fb021`).** Cierra el CONFIRMADO de la auditoría de `f2eca37`. Un
+`<declare-styleable>` no tiene configuración —ni densidad ni idioma—, así que su **nombre es la
+clave**: la prioridad es proyecto(0) > isla(1) > AAR(2) y el desempate va por `origen` y `nombre`
+del fichero. Cuando dos fuentes chocan, el `LogW` nombra la clave (`styleable/Vista`) y las dos
+fuentes. Antes de este commit el enlazado dejaba `Vista=2` y `avisos=""`; ahora deja `Vista=1`,
+**un solo** `int[] Vista=` en `R.java`, y el resultado es determinista también con el orden de
+entrada invertido. La falsificación revierte `enlazar.go` y deja **3 FALLO**; con el arreglo, la
+suite sale `ok … 188.102s`.
+
+**Fronteras de este `§`.** El byte a byte es de esas 6 clases, **no de la app entera**: ApkShare
+sigue sin compilar y el build se para en `MainActivity.java:74`, en la captura de `adapter` dentro
+de una anónima anidada; ese frente sigue en curso. El dedupe de `styleables` sí queda cerrado por
+`56fb021`, con su falsificación y su suite. No se re-ejecutó nada aquí ni hubo gate, chromium, red,
+push ni publicación; el oráculo del dex es javac 17 y el de los recursos, la suite de `apkc`.
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
 
 1. **ApkShare no compila entero.** En `§253` pasó la 187, la 218 y `AppAdapter`, y se para en
    `MainActivity.java:55`, columna 44, con la captura de `apps` en una anónima; el puente `getItem`
-   del retorno covariante y su `check-cast` ya cerraron en `ee5a372`.
+   del retorno covariante y su `check-cast` ya cerraron en `ee5a372`. `§256` avanza esa frontera a
+   `MainActivity.java:74`, con la captura de `adapter` en una anónima anidada.
 2. **Asignación como valor sobre campo o arreglo**, rechazada por nombre, pendiente del
    `dup_x1`/`dup2_x1` (y del `dup_x2` del elemento).
 3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual sin
