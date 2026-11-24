@@ -3865,6 +3865,21 @@ func (e *emisor) plegarConstante(x jexpr) (constNum, bool) {
 		if base != nil || len(segs) == 0 {
 			return constNum{}, false
 		}
+		// una constante suelta (`AutoResearchDelay`): su nombre no es el de un tipo, así que el camino
+		// de abajo no la resuelve. javac la dobla sobre el hueco al que va —medido con javac 17.0.21
+		// `--release 8`, `long x = INT500` es `ldc2_w 500l` y no `sipush 500; i2l`—, y aquí tiene que
+		// doblarse igual para que `expA` escriba la constante ya promovida. Una local del método o una
+		// captura `val$x` con el mismo nombre tapan al campo y no pliegan.
+		if len(segs) == 1 {
+			if _, esLocal := e.locales[segs[0]]; !esLocal && !e.tapaLaCaptura(segs[0]) {
+				if _, cr, encontrado := e.duenioDelCampo(segs[0]); encontrado &&
+					cr.constante && !cr.esCadena && cr.acceso&accStatic != 0 && esConstanteEntera(cr.desc) {
+					if pliegaCampoSuelto {
+						return constNum{tipo: 'I', entero: int64(cr.valor)}, true
+					}
+				}
+			}
+		}
 		interno, resto, ok := e.ctx.tipoDeReferencia(segs)
 		if !ok || len(resto) == 0 {
 			return constNum{}, false
@@ -3897,6 +3912,36 @@ func (e *emisor) plegarConstante(x jexpr) (constNum, bool) {
 		return constNum{tipo: 'I', entero: int64(cr.valor)}, true
 	}
 	return constNum{}, false
+}
+
+// pliegaCampoSuelto es el interruptor de la falsificación del plegado de una constante suelta. Apagado,
+// `postDelayed(r, AutoResearchDelay)` vuelve a escribir `sipush 500; i2l` donde javac 17 escribe
+// `ldc2_w 500l`, que es la divergencia que mide `javaemisor_ldc2w_campo_test.go`. Encendido en el
+// binario que se publica.
+var pliegaCampoSuelto = true
+
+// esConstanteEntera: los descriptores de un `static final` que javac dobla como una constante entera.
+// `Z` queda fuera: `long x = BOOL` no es Java y plegarlo como entero lo aceptaría (JLS 5.1.2).
+func esConstanteEntera(desc string) bool {
+	return len(desc) == 1 && strings.IndexByte("IBCS", desc[0]) >= 0
+}
+
+// tapaLaCaptura: la clase actual, o alguno de sus exteriores, declara el campo `val$nombre`, así que
+// el nombre suelto es una local capturada y no una constante de la clase. Sin esta comprobación, una
+// local que se llamara como un `static final` del exterior se doblaría con el valor del campo.
+func (e *emisor) tapaLaCaptura(nombre string) bool {
+	for c := e.c; c != nil; {
+		for _, f := range c.campos {
+			if f.nombre == "val$"+nombre {
+				return true
+			}
+		}
+		if !tieneExterior(c) {
+			break
+		}
+		c = c.encierre
+	}
+	return false
 }
 
 // aplanar: los segmentos de una cadena de puntos y su base, que viene vacia si empezo por un nombre.
