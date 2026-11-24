@@ -13658,6 +13658,51 @@ tcr -r 256M -- sh tools/entorno.sh wasm
 JAVAC17=/ruta/al/javac17 tcr -- sh tools/entorno.sh test
 ```
 
+## 285. La página permite activar o desactivar la compilación incremental
+
+Registrado el 2026-11-24 por transferencia del builder `ses_df1d6c613ffeGmQsTnaFzeaRCi`
+(commit del submódulo `551a478`, puntero `c324611` en este repo) y de la crítica
+`ses_df1c97e9bffe9Azxx7mOzRggVb`, que APROBÓ sin `CONFIRMADO`. Solo documentación: no se
+re-ejecutó nada aquí, sin gate final, chromium, red ni publicación.
+
+**Antes y después.** Antes, `pestana.js:3033-3050` siempre pasaba `--inc`; solo las pruebas
+podían pedir `{incremental:false}`. Ahora `index.html:849-850` ofrece la casilla
+`#inc-compilar`, marcada por defecto (`checked`), con la nota «Reutiliza las cachés del build
+anterior; destildarlo fuerza una compilación completa».
+
+**La regla de prioridad.** `pestana.js:3033-3043` decide con la expresión siguiente:
+
+```js
+const inc = opciones.incremental === undefined
+  ? (casillaInc ? casillaInc.checked : true)
+  : opciones.incremental !== false
+```
+
+Manda la opción explícita de las pruebas; si falta, manda la casilla; si no hay casilla en el
+DOM, se cae a `true`, que es el comportamiento anterior. El comentario se reescribió: ya no
+dice que la página siempre compila con `--inc`.
+
+**Lo que midió la prueba CDP (transferido).** `node --check` limpio en los dos `.js`;
+`node prueba.js` → `prueba: todo en orden`, `reglas: 24`; `prueba-pestana.js` con Brave →
+**236 comprobaciones bien, 0 mal**. En la sección de `--inc`: 5 builds con `--inc` y 3 sin
+él; al destildar se quita `--inc` y la apk sigue válida (`codigo 0`, 7 entradas,
+`distintas: []`). El gate de red sigue en cero peticiones ajenas: 469 locales y 0
+websockets.
+
+**Veredicto de la crítica: APROBAR, sin `CONFIRMADO`.** La opción explícita manda, el
+fallback sin casilla es seguro, el gate de red no se relajó, y los ids y la sintaxis son
+correctos; el puntero del submódulo quedó en `551a478` y limpio.
+
+**Memoria del frente.** El Brave headless de la prueba salió solo al terminar: no hubo que
+matar procesos ni se tocó el Brave del usuario. El consumo temporal fue de la prueba CDP,
+no un defecto del cambio.
+
+```sh
+cd studio && node --check pestana.js && node --check prueba-pestana.js
+cd studio && node prueba.js
+cd studio && tcr -c 4 -m 3G env CHROME_BIN=/usr/bin/brave … node prueba-pestana.js
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
