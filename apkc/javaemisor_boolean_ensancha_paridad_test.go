@@ -33,3 +33,11 @@ func TestElBooleanNoEnsanchaContraJavac17(t *testing.T) {
 		})
 	}
 }
+
+// TestElControlDeLosAnchosQueSiEnsanchan: `int`/`byte`/`short`/`char` siguen compilando y el dex sale
+// byte a byte como el de javac 17. Es el control de que quitar `Z` no se llevó por delante los anchos
+// de verdad.
+func TestElControlDeLosAnchosQueSiEnsanchan(t *testing.T) {
+	_, nuestro, suyo := compilaYDejaElDexDeJavac(t, []fuenteJava{{nombre: "src/S.java", contenido: controlEnsanchaFuente}})
+	comparaDexByteAByte(t, nuestro, suyo, "control_anchos")
+}

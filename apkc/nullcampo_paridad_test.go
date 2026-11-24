@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de nullcampo_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 import (
@@ -13,7 +20,7 @@ import (
 // hacía la asignación a una variable local. El dex tiene que salir byte a byte el de javac 17.
 func TestAsignacionNulaAUnCampoContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 	pon(t, raiz, "Apk.java", fuenteNuloEnCampo)
 
@@ -77,7 +84,7 @@ public class Apk {
 // TestAsignacionNulaEnCampoDelExteriorContraJavac17 cubre la ruta del accesor sintético con un null.
 func TestAsignacionNulaEnCampoDelExteriorContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 	pon(t, raiz, "Apk.java", fuenteNuloEnCampoAnonima)
 

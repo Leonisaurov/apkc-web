@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_campo_generico_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 // §203: los campos y los parámetros con argumentos de tipo, medidos contra javac 17. `List<Apk>`
@@ -56,7 +63,7 @@ public class Contenedor {
 // comparan también para que el campo del usuario quede medido.
 func TestCampoGenericoContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 	pon(t, raiz, "Apk.java", fuenteApkDelCampo)
 	pon(t, raiz, "Contenedor.java", fuenteContenedorGenerico)
@@ -143,7 +150,7 @@ public class Guarda {
 // `Exceptions` sí los lleva a los dos, y el dex entero coincide byte a byte con javac 17.
 func TestThrowsFueraDeLaSignatureContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 	pon(t, raiz, "Apk.java", fuenteApkDelCampo)
 	pon(t, raiz, "Guarda.java", fuenteConThrows)

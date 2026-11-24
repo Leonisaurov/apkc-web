@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_anonima_numeracion_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 // Cómo numera javac las clases anónimas: el contador es **por clase exterior** y el número se asigna
@@ -113,7 +120,7 @@ func descriptoresDeJavac(cs []classFull) []string {
 // divergencia que ya fijó `javaemisor_captura_receptor_test.go`, no de esta ruta—.
 func TestLaNumeracionDeAnonimasEsLaDeJavac(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	fuentes := fuentesSondaNumeracion(fuenteSondaNumeracion)
 
 	nuestras, err := compilarProyectoJava(fuentes, jar)
@@ -192,7 +199,7 @@ func TestLaNumeracionDeAnonimasFalsificacion(t *testing.T) {
 	}
 
 	// y el dex deja de ser el de javac, que es lo que delata el `checksum` distinto de ApkShare
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	raiz := t.TempDir()
 	pon(t, raiz, "p/Sonda.java", fuenteSondaNumeracion)
 	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)

@@ -73,14 +73,6 @@ const controlEnsanchaFuente = `public class S {
     }
 }`
 
-// TestElControlDeLosAnchosQueSiEnsanchan: `int`/`byte`/`short`/`char` siguen compilando y el dex sale
-// byte a byte como el de javac 17. Es el control de que quitar `Z` no se llevó por delante los anchos
-// de verdad.
-func TestElControlDeLosAnchosQueSiEnsanchan(t *testing.T) {
-	_, nuestro, suyo := compilaYDejaElDexDeJavac(t, []fuenteJava{{nombre: "src/S.java", contenido: controlEnsanchaFuente}})
-	comparaDexByteAByte(t, nuestro, suyo, "control_anchos")
-}
-
 // TestFalsificacionDelBooleanQueEnsancha: con `booleanEnsanchaEnArgumentos` encendido, `Z` vuelve a
 // tratarse como `int` y `s.f(true)` / `f(true)` se aceptan otra vez —el defecto literal de af73a8a—,
 // lo que prueba que el rechazo de arriba depende de la corrección y no de otra cosa.

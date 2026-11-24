@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_plegado_bits_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 import (
@@ -86,7 +93,7 @@ func llevaSipush(t *testing.T, code []byte, valor int) bool {
 // es literal: `base | 128` sigue con su `ior` y es, también, el de javac.
 func TestElPlegadoDeBitsContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	fuentes := []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuentePlegadoDeBits}}
 
 	nuestras, err := compilarProyectoJava(fuentes, jar)
@@ -135,7 +142,7 @@ func TestElPlegadoDeBitsContraJavac17(t *testing.T) {
 // de los bloques. Aquí se mide solo el plegado, que es de este fichero.
 func TestElApkDeApkSharePlegaElOrDeLosDosPermisos(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	fuentes := fuentesAppAdapterShare()
 
 	nuestras, err := compilarProyectoJava(fuentes, jar)
@@ -177,7 +184,7 @@ func TestFalsificacionDelPlegadoDeBits(t *testing.T) {
 	t.Cleanup(func() { pliegaBits = anterior })
 
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	fuentes := fuentesAppAdapterShare()
 
 	nuestras, err := compilarProyectoJava(fuentes, jar)

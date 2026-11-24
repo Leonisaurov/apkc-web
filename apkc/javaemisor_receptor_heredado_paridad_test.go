@@ -42,3 +42,33 @@ func TestSobrecargaExteriorContraJavac17(t *testing.T) {
 		t.Fatalf("el dex de la sobrecarga exterior no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
 	}
 }
+
+// TestReceptorHeredadoEnAnonimaContraJavac17: `getExternalFilesDir(null)` sobre el `getApplicationContext()`
+// heredado se estima sin emitirlo, la sobrecarga `File(File, String)` del constructor se resuelve y el
+// `onClick` sale instrucción a instrucción igual al de javac.
+func TestReceptorHeredadoEnAnonimaContraJavac17(t *testing.T) {
+	jar := jarDelSDK(t)
+	javac := javac17Exigido(t)
+	fuentes := fuentesReceptorHeredado(fuenteReceptorHeredado)
+
+	nuestras, err := compilarProyectoJava(fuentes, jar)
+	if err != nil {
+		t.Fatalf("el emisor rechazó el método heredado sin receptor escrito: %v", err)
+	}
+
+	raiz := t.TempDir()
+	pon(t, raiz, "p/Pantalla.java", fuenteReceptorHeredado)
+	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
+
+	// la vuelta de `getExternalFilesDir(String)` es `Ljava/io/File;`: es lo que resuelve `File(File, String)`
+	nuestraAnonima, suyaAnonima := buscaLaClase(t, nuestras, "Lp/Pantalla$1;", deJavac)
+	comparaMetodos(t, nuestraAnonima, suyaAnonima)
+	nuestroOnClick := metodoDeClaseEmitida(t, nuestras, "p/Pantalla$1", "onClick", "(Landroid/view/View;)V")
+	suOnClick := metodoDeClaseLeida(t, deJavac, "Lp/Pantalla$1;", "onClick", "(Landroid/view/View;)V")
+	if err := comparaInstrucciones(nuestroOnClick.Code, suOnClick.Code); err != nil {
+		t.Fatalf("Pantalla$1.onClick no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
+	}
+	if err := comparaDexComoJavac17(t, nuestras, deJavac); err != nil {
+		t.Fatalf("el dex de la anónima no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
+	}
+}

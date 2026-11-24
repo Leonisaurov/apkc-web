@@ -59,35 +59,6 @@ func fuentesSondaMolde() []fuenteJava {
 	return []fuenteJava{{nombre: "src/p/Sonda.java", contenido: fuenteSondaMolde}}
 }
 
-// TestMoldeDeArgumentoContraJavac17: el argumento con molde se estima y se emite como javac 17. La
-// estimación tiene que coincidir con el `check-cast` que escribe `exp`, así que el dex de la sonda
-// entera —sobrecarga elegida incluida— sale byte a byte igual al de javac.
-func TestMoldeDeArgumentoContraJavac17(t *testing.T) {
-	jar := jarDelSDK(t)
-	javac := javac17(t)
-	fuentes := fuentesSondaMolde()
-
-	nuestras, err := compilarProyectoJava(fuentes, jar)
-	if err != nil {
-		t.Fatalf("el emisor rechazó el molde como argumento: %v", err)
-	}
-
-	raiz := t.TempDir()
-	pon(t, raiz, "p/Sonda.java", fuenteSondaMolde)
-	deJavac := compilaConJavac(t, javac, jar, raiz, fuentes)
-
-	nuestra, suya := buscaLaClase(t, nuestras, "Lp/Sonda;", deJavac)
-	nuestroCrea := metodoDeClaseEmitida(t, nuestras, "p/Sonda", "crea", "(I)V")
-	suCrea := metodoDeClaseLeida(t, deJavac, "Lp/Sonda;", "crea", "(I)V")
-	if err := comparaInstrucciones(nuestroCrea.Code, suCrea.Code); err != nil {
-		t.Fatalf("crea(I)V no es el de javac: %v\n%s", err, volcadoDeClases(nuestras))
-	}
-	comparaMetodos(t, nuestra, suya)
-	if err := comparaDex(t, nuestras, deJavac); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // TestMoldeDeArgumentoFalsificacion: con la ruta apagada, la sonda vuelve a fallar con el mensaje que
 // el usuario leyó. Se comprueba el texto literal del emisor (`%T` de un `jcast` es `main.jcast`,
 // porque el paquete de la herramienta es `main`) y que el prefijo del fuente y la línea son los de la

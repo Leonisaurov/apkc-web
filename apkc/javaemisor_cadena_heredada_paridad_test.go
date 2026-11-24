@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_cadena_heredada_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 // Un `static final String` con `ConstantValue` heredado de un padre del classpath es también una
@@ -84,7 +91,7 @@ func cuentaOp(t *testing.T, metodo classMethod, op byte) int {
 // sin `ConstantValue`, sigue leyéndose con `getstatic`.
 func TestCadenaEstaticaHeredadaContraJavac17(t *testing.T) {
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	baseJar := baseHeredadaEnJar(t, javac)
 	classpath := strings.Join([]string{jar, baseJar}, string(os.PathListSeparator))
 	fuentes := []fuenteJava{{nombre: "src/p/Hijo.java", contenido: fuenteHijoHeredado}}
@@ -210,7 +217,7 @@ public class VerificarHeredada {
 func TestCadenaEstaticaHeredadaFalsificacion(t *testing.T) {
 	const literal = "pc 1 (areturn): se esperaba una referencia y hay entero"
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	baseJar := baseHeredadaEnJar(t, javac)
 	fuentes := []fuenteJava{{nombre: "src/p/Hijo.java", contenido: fuenteHijoHeredado}}
 

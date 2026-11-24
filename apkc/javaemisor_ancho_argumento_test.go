@@ -50,36 +50,6 @@ const (
 	anchoThisFuente        = `public class S { S(){} S(long L){ this(); } S(int n){ this((long) n); } }`
 )
 
-// TestElEnsanchamientoDelArgumentoLlevaSuConversion: los quince casos salen byte a byte como los de
-// javac 17. Las dos primeras son el defecto (una y dos palabras de menos); las de `float` y `double`
-// conservan el saldo pero les faltaba el `i2f`/`i2d`; las de `byte`, `short` y `char` son la subida a
-// `int` sin opcode y la conversión detrás; las tres últimas son el control —`long` a `long` no escribe
-// nada, y el literal se pliega sobre la constante (`ldc2_w 97l`, `fconst_0`, `dconst_1`)— y el
-// `this(...)` de un constructor, que pasa por la misma cuenta.
-func TestElEnsanchamientoDelArgumentoLlevaSuConversion(t *testing.T) {
-	casos := []struct{ nombre, fuente string }{
-		{"int_a_long", anchoLargoFuente},
-		{"dos_int_a_dos_long", anchoDosLargosFuente},
-		{"int_a_float", anchoFlotanteFuente},
-		{"int_a_double", anchoDobleFuente},
-		{"int_y_long_mezclados", anchoMezclaFuente},
-		{"static_desde_la_propia_clase", anchoEstaticoFuente},
-		{"static_cualificado_por_el_tipo", anchoCualificadoFuente},
-		{"byte_a_long", anchoByteFuente},
-		{"short_a_double", anchoShortFuente},
-		{"char_a_float", anchoCharFuente},
-		{"control_long_a_long", anchoControlFuente},
-		{"control_literal_entero", anchoLiteralFuente},
-		{"control_literal_caracter", anchoCaracterFuente},
-		{"control_literal_cero", anchoCeroFuente},
-		{"this_con_long", anchoThisFuente},
-	}
-	for _, c := range casos {
-		_, nuestro, suyo := compilaYDejaElDexDeJavac(t, []fuenteJava{{nombre: "src/S.java", contenido: c.fuente}})
-		comparaDexByteAByte(t, nuestro, suyo, c.nombre)
-	}
-}
-
 // fuenteRetardoShare reproduce el bloque de `~/.cache/apkc-web/arraylist-apkshare/ApkShare-main/src/
 // share/apps/util/MainActivity.java:84-107` —verbatim, con `handler.postDelayed(runnable,
 // AutoResearchDelay)` en la 105— dentro de una clase con los miembros que ese bloque usa: `handler` y

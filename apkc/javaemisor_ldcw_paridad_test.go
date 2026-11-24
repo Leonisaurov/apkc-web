@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_ldcw_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 // El colector sigue el operando de `ldc_w`. javac cambia a `ldc_w` (0x13) cuando el índice del
@@ -49,7 +56,7 @@ func palabraConstClass(insns []uint16) (primera, segunda uint16, ok bool) {
 // como lo hace el `ldc` de un byte. Se compara la instrucción con la que escribe `d8` sobre el mismo
 // `.class`: mismo registro y type_id de la misma clase.
 func TestElLdcWInternaElTipoYCoincideConD8(t *testing.T) {
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	jar := jarDelSDK(t)
 	raiz := t.TempDir()
 	pon(t, raiz, "Muchas.java", fuenteLdcW())

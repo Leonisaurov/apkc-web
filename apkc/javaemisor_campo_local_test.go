@@ -169,25 +169,6 @@ func nuestrasClases(t *testing.T, jar string, fuentes []fuenteJava) []claseEmiti
 	return nuestras
 }
 
-// TestCampoDeLocalDeApkShareContraJavac17: el `App.java` del zip, entero y literal, por los dos
-// caminos. Se compara el dex de **`App` solo**: `Apk.java` trae una diferencia ajena a estas dos ramas
-// —no pliega `GET_ACTIVITIES | GET_META_DATA` en `129`— que este frente no toca. El resto de `App`
-// entra igual: el constructor, `getApks`, el `for` con dos puntos y `toString`.
-func TestCampoDeLocalDeApkShareContraJavac17(t *testing.T) {
-	jar := jarDelSDK(t)
-	javac := javac17(t)
-	raiz := t.TempDir()
-	pon(t, raiz, "src/share/apps/util/App.java", fuenteAppApkShare)
-	pon(t, raiz, "src/share/apps/util/Apk.java", fuenteApkApkShare)
-
-	nuestras := nuestrasClases(t, jar, []fuenteJava{
-		{nombre: "src/share/apps/util/App.java", contenido: fuenteAppApkShare},
-		{nombre: "src/share/apps/util/Apk.java", contenido: fuenteApkApkShare},
-	})
-	suyas := clasesDeJavac17(t, jar, javac, raiz, "src/share/apps/util/App.java", "src/share/apps/util/Apk.java")
-	compararDex(t, laClaseNuestra(t, nuestras, "share/apps/util/App"), laClaseDeJavac(t, suyas, "Lshare/apps/util/App;"))
-}
-
 // laClaseNuestra y laClaseDeJavac: una clase concreta de las que salieron, para dexar solo esa.
 func laClaseNuestra(t *testing.T, clases []claseEmitida, interno string) []claseEmitida {
 	t.Helper()
@@ -209,31 +190,6 @@ func laClaseDeJavac(t *testing.T, clases []classFull, nombre string) []classFull
 	}
 	t.Fatalf("javac no dejo %s", nombre)
 	return nil
-}
-
-// TestCampoDeLocalComoArgumentoContraJavac17: la rama del `App.java:28` aislada. El argumento
-// `info.applicationInfo` se estima desde el tipo estático del parámetro `info`, sin emitir su receptor.
-func TestCampoDeLocalComoArgumentoContraJavac17(t *testing.T) {
-	jar := jarDelSDK(t)
-	javac := javac17(t)
-	raiz := t.TempDir()
-	pon(t, raiz, "Argumento.java", fuenteCampoDeLocal)
-
-	nuestras := nuestrasClases(t, jar, []fuenteJava{{nombre: "Argumento.java", contenido: fuenteCampoDeLocal}})
-	compararDex(t, nuestras, clasesDeJavac17(t, jar, javac, raiz, "Argumento.java"))
-}
-
-// TestArregloComparadoConNullContraJavac17: la rama del `App.java:34` aislada. javac escribe
-// `aload_0; getfield splitSourceDirs:[Ljava/lang/String;; ifnonnull` — el mismo `ifnonnull` de una
-// referencia `L`, porque un arreglo también lo es.
-func TestArregloComparadoConNullContraJavac17(t *testing.T) {
-	jar := jarDelSDK(t)
-	javac := javac17(t)
-	raiz := t.TempDir()
-	pon(t, raiz, "Nulo.java", fuenteArregloNulo)
-
-	nuestras := nuestrasClases(t, jar, []fuenteJava{{nombre: "Nulo.java", contenido: fuenteArregloNulo}})
-	compararDex(t, nuestras, clasesDeJavac17(t, jar, javac, raiz, "Nulo.java"))
 }
 
 // TestCampoDeLocalFalsificacion: la falsificación de la rama del `App.java:28`. Con el interruptor

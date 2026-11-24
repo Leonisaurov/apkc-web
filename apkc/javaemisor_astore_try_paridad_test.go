@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_astore_try_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 // El reparto de huecos de un `try`/`catch` y el rango protegido, contra javac 17.0.21
@@ -201,7 +208,7 @@ func compilaConJavacSondaTry(t *testing.T) []classFull {
 	for _, f := range fuentes {
 		pon(t, raiz, f.nombre[len("src/"):], f.contenido)
 	}
-	return compilaConJavac(t, javac17(t), jarDelSDK(t), raiz, fuentes)
+	return compilaConJavac(t, javac17Exigido(t), jarDelSDK(t), raiz, fuentes)
 }
 
 func mustWalk(t *testing.T, code []byte) []jvmInstr {

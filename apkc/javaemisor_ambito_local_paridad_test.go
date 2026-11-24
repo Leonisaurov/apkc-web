@@ -1,3 +1,10 @@
+//go:build !js
+
+// La paridad con javac 17 de javaemisor_ambito_local_test.go, que se mueve entero: todas sus pruebas son oráculo de javac,
+// que se lanza como proceso, y el hospedador de la capa wasm no crea procesos. Por eso el fichero
+// lleva `//go:build !js` y no se salta en silencio bajo `GOOS=js`. No hay SKIP: sin javac 17
+// fallan (ver `dependencias_test.go:5-8`).
+
 package main
 
 import (
@@ -77,7 +84,7 @@ class Huecos {
 func compilaYDejaElDexDeJavac(t *testing.T, fuentes []fuenteJava) (nuestras []claseEmitida, nuestro, suyo []byte) {
 	t.Helper()
 	jar := jarDelSDK(t)
-	javac := javac17(t)
+	javac := javac17Exigido(t)
 	nuestras, err := compilarProyectoJava(fuentes, jar)
 	if err != nil {
 		t.Fatalf("el emisor rechazó los fuentes: %v", err)
