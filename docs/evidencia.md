@@ -12185,6 +12185,81 @@ sed -n '383,438p' apkc/keystore_test.go
 git show --stat 0e65ac1
 ```
 
+## 267. Sin sondeo de SDK, el keystore por defecto queda vacío y el build aborta antes de firmar
+
+Registrado el 2026-11-23 sobre este árbol (`c8dbb67`). La medición es **lectura de código**, no una
+ejecución: no se compiló el binario, ni se pasó la suite, ni `go vet`, ni el gate, ni chromium, ni
+red, ni push, ni publicación; tampoco se reprodujo el fallo con una línea de comando real. Las citas
+`archivo:línea` son de `apkc/` en este árbol y las de `studio/` se comprobaron sobre el pin
+`f34c79d`, que es el que declara el submódulo (en este worktree no está inicializado). El hueco que
+se describe no se corrige aquí.
+
+**La lista blanca no sondea.** `apkc/main.go:24` enumera los subcomandos que corren sin SDK —`dex`,
+`link`, `compile`, `check`, `verify`, `keystore`, `rotate`, `debug-keystore`, `create-keystore`,
+`preview`— y no llama a `findSDKs()`. `build` solo lo llama si la línea de comando **no** es el
+build sin procesos (`:28-29`), y `default` sondea (`:32`). `sinProcesos` (`apkc/build.go:522`) exige
+`--linker go` **y** `--compiler go` (`:540`), el par exacto que usa la pestaña: el único camino que
+se queda sin sondeo es justo el que ya estaba pensado para no encontrar SDK.
+
+**El default se asigna en un solo sitio.** `keyStorePath` es un global (`apkc/doctor.go:49`) y el
+único sitio que lo escribe es `findSDKs()`, con `os.UserHomeDir()` y `.android/debug.keystore`
+(`apkc/doctor.go:162`). Sin ese sondeo la cadena conserva su valor cero, `""`. Lo mismo vale para
+`androidJar`, que solo puebla el sondeo.
+
+**La cadena vacía llega hasta la firma.** `set.String("keystore", keyStorePath, …)`
+(`apkc/build.go:115`) hereda `""`; `opts()` lo copia a `buildOpts.keyStore` (`:138`) y `:212`
+llama a `resolveSigner`. Con `signer=auto` y `!keystoreIsReadable("")`, `resolveSigner`
+(`apkc/gopackage.go:78`) escribe el `LogD` de `:90` y devuelve `signerJVM`; con un keystore
+legible y API ≥ 18 devuelve `signerGo` (`:96`). El `auto` cambia de backend por el hueco sin decir
+que lo que falta es la ruta.
+
+**Y aborta antes de firmar.** `requireKeystore` (`apkc/keystore.go:123`) hace `os.Stat("")`
+(`:124`), falla y llama a `LogF` (`apkc/log.go:38-41`, que acaba en `os.Exit(1)`), con el texto de
+`keystoreAbsentMessage` (`apkc/keystore.go:101-103`). Con la ruta vacía ese texto queda «there is no
+keystore at  - …»: la doble blanca es fea pero inequívoca.
+
+**Ninguna rama lo esquiva.** `apkc/build.go:419-462` pone `requireKeystore` delante de las tres: AAB
+(`:421`, con `signAAB` en `:423`), `signerGo` (`:427`) y JVM (`:450`, con `signAPK` en `:452`). No
+hay rama que entregue `""` a `signAPK`/`signAAB`, ni `--signer=go` lo evita: el fallo es de puerta y
+no de firma, y por eso es benigno para la integridad del paquete.
+
+**El mismo hueco, en el jar.** Sin sondeo, `androidJar` queda `""` salvo `--android-jar`
+(`apkc/build.go:128`, `:184-188`); el enlace Go lo exige en `apkc/linker.go:443` y
+`opcionesDelProyecto` (`:524-534`) pide `--sdk-version` cuando la ruta no dice la plataforma.
+
+**La pestaña no cae en él.** `studio/pestana.js:3049-3054` arma `build … --keystore <k.ruta>`
+siempre; la clave de depuración es `/sdk/debug.keystore` (`:2996`) y `sign` también pasa la ruta
+(`:2382-2383`). El wasm no depende de `findSDKs`: el par `--linker go --compiler go` lo saca de
+`apkc/main.go:28` y las rutas le llegan por bandera.
+
+**El diagnóstico ya existe; el default sigue vacío.** `0e65ac1`, registrado en `§266`, separó «no
+está» de «no se lee» en el mensaje (`keystoreAbsentMessage`, `keystoreRefusal`), y `§264` ya anotó
+que el build sin `--keystore` no llama a `findSDKs` (`apkc/main.go:28-30`). Lo que fija este `§267`
+es el mecanismo completo: no es que el aviso sea malo, es que el valor por defecto nunca se puebla
+fuera del sondeo.
+
+**Veredicto.** Benigno para la firma —no hay ruta que firme con `""`— y fricción de CLI y de e2e: un
+guion que invoque `build --linker go --compiler go` sin `--keystore` **ni** `--android-jar` muere en
+la puerta. La vía propuesta, **no implementada**, es fijar el default con `os.UserHomeDir()` en
+`apkc/main.go:25-30` sin llamar a `findSDKs()`, con su test en `apkc/keystore_test.go`; mientras
+tanto el e2e pasa `--keystore ~/.android/debug.keystore --android-jar <jar>`. No se verificó si el
+e2e de ApkShare pasa `--keystore`: queda declarado como incertidumbre.
+
+Sin build ni gate: las citas de arriba se reproducen con
+
+```sh
+sed -n '24,33p' apkc/main.go
+sed -n '518,541p' apkc/build.go
+sed -n '157,163p' apkc/doctor.go
+sed -n '113,116p;135,140p;184,188p;209,214p;419,462p' apkc/build.go
+sed -n '78,97p' apkc/gopackage.go
+sed -n '101,127p' apkc/keystore.go
+sed -n '36,42p' apkc/log.go
+sed -n '440,445p;523,535p' apkc/linker.go
+sed -n '2996p;2382,2383p;3049,3054p' studio/pestana.js
+git log --oneline -2 0e65ac1
+```
+
 ## Fronteras del bloque, sin cerrar
 
 Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
