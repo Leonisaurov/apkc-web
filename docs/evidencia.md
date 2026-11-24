@@ -12631,6 +12631,65 @@ node --check shim/navegador-sim.js
 node --check shim/prueba-salida.js
 ```
 
+## 272. La capa wasm monta el jar y el fixture, y captura sin tubería (`e3c7259`)
+
+Registrado el 2026-11-24 sobre `e907433`. La medición es del builder que dejó `e3c7259`; este `§` la
+**transfiere**: cita sus logs (`~/.cache/apkc-web/wasm-antes.log`, `wasm-sin.log`, `wasm-con.log`,
+`wasm-despues.log`) y no re-ejecuta la capa. Los rojos y verdes que se dan son de esas corridas.
+
+**El síntoma era el fs simulado, no el código.** `tools/entorno.sh wasm` lanzaba
+`shim/navegador-sim.js` sin `--montar`, así que el fs en memoria nacía vacío y las pruebas que abren
+el SDK o el fixture morían con ENOENT aunque el emisor estuviera bien. `wasm-antes.log`: **33 `FAIL`
+de primer nivel** —25 con `sin android.jar que abrir: exporta APKC_ANDROID_JAR …`, uno con
+`open testdata/vista-propia/main.xml: No such file or directory`, **6** líneas de
+`pipe: not implemented on js` (4 subtests de `TestAvisoDeColisionDeNativos…`, `TestResolveSigner` y
+`TestSignAvisaAlDescartar…`) y cuatro de otra causa: la guarda de `dependenciasDexeables` en un
+proceso hijo, el manifiesto inyectado, los permisos del fichero de contraseña y la sonda de WISP—.
+
+**El jar, con la forma del SDK.** `tools/entorno.sh:121-126` monta el android.jar de `jar_del_sdk`
+(`:60-67`, la misma definición que usan `doctor` y la tarea `jar`) en
+`/android/platforms/android-34/android.jar`, bajo el `ANDROID_HOME` que el hospedador publica. La
+forma importa: en `/sdk/android.jar` suelto, `check` y el enlazador no deducen la API del directorio
+padre; `wasm-despues.log` lo enseña con cinco rojos de `check` y el aviso
+`la ruta del android.jar no dice la version del platform; digala con --sdk-version`; esos cinco
+desaparecen al mover el destino. El fixture viaja en el mismo `--montar` (`:128`) y el destino va
+absoluto porque `--montar` expande también el destino.
+
+**El fixture y el jar se miden por separado.** `wasm-sin.log`, con el fixture montado y el jar no,
+deja **29 rojos** (25 de ellos por el jar); `wasm-con.log`, con los dos, deja **2**. Si falta el jar
+el aviso es explícito y no se salta nada: `aviso: sin android.jar; las pruebas contra el SDK
+fallarán en wasm` (`:125`).
+
+**La captura, por fichero.** `capturarSalida` (`apkc/sign_hostil_test.go:91-110`) redirigía
+`os.Stdout` a `os.Pipe`; `os/pipe_wasm.go` devuelve ENOSYS y la prueba moría con
+`pipe: not implemented on js`. Ahora usa `os.CreateTemp(t.TempDir(), "salida-*.log")` (`:94`),
+lee el fichero al cerrarlo y restaura `os.Stdout` con `defer` (`:99`): la aserción sobre lo escrito
+es la misma y también vale en nativo. Los tres usos (`sign_hostil_test.go:54`,
+`aar_real_test.go:379`, `keystore_test.go:428`) dejan de depender de una tubería, y `wasm-con.log`
+ya no registra ningún `pipe: not implemented`.
+
+**Lo que queda no es de este cambio.** Con los montajes, los 2 rojos son
+`TestDependenciasDexeablesAbortaConDosJarsQueDefinenLaMismaClase` —la guarda conduce un proceso
+hijo y en wasm no hay proceso: la salida llega vacía— y
+`TestCompilarEnGoDexaIgualQueJavacConUnaDependencia` (`sin javac 17: exporta JAVAC17 …`). Después
+del `§`, el run **aborta** en `TestRecursosDeDependenciaEnElApk` al abrir
+`build/res/layout/deps_fila.xml` (`apkc/deps_recursos_test.go:233`): es el fs simulado de otro
+frente. `f64101e` separa por build tag las pruebas que no corren en la pestaña y deja la capa en 116
+con 0 rojos, con ese aborto abierto; no se verifica aquí.
+
+**Preguntas abiertas.** (1) ¿Sigue el aborto de `TestRecursosDeDependenciaEnElApk` en `e907433`?
+**INCIERTO**: no se re-ejecutó la capa. La vía es `sh tools/entorno.sh wasm`, que compila el wasm y
+lo corre en el hospedador de Node, sin chromium ni red. (2) `wasm-antes.log` no trae el total de
+pruebas, solo los rojos; el 118/116 es del mensaje de `f64101e` y aquí no se usa como medición.
+
+```sh
+ANDROID_HOME="$HOME/opt/android-sdk" sh tools/entorno.sh jar 34   # ruta del jar que se monta
+sh tools/entorno.sh wasm        # compila el wasm y corre la suite en el hospedador
+grep -n 'MONTAJES\|android-34/android.jar\|aviso: sin android.jar' tools/entorno.sh
+sed -n '86,110p' apkc/sign_hostil_test.go
+sed -n '225,240p' apkc/deps_recursos_test.go
+>>>>>>> 622cd6c (docs(evidencia): registra los montajes del jar y la captura sin tubería (272))
+```
 ## 273. El oráculo javac 17 no escribe `MethodParameters` en las anónimas
 
 Registrado el 2026-11-24 sobre `d0610bf` (corrección `d123135`). Viene del builder
@@ -12730,6 +12789,7 @@ for d in clases-antes clases-despues clases-final javac; do
 done
 stat -c '%s %n' dex-antes.apkc dex-final.apkc dex-javac.apkc apkshare/build/app.apk
 ```
+
 
 ## Fronteras del bloque, sin cerrar
 
