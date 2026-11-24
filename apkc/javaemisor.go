@@ -1799,11 +1799,43 @@ func (ctx *contextoJava) asignableEstricto(desde, hasta string) bool {
 	return false
 }
 
+// interfacesDeLaPropiaEnAsignable es el interruptor de la sonda de las interfaces de una clase
+// propia. Apagado, `superEInterfaces` vuelve a devolver solo el padre —la forma que daba el error
+// literal del usuario sobre `MainActivity.java:99` de ApkShare—; encendido en el binario que se
+// publica. Lo usa la falsificación de `javaemisor_interfaz_anonima_test.go`.
+var interfacesDeLaPropiaEnAsignable = true
+
 // superEInterfaces: el padre y las interfaces de un tipo, venga del fuente o del `android.jar`.
+//
+// Una clase propia devuelve también las interfaces que declara implementar. Sin ellas,
+// `Runnable r = new Runnable() { … }` se leía como un tipo ajeno y el `access$` de escritura del
+// campo rechazaba la asignación con «runnable es Ljava/lang/Runnable; y se le asigna un
+// Lshare/apps/util/MainActivity$4$1;» (ApkShare, `MainActivity.java:99`). Los nombres viajan como
+// se escribieron en el fuente (`Runnable`), así que se resuelven con el alcance de su fichero —el
+// mismo que usa `padreDe`— y no con el del llamador.
 func (ctx *contextoJava) superEInterfaces(interno string) (padre string, interfaces []string, err error) {
 	if propia, ok := ctx.clasePropia(interno); ok {
 		p, err := ctx.padreDe(propia)
-		return p, nil, err
+		if err != nil {
+			return "", nil, err
+		}
+		if !interfacesDeLaPropiaEnAsignable {
+			return p, nil, nil
+		}
+		resolver := func() error {
+			for _, im := range propia.implementa {
+				nombre, e := ctx.tipoAInterno(im)
+				if e != nil {
+					return fmt.Errorf("linea %d: la interfaz %s: %w", propia.linea, im, e)
+				}
+				interfaces = append(interfaces, nombre)
+			}
+			return nil
+		}
+		if e := ctx.enAlcanceDe(propia, resolver); e != nil {
+			return "", nil, e
+		}
+		return p, interfaces, nil
 	}
 	c, err := ctx.busc.claseDelJar(interno)
 	if err != nil {
