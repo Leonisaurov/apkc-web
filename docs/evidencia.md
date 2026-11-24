@@ -10778,3 +10778,366 @@ terminar y no usan `t.Parallel`, así que no queda estado sucio para el test sig
 meta-falsificación son lo único medido en esta entrada, y las tres corridas del frente se citan sin
 repetir. No hay medición de runtime en ART para estas dos ramas: el oráculo es javac 17 más el dex byte
 a byte.
+
+## 245. El condicional promovido no duplica su frontera de unión
+
+Medido el 2026-11-23 sobre `d315a89` (`fix(dex): no duplica la frontera del condicional promovido`). El
+origen es la reconciliación de puntos de unión: un borde de vuelta a una cabecera con **otra altura de
+pila** no tiene plan que igualar, así que `reconciliaAntesDeSaltar` no hace `fijaPila` y lo anota como
+`fronteraUnion` en vez de abortar el método. La forma larga de un condicional —`if-*` promovido a
+`if` invertido más `goto/32`— pasa por esa función **dos veces**, una desde `escribeBranquia` y otra
+desde `salto32`; con una altura distinta la segunda veía la misma llegada y el par (origen, destino)
+quedaba anotado dos veces.
+
+**El arreglo.** `anotaFrontera` (`apkc/dexunion.go:71`) apunta la llegada solo si no está ya: compara la
+estructura entera —`pc`, `destino`, `cabecera` y `borde`—, no solo el par, para no descartar una llegada
+del mismo `pc` a **otro** bloque con otra altura, que sí es un camino distinto. Los dos sitios de
+anotación pasan por ella: `apkc/dexunion.go:314` (la reconciliación del punto de unión) y
+`apkc/dexunion.go:359` (el borde de vuelta). Lo que se escribe en el dex no cambia: la frontera es la
+anotación del camino que conserva su reparto, y con una sola copia describe lo mismo que con dos.
+
+**El test.** `TestElCondicionalLargoNoDuplicaLaFrontera` (`apkc/dexunion_test.go:357`) monta el cuerpo
+mínimo con la cabecera en `pc 3` (canon de un valor) y el borde de vuelta en `pc 7`, que llega con 0 tras
+consumir la comparación, fuerza la promoción del `if_icmplt` con `promover: map[int]byte{7:
+promocionCond32}` —para no montar un método de 32 KB— y exige **una** sola frontera para el par
+`pc 7 -> pc 3`. El commit documenta que antes del arreglo salían dos. La reproducción es la del propio
+test, que no necesita SDK:
+
+```sh
+cd apkc && go test -run TestElCondicionalLargoNoDuplicaLaFrontera -v .
+```
+
+**Fronteras de este `§`.** No se re-ejecutó el test en esta entrada: la medición que se cita es la del
+commit y la que el test deja escrita, no una corrida propia. La deduplicación solo toca la lista de
+fronteras anotadas, y el gate de `§242` corrió sobre un árbol posterior (`912a2c4`) que ya lleva este
+commit. No se midió en ART un caso que dependa de la lista de fronteras: el oráculo es el test unitario
+del traductor.
+
+## 246. El `final` de una declaración local
+
+Medido el 2026-11-23 sobre `9cddc37` (`fix(java): admite final en declaraciones locales`). Lo abrió la
+línea 137 de `MainActivity.java` del zip de ApkShare, `final Dialog dialog = new Dialog(this);`, que
+paraba el `check` con `"final" no es una expresion que este parser reconozca`.
+
+**Por qué se paraba.** En una declaración local el modificador solo lo veía `pareceDeclaracion`, que lo
+saltaba para decidir; el tipo se leía después con `tipoConArgumentos`, que empezaba en la palabra clave
+y no la consumía. El guardia de la sentencia (`apkc/javafuente.go:2270`) tampoco dejaba entrar un
+`final`: solo abrían tipo un identificador o un nombre de tipo, así que la sentencia caía en la ruta de
+la expresión y el parser rechazaba.
+
+**El arreglo.** `tipoArgumento` gana `esFinal` (`apkc/javafuente.go:525`), que consume `final` antes del
+tipo dentro de `tipoConArgumentos` (`:1717`); la sentencia acepta `final` como apertura de tipo y pasa
+`decl.esFinal` al `jdecl` (`:2288`). El `final` **no viaja al descriptor ni a la `Signature`**: `crudo()`
+lo ignora, y `esFinal` solo lo usa la sentencia. El interruptor de la sonda es
+`leeFinalEnDeclaracion` (`apkc/javafuente.go:1652`, encendido en `:1656`).
+
+**El caso verde.** `TestFinalEnDeclaracionLocalContraJavac17` (`apkc/javaemisor_final_local_test.go:70`)
+compila tres declaraciones locales con `final` —un primitivo con inicializador no literal, un
+`ArrayList<>` y un `Dialog` sobre el `this` de la línea 137— y compara `max_stack`/`locals`, la
+LineNumberTable y el dex **byte a byte** con javac 17 `--release 8 -g:lines,source`. Además comprueba en
+los dos `.class` que no hay `LocalVariableTable` ni `LocalVariableTypeTable` (`:104-115`): con
+`-g:lines,source` javac no escribe tabla de variables, así que el `final` no deja huella y la ruta nueva
+tampoco puede inventarla.
+
+**La falsificación.** `TestFinalLocalFalsificacion` (`:149`) apaga `leeFinalEnDeclaracion` sobre un
+fuente que lleva la línea 137 **verbatim** en la línea 137 (`fuenteMainActivityLinea137`, con las de
+relleno como comentarios dentro del método) y con el `Dialog` en la misma unidad, para que el único
+motivo posible de fallo sea el `final`. Devuelve el mensaje literal del usuario:
+
+```
+src/share/apps/util/MainActivity.java: linea 137: "final" no es una expresion que este parser reconozca
+```
+
+**El crítico.** Aprobó sin ningún `CONFIRMADO`: comprobó que `esFinal` no llega al descriptor ni a la
+`Signature`, que no rompe parámetros, campos, el `for` con dos puntos ni los comodines, y que la
+falsificación devuelve el literal. La suite y el gate de este frente los dio la raíz y no se re-ejecutan
+aquí; el gate que lo cubre es el de `§242`, sobre un árbol posterior. El comando de la punta es:
+
+```sh
+cd apkc && go test -run 'TestFinalEnDeclaracionLocalContraJavac17|TestFinalLocalFalsificacion' -v .
+```
+
+**Fronteras de este `§`.** El oráculo es javac 17 más el dex byte a byte: como `final` no deja huella en
+el `.class`, no hay un oráculo de runtime que añada nada. El `final` de un campo y el de un parámetro ya
+los leía el bucle de modificadores y no cambian. Pasar la línea 137 no cierra ApkShare: siguen
+`MainActivity.java:218` y `AppAdapter.java:21/29/33`.
+
+## 247. La firma de `--intercambiar` con tipos de referencia en el proto
+
+Medido el 2026-11-23 sobre `8d25b64` (`fix(preview): parsea firmas con tipos de referencia en el proto`).
+El evento de intercambio se partía buscando el **último** `;` de la firma (`strings.LastIndex(espec,
+";")`), con la idea de que el nombre de la clase no lleva `;` y sus barras de paquete quedan dentro. Con
+un proto que lleva una referencia —`Lcom/hola/Saludo;/suma(Lcom/hola/Saludo;)I`— el último `;` cae
+**dentro del parámetro**, la clase sale truncada y la cola ya no empieza por `/`: la forma con referencia
+no se podía usar.
+
+**El arreglo.** `parteFirmaDeIntercambio` (`apkc/preview.go:490`) parte con la gramática del descriptor
+DEX: exige que la firma empiece por `L`, cierra la clase en su **primer** `;` (`strings.IndexByte`) y lo
+que sigue es o nada —la clase entera—, o `/metodo` sin proto, o `/metodo(proto)retorno`. El proto admite
+referencias y arreglos porque sus `;` y sus `[` vienen después del que cerró la clase; el retorno se
+valida con `esTipoDeRetorno` (`apkc/preview.go:539`). `eventoDeIntercambio` (`apkc/preview.go:459`) solo
+lee el dex y rellena el evento.
+
+**Las tres formas**, con el evento que deja cada una, en `TestLaFirmaDeIntercambioAceptaLasTresFormas`
+(`apkc/previewfirma_test.go:42`): `Lcom/hola/Saludo;` (clase entera), `Lcom/hola/Saludo;/suma` (método
+sin proto) y `Lcom/hola/Saludo;/suma(Lcom/hola/Saludo;)I` (método con proto). El mismo test comprueba que
+`([I[[Lcom/hola/Saludo;)V` se parte sin confundir el troceo y que siete firmas malas se rechazan: sin
+descriptor, descriptor sin `;`, `/` sin método, proto sin nombre, proto sin retorno, retorno que no es
+descriptor y barra fuera del descriptor. `TestLaFirmaConReferenciaEnElProtoIntercambiaElMetodoVivo`
+(`:102`) encadena el parseo real con el swap real: el proto con `;` dentro llega entero a
+`intercambiaMetodo` y el cuerpo nuevo responde sobre el objeto vivo con su campo de antes.
+
+**La falsificación** es el troceo anterior: con `Lcom/hola/Saludo;/suma(Lcom/hola/Saludo;)I` la cola que
+veía el `LastIndex` era `)I` sin el `/` inicial, y el rechazo es el que el frente registró:
+
+```
+tras Lcom/hola/Saludo;/suma(Lcom/hola/Saludo; se esperaba /metodo(proto), no ")I"
+```
+
+**El comando y la suite.** La punta se reproduce con:
+
+```sh
+cd apkc && go test -run 'TestLaFirmaDeIntercambioAceptaLasTresFormas|TestLaFirmaConReferenciaEnElProtoIntercambiaElMetodoVivo' -v .
+```
+
+El constructor dio la suite del árbol en `ok … 103.370s`; no se re-ejecutó aquí.
+
+**Fronteras de este `§`.** Solo se midió el parseo de la firma y su unión con el swap del intérprete: no
+hay gate, chromium ni publicación en esta entrada. El comentario de
+`studio/prueba-navegador.js:522-524` sigue diciendo que el parser corta por el último `;` y usa por eso
+la forma de clase entera; es una nota vieja y la cita buena es este `§` (el código de `studio/` no se
+toca).
+
+## 248. El swap por nombre sin proto, y el proto obligatorio si hay sobrecargas
+
+Medido el 2026-11-23 sobre `7200bc8` (`fix(preview): resuelve por nombre el swap sin proto y exige proto
+si hay sobrecargas`). La forma `clase/metodo` del flag dejaba `Proto` vacío y `metodoDeClase` comparaba
+`descDeProto(ref.proto) != proto` con `proto` vacío, así que **nunca** encontraba el método: el nombre
+solo servía si además se escribía el proto.
+
+**El arreglo.** `metodoDeClase` (`apkc/previewhotswap.go:48`) filtra por nombre y trata el proto como
+opcional. Tres desenlaces: sin candidatos, el error de siempre con el proto pedido; con **más de uno**,
+rechazo que enumera los protos vistos y pide el completo —`… pide el proto completo, como
+Saludo.valor()I`, con `strings.Join` de los descriptores—; con uno solo, se toma ese y el
+`metodoDalvik` lleva el `descDeProto(ref.proto)` **resuelto**, no el vacío del flag. Con el proto ya
+resuelto, la clave `nombre+proto` del intérprete (`apkc/previewinterprete.go:2700`) encuentra el método
+y el `invoke` del programa vivo se engancha al cuerpo nuevo.
+
+**La resolución por nombre.** `TestLaFirmaSinProtoResuelvePorNombre` (`apkc/previewfirma_test.go:193`)
+deja `valor()` en 102 tras dos `sube()`, intercambia con `Lcom/hola/Saludo;/valor` —sin proto— y
+comprueba que el resultado **dice** `()I` y que el programa responde 202: el nombre resolvió y el cuerpo
+nuevo se ejecutó sobre el mismo objeto, con su `n`.
+
+**El rechazo con sobrecargas.** `TestLaFirmaSinProtoConSobrecargasPideElProto` (`:267`) usa una clase con
+`valor()` y `valor(int)`: el swap sin proto falla y el mensaje lleva `sobrecargado`, `()I`, `(I)I` y
+`proto completo`; la sesión **no se toca** —`valor()` sigue en 100— y con `Lcom/hola/Saludo;/valor()I` el
+mismo dex entra y deja 200. Que el rechazo no tape un fallo de lectura es la segunda mitad del test.
+
+**El estado.** Cinco tests en verde, `ok … 0.070s`, y la suite del árbol en `ok … 120.206s`, ambas dadas
+por el constructor; el crítico lo aprobó formalmente. La punta se reproduce con las cuatro pruebas de
+firma, que comparten fichero:
+
+```sh
+cd apkc && go test -run 'TestLaFirmaDeIntercambioAceptaLasTresFormas|TestLaFirmaConReferenciaEnElProtoIntercambiaElMetodoVivo|TestLaFirmaSinProtoResuelvePorNombre|TestLaFirmaSinProtoConSobrecargasPideElProto' -v .
+```
+
+**Fronteras de este `§`.** La resolución por nombre es del dex **nuevo** del swap: no cambia la forma de
+intercambiar la clase entera ni el `--intercambiar` con proto, que ya iban por su ruta. No se re-ejecutó
+nada aquí, no hubo gate ni chromium, y el runtime medido es el intérprete del `preview`, no ART.
+
+## 249. La interfaz del intercambio de métodos en el emulador
+
+Medido el 2026-11-23 sobre `9a61a23` (`chore(studio): cierre del intercambio de metodos en el emulador`),
+puntero a los dos commits del submódulo `3d79170` (`feat(emulador): interfaz para intercambiar metodos
+con un dex`) y `36044e8` (`fix(emulador): registra el fallo del swap y serializa los drops`). Es la capa
+de UI del hot swap; el comando (`--intercambiar`) y su parser son `§247` y `§248`.
+
+**Lo que añade la interfaz.** Un campo de firma y un botón por panel —`previa-intercambio-firma` y
+`previa-intercambiar`, con sus gemelos `vista-intercambio-firma` y `vista-intercambiar`— más el arrastre
+de un `.dex`, que se reconoce por la extensión o por el tipo (`esArchivoDex`, porque en Linux llega como
+`application/octet-stream`) y se guarda en una zona aislada con un fichero por swap
+(`RUTA_DEX_SOLTADO = "/previa-soltada/intercambio-"`), para que el guion, que se repite entero en cada
+invocación, no lea el dex nuevo en los pasos viejos.
+
+**Las puertas antes del intérprete.** `motivoFirmaInvalida` exige el descriptor de la clase y deja el
+método como opcional, que es la forma legítima de cambiar la clase entera. `motivoDexInvalido` rechaza
+el fichero vacío, el que no empieza por el mágico `dex\n`, el que no llega a la cabecera de 112 bytes, el
+que declara una versión que no tiene la forma `0dd` y el que declara más bytes que el fichero; un dex que
+pasa el mágico pero está roto por dentro lo rechaza después el propio `preview`, que nombra el defecto.
+
+**El registro.** `textoDeIntercambio` (`studio/previa-panel.js:632`) pinta
+`clase/metodo/proto · existía: sí|no`, con los cuatro datos que publica `ejecucion.intercambios`; un
+objeto sin clase ni método no se pinta. Ese `existía` es lo que distingue «reemplacé el cuerpo» de
+«añadí un método».
+
+**Los dos defectos que cerró `36044e8`.** La guarda del doble drop se toma **antes** de ejecutar, no
+dentro de `ejecutaGuion`, así que dos drops seguidos no se pisan el fichero ni el guion; y el `catch`
+del transporte llama a `alFallar`, que deja en el registro y en la línea del emulador
+`no se intercambió <nombre>: <motivo>` en vez de quedarse en un error mudo.
+
+**La evidencia de la pestaña.** `studio/prueba-navegador.js:525-578` conduce el bloque del swap sobre la
+pestaña: presencia de los tres controles, el evento `intercambiar` con su firma dentro del guion, la
+ruta `/previa-soltada/intercambio-\d+\.dex` y el registro con clase, método, proto y `existía`
+(`:876-883`); y `:893-911` cubre el dex roto, el doble drop y el transporte caído con sus mensajes. El
+crítico aprobó con el bloque swap ejecutado sobre wasm real. Este `§` no corrió chromium ni el gate.
+
+**Fronteras de este `§`.** Es una medición de UI sobre el guion del intérprete, no del compilador: un
+swap que el intérprete rechace por el cuerpo sale por el mismo registro, y no hay medición de ART. La
+nota de `studio/prueba-navegador.js:522-524`, que atribuye al parser el corte por el último `;`, quedó
+vieja tras `§247`; el código no se toca.
+
+## 250. Las condiciones cerradas del main-dex pre-21
+
+Medido el 2026-11-23 sobre `b805733` (`test(build): mide el camino d8 pre-21 y el arrastre de la lambda
+al dex primario`). Cierra las dos condiciones de bytes que el frente de dependencias dejó abiertas: que
+el dex primario lleve las clases fijas **también** cuando el dexado lo hace `javac` + `d8` con
+`minSdkVersion` 19, y que la clase sintética de una lambda viaje con su dueña cuando la dueña está fija.
+El arranque real en un Dalvik de API ≤ 20, el AAR de `androidx.multidex` y
+`Application.attachBaseContext` siguen fuera.
+
+**El camino javac + d8.** `TestCompilaAppPre21PorD8FijaElDexPrimario`
+(`apkc/maindex_pre21_test.go:383`) monta el proyecto con `minSdkVersion="19"`, 70 clases de 1000
+métodos en `jar/a-grande.jar` y el cargador en `jar/z-multidex.jar` —el nombre del jar decide el orden,
+y el cargador va detrás para que la falsificación se vea—, compila por el camino por defecto y comprueba
+que `build/maindex.pro` lleva las dos reglas `-keep class grande.Arranque { *; }` y
+`-keep class androidx.multidex.MultiDex { *; }`; que `classes.dex` tiene las dos fijas y **no** tiene
+`Lgrande/C0;`; que `classes2.dex` lleva el resto; y que `dexdump -f` lee los dos ficheros y ve en cada
+uno lo que debe. La corrida del constructor dejó **8 clases en `classes.dex` y 65 en `classes2.dex`**
+(es la cifra del `t.Logf` de `:494`; el test no fija cuántas son, solo su pertenencia).
+
+**El arrastre de la lambda.** `arrastraLambdasDeFijas` (`apkc/reparto.go:189`, leído en `:198`) mete la
+sintética de una clase fija en el dex primario. `TestRepartoArrastraLaLambdaDeSuClaseFija`
+(`apkc/maindex_pre21_test.go:32`) comprueba con el arrastre encendido que
+`Lcom/hola/Arranque$$Lambda$1;` encabeza el primer dex junto a su dueña, y con el interruptor apagado
+—restaurado por `t.Cleanup`— que la sintética cae en `classes2.dex` mientras la dueña sigue en
+`classes.dex`: la falsificación falla si el arrastre no hace nada. `TestRepartoFijaClasesEnElDexPrimario`
+(`:77`) hace lo mismo con las fijas en el reparto puro y `TestRepartoFijasQueNoCabenEsUnRechazo`
+(`:139`) cubre el caso en que las fijas no caben en el techo de 65 536 referencias.
+
+**El estado.** El crítico aprobó. La punta, con SDK y los oráculos, se reproduce en:
+
+```sh
+cd apkc && ANDROID_HOME=/home/leonisauro/opt/android-sdk \
+  go test -run 'TestRepartoArrastraLaLambdaDeSuClaseFija|TestRepartoFijaClasesEnElDexPrimario|TestRepartoFijasQueNoCabenEsUnRechazo|TestCompilaAppPre21FijaElDexPrimario|TestCompilaAppPre21PorD8FijaElDexPrimario' -v .
+```
+
+**Fronteras de este `§`.** No se corrió aquí ni el test ni el gate: las cifras 8/65 y el `ok` son del
+constructor. El oráculo es de **bytes** (`dexdump`, `apksigner`, `zipalign`), no de ejecución: no hay
+dispositivo API ≤ 20 donde arrancar la app, y sin el AAR de `androidx.multidex` el cargador que abre
+`classes2.dex` no está en el árbol.
+
+## 251. La lambda de un parámetro en la fuente
+
+Medido el 2026-11-23 sobre `0ee8200` (`fix(java): admite lambdas de un parametro en la fuente`) y
+`d0a0492` (`fix(java): numera por clase los implementadores de lambda`). Lo abrió la línea 156 de
+`MainActivity.java` del zip de ApkShare, `ApkAdapter adapter = new ApkAdapter(this, apks, apk ->
+shareApp(apk));`, que paraba el `check` con `linea 156: ">" no es una expresion que este parser
+reconozca`: el `->` no existía como símbolo y la lambda no era una expresión.
+
+**La lambda, sin tipo en la expresión.** El tipo funcional no viaja en la expresión: lo pone el
+parámetro formal de la llamada (JLS 15.27.3), así que con una lambda en los argumentos la sobrecarga del
+constructor se elige mirando la declaración del fuente —`Consumer<Apk>`, con su `Signature`— y no un
+descriptor de la expresión. Se escribe el implementador `lambda$metodo$N` (privado y sintético, de
+instancia con `REF_invokeSpecial` cuando captura `this`), un `invokedynamic` con
+`LambdaMetafactory.metafactory` que `lambda.go` ya desugra al dex, y el análisis de marcos del emisor
+aprende el efecto del `0xba`. El cuerpo nuevo vive en `apkc/lambda_fuente.go`.
+
+**El oráculo de la 156.** `TestLambdaDeUnParametroContraJavac17`
+(`apkc/javaemisor_lambda_fuente_test.go:93`) compara con javac 17 `--release 8 -g:lines,source` los
+métodos, `max_stack`/`locals` y la LineNumberTable, y el dex **byte a byte**; comprueba que el
+implementador es `lambda$openAppDetailsDialog$0` con descriptor `(Lshare/apps/util/Apk;)V`, flags
+`0x1002` y una sola fila de `BootstrapMethods`. El `t.Logf` de `:140` deja el tamaño del dex de la
+clase en **2 116 B** en las dos partes, que es la cifra que reportó el frente.
+
+**El contador es de la clase.** Dos sobrecargas del mismo nombre con una lambda cada una escribían dos
+`method_info` idénticos `lambda$f$0(Ljava/lang/Object;)V`, un ClassFile inválido; lo destapó el crítico
+con su propia sonda (`TestCriticoColisionImplementadoresLambda`, que no está en el árbol). La causa era
+que `preparaMetodo` reiniciaba `lambdaN` en cada método: ahora el contador vive toda la emisión de la
+clase (`apkc/javaemisor.go:2184`, con el porqué en `:2176`) y javac numera igual —con `f(int)`,
+`f(String)` y `g(int)` escribe `lambda$f$0`, `lambda$f$1` y `lambda$g$2`, medido con `javap -p`—. El
+dex seguía sin coincidir por cuatro bytes y no era el contador: javac escribe los implementadores en el
+orden **inverso** al que los crea y el dex copia el orden del ClassFile, así que se emiten en ese orden
+(`apkc/javaemisor.go:7255`) y el dex de las dos sobrecargas sale idéntico a javac 17, checksum y firma
+incluidos.
+
+**La vuelta que faltaba al comparador.** `comparaMetodos` solo iteraba los métodos de javac, así que un
+implementador sobrante pasaba callado; ahora un método que escribimos y javac no es un fallo
+(`apkc/javaemisor_generico_test.go:231`) y `TestComparaMetodosVeUnMetodoDeMas` (`:240`) lo falsifica
+quitándole un método al de javac. `TestDosSobrecargasNoCompartenImplementadorDeLambda`
+(`apkc/javaemisor_lambda_fuente_test.go:180`) exige además que no haya `nombre+descriptor` repetido y
+que salgan los dos `lambda$f$0`/`lambda$f$1`.
+
+**El estado.** El crítico rechazó primero y aprobó después de cerrar dos `CONFIRMADO`. La punta:
+
+```sh
+cd apkc && go test -run 'TestLambdaDeUnParametroContraJavac17|TestDosSobrecargasNoCompartenImplementadorDeLambda|TestLaLambdaDelFuenteSeDesugra|TestLaLambdaConBloqueSeRechaza|TestComparaMetodosVeUnMetodoDeMas' -v .
+```
+
+**Fronteras de este `§`.** Capturar una local, la lambda con cuerpo de bloque y la lambda anidada se
+rechazan **por nombre** (`TestLaLambdaConBloqueSeRechaza`, `:283`); cómo se mezclan los implementadores
+con los `access$` de una anónima en la misma clase no está medido —hoy salen detrás—, y el frente
+comprobó que un fuente con `access$` difiere igual sin lambda, así que no hay defecto atribuible. No se
+re-ejecutó nada aquí ni hubo gate. ApkShare pasó la 156 y se paró en la 187, que abre `§252`.
+
+## 252. La asignación como expresión, y la declaración sin inicializador
+
+Medido el 2026-11-23 sobre `91657b4` (`fix(java): admite asignaciones como expresion`) y `0936c32`
+(`test(java): mide la asignación anidada y la ancha contra javac`). Lo abrió la línea 187 de
+`MainActivity.java`, `while ((length = in.read(buffer)) > 0)`, que paraba el `check` con `linea 187: se
+esperaba ")" y hay "="`. Es una asignación como expresión (JLS 15.26.1), el operador de menor precedencia
+y asociativo a la derecha.
+
+**El nodo y el emisor.** `jasignExp` (`apkc/javafuente.go:212-223`) guarda destino, valor y posición; el
+`=` se lee en `expresion()` después del operando izquierdo, que tiene que ser un acceso o un índice. En
+la sentencia y en el paso del `for` el nodo se baja al `jasign` de siempre para no dejar el valor en la
+pila, así que lo ya medido no cambia. `asignacionValor` (`apkc/javaemisor.go:5909`) escribe el valor, lo
+duplica —`dup`, o `dup2` en un ancho— y lo guarda con `guardaDe` (`:2512`), que es lo que hace javac:
+`aload_1; aload_2; invokevirtual read([B)I; dup; istore 4; iconst_0; if_icmple`. Sobre un campo o un
+elemento de arreglo se rechaza por nombre, porque el duplicado pide `dup_x1`/`dup_x2` con el receptor
+debajo. De paso, una declaración sin inicializador ya no marca fila en la LineNumberTable: `int length;`
+no escribe un byte y javac no le pone entrada.
+
+**El anidamiento y el ancho.** `0936c32` cerró las dos condiciones que faltaban. `a = b = c` anida por la
+misma ruta y el emisor duplica dos veces el mismo valor (`dup; istore b; dup; istore a`), con el dex
+entero byte a byte contra javac 17 (`TestAsignacionAnidadaEnCondicionContraJavac17`,
+`apkc/javaemisor_asignacion_valor_test.go:136`). `long x; while ((x = f()) > 0)` lleva `dup2` y `lstore`
+y `lcmp` antes de la branquia; para elegir ese camino ancho antes de emitir hacía falta el tipo del
+operando, y se añadió `tipoPrevisto` para `jasignExp` (`apkc/javaemisor.go:4775` y la rama en `:4837`),
+que devuelve el descriptor del local —sin él el caso se rechazaba con «solo se midieron enteros»— y el
+dex sale también byte a byte (`:182`).
+
+**El caso del zip.** `TestAsignacionComoValorContraJavac17` (`:91`) compila una copia mínima con la línea
+187 y compara; `TestCopiaDelBloqueDeLaLinea187` (`:210`) compara el bloque con su `try`/`catch`
+instrucción a instrucción —opcode a opcode, sin los índices del pool— porque ese dex ya traía 12 bytes de
+más en el primer `annotations_directory_item` antes de este cambio, y un control sin asignación en la
+condición mide los mismos 12. `TestAsignacionComoValorSoloLocal` (`:310`) fija el rechazo del destino que
+no es local.
+
+**La falsificación y el avance.** Con la ruta de `expresion()` apagada en una copia y el binario fuera del
+repo, el árbol integrado devuelve el error literal del usuario, `linea 187: se esperaba ")" y hay "="`;
+sin apagar nada, ApkShare pasa la 187 y se para en `linea 218: se esperaba ";" y hay "builder"`
+(`AlertDialog.Builder builder = ...`). El crítico aprobó.
+
+```sh
+cd apkc && go test -run 'TestAsignacionComoValorContraJavac17|TestAsignacionAnidadaEnCondicionContraJavac17|TestAsignacionAnchaComoValorContraJavac17|TestCopiaDelBloqueDeLaLinea187|TestAsignacionComoValorSoloLocal' -v .
+```
+
+**Fronteras de este `§`.** La asignación como valor sobre un campo o un elemento de arreglo está
+**rechazada por nombre**, no medida: falta el `dup_x1`/`dup2_x1` con el receptor debajo. No se re-ejecutó
+nada aquí, no hubo gate ni chromium, y el oráculo es javac 17 más el dex byte a byte (o instrucción a
+instrucción en el bloque del zip).
+
+## Fronteras del bloque, sin cerrar
+
+Ninguna de estas cinco se cierra en `§245`-`§252`; se dejan escritas para que no se reabran por analogía:
+
+1. **ApkShare no compila entero.** Pasa la 187 y se para en `MainActivity.java:218`; quedan
+   `AppAdapter.java:21/29/33`.
+2. **Asignación como valor sobre campo o arreglo**, rechazada por nombre, pendiente del
+   `dup_x1`/`dup2_x1` (y del `dup_x2` del elemento).
+3. **`access$` más lambda en la misma clase** no está medido; el fuente con `access$` difiere igual sin
+   lambda, así que no hay defecto atribuible todavía.
+4. **Dependencias y runtime viejo:** el AAR de `androidx.multidex`, `Application.attachBaseContext` y un
+   Dalvik de API ≤ 20 donde arrancar; hoy el oráculo es el contrato de bytes.
+5. **CI remoto y publicación:** los commits nuevos no se empujaron y `apkc-studio.surge.sh` no se
+   actualizó; las Actions fijadas por SHA no se miden sin red.
