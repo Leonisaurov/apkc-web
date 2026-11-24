@@ -49,6 +49,7 @@ const accMandated = 0x8000
 const (
 	opAconstNull = 0x01
 	opLdc        = 0x12
+	opLdcW       = 0x13
 	opPop        = 0x57
 	opPop2       = 0x58
 	opDup        = 0x59
@@ -2414,8 +2415,9 @@ type emisor struct {
 	prof    int
 	maxProf int
 	maxLoc  int
-	// truncado avisa que un indice del pool no cabia en el byte de un `ldc`: el fichero ya no es correcto y
-	// el metodo se rechaza por nombre en vez de escribir un operando roto.
+	// truncado avisa que un indice del pool no cupo donde se escribio: el `ldc` corto con el
+	// interruptor `ldcSinFormaLarga`, o un pool que ni en los dos bytes de `ldc_w` cabe. El fichero ya
+	// no es correcto y el metodo se rechaza por nombre en vez de escribir un operando roto.
 	truncado bool
 
 	// las branquias dejan el operando en blanco y lo rellenan al cerrar la etiqueta: el desplazamiento
@@ -2988,10 +2990,25 @@ func (e *emisor) cargaConstante(c constNum) {
 	}
 }
 
-// ldc: `ldc` lleva el indice en un byte; a partir de 256 javac usa `ldc_w`. Un fichero de la pagina no
-// llega, y si lo hiciera es mejor nombrarlo que escribir el indice truncado.
+// ldcSinFormaLarga es el interruptor de la falsificación del `ldc_w`. Apagado (el binario que se
+// publica), el índice del pool decide la forma: hasta 255 `ldc` (0x12) y a partir de 256 `ldc_w`
+// (0x13). Encendido, todo sale por `ldc` corto y el método se rechaza con «pasa de 255 entradas»,
+// que es la regresión que se quiere poder ver. Lo usa `javaemisor_ldcw_escritor_test.go`.
+var ldcSinFormaLarga = false
+
+// ldc: carga una constante del pool con la forma que le toca por su índice. `ldc` (0x12) lleva el
+// índice en un byte y llega hasta 255; a partir de 256 javac escribe `ldc_w` (0x13), con dos bytes
+// (JVMS 6.5), y la instrucción crece uno. El índice ya es definitivo al emitir porque el pool solo
+// crece por el final: ninguna entrada escrita se mueve. El byte de más corre las posiciones que se
+// anotan después —filas de línea, etiquetas, `exception_table`—, y todas se toman de `len(e.codigo)`
+// en el momento de emitir, así que quedan solas; los saltos se resuelven luego en `resuelveSaltos`.
+// Un índice de más de 65535 tampoco cabe en `ldc_w`, y ahí el método se rechaza por nombre.
 func (e *emisor) ldc(idx int) {
 	if idx > 255 {
+		if idx <= 0xffff && !ldcSinFormaLarga {
+			e.emite(opLdcW, byte(idx>>8), byte(idx))
+			return
+		}
 		e.truncado = true
 		e.emite(opLdc, 0)
 		return
@@ -9607,7 +9624,7 @@ func (e *emisor) metodoDeClassFile(m jmetodo) ([]byte, error) {
 		return nil, fmt.Errorf("linea %d: quedan %d valores en la pila al cerrar el metodo, y eso no lo produce javac", m.linea, e.prof)
 	}
 	if e.truncado {
-		return nil, fmt.Errorf("linea %d: el pool de %s pasa de 255 entradas y `ldc_w` no esta medido en este emisor", m.linea, e.interno)
+		return nil, fmt.Errorf("linea %d: el pool de %s pasa de 255 entradas y el indice no cabe en el `ldc` que se escribio", m.linea, e.interno)
 	}
 	acc := e.flagsDeMetodo(m)
 	codigo, err := e.codeAttr()
