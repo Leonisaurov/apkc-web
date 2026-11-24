@@ -13488,10 +13488,11 @@ grep -n 'pendiente func' apkc/lambda.go
 
 ## 283. Los oráculos que exigen javac 17 salen del binario de la pestaña por build tag
 
-Registrado el 2026-11-24 sobre `af7686b` (el commit del builder es `7cb559b`). La crítica de este
-frente sigue en curso: aquí se deja lo medido, **no** un veredicto de aprobado. El cambio no toca el
-emisor: mueve once pruebas que lanzan `javac` a ficheros con `//go:build !js`, para que la capa wasm
-deje de contar como fallo lo que en la pestaña no puede existir —no hay proceso que lanzar—.
+Registrado el 2026-11-24 sobre `af7686b` (el commit del builder es `7cb559b`). La crítica
+`ses_df25516b9ffeypRdvNY7sfyIXB` aprobó `af7686b` sin hallazgos, así que este `§` deja el veredicto
+**APROBAR**. El cambio no toca el emisor: mueve once pruebas que lanzan `javac` a ficheros con
+`//go:build !js`, para que la capa wasm deje de contar como fallo lo que en la pestaña no puede
+existir —no hay proceso que lanzar—.
 
 **Los once, y dónde viven.** `TestNewDeOtraClaseContraJavac17`, `TestNewConTipoDeJar` y
 `TestHerenciaDeOtraClaseSubePorSuPadre` en `apkc/javaemisor_alcance_paridad_test.go:21`, `:134` y
@@ -13522,23 +13523,26 @@ haber medido nada»— se cumple con tag, no con `Skip`.
 **`javac17Exigido` no se mueve.** Sigue en `apkc/dependencias_test.go:41`, sin tag: lo usan los
 ficheros sin tag, y moverlo rompía el build wasm con `undefined: javac17Exigido`.
 
-**Medición transferida del builder, no re-ejecutada aquí.** La capa wasm pasa de 15 a **4**
-`--- FAIL` sin aborto; dos de esos cuatro son los `Dedupe` que `50952c0` ya corrigió (`§280` C), así
-que sobre este `HEAD` la cuenta esperada es **2**, ambos `multidex` y por la re-ejecución del propio
-binario (`exec.Command(os.Args[0])`, `apkc/multidex_app_test.go:386`):
-`TestCompilaAppPre21ConDemasiadasClasesAborta` (`:401`) y
-`TestCompilaAppSinUsesSdkConDemasiadasClasesAborta` (`:429`). La suite nativa da `ok … 177.340s` con
-los once movidos corriendo y pasando. **Ese recuento final queda pendiente de la crítica: no se
-declara cerrado aquí**, y en esta sesión no se re-ejecutaron ni la suite ni la capa wasm.
+**Veredicto de la crítica: APROBAR, con su medición.** Cero aserciones relajadas: la comparación
+línea a línea de los ocho pares de ficheros —cada `*_paridad_test.go` con su gemelo sin tag— da
+`FALTAN 0`. La suite nativa sale `ok … 183.986s`, con `javac17Exigido` fallando por `t.Fatalf` y no
+por `t.Skip`. Y la capa wasm se ejecutó entera hasta el final: **2 `--- FAIL` de nivel superior**,
+`TestCompilaAppPre21ConDemasiadasClasesAborta` (`apkc/multidex_app_test.go:401`) y
+`TestCompilaAppSinUsesSdkConDemasiadasClasesAborta` (`:429`), los dos por la re-ejecución del propio
+binario (`exec.Command(os.Args[0])`, `:386`), y **sin** javac, sin dedupe y sin aborto. Son cifras
+de la crítica, no re-ejecutadas en esta sesión.
 
-**Lo medido aquí.** `GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .` sale `rc=0`, y `gofmt -l` sobre los
-dieciséis ficheros del cambio no lista ninguno; `git diff --check` queda limpio.
+**Lo medido aquí.** `GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .` y `go vet .` salen `rc=0`;
+`git diff --check af7686b^ af7686b` queda limpio; y `gofmt -l` sobre los dieciséis ficheros del
+commit no lista ninguno. El único `gofmt` sucio del paquete,
+`javaemisor_constantvalue_long_test.go`, es deuda previa y no entra en el commit:
+`git diff --name-only 7cb559b^ 7cb559b` no lo nombra.
 
-**Deuda declarada, no cerrada.** `TestReceptorHeredadoEnAnonimaContraJavac17`
-(`apkc/javaemisor_receptor_heredado_test.go:83`) y otros ficheros (`comodin`, `cadena_estatica`,
-`lambda_fuente`, `estatica_cualificada`) siguen llamando a `javac17(t)`
-(`apkc/javaemisor_argumento_estatico_test.go:57`), que **se salta en silencio** en wasm. No estaban
-en este encargo, los trata otro frente y no se dan por cerrados.
+**Deuda preexistente, no regresión.** `TestReceptorHeredadoEnAnonimaContraJavac17` llama a
+`javac17(t)` en `apkc/javaemisor_receptor_heredado_test.go:85` (la prueba abre en `:83`), y otros
+ficheros (`comodin`, `cadena_estatica`, `lambda_fuente`, `estatica_cualificada`) hacen lo mismo
+(`apkc/javaemisor_argumento_estatico_test.go:57`), que **se salta en silencio** en wasm. Ya estaba
+antes de este commit, lo trata otro frente y no se da por cerrado aquí.
 
 ```sh
 # los ocho ficheros con tag, y la cuenta de saltos nuevos: la segunda línea debe dar 0
@@ -13553,9 +13557,20 @@ grep -n 'func javac17Exigido' apkc/dependencias_test.go
 ```
 
 ```sh
-# lo medido en esta sesión: vet de wasm en verde y ningún fichero del cambio sin formatear
-cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .
-cd .. && git diff --name-only 7cb559b^ 7cb559b -- 'apkc/*_test.go' | xargs gofmt -l
+# el veredicto de la crítica, por capas (JAVAC17 apuntando al javac 17)
+JAVAC17=/ruta/al/javac17 tcr -- sh tools/entorno.sh test   # ok … 183.986s
+tcr -- sh tools/entorno.sh wasm                            # 2 --- FAIL, ambos multidex
+```
+
+```sh
+# lo medido en esta sesión: los dos vet en verde, el diff del commit limpio y gofmt
+cd apkc
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go vet .
+go vet .
+gofmt -l javaemisor_constantvalue_long_test.go   # deuda previa, fuera del commit
+cd ..
+git diff --check af7686b^ af7686b
+git diff --name-only 7cb559b^ 7cb559b -- 'apkc/*_test.go' | xargs gofmt -l   # sin nombres
 ```
 
 ## Fronteras del bloque, sin cerrar
