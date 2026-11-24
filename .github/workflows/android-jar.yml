@@ -28,7 +28,7 @@ jobs:
         with:
           go-version: '1.27.4'
 
-      - name: Descargar las fuentes Apache-2.0 de AOSP
+      - name: Descargar las fuentes y los avisos Apache-2.0 de AOSP
         env:
           AOSP_TAG: android-14.0.0_r75
         run: |
@@ -42,8 +42,15 @@ jobs:
             curl -fsSL "$base/frameworks/base/+/refs/tags/$AOSP_TAG/core/res/res/values/$f?format=TEXT" \
               | base64 -d > "$RUNNER_TEMP/aosp/$f"
           done
+          # Los tres avisos se guardan con nombre propio: frameworks/base,
+          # libcore y core/res aportan su atribución por separado y no se
+          # mezclan en un único NOTICE. Todos entran en SHA256SUMS.
           curl -fsSL "$base/frameworks/base/+/refs/tags/$AOSP_TAG/NOTICE?format=TEXT" \
-            | base64 -d > "$RUNNER_TEMP/aosp/NOTICE"
+            | base64 -d > "$RUNNER_TEMP/aosp/NOTICE-frameworks-base"
+          curl -fsSL "$base/libcore/+/refs/tags/$AOSP_TAG/NOTICE?format=TEXT" \
+            | base64 -d > "$RUNNER_TEMP/aosp/NOTICE-libcore"
+          curl -fsSL "$base/frameworks/base/+/refs/tags/$AOSP_TAG/core/res/NOTICE?format=TEXT" \
+            | base64 -d > "$RUNNER_TEMP/aosp/NOTICE-core-res"
           curl -fsSL 'https://www.apache.org/licenses/LICENSE-2.0.txt' \
             -o "$RUNNER_TEMP/aosp/LICENSE"
           sha256sum "$RUNNER_TEMP"/aosp/* | tee "$RUNNER_TEMP/aosp/SHA256SUMS"
@@ -75,15 +82,20 @@ jobs:
           go -C tools/androidjar run . \
             -in "$RUNNER_TEMP/aosp" -out "$OUT/full" -api 34 \
             -tag "${{ env.AOSP_TAG || 'android-14.0.0_r75' }}" \
-            -notice "$RUNNER_TEMP/aosp/NOTICE" -license "$RUNNER_TEMP/aosp/LICENSE"
+            -notice "$RUNNER_TEMP/aosp/NOTICE-frameworks-base" -license "$RUNNER_TEMP/aosp/LICENSE"
           go -C tools/androidjar run . \
             -in "$RUNNER_TEMP/aosp" -out "$OUT/min" -api 34 \
             -tag "${{ env.AOSP_TAG || 'android-14.0.0_r75' }}" \
-            -notice "$RUNNER_TEMP/aosp/NOTICE" -license "$RUNNER_TEMP/aosp/LICENSE" \
+            -notice "$RUNNER_TEMP/aosp/NOTICE-frameworks-base" -license "$RUNNER_TEMP/aosp/LICENSE" \
             -only "$ONLY"
           cp "$OUT/full/android-stub-34.jar" "$OUT/android-stub-34-full.jar"
           cp "$OUT/min/android-stub-34.jar" "$OUT/android-stub-34-min.jar"
-          cp "$RUNNER_TEMP/aosp/NOTICE" "$RUNNER_TEMP/aosp/LICENSE" "$OUT/"
+          # Los tres avisos viajan en el artifact junto a los PROCEDENCIA.md
+          # que escribe el generador en full/ y min/ (main.go:104-106).
+          cp "$RUNNER_TEMP/aosp/NOTICE-frameworks-base" \
+            "$RUNNER_TEMP/aosp/NOTICE-libcore" \
+            "$RUNNER_TEMP/aosp/NOTICE-core-res" \
+            "$RUNNER_TEMP/aosp/LICENSE" "$OUT/"
           sha256sum "$OUT"/*.jar | tee "$OUT/SHA256SUMS"
 
       - name: Resumen con el SHA-256
@@ -126,6 +138,8 @@ jobs:
           yes | "$SDKM" --licenses >/dev/null 2>&1 || true
           "$SDKM" --install 'platforms;android-34' >/dev/null
           test -f "$ANDROID_HOME/platforms/android-34/android.jar"
+          # apksigner del oráculo: las build-tools no las instala la platform.
+          "$SDKM" --install 'build-tools;34.0.0' >/dev/null
 
       - uses: actions/download-artifact@v4  # TODO(sha): requiere red; gh api repos/actions/download-artifact/git/ref/tags/v4 --jq .object.sha
         with:
@@ -149,28 +163,36 @@ jobs:
             -alias androiddebugkey -keyalg RSA -validity 10000 \
             -dname 'CN=Android Debug,O=Android,C=US'
 
-      - name: Construir la referencia con la SDK y el jar generado
+      - name: Construir la referencia con la SDK y los dos jars generados
         working-directory: ${{ runner.temp }}/proj
         run: |
           SDK_JAR="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/platforms/android-34/android.jar"
-          JAR="$GITHUB_WORKSPACE/dist/android-stub-34-min.jar"
+          MIN="$GITHUB_WORKSPACE/dist/android-stub-34-min.jar"
+          FULL="$GITHUB_WORKSPACE/dist/android-stub-34-full.jar"
           "$RUNNER_TEMP/apkc" build --linker go --compiler go \
             --android-jar "$SDK_JAR" --sdk-version 34 --codename 14 \
             --keystore "$HOME/.android/debug.keystore"
           cp "$RUNNER_TEMP/proj/build/classes.dex" "$RUNNER_TEMP/sdk.dex"
           cp "$RUNNER_TEMP/proj/build/resources.arsc" "$RUNNER_TEMP/sdk.arsc"
 
-          "$RUNNER_TEMP/apkc" compile --android-jar "$JAR" \
-            -o "$RUNNER_TEMP/out-min" src
           "$RUNNER_TEMP/apkc" compile --android-jar "$SDK_JAR" \
             -o "$RUNNER_TEMP/out-sdk" src
-          diff -r "$RUNNER_TEMP/out-min" "$RUNNER_TEMP/out-sdk"
 
-          "$RUNNER_TEMP/apkc" build --linker go --compiler go \
-            --android-jar "$JAR" --sdk-version 34 --codename 14 \
-            --keystore "$HOME/.android/debug.keystore"
-          cmp "$RUNNER_TEMP/sdk.dex" "$RUNNER_TEMP/proj/build/classes.dex"
-          cmp "$RUNNER_TEMP/sdk.arsc" "$RUNNER_TEMP/proj/build/resources.arsc"
+          # El jar mínimo y el completo deben dejar los mismos .class, el
+          # mismo classes.dex y el mismo resources.arsc que la SDK.
+          for par in "min:$MIN" "full:$FULL"; do
+            nombre="${par%%:*}"
+            jar="${par#*:}"
+            "$RUNNER_TEMP/apkc" compile --android-jar "$jar" \
+              -o "$RUNNER_TEMP/out-$nombre" src
+            diff -r "$RUNNER_TEMP/out-$nombre" "$RUNNER_TEMP/out-sdk"
+
+            "$RUNNER_TEMP/apkc" build --linker go --compiler go \
+              --android-jar "$jar" --sdk-version 34 --codename 14 \
+              --keystore "$HOME/.android/debug.keystore"
+            cmp "$RUNNER_TEMP/sdk.dex" "$RUNNER_TEMP/proj/build/classes.dex"
+            cmp "$RUNNER_TEMP/sdk.arsc" "$RUNNER_TEMP/proj/build/resources.arsc"
+          done
 
       - name: TestMarco con el jar generado
         run: |
@@ -179,11 +201,27 @@ jobs:
             "$RUNNER_TEMP/fakehome/Android/platforms/android-34/android.jar"
           HOME="$RUNNER_TEMP/fakehome" go -C apkc test -count=1 -run TestMarco -v .
 
-      - name: Comprobar que no viaja nada de la SDK
+      - name: Auditoría del jar completo y de la firma del APK
         run: |
-          if unzip -l dist/android-stub-34-full.jar | grep -qE ' res/|NOTICES/'; then
+          JAR=dist/android-stub-34-full.jar
+          # Las 4.873 clases públicas de la API 34 (plan del jar propio).
+          clases=$(unzip -Z1 "$JAR" | grep -c '\.class$')
+          echo "clases en $JAR: $clases"
+          test "$clases" -eq 4873
+          if unzip -l "$JAR" | grep -qE ' res/|NOTICES/'; then
             echo 'el jar generado contiene res/ o NOTICES/ de la SDK' >&2
             exit 1
           fi
+          # Los avisos y la licencia viajan también dentro del jar.
+          unzip -l "$JAR" | grep -E 'NOTICE|LICENSE'
           unzip -t dist/android-stub-34-min.jar
-          unzip -t dist/android-stub-34-full.jar
+          unzip -t "$JAR"
+
+          # El APK de la última iteración del paso anterior se construyó con
+          # el jar completo; apksigner verifica su firma v1 y v2.
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f \
+            | sort -V | tail -1)
+          "$APKSIGNER" verify --verbose "$RUNNER_TEMP/proj/build/app.apk" \
+            | tee "$RUNNER_TEMP/apksigner.txt"
+          grep -q 'Verified using v1 scheme (JAR signing): true' "$RUNNER_TEMP/apksigner.txt"
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' "$RUNNER_TEMP/apksigner.txt"
