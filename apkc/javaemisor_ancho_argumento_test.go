@@ -220,10 +220,19 @@ func TestFalsificacionDelEnsanchamientoEnElArgumento(t *testing.T) {
 }
 
 // TestElArgumentoAnchoQueNoSePuedeEstimarSeRechaza: cuando el tipo del argumento no se puede estimar
-// sin emitirlo —`s.f(s.n())`, una llamada encadenada— la sobrecarga se resuelve después de bajar los
-// argumentos y ya no hay dónde meter la conversión. Se rechaza con la línea y las dos cuentas; antes
-// de esta guarda el método cerraba con `-1` y el `.class` salía con la pila descuadrada.
+// sin emitirlo, la sobrecarga se resuelve después de bajar los argumentos y ya no hay dónde meter la
+// conversión. Se rechaza con la línea y las dos cuentas; antes de esta guarda el método cerraba con
+// `-1` y el `.class` salía con la pila descuadrada.
+//
+// La ruta `vueltaSinEmitir` estima ahora `s.n()` sin emitir el receptor (`S.n` tiene una sola candidata
+// y devuelve `I`), así que la guarda se mide con esa ruta **apagada**: sigue cubriendo el caso de un
+// argumento cuyo tipo no se sabe. Con la ruta encendida el mismo fuente se emite como javac, y eso lo
+// fija `TestLlamadaEncadenadaAnchaContraJavac17` (`javaemisor_llamada_argumento_test.go`).
 func TestElArgumentoAnchoQueNoSePuedeEstimarSeRechaza(t *testing.T) {
+	anterior := estimaLlamadaEncadenada
+	estimaLlamadaEncadenada = false
+	t.Cleanup(func() { estimaLlamadaEncadenada = anterior })
+
 	fuentes := map[string]string{
 		"receptor_explicito": `public class S { int n(){ return 1; } void f(long b){} void t(S s){ s.f(s.n()); } }`,
 		"cualificado":        `public class S { static int n(){ return 1; } static void f(long b){} static void t(S s){ s.f(S.n()); } }`,

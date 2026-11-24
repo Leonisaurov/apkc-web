@@ -2043,6 +2043,11 @@ type campoResuelto struct {
 	dueño     string // el tipo contra el que se escribe el Fieldref, que es el que nombra javac
 	constante bool
 	valor     int32
+	// generico es el tipo declarado del campo con sus argumentos (`List<Apk>`), cuando lo trae. Es lo
+	// que permite sustituir el tipo variable de la vuelta de un método genérico sin emitir el
+	// receptor: `app.apks.get(0)` con `apks` un `List<Apk>` devuelve `Apk` y no el borrado `Object`.
+	// Un campo del classpath lo deja a nil, y eso solo quiere decir «el descriptor y nada más».
+	generico *tipoArgumento
 }
 
 // buscarCampo recorre la clase y sus padres. Una constante de compilacion trae el valor: javac la dobla en
@@ -2077,7 +2082,7 @@ func (ctx *contextoJava) buscarCampo(dueño, nombre string) (campoResuelto, erro
 				}
 				// solo un `static final` es constante de compilación: un `val$x` final de instancia se
 				// lee con `getfield` y no se dobla (5.14)
-				cr := campoResuelto{desc: d, acceso: acc, dueño: dueño, constante: f.esFinal && f.esEstatico}
+				cr := campoResuelto{desc: d, acceso: acc, dueño: dueño, constante: f.esFinal && f.esEstatico, generico: f.generico}
 				if cr.constante {
 					lit, esLit := f.valor.(jlit)
 					if !esLit {
@@ -5249,25 +5254,36 @@ var resuelveCampoDeLocal = true
 // encendido en el binario que se publica.
 var estimaMoldeSinEmitir = true
 
+// estimaLlamadaEncadenada es el interruptor de la sonda de la llamada encadenada como argumento:
+// apagado, `tipoEstimado` no reconoce un `jllamada` con receptor y devuelve el rechazo de antes («no se
+// puede estimar el tipo de get() sin emitir el receptor de la llamada»). Lo usa la falsificación de
+// `javaemisor_llamada_argumento_test.go`; encendido en el binario que se publica.
+var estimaLlamadaEncadenada = true
+
 // descDeCampos: el descriptor del último campo de una cadena `a.b.c` sobre un receptor cuyo tipo ya se
 // conoce, sin escribir el `aload`/`getfield` que emitiría `cadenaDeCampos`. `length` sobre un arreglo da
-// `I`, como el `arraylength` de 0xbe. Lo que no se resuelve sin código sale con ok falso.
-func (e *emisor) descDeCampos(actual string, segs []string) (string, bool) {
+// `I`, como el `arraylength` de 0xbe. Devuelve además el tipo declarado del último campo cuando trae
+// argumentos (`List<Apk>`), que es lo que estrecha la vuelta de un método genérico. Lo que no se
+// resuelve sin código sale con ok falso.
+func (e *emisor) descDeCampos(actual string, segs []string) (string, *tipoArgumento, bool) {
+	var generico *tipoArgumento
 	for _, seg := range segs {
 		if seg == "length" && len(actual) > 0 && actual[0] == '[' {
 			actual = "I"
+			generico = nil
 			continue
 		}
 		if len(actual) == 0 || actual[0] != 'L' {
-			return "", false
+			return "", nil, false
 		}
 		cr, err := e.ctx.buscarCampo(actual[1:len(actual)-1], seg)
 		if err != nil {
-			return "", false
+			return "", nil, false
 		}
 		actual = cr.desc
+		generico = cr.generico
 	}
-	return actual, true
+	return actual, generico, true
 }
 
 // tipoSinEmitir: el descriptor estático de una expresión que solo se lee, sin escribir su código. Es lo
@@ -5277,22 +5293,30 @@ func (e *emisor) descDeCampos(actual string, segs []string) (string, bool) {
 // en un `aload`/`getfield` de más (§244). Devuelve ok falso en cuanto algo no se sabe sin código; el
 // llamador elige el mensaje.
 func (e *emisor) tipoSinEmitir(x jexpr) (string, bool) {
+	d, _, ok := e.tipoSinEmitirCompleto(x)
+	return d, ok
+}
+
+// tipoSinEmitirCompleto: `tipoSinEmitir` y, además, el tipo declarado del último campo de la cadena
+// cuando trae argumentos (`app.apks` es un `List<Apk>`). Es lo que necesita la vuelta de un método
+// genérico encadenado: `List.get` declara `(I)TE;` y el argumento de tipo lo pone el campo.
+func (e *emisor) tipoSinEmitirCompleto(x jexpr) (string, *tipoArgumento, bool) {
 	switch v := x.(type) {
 	case jacceso:
 		segs, base := aplanar(v)
 		if len(segs) == 0 {
-			return "", false
+			return "", nil, false
 		}
 		if !resuelveCampoDeLocal && (base != nil || len(segs) > 1) {
 			// apagado, la cadena de campos no se toca: la resuelve el llamador como pueda, que es el
 			// rechazo que medía el usuario antes de §242
-			return "", false
+			return "", nil, false
 		}
 		var actual string
 		if base != nil {
 			d, ok := e.tipoSinEmitir(base)
 			if !ok {
-				return "", false
+				return "", nil, false
 			}
 			actual = d
 		} else if lv, ok := e.locales[segs[0]]; ok {
@@ -5308,32 +5332,262 @@ func (e *emisor) tipoSinEmitir(x jexpr) (string, bool) {
 			// un campo suelto de la clase actual o del exterior que captura la anónima
 			_, cr, esCampo := e.duenioDelCampo(segs[0])
 			if !esCampo {
-				return "", false
+				return "", nil, false
 			}
-			return cr.desc, true
+			return cr.desc, cr.generico, true
 		} else if interno, resto, ok := e.ctx.tipoDeReferencia(segs); ok {
 			d, err := e.descDeAccesoEstatico(interno, resto)
 			if err != nil {
-				return "", false
+				return "", nil, false
 			}
-			return d, true
+			return d, nil, true
 		} else {
-			return "", false
+			return "", nil, false
 		}
 		return e.descDeCampos(actual, segs)
 	case jnuevo:
 		// `f(new S())`: el tipo es el de la clase construida, igual que en `tipoEstimado`
 		if v.cuerpo != nil {
-			return "L" + internoDe(v.cuerpo.paquete, v.cuerpo.nombre) + ";", true
+			return "L" + internoDe(v.cuerpo.paquete, v.cuerpo.nombre) + ";", nil, true
 		}
 		interno, err := e.ctx.tipoAInterno(v.tipo)
 		if err != nil {
-			return "", false
+			return "", nil, false
 		}
-		return "L" + interno + ";", true
+		return "L" + interno + ";", nil, true
 	}
 	// literales, `this`, `X.class`, elementos de arreglo, negaciones y cuentas ya se prevén sin código
-	return e.tipoPrevisto(x)
+	d, ok := e.tipoPrevisto(x)
+	return d, nil, ok
+}
+
+// vueltaSinEmitir: el descriptor de lo que deja en la pila una llamada cuyo receptor **no se emite**.
+// Es el caso de `shareApp(app.apks.get(0))` de ApkShare (`MainActivity.java:163`), donde el argumento
+// de una llamada es otra llamada encadenada: para resolver la sobrecarga de `shareApp` hace falta el
+// tipo de `get()`, y `tipoEstimado` se negaba a estimarlo sin escribir antes el receptor. El tipo sale
+// del tipo estático del receptor (`tipoSinEmitirCompleto`, §244) y del descriptor del método, que trae
+// la aridad y la vuelta borrada; el argumento de tipo del `Signature` la estrecha cuando el receptor
+// declara los suyos (`app.apks` es un `List<Apk>` y `get` declara `(I)TE;`), que es con lo que resuelve
+// javac. Sin genérico se devuelve el borrado, que es lo que la llamada deja de verdad en la pila: el
+// `check-cast` al tipo estrecho lo escribe `expA` al llenar el hueco, igual que javac.
+//
+// ok falso cuando el receptor no se sabe sin código: el llamador devuelve el rechazo de siempre, sin
+// adivinar. El orden de evaluación no cambia, porque aquí no se escribe ninguna instrucción.
+func (e *emisor) vueltaSinEmitir(v jllamada) (string, bool, error) {
+	if !estimaLlamadaEncadenada || v.base == nil || v.super {
+		return "", false, nil
+	}
+	d, generico, ok := e.tipoSinEmitirCompleto(v.base)
+	if !ok || len(d) == 0 || d[0] != 'L' {
+		return "", false, nil
+	}
+	receptor := d[1 : len(d)-1]
+	// la sobrecarga se resuelve con los tipos de los argumentos de la propia llamada, estimados como
+	// los de cualquier otra; si alguno no se sabe sin código, el rechazo es el de siempre
+	tipos := make([]string, 0, len(v.args))
+	for _, arg := range v.args {
+		da, err := e.tipoEstimado(arg)
+		if err != nil {
+			return "", false, nil
+		}
+		tipos = append(tipos, da)
+	}
+	cand, err := e.ctx.buscarMetodo(receptor, v.nombre, len(v.args), tipos)
+	if err != nil {
+		return "", true, fmt.Errorf("%s: al estimar el tipo de %s(), %w", v.donde.sitio(), v.nombre, err)
+	}
+	if vuelta, ok := e.vueltaGenerica(receptor, v.nombre, cand.desc, generico); ok {
+		return vuelta, true, nil
+	}
+	return vueltaDe(cand.desc), true, nil
+}
+
+// vueltaGenerica: estrecha la vuelta borrada de un método con el argumento de tipo que declara el
+// receptor (`List<Apk>.get` → `(I)TE;` con `E` = `Apk`). Solo sustituye cuando el tipo declarado del
+// receptor es la propia clase del método y el número de parámetros de tipo de su `Signature` es el de
+// argumentos declarados: con una herencia de por medio (`ArrayList<Apk>` con `get` en `List`) el mapeo
+// posicional no es una regla de Java y se devuelve el borrado en vez de adivinar.
+func (e *emisor) vueltaGenerica(receptor, nombre, desc string, decl *tipoArgumento) (string, bool) {
+	if decl == nil || len(decl.args) == 0 || decl.arreglos > 0 || decl.comodin != 0 {
+		return "", false
+	}
+	propio, err := e.ctx.descriptorDe(decl.crudo())
+	if err != nil || propio != "L"+receptor+";" {
+		return "", false
+	}
+	cf, err := e.ctx.busc.claseDelJar(receptor)
+	if err != nil {
+		return "", false
+	}
+	nombres := parametrosDeTipoDeFirma(cf.Signature)
+	if len(nombres) == 0 || len(nombres) != len(decl.args) {
+		return "", false
+	}
+	vars := make(map[string]string, len(nombres))
+	for i, n := range nombres {
+		da, err := e.ctx.descriptorDe(decl.args[i].crudo())
+		if err != nil {
+			return "", false
+		}
+		vars[n] = da
+	}
+	firma, ok := firmaDelMetodoDelJar(cf, nombre, desc)
+	if !ok {
+		return "", false
+	}
+	return vueltaDeFirma(firma, vars)
+}
+
+// firmaDelMetodoDelJar: la `Signature` del método `nombre` con el descriptor `desc` en esa clase. Solo
+// en la propia clase: si el método se hereda, el tipo variable puede ser el del padre y no el del
+// receptor, y entonces no se sustituye.
+func firmaDelMetodoDelJar(cf *classFull, nombre, desc string) (string, bool) {
+	for _, m := range cf.Methods {
+		if m.Name == nombre && m.Desc == desc && m.Signature != "" {
+			return m.Signature, true
+		}
+	}
+	return "", false
+}
+
+// parametrosDeTipoDeFirma: los nombres de los parámetros de tipo de la `Signature` de una clase
+// (JVMS 4.7.9.1), en orden de declaración: `<E:Ljava/lang/Object;>Ljava/lang/Object;` da `["E"]`. La
+// firma de una clase sin parámetros (`Ljava/lang/Object;`) no los tiene.
+func parametrosDeTipoDeFirma(firma string) []string {
+	if len(firma) == 0 || firma[0] != '<' {
+		return nil
+	}
+	nombres := []string{}
+	i := 1
+	for i < len(firma) && firma[i] != '>' {
+		j := i
+		for j < len(firma) && firma[j] != ':' {
+			j++
+		}
+		if j >= len(firma) {
+			return nil
+		}
+		nombres = append(nombres, firma[i:j])
+		i = j
+		// los límites del parámetro: `:` con el tipo de clase (puede faltar) y `:` con cada interfaz
+		for i < len(firma) && firma[i] == ':' {
+			i++
+			if i < len(firma) && firma[i] == ':' {
+				continue
+			}
+			siguiente, ok := saltaFirmaTipo(firma, i)
+			if !ok {
+				return nil
+			}
+			i = siguiente
+		}
+	}
+	if len(nombres) == 0 {
+		return nil
+	}
+	return nombres
+}
+
+// saltaFirmaTipo: avanza un tipo de una Signature sin interpretarlo. Basta con contar los `<>`
+// anidados y parar en el `;` del nivel de fuera; un primitivo es una sola letra.
+func saltaFirmaTipo(s string, i int) (int, bool) {
+	if i >= len(s) {
+		return i, false
+	}
+	if strings.IndexByte("BCDFIJSZV", s[i]) >= 0 {
+		return i + 1, true
+	}
+	dentro := 0
+	for ; i < len(s); i++ {
+		switch s[i] {
+		case '<':
+			dentro++
+		case '>':
+			dentro--
+		case ';':
+			if dentro == 0 {
+				return i + 1, true
+			}
+		}
+	}
+	return i, false
+}
+
+// vueltaDeFirma: el descriptor de vuelta de una `Signature` de método (`(I)TE;` con `E` = `Apk` da
+// `Lshare/apps/util/Apk;`), con los tipos variables sustituidos. ok falso si la firma nombra una
+// variable que no se conoce o una forma que este subconjunto no lee: el llamador se queda con el
+// borrado del descriptor en vez de adivinar.
+func vueltaDeFirma(firma string, vars map[string]string) (string, bool) {
+	cierre := strings.IndexByte(firma, ')')
+	if cierre < 0 {
+		return "", false
+	}
+	d, _, ok := tipoDeFirma(firma, cierre+1, vars)
+	if !ok || d == "V" {
+		return "", false
+	}
+	return d, true
+}
+
+// tipoDeFirma: lee un `JavaTypeSignature` de una Signature y devuelve su descriptor borrado, con los
+// tipos variables sustituidos por lo que diga `vars`, y el índice siguiente. Las anidadas detrás de
+// argumentos (`LOuter<...>.Inner;`) se rechazan: no están medidas y su descriptor no es el del prefijo.
+func tipoDeFirma(s string, i int, vars map[string]string) (string, int, bool) {
+	if i >= len(s) {
+		return "", i, false
+	}
+	switch s[i] {
+	case 'B', 'C', 'D', 'F', 'I', 'J', 'S', 'Z', 'V':
+		return string(s[i]), i + 1, true
+	case '[':
+		d, siguiente, ok := tipoDeFirma(s, i+1, vars)
+		if !ok {
+			return "", i, false
+		}
+		return "[" + d, siguiente, true
+	case 'T':
+		fin := strings.IndexByte(s[i:], ';')
+		if fin < 0 {
+			return "", i, false
+		}
+		d, ok := vars[s[i+1:i+fin]]
+		if !ok {
+			return "", i, false
+		}
+		return d, i + fin + 1, true
+	case 'L':
+		fin := i + 1
+		for fin < len(s) && s[fin] != '<' && s[fin] != ';' {
+			fin++
+		}
+		if fin >= len(s) {
+			return "", i, false
+		}
+		nombre := strings.ReplaceAll(s[i+1:fin], ".", "$")
+		if s[fin] == ';' {
+			return "L" + nombre + ";", fin + 1, true
+		}
+		// los argumentos del tipo no cambian el descriptor (es el del borrado), pero se saltan
+		dentro := 0
+		j := fin
+		for ; j < len(s); j++ {
+			if s[j] == '<' {
+				dentro++
+			}
+			if s[j] == '>' {
+				dentro--
+				if dentro == 0 {
+					j++
+					break
+				}
+			}
+		}
+		if dentro != 0 || j >= len(s) || s[j] != ';' {
+			return "", i, false
+		}
+		return "L" + nombre + ";", j + 1, true
+	}
+	return "", i, false
 }
 
 // tipoEstimado: el descriptor de un argumento, sin volver a emitirlo. En el subconjunto medido los
@@ -5453,6 +5707,11 @@ func (e *emisor) tipoEstimado(x jexpr) (string, error) {
 		}
 		return "", fmt.Errorf("linea %d: la negacion de un %s no esta medida (solo los numeros)", v.donde.linea, d)
 	case jllamada:
+		// una llamada encadenada (`app.apks.get(0)`) como argumento de otra: la vuelta sale del tipo
+		// estático del receptor, sin emitirlo (`vueltaSinEmitir`)
+		if d, ok, err := e.vueltaSinEmitir(v); ok {
+			return d, err
+		}
 		// una llamada sin receptor escrito: la vuelta de su unica candidata en esa aridad (medido al
 		// pasar `local()` y `cuenta(2L, 3L)` como argumento de `imprime` en la sonda `L`, parrafo 74)
 		if v.base != nil || v.super {
