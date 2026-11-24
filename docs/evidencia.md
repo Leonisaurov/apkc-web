@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§257`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§259`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -11615,6 +11615,59 @@ proyecto cuando ganaba otro AAR. Otro frente lo está corrigiendo: **en correcci
 cableado del núcleo. 3) Quedan **dos gates** por pasar. 4) El sitio publicado no se actualizó.
 5) Los commits no se empujaron y el CI no se midió. 6) La deuda de resources sigue en corrección.
 Nada de esto se re-ejecutó aquí; los oráculos citados son los de cada commit.
+
+## 259. La allowlist de WISP y el cierre del vigilante de la preview
+
+Registrado el 2026-11-23. Este `§` transfiere la salida de `b7d08ae`, `abf55a7` y `4991d86`; aquí
+no se re-ejecutó nada: sin gate, sin chromium, sin red, sin push y sin publicación. La allowlist
+queda **aprobada** con notas de endurecimiento **en corrección**, y el núcleo WISP sigue **inerte**,
+fuera del wasm.
+
+**La allowlist de relays, destinos y coordenadas (`b7d08ae`).** Cierra la condición F de la
+auditoría de seguridad: el módulo validaba la forma de la URL del relay pero no quién era, y
+`AbrirTLSWISP` abría cualquier `TCP:puerto` desde la IP del relay. Solo valen las **6** URLs
+verificadas por handshake —`wss://wisp.mercurywork.shop/wisp/`, `wss://terbiumon.top/wisp/`,
+`wss://anura.pro/wisp/`, `wss://lichology.com/wisp/`, `wss://wisp.waved.site/w/` y
+`wss://gointospace.app/wisp/` (`apkc/depswisp.go:63-70`)— y los destinos `repo1.maven.org:443` y
+`repo.maven.apache.org:443` (`apkc/depswisp.go:90-93`). Encima del flujo WISP va TLS de punta a
+punta: el relay solo ve registros cifrados y no puede leer ni alterar los artefactos, así que la
+lista autoriza la **pareja host:puerto** y no el host suelto; el mismo host en un puerto en claro
+delataría el tráfico.
+
+**El orden de la comprobación.** `Validar` (`apkc/depswisp.go:275`) pasa forma → allowlist de relay
+→ forma de los destinos extra; `validarRelayAutorizado` (`:317`) compara la **URL canónica**
+(`relayCanonico`, `:338`), de modo que cambiar la ruta de un relay conocido también lo convierte en
+otro relay; `ValidarDestino` (`:373`) rechaza host o puerto fuera de la lista antes del CONNECT;
+`ValidarCoordenadaMaven` (`:452`) y `RutaDependenciaMaven` (`:474`) exigen
+`grupo:artefacto:version` y una ruta bajo `deps/` sin traversal, con la extensión acotada a
+`aar`/`jar`/`pom`; y `AbrirTLSWISP`
+(`:517`) valida configuración y destino **antes** del pool de CAs y del CONNECT, que sale por
+`AbrirTCPAutorizado` (`apkc/wisp.go:465`).
+
+**Las falsificaciones.** Un relay ajeno pasa toda la forma y solo la allowlist lo rechaza. Sin la
+allowlist, el CONNECT sale a `smtp-ajeno.test:25`. Sin validar la coordenada,
+`com.example:../../../../../x:1.0` se resuelve en `../../../../../x-1.0.aar`. La suite sale
+`ok … 120.029s`; `-race` y el build wasm, verdes. El módulo sigue **inerte**: el linker lo elimina
+al no tener llamadores y no hay `js.Global().Set`, así que `nucleoDisponible` falla cerrado.
+
+**La auditoría de la allowlist.** APROBADA, sin ningún bypass, con **6 notas de endurecimiento**:
+alias de ruta codificada (`/%77isp/`); `?`/`#` vacíos que hacen `WebSocket.New` lanzar un pánico sin
+`recover` y matar el wasm; userinfo `evil@`; IP o loopback en `DestinosExtra`; puerto `0443`; y
+`AbrirTCP` cruda como primitiva pública. Las notas están **en corrección**: no se dan por cerradas.
+
+**El vigilante de la preview (`abf55a7`, `4991d86`).** Tras el `mv` atómico revalida `HEAD`
+(`tools/preview-automatica.sh:38`); si cambió, no fija el estado. `4991d86` cierra el caso ABA: un
+commit y su revert durante el build dejaban `head-construido` con el valor viejo, el ciclo siguiente
+no reconstruía y se servía un wasm abandonado indefinidamente; ahora el estado se **vacía** (`:45`)
+para reconstruir siempre. El subproceso recibe `APKC_PREVIEW_WASM` y `HOME` (`:34-35`). Verificado
+con `estado == HEAD == wasm servido` (`4991d86`, sha `f9943c7b…`), y `studio/servidor.js:264` lee el
+fichero en cada petición, así que no hay que reiniciar el servidor.
+
+**Fronteras de este `§`.** 1) ApkShare **no** compila: el `int`→`long` del `postDelayed` se para en
+`MainActivity.java:97`. 2) La allowlist está **en corrección**: sus 6 notas no se dan por cerradas.
+3) Quedan **dos gates** de WISP por pasar. 4) El sitio publicado no se actualizó. 5) Los commits no
+se empujaron y el CI no se midió. Nada de esto se re-ejecutó aquí; los oráculos citados son los de
+cada commit.
 
 ## Fronteras del bloque, sin cerrar
 
