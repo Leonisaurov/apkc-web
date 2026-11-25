@@ -137,8 +137,8 @@ jobs:
           path: ${{ runner.temp }}/sitio
 
   # WebKit es el motor de Safari. Esta comprobación corre en un runner Linux con el WebKit de
-  # Playwright: no es Safari real. El job `safari` repite la prueba en macos-latest y dice qué
-  # ejecutable se usó. Los dos son informativos por la misma razón (§181).
+  # Playwright; el job `safari` repite la prueba en macos-latest con el WebKit de Playwright y dice
+  # qué ejecutable se usó. Los dos son informativos por la misma razón (§181).
   webkit:
     needs: pesado
     runs-on: ubuntu-latest
@@ -198,10 +198,10 @@ jobs:
           echo "marcador=$marcador" >> "$GITHUB_OUTPUT"
           echo "$marcador"
 
-  # Safari real no se puede automatizar con Playwright: en macos-latest lo que se ejecuta es el
-  # motor WebKit empaquetado por Playwright, que es el mismo motor pero no la app Safari. Por eso
-  # el job informa de la identidad del ejecutable antes de nada y no bloquea: sin evidencia de que
-  # se esté corriendo Safari.app no tiene sentido exigirlo como gate (§181).
+  # El WebKit de Playwright se puede automatizar; la app Safari no. En macos-latest lo que se
+  # ejecuta es el motor WebKit empaquetado por Playwright, que es el mismo motor pero no la app
+  # de Apple. Por eso el job informa de la identidad del ejecutable y captura el rc real de la
+  # prueba: sin evidencia de que se corra otra cosa no tiene sentido exigirlo como gate (§181).
   safari:
     needs: pesado
     runs-on: macos-latest
@@ -226,13 +226,21 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@latest
           npx playwright install webkit
-      - name: identidad del motor (WebKit de Playwright o Safari real)
+      - name: identidad del motor (WebKit de Playwright)
         id: safari_info
         run: node tools/safari-info.mjs 2>&1 | tee "$RUNNER_TEMP/safari-info.log"
       - name: el sitio sobre WebKit en macOS
+        id: prueba_webkit
         env:
           SITIO_DIR: ${{ github.workspace }}/sitio
-        run: node studio/prueba-webkit.js
+        shell: bash
+        run: |
+          set +e
+          node studio/prueba-webkit.js 2>&1 | tee "$RUNNER_TEMP/safari-webkit.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
       - name: marcador informativo
         id: marcador
         if: always()
@@ -246,14 +254,16 @@ jobs:
           else
             motor=sin-identidad
           fi
-          marcador="safari|motor=$motor|ejecutable=$ejecutable"
+          rc="${{ steps.prueba_webkit.outputs.rc }}"
+          if [ -z "$rc" ]; then rc=1; fi
+          marcador="safari|motor=$motor|ejecutable=$ejecutable|rc=$rc"
           echo "marcador=$marcador" >> "$GITHUB_OUTPUT"
           echo "$marcador"
       - name: por qué este job no bloquea
         if: failure()
         run: |
-          echo "safari: informativo. Playwright no automatiza Safari.app; ejecuta su propio WebKit."
-          echo "Un fallo aquí no impide la release: no hay evidencia de que se corra Safari real."
+          echo "safari: informativo. Se mide el WebKit de Playwright en macOS, no la app Safari."
+          echo "Un fallo aquí no impide la release: el marcador informa del motor y del rc real."
 
   # ART de verdad: un emulador x86_64 con KVM ejecuta app_process64 y dexdump sobre los dex del
   # banco (banco/art.sh). KVM depende del hardware del runner y arrancar un system-image puede
@@ -329,6 +339,9 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           # JAVA_HOME lo exporta actions/setup-java para los pasos siguientes; no se copia aquí.
           APKC: ${{ runner.temp }}/apkc-art
+          # El AVD se elige solo desde la configuración del runner. Sin esta variable art.sh sigue
+          # en la Blackview por WiFi y su guard rechaza el emulador antes de compilar.
+          ADB_SERIAL: ${{ vars.ART_ADB_SERIAL }}
         shell: bash
         run: |
           set +e
@@ -384,49 +397,71 @@ jobs:
       contents: read
     steps:
       - name: comprobar los marcadores
+        env:
+          MARCA_WEBKIT: ${{ needs.webkit.outputs.marcador }}
+          MARCA_SAFARI: ${{ needs.safari.outputs.marcador }}
+          MARCA_ART: ${{ needs.art.outputs.marcador }}
         shell: bash
         run: |
-          w="${{ needs.webkit.outputs.marcador }}"
-          s="${{ needs.safari.outputs.marcador }}"
-          a="${{ needs.art.outputs.marcador }}"
+          w=${MARCA_WEBKIT:-}
+          s=${MARCA_SAFARI:-}
+          a=${MARCA_ART:-}
           printf 'webkit: %s\n' "$w"
           printf 'safari: %s\n' "$s"
           printf 'art:    %s\n' "$a"
+
+          # Extracción regex: cada marcador es una lista de campos clave=valor separados por '|'.
+          campo() { # marcador clave -> valor (vacío si el campo no está)
+            printf '%s' "$1" | grep -oE "(^|\\|)$2=[^|]*" | head -1 | sed 's/^[^=]*=//' || true
+          }
           fallos=0
-          if [[ "$w" != webkit\|resultado=* ]]; then
-            echo "falta el marcador de webkit"
-            fallos=$((fallos+1))
+          fallar() { echo "$1"; fallos=$((fallos+1)); }
+
+          # webkit: terminó en orden, con comprobaciones reales y rc cero.
+          if [[ "$w" != webkit\|* ]]; then
+            fallar "falta el marcador de webkit"
           else
-            for campo in '|resultado=' '|comprobaciones=' '|rc='; do
-              if [[ "$w" != *"$campo"* ]]; then
-                echo "al marcador de webkit le falta $campo"
-                fallos=$((fallos+1))
-              fi
-            done
-          fi
-          if [[ "$s" != safari\|motor=* ]]; then
-            echo "falta el marcador de safari"
-            fallos=$((fallos+1))
-          else
-            for campo in '|motor=' '|ejecutable='; do
-              if [[ "$s" != *"$campo"* ]]; then
-                echo "al marcador de safari le falta $campo"
-                fallos=$((fallos+1))
-              fi
-            done
-          fi
-          if [[ "$a" != art\|kvm=* ]]; then
-            echo "falta el marcador de art"
-            fallos=$((fallos+1))
-          elif [[ "$a" == *'|omitido=si'* ]]; then
-            if [[ "$a" != *'|kvm=no'* ]]; then
-              echo "art informa de una omisión sin causa (falta kvm=no)"
-              fallos=$((fallos+1))
+            res=$(campo "$w" resultado)
+            comp=$(campo "$w" comprobaciones)
+            rcw=$(campo "$w" rc)
+            [ "$res" = 'todo-en-orden' ] || fallar "webkit: resultado=$res (se exige todo-en-orden)"
+            if ! [[ "$comp" =~ ^[0-9]+$ ]]; then
+              fallar "webkit: comprobaciones='$comp' (se exige un número)"
+            elif [ "$comp" -lt 1 ]; then
+              fallar "webkit: comprobaciones=$comp (se exige >=1)"
             fi
-          elif [[ "$a" != *'|banco=rc'* ]]; then
-            echo "art no informa del resultado del banco"
-            fallos=$((fallos+1))
+            [ "$rcw" = '0' ] || fallar "webkit: rc=$rcw (se exige rc=0)"
           fi
+
+          # safari: WebKit de Playwright identificado por su ejecutable y rc cero.
+          if [[ "$s" != safari\|* ]]; then
+            fallar "falta el marcador de safari"
+          else
+            motor=$(campo "$s" motor)
+            exe=$(campo "$s" ejecutable)
+            rcs=$(campo "$s" rc)
+            [ "$motor" = 'playwright-webkit' ] || fallar "safari: motor=$motor (se exige playwright-webkit)"
+            exe_conocido=no
+            if [ -n "$exe" ] && [ "$exe" != 'desconocido' ] &&
+               printf '%s' "$exe" | grep -qiE 'playwright'; then
+              exe_conocido=si
+            fi
+            [ "$exe_conocido" = 'si' ] || fallar "safari: ejecutable='$exe' (no es conocido)"
+            [ "$rcs" = '0' ] || fallar "safari: rc=$rcs (se exige rc=0)"
+          fi
+
+          # art: KVM real, banco en orden y sin omisión ni fallo.
+          if [[ "$a" != art\|* ]]; then
+            fallar "falta el marcador de art"
+          else
+            kvm=$(campo "$a" kvm)
+            banco=$(campo "$a" banco)
+            [ "$kvm" = 'si' ] || fallar "art: kvm=$kvm (se exige kvm=si)"
+            [ "$banco" = 'rc0' ] || fallar "art: banco=$banco (se exige banco=rc0)"
+            [ "$(campo "$a" omitido)" != 'si' ] || fallar "art: omitido=si (se prohíbe)"
+            [ "$(campo "$a" fallo)" != 'si' ] || fallar "art: fallo=si (se prohíbe)"
+          fi
+
           if [ "$fallos" -ne 0 ]; then
             echo "$fallos problema(s) en el contrato de marcadores"
           fi

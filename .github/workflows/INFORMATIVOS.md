@@ -23,13 +23,15 @@ paso anterior falla. **No se usa `$GITHUB_STEP_SUMMARY`**: el summary es por job
 - `webkit`: `webkit|resultado=<resultado>|comprobaciones=<N>|rc=<rc>`. El resultado y el número
   de comprobaciones se leen del registro de `prueba-webkit.js` y el `rc` se captura del proceso
   real con `PIPESTATUS`.
-- `safari`: `safari|motor=<motor>|ejecutable=<ruta>`. La ruta y la identidad se leen de la salida
-  de `tools/safari-info.mjs`; cuando no hay evidencia de Playwright el motor se declara
-  `sin-identidad`, que no es un fallo del contrato.
+- `safari`: `safari|motor=<motor>|ejecutable=<ruta>|rc=<rc>`. La ruta y la identidad se leen de la
+  salida de `tools/safari-info.mjs`; el `rc` se captura con `PIPESTATUS` del paso `prueba_webkit`
+  (el sitio sobre WebKit en macOS). Cuando no hay evidencia de Playwright el motor se declara
+  `sin-identidad`, que el verificador rechaza porque exige `playwright-webkit`.
 - `art` sin KVM: `art|kvm=no|omitido=si`.
 - `art` con KVM y banco correcto: `art|kvm=si|banco=rc0`.
 - `art` con KVM y banco fallido: `art|kvm=si|banco=rc<N>|fallo=si`, con el `rc` real de
-  `banco/art.sh`.
+  `banco/art.sh`. El AVD del corredor se elige con `ADB_SERIAL` (variable del runner); sin esa
+  variable `banco/art.sh` sigue en la Blackview MEGA 3 y mantiene su guard de marca/modelo.
 
 `omitido` significa que no hubo entorno (`kvm=no`); `fallo` significa que el comando se ejecutó
 y devolvió `rc` distinto de cero. Un `omitido=si` sin `kvm=no` es una omisión sin causa y falla
@@ -37,10 +39,17 @@ la verificación. El `rc` nunca se supone: se captura de la ejecución.
 
 ## Qué comprueba `verificar-informativos`
 
-Tiene `needs: [webkit, safari, art]` e `if: always()`, **sin** `continue-on-error`. Falla solo si
-falta un marcador, si le falta un campo obligatorio o si `art` dice `omitido` sin causa. **No
-exige** `resultado=...`, `rc=0` ni `fallo=no`: que `webkit` falle o que `art` no corra no bloquea.
-`publicar` sigue atado solo a `pesado`, así que este job no puede impedir la release.
+Tiene `needs: [webkit, safari, art]` e `if: always()`, **sin** `continue-on-error`. Ya no se conforma
+con la presencia de los campos: extrae los valores por regex y exige que todos sean los correctos.
+
+- `webkit`: `resultado=todo-en-orden`, `comprobaciones>=1` y `rc=0`.
+- `safari`: `motor=playwright-webkit`, `ejecutable` conocido (ruta de Playwright, no `desconocido`)
+  y `rc=0`.
+- `art`: `kvm=si`, `banco=rc0` y ausencia de `omitido=si` y de `fallo=si`.
+
+Cualquier otro valor cuenta como problema y falla este job, aunque los tres jobs informativos sigan
+siendo `continue-on-error`. `publicar` sigue atado solo a `pesado`, así que este job no puede impedir
+la release.
 
 ## Estado de esta entrega
 

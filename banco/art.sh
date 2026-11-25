@@ -36,9 +36,13 @@ adb wait-for-device
 MARCA=$(adb shell getprop ro.product.brand | tr -d '\r')
 MODELO=$(adb shell getprop ro.product.model | tr -d '\r')
 echo "art: aparato $SERIE, marca=$MARCA, modelo=$MODELO"
-if [ "$MARCA" != "Blackview" ] || [ "$MODELO" != "MEGA 3" ]; then
-  echo "art: el aparato $SERIE no es la Blackview MEGA 3; se aborta antes de compilar"
-  exit 1
+# El corredor elige el AVD con ADB_SERIAL (variable/secret del runner): esa ruta no es la Blackview.
+# Sin ADB_SERIAL seguimos en la Blackview por WiFi y la guard de marca/modelo sigue siendo obligatoria.
+if [ -z "${ADB_SERIAL:-}" ]; then
+  if [ "$MARCA" != "Blackview" ] || [ "$MODELO" != "MEGA 3" ]; then
+    echo "art: el aparato $SERIE no es la Blackview MEGA 3; se aborta antes de compilar"
+    exit 1
+  fi
 fi
 [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = "1" ] ||
   { echo "art: el aparato no terminó de arrancar"; exit 1; }
