@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§352` (325 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§355` (327 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -356,6 +356,8 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §350 | Emulador separado en el submódulo `apkc-emulador/`: 59 commits importados, 34 ficheros y el mismo JSON de `preview` (`pasos: 22`) | [23-emulador-modulo.md](evidencia/23-emulador-modulo.md) |
 | §351 | Copia gobernada de los 34 `preview*.go` con `cmp` byte a byte en los seis puntos de build y detección de deriva (falla en el byte 121) | [23-emulador-modulo.md](evidencia/23-emulador-modulo.md) |
 | §352 | Pestaña intacta: `go test ./...` en verde y `node prueba.js` → «prueba: todo en orden» sobre el wasm separado, sin CDP | [23-emulador-modulo.md](evidencia/23-emulador-modulo.md) |
+| §354 | Apps reales en `~/Downloads`: los tres arrancan con `pasos:0` y una pantalla falsa; SHA de los cuatro APK | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §355 | Fase A: el lector acepta los dex reales sin tocar el escritor; los tres avanzan, pero aparece el opcode 0x1d del intérprete | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
@@ -371,15 +373,15 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
 aquí; `§78` no existe y su hueco está explicado en el preámbulo. La tabla sigue el orden del fichero
 original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica; las filas
-añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`) se sitúan en el bloque de su fichero, no en orden numérico.
+añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`) se sitúan en el bloque de su fichero, no en orden numérico.
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
 `§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra),
 `§327-328` (J5), `§329-333` (diagnóstico) y `§340-347` (paneles). `§334-339` ya no está
 reservado: sus mediciones están escritas en este índice. `§348` ya no está reservado: su medición
 está escrita en este índice. `§349` ya no está reservado: su medición está escrita en este índice.
-`§350`, `§351` y `§352` ya no están libres: sus mediciones están escritas en este índice. `§353`
-queda reservado a F5; `§354+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
+`§350`, `§351`, `§352`, `§354` y `§355` ya no están libres: sus mediciones están escritas en este índice.
+`§353` queda reservado a F5; `§356+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.

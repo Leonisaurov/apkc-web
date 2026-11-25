@@ -880,3 +880,18 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   reglas contra salidas reales. Frontera: no se corrieron el gate, `prueba-pestana.js` ni
   `prueba-sitio.js` (CDP), ni `surge`, ni `push`; `studio` sigue `ahead 1` y CI no puede clonar el
   submódulo hasta el push autorizado. Nada se da por verde por analogía (regla 11).
+- §354: los tres APK reales de `~/Downloads` (F-Droid, NewPipe y Termux arm; la variante x86_64 solo
+  por SHA) arrancan con `pasos:0` y un `ejecucion.error` distinto cada uno — valor estático `0x17` en
+  `L_COROUTINE/CoroutineDebuggingKt;`, 4 valores para 8 campos en `SpacerKt` y la cadena #808 que
+  declara 18 unidades y decodifica 20—, y pintan el mismo `LinearLayout` de tres nodos con
+  `id/action_bar_title`, que **no es** la pantalla de ninguna de las tres apps. Frontera: no se afirma
+  que funcionen; la causa byte a byte de la cadena #808 sigue `incierto`, y la identidad de la
+  lanzadora de F-Droid es hipótesis. Sostenido por `§354`.
+- §355: las tres causas del lector de `apkc/` quedan arregladas con tuplas byte a byte de los APK:
+  valor `0x17` little-endian (`_COROUTINE`), cola de `SpacerKt` rellena con `VALUE_NULL` y sustituto
+  suelto `ed a0 80` convertido en un solo `U+FFFD`; el test focal y la suite pasan y el escritor de
+  dex da el mismo SHA antes y después. Con el binario reconstruido los tres `preview` avanzan de
+  `pasos:0` a 292/286/207 y pierden sus errores de `§354`. Frontera: **no verde**: aparece un error
+  nuevo compartido, `ArchTaskExecutor.getInstance usa el opcode 0x1d, que el intérprete MVP no
+  decodifica`, y los layouts siguen siendo falsos; el bloqueo es del intérprete, no del lector. Sin
+  gate, CDP, red ni publicación. Sostenido por `§355`.
