@@ -307,3 +307,104 @@ func TestLaSesionNoPegaElErrorDeUnaOrdenMala(t *testing.T) {
 		t.Fatalf("la orden posterior al delta roto contestó %q", total)
 	}
 }
+
+// modeloNavegaSesion es el recorte del JSON que la navegación por sesión tiene que publicar: la
+// actividad y el layout delante, el recorrido y los clics acumulados, y el rectángulo pulsable.
+type modeloNavegaSesion struct {
+	Actividad string `json:"actividad"`
+	Layout    string `json:"layout"`
+	Ejecucion struct {
+		Actividad   string   `json:"actividad"`
+		Pantallas   []string `json:"pantallas"`
+		Pulsaciones []string `json:"pulsaciones"`
+		Error       string   `json:"error"`
+	} `json:"ejecucion"`
+	Raiz *struct {
+		Hijos []nodoNavegaSesion `json:"hijos"`
+	} `json:"raiz"`
+}
+
+// nodoNavegaSesion es un view del modelo de navegación: basta con su id, su texto escrito, si
+// registró oyente y su rectángulo para comprobar que un botón es pulsable.
+type nodoNavegaSesion struct {
+	ID            string `json:"id"`
+	TextoDinamico string `json:"textoDinamico"`
+	Oyente        bool   `json:"oyente"`
+	Rect          struct {
+		Ancho int `json:"ancho"`
+		Alto  int `json:"alto"`
+	} `json:"rect"`
+}
+
+func modeloNavegaDe(t *testing.T, linea string) modeloNavegaSesion {
+	t.Helper()
+	var m modeloNavegaSesion
+	if err := json.Unmarshal([]byte(linea), &m); err != nil {
+		t.Fatalf("el modelo de navegación no se lee: %v", err)
+	}
+	if m.Ejecucion.Error != "" {
+		t.Fatalf("la ejecución de navegación falló: %s", m.Ejecucion.Error)
+	}
+	return m
+}
+
+// TestLaSesionNavegaEntreActividades es la regresión de D7: el bucle de sesión entregaba el clic y
+// drenaba las tareas vencidas, pero no estabilizaba la navegación, así que un `startActivity` dejaba
+// la máquina vieja delante aunque el `onClick` hubiera corrido. Con la corrección, un clic en
+// id/abrir abre la segunda actividad con su rect pulsable, y id/volver vuelve a la primera
+// conservando lo que el primer onCreate escribió.
+func TestLaSesionNavegaEntreActividades(t *testing.T) {
+	s, err := nuevaSesionPreview(apkDelNavega(t), "", "")
+	if err != nil {
+		t.Fatalf("la sesión de dos pantallas no arrancó: %v", err)
+	}
+
+	abrir := modeloNavegaDe(t, mustLinea(t, s, "abrir", []string{"--pulsar", "id/abrir"}))
+	if abrir.Actividad != "com.hola.navega.SegundaActivity" {
+		t.Errorf("tras el clic la actividad es %q y se esperaba la segunda", abrir.Actividad)
+	}
+	if abrir.Ejecucion.Actividad != "com.hola.navega.SegundaActivity" {
+		t.Errorf("la ejecución dice %q y se esperaba la segunda", abrir.Ejecucion.Actividad)
+	}
+	if abrir.Layout != "res/layout/segunda.xml" {
+		t.Errorf("el layout es %q y se esperaba el de la segunda pantalla", abrir.Layout)
+	}
+	quiero := []string{"com.hola.navega.MainActivity", "com.hola.navega.SegundaActivity"}
+	if strings.Join(abrir.Ejecucion.Pantallas, "|") != strings.Join(quiero, "|") {
+		t.Errorf("el recorrido tras abrir es %v y se esperaba %v", abrir.Ejecucion.Pantallas, quiero)
+	}
+	if abrir.Raiz == nil {
+		t.Fatal("la segunda pantalla no trae raíz")
+	}
+	var volver *nodoNavegaSesion
+	for i := range abrir.Raiz.Hijos {
+		if abrir.Raiz.Hijos[i].ID == "id/volver" {
+			volver = &abrir.Raiz.Hijos[i]
+		}
+	}
+	if volver == nil {
+		t.Fatalf("la segunda pantalla no tiene el botón id/volver: %+v", abrir.Raiz.Hijos)
+	}
+	if !volver.Oyente || volver.Rect.Ancho <= 0 || volver.Rect.Alto <= 0 {
+		t.Errorf("id/volver no es pulsable: oyente=%t rect=%+v", volver.Oyente, volver.Rect)
+	}
+
+	vuelta := modeloNavegaDe(t, mustLinea(t, s, "volver", []string{"--pulsar", "id/volver"}))
+	if vuelta.Actividad != "com.hola.navega.MainActivity" {
+		t.Errorf("tras volver la actividad es %q y se esperaba la primera", vuelta.Actividad)
+	}
+	if vuelta.Layout != "res/layout/main.xml" {
+		t.Errorf("tras volver el layout es %q y se esperaba el principal", vuelta.Layout)
+	}
+	quiero = append(quiero, "com.hola.navega.MainActivity")
+	if strings.Join(vuelta.Ejecucion.Pantallas, "|") != strings.Join(quiero, "|") {
+		t.Errorf("el recorrido tras volver es %v y se esperaba %v", vuelta.Ejecucion.Pantallas, quiero)
+	}
+	if got := strings.Join(vuelta.Ejecucion.Pulsaciones, ","); got != "id/abrir,id/volver" {
+		t.Errorf("los clics acumulados son %q y se esperaban dos", got)
+	}
+	if vuelta.Raiz == nil || len(vuelta.Raiz.Hijos) != 2 ||
+		vuelta.Raiz.Hijos[0].TextoDinamico != "Pulsos: 1" {
+		t.Errorf("al volver no se conservó el estado de la primera pantalla: %+v", vuelta.Raiz)
+	}
+}

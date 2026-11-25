@@ -20,6 +20,12 @@ type sesionPreview struct {
 	paquete string
 	res     *resultadoEjecucion
 	m       *maquinaDalvik
+	// pila guarda las actividades cubiertas por un `startActivity`, en orden, para que un
+	// `finish()` pueda volver a la que quedó detrás conservando su máquina y su estado.
+	pila []*maquinaDalvik
+	// pantallas es el recorrido acumulado de actividades, con la actual al final. actualizaRes lo
+	// publica en res.Pantallas; se guarda aparte para no perderlo cuando cambia la máquina delantera.
+	pantallas []string
 	// base es el dex contra el que se calcula el SIGUIENTE delta. Solo se cambia cuando aplicaDelta
 	// terminó bien; en un fallo la sesión sigue interpretando el dex anterior.
 	base *dexFile
@@ -52,7 +58,87 @@ func nuevaSesionPreview(datos []byte, layout, locale string) (*sesionPreview, er
 	return &sesionPreview{
 		datos: datos, layout: layout, locale: locale, paquete: modelo.Paquete,
 		res: modelo.Ejecucion, m: m, base: m.prog.dex,
+		pantallas: append([]string(nil), modelo.Ejecucion.Pantallas...),
 	}, nil
+}
+
+// preparadorSesion enlaza los `android:onClick` del layout de una actividad recién abierta, igual
+// que el comando de una sola pasada hace en preview.go:751. La sesión no guarda el zip ni la tabla
+// del arranque, así que los reconstruye de los bytes de la apk que ya tiene en memoria.
+func (s *sesionPreview) preparadorSesion() func(*maquinaDalvik) {
+	return func(m *maquinaDalvik) {
+		zr, err := zip.NewReader(bytes.NewReader(s.datos), int64(len(s.datos)))
+		if err != nil {
+			return
+		}
+		var tabla *tablaRecursos
+		if arsc, err := entradaDeZip(zr, "resources.arsc"); err == nil {
+			tabla, err = leeTabla(arsc)
+			if err == nil && s.locale != "" {
+				tabla.locale = s.locale
+			}
+		}
+		preparaVistasDelLayout(m, zr, tabla, s.layout)
+	}
+}
+
+// estabilizaSesion hace por la sesión viva lo que el cierre `estabiliza` de previewinterprete.go:1453
+// hace en una pasada: abre la actividad que dejó pendiente un `startActivity` y vuelve a la anterior
+// si alguien llamó a `finish()`. La máquina que queda delante y su pila se guardan en la sesión para
+// que la siguiente orden llegue a la pantalla correcta, sin releer el dex ni reenviar el guion.
+func (s *sesionPreview) estabilizaSesion() {
+	for {
+		m := s.m
+		if m.pendiente != "" {
+			destino := m.pendiente
+			m.pendiente = ""
+			if len(s.pantallas) >= pantallasMaximas {
+				// el tope simétrico de los clics: corta una navegación circular antes de encadenar
+				// pantallas sin fin, como en el comando de una pasada.
+				m.avisa("startActivity a %s no se abrió: el tope de %d pantallas", claseCorta(destino),
+					pantallasMaximas)
+				continue
+			}
+			if _, ok := m.prog.clases[destino]; !ok {
+				m.avisa("startActivity a %s: la clase no está en el dex", claseCorta(destino))
+				continue
+			}
+			if m.declaradas != nil && !m.declaradas[destino] {
+				m.avisa("startActivity a %s: no está declarada en el manifiesto", claseCorta(destino))
+				continue
+			}
+			m.pausa()
+			nueva := nuevaMaquina(m.prog, m.tabla)
+			nueva.declaradas = m.declaradas
+			nueva.registro = m.registro
+			nueva.almacen = m.almacen
+			nueva.reloj = m.reloj
+			nueva.intent = m.intentoSaliente
+			if err := nueva.abreActividad(destino, s.preparadorSesion(), true); err != nil {
+				m.avisa("la actividad %s no arrancó: %v", claseCorta(destino), err)
+				m.reanuda()
+				continue
+			}
+			s.pila = append(s.pila, m)
+			s.m = nueva
+			s.pantallas = append(s.pantallas, claseCorta(destino))
+			continue
+		}
+		if m.terminada {
+			m.terminada = false
+			m.cierra()
+			if len(s.pila) > 0 {
+				anterior := s.pila[len(s.pila)-1]
+				s.pila = s.pila[:len(s.pila)-1]
+				s.m = anterior
+				anterior.reanuda()
+				s.pantallas = append(s.pantallas, claseCorta(anterior.actividad.clase))
+				continue
+			}
+			m.avisa("finish() en la única actividad: la app se queda sin pantalla")
+		}
+		return
+	}
 }
 
 // aplicaEvento entrega UNA orden a la máquina viva. El intercambio pasa siempre por deltaDeDexes
@@ -78,9 +164,15 @@ func (s *sesionPreview) aplicaEvento(ev eventoUsuario) error {
 	if err := s.m.entregaEvento(s.m.tabla, ev, s.res); err != nil {
 		return err
 	}
-	// el guion del hospedador no trae navegación; drenar las tareas vencidas basta para que el
-	// reloj lógico y los aftermath de un clic queden como en el comando de una sola pasada.
+	// un clic puede llamar a `startActivity` o a `finish()`: estabilizar aquí abre la actividad
+	// siguiente (o vuelve a la anterior) antes de publicar, igual que hace el bucle de una pasada
+	// entre orden y orden en previewinterprete.go:1648. Sin esto la máquina viva seguía delante de
+	// la pantalla vieja aunque el `onClick` hubiera corrido.
+	s.estabilizaSesion()
+	// las tareas vencidas pueden navegar a otra pantalla: estabiliza también tras cada una, como
+	// hace `drena` en el comando de una sola pasada (previewinterprete.go:1555-1558).
 	for s.m.vence(s.m.ahora()) {
+		s.estabilizaSesion()
 	}
 	return nil
 }
@@ -93,6 +185,10 @@ func (s *sesionPreview) actualizaRes() {
 	// limpiara, la siguiente buena seguiría publicando `error` con codigo 0 (json:"error,omitempty")
 	res.Error = ""
 	res.Actividad = claseCorta(m.actividad.clase)
+	// el recorrido se publica desde la sesión, no desde la máquina delantera: `startActivity` y
+	// `finish()` cambian la máquina, y el historial de pantallas tiene que seguir acumulado para
+	// que el panel y la vista Pantalla vean la actividad que quedó delante.
+	res.Pantallas = append([]string(nil), s.pantallas...)
 	res.Capturas = append([]capturaTexto(nil), m.capturas...)
 	res.Oyentes = m.oyentesDeVista()
 	res.Marcas = m.marcasDeVista()
