@@ -43,9 +43,13 @@ Actualización (§358, push ejecutado): el pin de entonces pasó a `4117a8f`
 Los rangos empujados fueron emulador `563e991..4117a8f` → `origin/emulador-modulo`, studio
 `e30d3ad..4a17f84` → `origin/emulador-sin-topes` y padre `8ea01c3..3a5f557` → `origin/web`; padre
 y studio quedan con `rev-list --count @{u}..HEAD` a cero.
-Actualización (§368, sin push en esta sesión): el pin vigente de la regla 14 es
+Actualización (§368, sin push en esa sesión; registro histórico): el pin vigente entonces era
 `a2a6c29111783ee09f6e74729c4b303b0dd8242d`, subido en el mismo commit del emulador al integrar
 C → B → D → E; los rangos de §358 quedan como registro del push anterior.
+Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de §368 queda
+como registro histórico. Guardia ejecutada aquí: `git -C studio rev-parse HEAD:apkc-emulador` →
+`c4484424140b13baef66d5d72f54bc4b2ec886cd` (y `git -C studio ls-tree HEAD apkc-emulador` →
+`160000 commit c4484424140b13baef66d5d72f54bc4b2ec886cd apkc-emulador`).
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)
 
@@ -158,10 +162,11 @@ Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El pin vigente de la regla 14 es `a2a6c29111783ee09f6e74729c4b303b0dd8242d`
+El pin vigente de la regla 14 es `c4484424140b13baef66d5d72f54bc4b2ec886cd`
 (`git -C studio rev-parse HEAD:apkc-emulador`, ejecutado y anotado en el apartado 1), subido en el
-mismo commit del emulador al integrar C → B → D → E. El gitlink anidado de `studio` es el único sitio
-donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
+mismo commit del emulador al integrar la familia de red. Actualización (familia de red, commit
+`3dbf574`): el pin pasó a `c448442…`; la nota de §368 queda como registro histórico. El gitlink
+anidado de `studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
 push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el
 recuento de `ahead` lo da `git status -sb` al leer este fichero (antes del commit documental de
 §368 era `[ahead 6]` y sube con cada commit local).
