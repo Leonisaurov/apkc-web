@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -224,6 +225,29 @@ func (s *sesionPreview) aplicaEvento(ev eventoUsuario) error {
 		}
 		s.base = nuevo
 		s.res.Intercambios = append(s.res.Intercambios, hechos...)
+		return nil
+	}
+	if ev.Tipo == ordenAvanzarTipo {
+		// La sesión viva tiene que mover el reloj igual que la pasada única (previewinterprete.go:
+		// 1593-1605): `entregaEvento` no tiene caso para esta orden y antes se descartaba sin tocar
+		// el reloj, así que el cronómetro nunca avanzaba aunque el fin-orden saliera con código 0.
+		ms, err := strconv.ParseInt(ev.Dato, 10, 64)
+		if err != nil || ms < 0 {
+			return fmt.Errorf("--avanzar %q no son milisegundos enteros no negativos", ev.Dato)
+		}
+		if err := s.m.avanza(ms); err != nil {
+			return err
+		}
+		// El mismo drenaje de `drena` en la pasada única (previewinterprete.go:1556-1562): correr
+		// las tareas que vencen hasta el instante pedido, estabilizando la navegación entre ellas,
+		// y dejar el reloj en el límite aunque una tarea lo haya movido a su propio instante.
+		limite := s.m.ahora()
+		for s.m.vence(limite) {
+			s.estabilizaSesion()
+		}
+		if !s.m.cortada && s.m.ahora() < limite && s.m.reloj != nil {
+			*s.m.reloj = limite
+		}
 		return nil
 	}
 	if err := s.m.entregaEvento(s.m.tabla, ev, s.res); err != nil {

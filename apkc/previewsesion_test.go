@@ -553,3 +553,193 @@ func TestLaSesionNavegaEntreActividades(t *testing.T) {
 		t.Errorf("al volver no se conservó el estado de la primera pantalla: %+v", vuelta.Raiz)
 	}
 }
+
+// Helpers del cronómetro por sesión ------------------------------------------------------------
+
+// tablaDelCronometroSesion es la tabla de una apk mínima con tres ids ordenados por nombre: el
+// botón que inicia, el TextView del pulso y el TextView de la hora; el cuarto recurso es el layout.
+func tablaDelCronometroSesion() tablaEscribir {
+	return tablaEscribir{
+		idPaquete: 0x7f, nombrePaquete: "com.hola.reloj",
+		global: []string{"res/layout/main.xml"}, globalUTF8: true,
+		nombresTipo: []string{"id", "layout"}, nombresUTF8: false,
+		claves: []string{"iniciar", "main", "pulso", "tiempo"}, clavesUTF8: true,
+		tipos: []tipoEscribir{
+			{
+				id: 1, specFlags: []uint32{0, 0, 0},
+				bloques: []bloqueEscribir{{entradas: []entradaEscribir{
+					{clave: 0, flags: 0x0004, valor: valorEscribir{tipo: 0x12, datos: 0}}, // iniciar
+					{clave: 2, flags: 0x0004, valor: valorEscribir{tipo: 0x12, datos: 0}}, // pulso
+					{clave: 3, flags: 0x0004, valor: valorEscribir{tipo: 0x12, datos: 0}}, // tiempo
+				}}},
+			},
+			{
+				id: 2, specFlags: []uint32{0},
+				bloques: []bloqueEscribir{{entradas: []entradaEscribir{
+					{clave: 1, valor: valorEscribir{tipo: 0x03, datos: 0}}, // main
+				}}},
+			},
+		},
+	}
+}
+
+// layoutDelCronometroSesion pone los dos TextView y el botón con los ids de la tabla anterior:
+// iniciar=0x7f010000, pulso=0x7f010001 y tiempo=0x7f010002 (el orden es el de las claves del tipo).
+func layoutDelCronometroSesion() documentoAXML {
+	texto := func(id uint32) *elementoEscribir {
+		return &elementoEscribir{
+			nombre: "TextView", linea: 3,
+			attrs: []atributoEscribir{
+				{ns: "android", nombre: "id", id: 0x010100d0, tipo: tipoReferencia, datos: id},
+				{ns: "android", nombre: "layout_width", id: 0x010100f4, tipo: tipoEnteroDec, datos: 0xfffffffe},
+				{ns: "android", nombre: "layout_height", id: 0x010100f5, tipo: tipoEnteroDec, datos: 0xfffffffe},
+			},
+		}
+	}
+	return documentoAXML{
+		ns:   []declaracionNS{{prefijo: "android", uri: uriAndroid, linea: 2}},
+		utf8: true,
+		raiz: &elementoEscribir{
+			nombre: "LinearLayout", linea: 2,
+			attrs: []atributoEscribir{
+				{ns: "android", nombre: "orientation", id: 0x010100c4, tipo: tipoEnteroDec, datos: 1},
+				{ns: "android", nombre: "layout_width", id: 0x010100f4, tipo: tipoEnteroDec, datos: 0xffffffff},
+				{ns: "android", nombre: "layout_height", id: 0x010100f5, tipo: tipoEnteroDec, datos: 0xffffffff},
+			},
+			hijos: []*elementoEscribir{
+				texto(0x7f010002), // tiempo
+				texto(0x7f010001), // pulso
+				{
+					nombre: "Button", linea: 20,
+					attrs: []atributoEscribir{
+						{ns: "android", nombre: "id", id: 0x010100d0, tipo: tipoReferencia, datos: 0x7f010000},
+						{ns: "android", nombre: "layout_width", id: 0x010100f4, tipo: tipoEnteroDec, datos: 0xfffffffe},
+						{ns: "android", nombre: "layout_height", id: 0x010100f5, tipo: tipoEnteroDec, datos: 0xfffffffe},
+						{ns: "android", nombre: "text", id: 0x0101014f, tipo: tipoCadena, texto: "Iniciar"},
+					},
+				},
+			},
+		},
+	}
+}
+
+func apkDelCronometroSesion(t *testing.T) []byte {
+	t.Helper()
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layout, err := escribeAXML(layoutDelCronometroSesion())
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelCronometroSesion())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	r, err := rDeTabla(tablaDelCronometroSesion())
+	if err != nil {
+		t.Fatalf("el R.java no sale de la tabla: %v", err)
+	}
+	return zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layout,
+		"classes.dex": dexDeFuentes(t,
+			fuenteJava{nombre: "R.java", contenido: r},
+			fuenteJava{nombre: "Casos.java", contenido: fuenteCronometroSesion}),
+	})
+}
+
+// fuenteCronometroSesion arranca un tic a los 1000 ms cuando se pulsa id/iniciar. El modelo arranca
+// sin hora escrita y solo la publica cuando vence la tarea: sin la orden --avanzar no hay tic.
+const fuenteCronometroSesion = `package com.hola.reloj;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class Casos extends Activity implements Runnable {
+    TextView tiempo;
+    TextView pulso;
+    Handler reloj;
+    int pulsos = 0;
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        tiempo = (TextView) findViewById(R.id.tiempo);
+        pulso = (TextView) findViewById(R.id.pulso);
+        reloj = new Handler();
+        findViewById(R.id.iniciar).setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                iniciar();
+            }
+        });
+    }
+
+    private void iniciar() {
+        reloj.postDelayed(this, 1000L);
+    }
+
+    public void run() {
+        pulsos = pulsos + 1;
+        tiempo.setText("tiempo 00:01.00");
+        pulso.setText("pulso " + pulsos);
+    }
+}
+`
+
+// capturaSesionDe lee el texto dinámico de un id del modelo que publicó la sesión.
+func capturaSesionDe(t *testing.T, linea, id string) string {
+	t.Helper()
+	var modelo struct {
+		Ejecucion struct {
+			Capturas []struct {
+				ID    string `json:"id"`
+				Texto string `json:"texto"`
+			} `json:"capturas"`
+		} `json:"ejecucion"`
+	}
+	if err := json.Unmarshal([]byte(linea), &modelo); err != nil {
+		t.Fatalf("el modelo no se lee: %v", err)
+	}
+	for i := len(modelo.Ejecucion.Capturas) - 1; i >= 0; i-- {
+		if modelo.Ejecucion.Capturas[i].ID == id {
+			return modelo.Ejecucion.Capturas[i].Texto
+		}
+	}
+	return ""
+}
+
+// TestLaSesionAvanzaElRelojConLaOrden es la falsación del defecto reportado: en modo sesión el
+// `--avanzar` caía en `entregaEvento`, que no tiene caso para esa orden, y el fin-orden salía con
+// código 0 mientras el reloj seguía en 0. Aquí se pulsa id/iniciar, se entrega --avanzar 1000 y el
+// modelo tiene que publicar reloj=1000, la hora 00:01.00 y el pulso de la tarea vencida.
+func TestLaSesionAvanzaElRelojConLaOrden(t *testing.T) {
+	s, err := nuevaSesionPreview(apkDelCronometroSesion(t), "", "")
+	if err != nil {
+		t.Fatalf("la sesión del cronómetro no arrancó: %v", err)
+	}
+	mustLinea(t, s, "iniciar", []string{"--pulsar", "id/iniciar"})
+	linea := mustLinea(t, s, "avance", []string{"--avanzar", "1000"})
+
+	var modelo struct {
+		Ejecucion struct {
+			Reloj int64 `json:"reloj"`
+		} `json:"ejecucion"`
+	}
+	if err := json.Unmarshal([]byte(linea), &modelo); err != nil {
+		t.Fatalf("el modelo no se lee: %v", err)
+	}
+	if modelo.Ejecucion.Reloj != 1000 {
+		t.Fatalf("reloj = %d y se esperaba 1000: el --avanzar se descartó en la sesión", modelo.Ejecucion.Reloj)
+	}
+	if got := capturaSesionDe(t, linea, "id/tiempo"); got != "tiempo 00:01.00" {
+		t.Errorf("tiempo = %q y se esperaba «tiempo 00:01.00»", got)
+	}
+	if got := capturaSesionDe(t, linea, "id/pulso"); got != "pulso 1" {
+		t.Errorf("pulso = %q y se esperaba «pulso 1»", got)
+	}
+}
