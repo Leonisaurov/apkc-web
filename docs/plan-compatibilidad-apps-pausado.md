@@ -291,7 +291,7 @@ numeración nueva empieza en `§350` (medido en §1 de este plan, aún por regis
 `§351`. Regla 11: **nada se marca «hecho» sin medición propia**;
 los `§` de abajo son criterios, no resultados.
 
-### Fase A — §351: lector de dex tolerante con dex de R8/javac real (desbloquea 3/3)
+### Fase A — §355: lector de dex tolerante con dex de R8/javac real (desbloquea 3/3)
 
 - **Por qué va primero**: es el primer error de los tres y es compartido. Sin esto no hay ni
   `onCreate`.
@@ -328,7 +328,7 @@ los `§` de abajo son criterios, no resultados.
   apkc/dexreader.go:579:func utf16Len(s string) int {
   ```
 
-### Fase B — §352: multidex en el modelo (desbloquea 2/3 para empezar)
+### Fase B — §360: multidex en el modelo (desbloquea 2/3 para empezar)
 
 - **Ficheros**: `apkc/preview.go:694-790` (bucle `entradaDeZip(zr,"classes.dex")`),
   nueva función `dexDelApk` que devuelve `[]*dexFile` y una tabla descriptor→dex;
@@ -364,7 +364,7 @@ los `§` de abajo son criterios, no resultados.
 - **Commit**: `fix(preview): elige lanzadora y layout reales sin inventar pantalla`.
 - **Dependencia de la separación**: **después de separar el módulo**.
 
-### Fase D — §354: stubs de framework por familia (desbloquea las pantallas reales)
+### Fase D — §361: stubs de framework por familia (desbloquea las pantallas reales)
 
 - **Ficheros**: `apkc/previewinterprete.go:4014-5303` (`intentaStub`) y nuevos
   `apkc/previewstubs_<familia>.go`; tests en `apkc/previewstubsframework_test.go` y
@@ -384,7 +384,7 @@ los `§` de abajo son criterios, no resultados.
 - **Dependencia de la separación**: **después de separar el módulo**; es la fase que más se beneficia
   de tener el intérprete suelto.
 
-### Fase E — §355: temas, recursos ofuscados y pintado en la pestaña
+### Fase E — §362: temas, recursos ofuscados y pintado en la pestaña
 
 - **Ficheros**: `apkc/preview.go` (resolución de estilos del tema), `apkc/previewdibujo.go:102-127`,
   `studio/vista-xml.js:254-258`, `studio/previa-panel.js`, `studio/vistas.js`. Cambios en `studio/`
@@ -397,7 +397,7 @@ los `§` de abajo son criterios, no resultados.
   `chore(studio): actualiza puntero`.
 - **Dependencia de la separación**: **después de separar el módulo**.
 
-### Fase F — §356: F-Droid y la pantalla Compose (decisión de alcance)
+### Fase F — §363: F-Droid y la pantalla Compose (decisión de alcance)
 
 - `F-Droid` no tiene layout XML para `MainActivity`: su UI es `androidx.compose.material3.*` con
   `navigation3`. Emular Compose de verdad (composition, recomposición, `remember`) es un frente
@@ -410,7 +410,7 @@ los `§` de abajo son criterios, no resultados.
   documentado; la pestaña no muestra una pantalla que parezca real sin serlo.
 - **Dependencia de la separación**: **después de separar el módulo**.
 
-### Fase G — §357: fidelity en navegador (solo con autorización)
+### Fase G — §364: fidelity en navegador (solo con autorización)
 
 - CDP/Droidloom comparando la captura real con la del emulador para las pantallas que ya tengan
   modelo (NewPipe `activity_main`, Termux `activity_termux`).
