@@ -1122,13 +1122,17 @@ apagado.
 
 ### Verificación Wisp v1 en remoto
 
-Cliente Go de sonda, con `GOPROXY=off`, contra `wss://wisp.dolci-vita.link/wisp/`. El literal del
-programa de sonda no se conserva en los datos recibidos: su forma canónica es la de un `go run` con
-el módulo resuelto sin red, y las tramas que siguen se transcriben tal como se observaron, sin
-inventar salidas.
+La sonda son tests de Go ejecutados con `GOPROXY=off` contra
+`wss://wisp.dolci-vita.link/wisp/`, desde una copia de trabajo de `tools/wispd/` bajo caché:
+`~/.cache/apkc-web/wisp-verificacion/wispd/`. El fichero `verificacion_remota_test.go` se añadió
+solo en esa copia, con los tests `TestRemoto01Handshake` … `TestRemoto06DestinoPermitido` y
+`TestRemoto07`; no está versionado y el repositorio sigue intacto. Las tramas que siguen se
+transcriben tal como se observaron, sin inventar salidas.
 
 ```sh
-GOPROXY=off go run <sonda Wisp v1>
+# desde ~/.cache/apkc-web/wisp-verificacion/wispd/
+tcr env GOTOOLCHAIN=local GOMODCACHE=/home/leonisauro/.cache/apkc-web/wispd/modcache GOTMPDIR=/home/leonisauro/.cache/apkc-web/wisp-verificacion/gotmp GOPROXY=off /home/leonisauro/sdk/go1.24.0/bin/go test -v -count=1 -run TestRemoto ./...
+# sondeo adicional: el mismo comando con -run TestRemoto07 ./...
 ```
 
 | # | Sonda | Resultado observado | Lectura |
