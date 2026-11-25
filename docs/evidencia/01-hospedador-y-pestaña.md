@@ -296,7 +296,7 @@ Solo cambian valores de texto; ids, rutas y drawables no cambian.
 pestaña en chromium real con `LD_LIBRARY_PATH` apuntando al `shimlib` de `libsimdutf.so.36`):
 
 ```sh
-cd apkc && go test -run TestSesionHeredaElLocaleDelArranque -count=1 -v .
+cd apkc && go test -run TestLaSesionHeredaElLocaleDelEntorno -count=1 -v .
 cd studio && node --check previa-panel.js && node prueba.js
 cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$HOME/.cache/apkc-web/apkc-wasm.wasm" .
 APK_EJEMPLO=$(find "$HOME/.cache/apkc-web/tmp" -name app.apk -path '*traducido*' | head -1)
@@ -311,26 +311,48 @@ cd studio && APK_FIXTURE="$APK_FIXTURE" CHROME_BIN=/usr/bin/chromium APKC_WASM= 
 eso el binario wasm se construye aparte):
 
 ```text
-=== RUN   TestSesionHeredaElLocaleDelArranque
---- PASS: TestSesionHeredaElLocaleDelArranque (0.02s)
+=== RUN   TestLaSesionHeredaElLocaleDelEntorno
+=== RUN   TestLaSesionHeredaElLocaleDelEntorno/con_locale_en_el_entorno
+=== RUN   TestLaSesionHeredaElLocaleDelEntorno/sin_locale_en_el_entorno
+--- PASS: TestLaSesionHeredaElLocaleDelEntorno (0.02s)
+    --- PASS: TestLaSesionHeredaElLocaleDelEntorno/con_locale_en_el_entorno (0.00s)
+    --- PASS: TestLaSesionHeredaElLocaleDelEntorno/sin_locale_en_el_entorno (0.00s)
 PASS
-ok  	github.com/ajinasokan/apkc	0.021s
+ok  	github.com/ajinasokan/apkc	0.027s
 ```
 
-El test arma una apk con `string/saludo` en base/es/es-rMX y un `classes.dex` del Contador y llama
-directamente a `nuevaSesionPreview(apk, "", caso.locale)`: comprueba la **herencia del locale dentro
-de la sesión** — el valor queda en `s.locale` y `modeloConResultado()` lo reaplica en cada repintado
-—, entregando una orden `--pulsar id/pulsar` **sin** `--locale`. Exige `Hola!` al arrancar y tras el
-clic con `es`, `Hello!` sin locale y `Hola MX!` con `es-MX`. **No** exercise `previewSesion()` ni el
-`FlagSet` de `apkc/previewsesion_js.go:31,48`, que solo compila con `js && wasm`: este test nativo
-seguiría pasando aunque se revirtiera ese fichero. La cobertura del flag es la de las seis
-comprobaciones CDP de abajo, que arrancan `apkc preview --locale …` dentro de chromium
-(`$HOME/.cache/apkc-web/cdp-selector-idioma.log:254-259`).
+El test arma una apk con `string/saludo` en base/es y un `classes.dex` del Contador cuyo TextView
+lee `@string/saludo`, y abre la sesión por la misma puerta que el arranque wasm:
+`nuevaSesionPreviewDelEntorno` lee `APKC_SESION_LOCALE` y lo pasa como tercer argumento de
+`nuevaSesionPreview`. El valor queda en `s.locale` y `modeloConResultado()` lo reaplica en cada
+repintado, así que una orden `--pulsar id/pulsar` **sin** `--locale` sigue devolviendo `Hola!`.
+`apkc/previewsesion_js.go:45` llama a ese mismo helper, y `studio/hospedador.js` pone la variable en
+`go.env` al crear la instancia (quitando `--locale` del argv de arranque, que el `FlagSet` de
+`preview --sesion` no acepta).
+
+**Falsificación del claim**: si el helper ignora el entorno y devuelve `""`, el mismo comando falla:
+
+```text
+=== RUN   TestLaSesionHeredaElLocaleDelEntorno/con_locale_en_el_entorno
+    previewsesion_locale_test.go:112: la sesión guardó locale "" y el entorno decía es
+--- FAIL: TestLaSesionHeredaElLocaleDelEntorno (0.02s)
+FAIL	github.com/ajinasokan/apkc	0.022s
+```
+
+(con `echo "rc=$?"` el intérprete devolvió `rc=1`).
+
+Las seis comprobaciones CDP de abajo arrancan `apkc preview --locale …` dentro de chromium
+(`$HOME/.cache/apkc-web/cdp-selector-idioma.log:254-259`) y son la punta de la **página**, no un
+sustituto de este test: el estado que leen es el del panel y un modelo que no se repinta tras un
+clic roto puede seguir enseñando `Hola!`. En esta corrección **no** se han vuelto a correr CDP,
+chromium ni red; solo las puntas Go y node, que son las que reproducen y falsifican el cambio.
 
 **Resultado de la punta node**: `prueba: todo en orden`. Falsifica siete casos de la whitelist
 (`""`, `es`, `es-MX` y `es-MX;id`, `EN`, `null`, `{}`), el contrato de dos argumentos de
 `argvDePrevia` y, leyendo las fuentes, que `e2e.sh` trae el guard activo y `gate.yml` fija
-`EXIGIR_PESTANA: "1"`.
+`EXIGIR_PESTANA: "1"`. También falsifica el transporte en el worker: si `go.env` deja `APKC_SESION_LOCALE`
+vacío, falla con `FALLO: el worker no transporta el locale al crear la sesión ni lo quita del argv de
+arranque` (`rc=1`).
 
 **Resultado CDP**: seis comprobaciones nuevas, todas `  ok`, y cero peticiones ajenas:
 
@@ -358,9 +380,10 @@ El valor de `es-MX` no se inventa: la apk de fixture de la plantilla `traducido`
       (es) "Hola!"
 ```
 
-La cobertura de `es-MX` con un bloque regional real queda medida en el test Go de arriba
-(`Hola MX!`) y en §290; esta medición CDP solo puede falsificar la caída a `values-es`. El clic
-posterior viaja por `argvDeOrden(paso, idSesion)` sin `--locale` y el `idSesion` no cambia; cambiar
+La cobertura de `es-MX` con un bloque regional real queda medida en §290 (el test Go de arriba ya
+solo falsifica la herencia base/es); esta medición CDP solo puede falsificar la caída a `values-es`.
+El clic posterior viaja por `argvDeOrden(paso, idSesion)` sin `--locale` y el `idSesion` no cambia:
+el idioma lo conserva la sesión porque lo leyó de `APKC_SESION_LOCALE` al nacer; cambiar
 `#idioma-ui` a `en` no toca el idioma de la app. La corrida completa terminó en
 `246 comprobaciones bien, 3 mal`: los tres fallos son las comprobaciones D7 de navegación entre
 actividades, y las tres fallan igual sobre una copia prístina del submódulo en `704b409`

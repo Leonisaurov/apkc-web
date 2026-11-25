@@ -100,6 +100,14 @@ func modeloDeBytesConOpciones(datos []byte, o opcionesPreview) (*modeloVista, er
 	return modeloVistaDeAPKConEventos(datos, o.layout, !o.sinEjecutar, o.guion, o.locale)
 }
 
+// nuevaSesionPreviewDelEntorno abre la sesión con el idioma que el hospedador fijó al crear la
+// instancia. La página manda el locale en el arranque clásico y el worker lo transporta en
+// APKC_SESION_LOCALE: las órdenes vivas no llevan `--locale`, así que el valor se lee una sola vez
+// aquí y queda en s.locale para todos los repintados. Es el camino que falsifica el test nativo.
+func nuevaSesionPreviewDelEntorno(datos []byte, layout string) (*sesionPreview, error) {
+	return nuevaSesionPreview(datos, layout, os.Getenv("APKC_SESION_LOCALE"))
+}
+
 // nuevaSesionPreview abre la apk una vez y deja la máquina viva en `onCreate`, sin órdenes.
 func nuevaSesionPreview(datos []byte, layout, locale string) (*sesionPreview, error) {
 	modelo, err := modeloDeBytes(datos, layout, locale, nil)

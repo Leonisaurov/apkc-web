@@ -42,7 +42,7 @@ func previewSesion() {
 		datos, err := os.ReadFile(rutas[0])
 		if err != nil {
 			motivo = err.Error()
-		} else if s, err = nuevaSesionPreview(datos, "", ""); err != nil {
+		} else if s, err = nuevaSesionPreviewDelEntorno(datos, ""); err != nil {
 			motivo = err.Error()
 		}
 	}

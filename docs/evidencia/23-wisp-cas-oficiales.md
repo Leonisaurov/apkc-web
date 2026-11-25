@@ -131,6 +131,18 @@ Texto literal de la licencia, sin inventarla:
 Raíces GTS_Root_R4 / ISRG_Root_X1 / ISRG_Root_X2 desde /etc/ca-certificates/extracted/cadir/ (p11-kit-trust, Mozilla CA store); texto público, licencia NO verificada localmente — confirmar MPL 2.0 / Mozilla CA Certificate Policy antes de publicar.
 ```
 
+**Confirmación escrita de licencia (2026-11-24, vía web, licencia libre):** la sección «CA certificate
+store license» de `https://curl.se/docs/caextract.html` dice literalmente: «The PEM file is only a
+converted version of the original one and thus it is licensed under the same license as the Mozilla
+source file: MPL 2.0». La «Mozilla Root Store Policy» v3.1 (vigente desde 2026-07-01),
+`https://www.mozilla.org/en-US/about/governance/policies/security-group/certs/policy/`, sección 1,
+dice: «under the terms of the relevant Mozilla license(s), distributors of such software are
+permitted to add or delete CA certificates and modify the values of the trust bits in the versions
+that they distribute». Ambas son licencias libres: MPL 2.0 es una licencia de código abierto, y la
+política de Mozilla permite redistribuir el store. Con esto se levanta el bloqueo de publicación y
+`git push` de `apkc-studio` que imponía este §349; la huella `CAS_WISP_SHA256` sigue fijada y cualquier
+cambio del bundle queda en el historial de git.
+
 Fuentes ausentes: `ls -ld /usr/share/doc/ca-certificates/` da
 `ls: cannot access '/usr/share/doc/ca-certificates/': No such file or directory`; el `README`
 local de `/etc/ca-certificates/` tiene 4 líneas (`README:1-4`) y solo remite a

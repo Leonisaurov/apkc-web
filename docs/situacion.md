@@ -702,7 +702,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   (el botón queda en (-12, 28, 88, 40)), con `ALTO_BOTON_DP=40`, `RADIO_BOTON_DP=4`, `clip(marcoRect)`
   para que el quinto botón de `notas` no pinte sobre el editor y el panel como dueño único de
   `#vista-previa`. Frontera: modelo aproximado (sin barra de estado, tema claro), CDP sobre
-  `apkc.wasm` local. El selector de idioma de la app en la pestaña quedó cerrado en §326: el control relanza `apkc preview` con `--locale`, la sesión viva hereda el valor en las órdenes sin bandera —la herencia la comprueba el test Go; el `FlagSet`, las seis comprobaciones CDP—, y `e2e.sh` falla con `pestaña omitida: falta APKC_WASM` en vez de omitirla.
+  `apkc.wasm` local. El selector de idioma de la app en la pestaña quedó cerrado en §326: el control relanza `apkc preview` con `--locale`, el worker transporta ese valor a la sesión en `APKC_SESION_LOCALE` al crear la instancia y la sesión lo conserva en las órdenes sin bandera —la herencia y su falsificación las comprueba el test Go `TestLaSesionHeredaElLocaleDelEntorno`—, y `e2e.sh` falla con `pestaña omitida: falta APKC_WASM` en vez de omitirla.
 - **Las diez plantillas compilan y se emulan dentro del gate (§291 y §292)**: `buildProject` de
   `studio/app.js` siembra `hola`, `contador`, `ciclo`, `menu`, `traducido`, `lienzo`, `notas`,
   `chatbt`, `tareas` y `cronometro`, y las diez pasan por `apkc build --linker go --compiler go` y
