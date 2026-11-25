@@ -28,14 +28,18 @@ const (
 	tipoFlujoTCP byte = 0x01
 	tipoFlujoUDP byte = 0x02
 
-	// Motivos de cierre que emite el servidor (0x41-0x49 están reservados a él).
-	motivoCierreGenerico    byte = 0x01
-	motivoCierreVoluntario  byte = 0x02
-	motivoCierreError       byte = 0x04
-	motivoFlujoDesconocido  byte = 0x05
-	motivoConexionRechazada byte = 0x43
-	motivoLimiteFlujos      byte = 0x48
-	motivoLimiteConexiones  byte = 0x49
+	// Motivos de cierre de la tabla de Wisp v1.2 (URL verificada en el README).
+	// 0x41-0x49 son exclusivos del servidor; 0x01-0x03 son compartidos.
+	motivoCierreGenerico       byte = 0x01
+	motivoCierreVoluntario     byte = 0x02
+	motivoErrorRed             byte = 0x03
+	motivoInfoInvalida         byte = 0x41
+	motivoHostInalcanzable     byte = 0x42
+	motivoTiempoAgotado        byte = 0x43
+	motivoConexionRechazada    byte = 0x44
+	motivoTransferenciaAgotada byte = 0x47
+	motivoDestinoBloqueado     byte = 0x48
+	motivoLimitado             byte = 0x49
 
 	cabeceraPaquete = 5
 	tamMaxDatos     = 16 << 10

@@ -12,11 +12,12 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -37,6 +38,7 @@ const (
 
 type servidor struct {
 	allow     *allowlist
+	destinos  politicaDestinos
 	credito   uint32
 	maxFlujos int
 
@@ -54,6 +56,7 @@ func nuevoServidor(a *allowlist, credito uint32, maxFlujos int) *servidor {
 	}
 	return &servidor{
 		allow:      a,
+		destinos:   politicaProduccion,
 		credito:    credito,
 		maxFlujos:  maxFlujos,
 		tokens:     make(chan struct{}, cupoGlobal),
@@ -87,7 +90,7 @@ func (s *servidor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case s.conexiones <- struct{}{}:
 	default:
 		_ = ws.WriteMessage(websocket.BinaryMessage,
-			codificarPaquete(tipoClose, 0, []byte{motivoLimiteConexiones}))
+			codificarPaquete(tipoClose, 0, []byte{motivoLimitado}))
 		_ = ws.Close()
 		return
 	}
@@ -120,15 +123,100 @@ type flujo struct {
 	salida chan []byte
 	done   chan struct{}
 	unaVez sync.Once
+
+	// Credito en los dos sentidos, en paquetes. `creditoEntrada` lo anuncia este
+	// relay al cliente; `creditoSalida` lo anuncia el cliente al relay. Hasta que
+	// el cliente envie su primer CONTINUE de flujo se mantiene sin tope: los
+	// clientes Wisp v1 de este repo no lo envian.
+	mu             sync.Mutex
+	cond           *sync.Cond
+	creditoEntrada uint32 // paquetes que el cliente aún puede enviar
+	creditoSalida  int64  // paquetes que el relay aún puede enviar al cliente
+	cerrado        bool
+}
+
+func nuevoFlujo(id uint32, tipo byte) *flujo {
+	f := &flujo{
+		id:            id,
+		tipo:          tipo,
+		salida:        make(chan []byte, cupoPorFlujo),
+		done:          make(chan struct{}),
+		creditoSalida: math.MaxInt64,
+	}
+	f.cond = sync.NewCond(&f.mu)
+	return f
 }
 
 func (f *flujo) cerrarRed() {
 	f.unaVez.Do(func() {
+		f.mu.Lock()
+		f.cerrado = true
+		f.mu.Unlock()
+		f.cond.Broadcast()
 		close(f.done)
 		if f.conn != nil {
 			_ = f.conn.Close()
 		}
 	})
+}
+
+// recargarSalida aplica el valor absoluto de un CONTINUE del cliente. Un valor
+// 0 se descarta: conceder cero dejaría al relay esperando para siempre.
+func (f *flujo) recargarSalida(restantes uint32) {
+	if restantes == 0 || f.tipo == tipoFlujoUDP {
+		return
+	}
+	f.mu.Lock()
+	f.creditoSalida = int64(restantes)
+	f.mu.Unlock()
+	f.cond.Broadcast()
+}
+
+// tomarSalida reserva un paquete del credito que el cliente concedió. Si se
+// agota, espera a un CONTINUE nuevo o al cierre del flujo.
+func (f *flujo) tomarSalida() bool {
+	if f.tipo == tipoFlujoUDP {
+		return true
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for f.creditoSalida <= 0 && !f.cerrado {
+		f.cond.Wait()
+	}
+	if f.cerrado || f.creditoSalida <= 0 {
+		return false
+	}
+	f.creditoSalida--
+	return true
+}
+
+// contabilizarEntrada descuenta un paquete recibido del cliente y avisa cuándo
+// conviene renovar el credito. Nunca se anuncia 0: apkc/wisp.go:894-916 bloquea
+// el Write del cliente si el credito llega a cero.
+func (f *flujo) contabilizarEntrada(ventana uint32) bool {
+	if f.tipo == tipoFlujoUDP {
+		return false
+	}
+	f.mu.Lock()
+	if f.creditoEntrada > 0 {
+		f.creditoEntrada--
+	}
+	umbral := ventana / 4
+	if umbral < 1 {
+		umbral = 1
+	}
+	renovar := f.creditoEntrada <= umbral
+	f.mu.Unlock()
+	return renovar
+}
+
+func (f *flujo) renovarEntrada(ventana uint32) {
+	if ventana == 0 {
+		return
+	}
+	f.mu.Lock()
+	f.creditoEntrada = ventana
+	f.mu.Unlock()
 }
 
 func (c *conexion) atender() {
@@ -197,6 +285,21 @@ func (c *conexion) escribirPaquete(tipo byte, id uint32, carga []byte) error {
 	return c.ws.WriteMessage(websocket.BinaryMessage, codificarPaquete(tipo, id, carga))
 }
 
+// recibirContinuo aplica el credito que el cliente concede al relay para enviar
+// DATA en ese flujo. En UDP no hay contabilidad de buffers (spec v1.2).
+func (c *conexion) recibirContinuo(id uint32, restantes uint32) {
+	if id == 0 || restantes == 0 {
+		return
+	}
+	c.mu.Lock()
+	f := c.flujos[id]
+	c.mu.Unlock()
+	if f == nil || f.tipo == tipoFlujoUDP {
+		return
+	}
+	f.recargarSalida(restantes)
+}
+
 func (c *conexion) procesar(p paquete) {
 	switch p.tipo {
 	case tipoConnect:
@@ -204,7 +307,9 @@ func (c *conexion) procesar(p paquete) {
 	case tipoData:
 		c.datosAlSocket(p.streamID, p.carga)
 	case tipoContinue:
-		// El credito lo fija este relay; el CONTINUE del cliente se ignora.
+		// El CONTINUE del cliente fija su credito de recepcion. El de streamID=0
+		// no llegue: el inicial lo manda este relay.
+		c.recibirContinuo(p.streamID, creditoDe(p))
 	case tipoClose:
 		motivo := motivoDe(p)
 		if motivo >= 0x41 && motivo <= 0x49 {
@@ -221,13 +326,23 @@ func (c *conexion) abrirFlujo(id uint32, carga []byte) {
 	}
 	sol, err := decodificarConnect(carga)
 	if err != nil {
-		_ = c.escribirPaquete(tipoClose, id, []byte{motivoCierreError})
+		_ = c.escribirPaquete(tipoClose, id, []byte{motivoInfoInvalida})
 		return
 	}
+
+	// La allowlist de destinos se aplica antes de resolver y antes de dialear.
+	ctx, cancel := context.WithTimeout(context.Background(), plazoDial)
+	defer cancel()
+	dir, motivo := c.srv.resolverDestino(ctx, sol.host, sol.puerto, sol.tipoFlujo)
+	if motivo != 0 {
+		_ = c.escribirPaquete(tipoClose, id, []byte{motivo})
+		return
+	}
+
 	c.mu.Lock()
 	if len(c.flujos) >= c.srv.maxFlujos {
 		c.mu.Unlock()
-		_ = c.escribirPaquete(tipoClose, id, []byte{motivoLimiteFlujos})
+		_ = c.escribirPaquete(tipoClose, id, []byte{motivoLimitado})
 		return
 	}
 	if _, existe := c.flujos[id]; existe {
@@ -235,36 +350,39 @@ func (c *conexion) abrirFlujo(id uint32, carga []byte) {
 		_ = c.escribirPaquete(tipoClose, id, []byte{motivoCierreGenerico})
 		return
 	}
-	f := &flujo{
-		id:     id,
-		tipo:   sol.tipoFlujo,
-		salida: make(chan []byte, cupoPorFlujo),
-		done:   make(chan struct{}),
-	}
+	f := nuevoFlujo(id, sol.tipoFlujo)
+	f.creditoEntrada = c.srv.credito
 	c.flujos[id] = f
 	c.mu.Unlock()
 
-	dir := net.JoinHostPort(sol.host, strconv.Itoa(int(sol.puerto)))
+	red := "tcp"
 	if sol.tipoFlujo == tipoFlujoUDP {
-		ctx, cancel := context.WithTimeout(context.Background(), plazoDial)
-		conn, errDial := (&net.Dialer{Timeout: plazoDial}).DialContext(ctx, "udp", dir)
-		cancel()
-		if errDial != nil {
-			c.cerrarFlujo(id, motivoConexionRechazada, true)
-			return
-		}
-		f.conn = conn
-	} else {
-		conn, errDial := net.DialTimeout("tcp", dir, plazoDial)
-		if errDial != nil {
-			c.cerrarFlujo(id, motivoConexionRechazada, true)
-			return
-		}
-		f.conn = conn
+		red = "udp"
 	}
+	conn, errDial := (&net.Dialer{Timeout: plazoDial}).DialContext(ctx, red, dir)
+	if errDial != nil {
+		c.cerrarFlujo(id, motivoDial(errDial), true)
+		return
+	}
+	f.conn = conn
 
 	go c.leerRed(f)
 	go c.escribirRed(f)
+}
+
+// motivoDial traduce el fallo del socket a la tabla de motivos de Wisp v1.2.
+func motivoDial(err error) byte {
+	var dns *net.DNSError
+	if errors.As(err, &dns) {
+		return motivoHostInalcanzable
+	}
+	if ne, ok := err.(net.Error); ok && ne.Timeout() {
+		return motivoTiempoAgotado
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return motivoConexionRechazada
+	}
+	return motivoErrorRed
 }
 
 func (c *conexion) datosAlSocket(id uint32, datos []byte) {
@@ -272,11 +390,11 @@ func (c *conexion) datosAlSocket(id uint32, datos []byte) {
 	f := c.flujos[id]
 	c.mu.Unlock()
 	if f == nil {
-		_ = c.escribirPaquete(tipoClose, id, []byte{motivoFlujoDesconocido})
+		_ = c.escribirPaquete(tipoClose, id, []byte{motivoCierreGenerico})
 		return
 	}
 	if f.tipo == tipoFlujoUDP && len(datos) > tamMaxDatagrama {
-		c.cerrarFlujo(id, motivoCierreError, true)
+		c.cerrarFlujo(id, motivoInfoInvalida, true)
 		return
 	}
 	select {
@@ -290,7 +408,16 @@ func (c *conexion) datosAlSocket(id uint32, datos []byte) {
 	default:
 	}
 	if _, err := f.conn.Write(datos); err != nil {
-		c.cerrarFlujo(id, motivoConexionRechazada, true)
+		c.cerrarFlujo(id, motivoErrorRed, true)
+		return
+	}
+	// El cliente solo puede enviar lo que este CONTINUE le concedió. Antes de
+	// agotarse se renueva el crédito, para que su Write nunca se bloquee en 0.
+	if f.contabilizarEntrada(c.srv.credito) {
+		f.renovarEntrada(c.srv.credito)
+		credito := make([]byte, 4)
+		binary.LittleEndian.PutUint32(credito, c.srv.credito)
+		_ = c.escribirPaquete(tipoContinue, id, credito)
 	}
 }
 
@@ -308,7 +435,7 @@ func (c *conexion) leerRed(f *flujo) {
 			return
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				log.Printf("wispd: flujo %d: %v", f.id, err)
 			}
 			c.cerrarFlujo(f.id, motivoCierreVoluntario, true)
@@ -321,6 +448,10 @@ func (c *conexion) colaDatos(f *flujo, datos []byte) bool {
 	for len(datos) > 0 {
 		n := min(len(datos), tamMaxDatos)
 		if !c.tomar(f.done) {
+			return false
+		}
+		if !f.tomarSalida() {
+			c.liberar()
 			return false
 		}
 		pkt := codificarPaquete(tipoData, f.id, datos[:n])

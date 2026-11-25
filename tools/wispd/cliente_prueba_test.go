@@ -12,8 +12,9 @@ import (
 // Cliente WebSocket usado solo en las pruebas: habla el mismo formato de
 // paquetes que el servidor y no comparte su lógica de relay.
 type clientePrueba struct {
-	t  *testing.T
-	ws *websocket.Conn
+	t     *testing.T
+	ws    *websocket.Conn
+	resto []byte // paquetes coalescidos del último mensaje leído
 }
 
 func urlWS(urlHTTP string) string {
@@ -43,15 +44,19 @@ func abrirCliente(t *testing.T, urlBase, origen string) *clientePrueba {
 
 func (cl *clientePrueba) leer() paquete {
 	cl.t.Helper()
-	_ = cl.ws.SetReadDeadline(time.Now().Add(3 * time.Second))
-	_, mensaje, err := cl.ws.ReadMessage()
-	if err != nil {
-		cl.t.Fatalf("leer mensaje: %v", err)
+	if len(cl.resto) == 0 {
+		_ = cl.ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_, mensaje, err := cl.ws.ReadMessage()
+		if err != nil {
+			cl.t.Fatalf("leer mensaje: %v", err)
+		}
+		cl.resto = mensaje
 	}
-	p, _, err := decodificarPaquete(mensaje)
+	p, resto, err := decodificarPaquete(cl.resto)
 	if err != nil {
 		cl.t.Fatalf("decodificar mensaje: %v", err)
 	}
+	cl.resto = resto
 	return p
 }
 

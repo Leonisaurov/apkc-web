@@ -12,12 +12,22 @@ import (
 )
 
 func servidorPrueba(t *testing.T) (*httptest.Server, string) {
+	return servidorPruebaCon(t, politicaPrueba, 64)
+}
+
+func servidorPruebaProduccion(t *testing.T) (*httptest.Server, string) {
+	return servidorPruebaCon(t, politicaProduccion, 64)
+}
+
+func servidorPruebaCon(t *testing.T, destinos politicaDestinos, credito uint32) (*httptest.Server, string) {
 	t.Helper()
 	allow, err := nuevaAllowlist(false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := httptest.NewServer(nuevoServidor(allow, 64, 8))
+	srv := nuevoServidor(allow, credito, 8)
+	srv.destinos = destinos
+	s := httptest.NewServer(srv)
 	t.Cleanup(s.Close)
 	return s, s.URL
 }
@@ -203,11 +213,11 @@ func TestLimiteFlujos(t *testing.T) {
 
 	for i := 0; i < 8; i++ {
 		p := cl.leer()
-		if p.tipo == tipoClose && p.streamID == 9 && p.carga[0] == motivoLimiteFlujos {
+		if p.tipo == tipoClose && p.streamID == 9 && p.carga[0] == motivoLimitado {
 			return
 		}
 	}
-	t.Fatal("el noveno flujo no recibió CLOSE 0x48")
+	t.Fatal("el noveno flujo no recibió CLOSE 0x49")
 }
 
 func TestLimiteConexiones(t *testing.T) {
@@ -236,7 +246,7 @@ func TestLimiteConexiones(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.tipo != tipoClose || p.streamID != 0 || p.carga[0] != motivoLimiteConexiones {
+	if p.tipo != tipoClose || p.streamID != 0 || p.carga[0] != motivoLimitado {
 		t.Fatalf("conexión 17: tipo=0x%02x stream=%d motivo=0x%02x, quería CLOSE 0x49 en 0",
 			p.tipo, p.streamID, p.carga[0])
 	}

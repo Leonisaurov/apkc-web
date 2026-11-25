@@ -4,11 +4,21 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 )
 
+// El límite se fija aquí, no con GOMEMLIMIT: es un único mecanismo y no depende
+// de cómo se arranque el proceso. debug.SetMemoryLimit devuelve el valor previo.
+const limiteMemoria = 512 << 20
+
+func fijarLimiteMemoria() int64 {
+	return debug.SetMemoryLimit(limiteMemoria)
+}
+
 func main() {
+	fijarLimiteMemoria()
 	addr := flag.String("addr", "127.0.0.1:8800", "direccion de escucha")
 	origenes := flag.String("origenes", "", "origenes adicionales separados por comas")
 	cert := flag.String("cert", "", "certificado TLS; vacio sirve ws://")
