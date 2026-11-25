@@ -26,7 +26,7 @@ git -C apkc-emulador rev-list --count @{u}..HEAD → fatal: HEAD does not point 
 
 El emulador está en `HEAD` desconectado y sin rama, así que no tiene `@{u}`: su «ahead» es
 **incierto** por diseño, no un fallo. Los tres gitlinks cuadran: studio en el padre = `e30d3ad`, y el
-pin del emulador es `563e991` tanto en el padre como dentro de `studio` (regla 14 y §356). El push
+pin del emulador es `563e991` tanto en el padre como dentro de `studio` (regla 14 y §356). Actualización (§358): el pin pasó a `4117a8f` en el mismo commit que subió el emulador y la guardia de la regla 14 espera ahora `4117a8f`. El push
 autorizado está ejecutado: padre y studio tienen `rev-list --count @{u}..HEAD` a cero.
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)

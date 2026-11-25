@@ -916,7 +916,9 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
    al padre. 34 `cmp` idénticos, suite Go en verde (264,994 s), wasm con `pasos: 22` y sin
    `ejecucion.error`, y `node prueba.js` → «prueba: todo en orden»; `studio` sigue limpio, sin
    gitlink nuevo. Frontera: sin gate, CDP, red ni publicación; el vigilante en vivo sigue
-   `incierto`. Sostenido por `§357`.
+   `incierto`. Sostenido por `§357`. Actualización (§358): el emulador subió a `4117a8f` y actualizó su
+   gitlink en el mismo commit, así que la guardia de la regla 14 espera ahora `4117a8f` en vez de
+   `563e991`, sin reescribir lo medido en `§357`.
 - **Traspaso para una sesión limpia (2026-11-24)**: `docs/ESTADO-SESION.md` recoge el estado verificado
   de los tres repos (padre `65578d9`, studio `e30d3ad`, emulador `563e991`), lo hecho y verificado en
   su capa, lo que sigue en verificación (CDP, `prueba-pestana.js`, `prueba-sitio.js`, `e2e.sh`, gate y
