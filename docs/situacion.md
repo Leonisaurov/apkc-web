@@ -857,7 +857,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `filter-branch --prune-empty` a **34 ficheros y 59 commits** en la rama `emulador-modulo`
   (el puntero es `563e991 fix(preview): hereda el locale…`). `git rm 'apkc/preview*.go'` y
   `submodule add` con `protocol.file.allow=always` dejaron el gitlink; el puntero de `studio` sigue
-  en `8788604081945ed58314d333fa5b06e97eb2b7b3` (`ahead 1`, sin empujar). Compilando los dos
+  en `8788604081945ed58314d333fa5b06e97eb2b7b3` (`ahead 1`, sin empujar). Actualización (§358, 2026-11-25): el push de estos rangos ya se ejecutó; ver docs/ESTADO-SESION.md y git status -sb para el estado vigente. Compilando los dos
   árboles desde la misma ruta, `cmp` da salida vacía y ambos wasm tienen sha256
   `a00e24effe90aff741a2ae63e5976985ed8dc88880073979bf5b3a707b9c9c43`; el JSON de
   `node shim/navegador-sim.js … preview /app.apk` es idéntico al de antes (`nodos: 3`,
@@ -880,7 +880,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `cd studio && node prueba.js` → «prueba: todo en orden» (`fallos=0`, `prueba.js:6722`), 9/9
   reglas contra salidas reales. Frontera: no se corrieron el gate, `prueba-pestana.js` ni
   `prueba-sitio.js` (CDP), ni `surge`, ni `push`; `studio` sigue `ahead 1` y CI no puede clonar el
-  submódulo hasta el push autorizado. Nada se da por verde por analogía (regla 11).
+  submódulo hasta el push autorizado. Nada se da por verde por analogía (regla 11). Actualización (§358, 2026-11-25): el push de estos rangos ya se ejecutó; ver docs/ESTADO-SESION.md y git status -sb para el estado vigente.
 - §354: los tres APK reales de `~/Downloads` (F-Droid, NewPipe y Termux arm; la variante x86_64 solo
   por SHA) arrancan con `pasos:0` y un `ejecucion.error` distinto cada uno — valor estático `0x17` en
   `L_COROUTINE/CoroutineDebuggingKt;`, 4 valores para 8 campos en `SpacerKt` y la cadena #808 que

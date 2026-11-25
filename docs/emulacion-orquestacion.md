@@ -174,7 +174,7 @@ El documentador es una sola sesión que se reanuda por `sessionID` para no dupli
   `previa-lateral-canvas`, un clic real sobre `id/pulsar` deja «Pulsos: 1» y `vista-previa.js` se
   sirve sin red desde la caché del service worker. Oráculos externos ejecutados: `apksigner`,
   `zipalign`, `aapt2`, `d8`, `bundletool`, `jarsigner` y `zipcheck.py`. `git status -sb` limpio
-  (`ahead 66`, submódulo limpio).
+  (`ahead 66`, submódulo limpio). Actualización (§358, 2026-11-25): el push de estos rangos ya se ejecutó; ver docs/ESTADO-SESION.md y git status -sb para el estado vigente.
 - **Pendiente de gate:** la comprobación visual de F5, la ejecución real de D7, la carrera de dos
   pestañas y la medición de I5 en la pestaña. El gate verde registrado es de `89fc27f`, un árbol
   anterior a estos cierres; el definitivo sigue pendiente.
