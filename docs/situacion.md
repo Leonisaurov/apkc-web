@@ -964,11 +964,13 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   (`2 > 1` y `arraycopy: length -2 is negative`). Sin campo JSON nuevo ni CDP.
   `docs/evidencia/15-apps-reales.md`.
 - §372: recursos y preferencias de Termux (`af72d22`, `5558e02`, `4bdebeb`, `7162fdc`, `6366291`,
-  **aún no integrados en el checkout principal**): 223 → 64 → 408 → 503 → 719 → **3798** pasos;
-  desaparecen `Set.iterator`, `containsKey`/`contains`, conjuntos estáticos nulos e
-  `ImmutableBiMap.entrySet`; queda `java.io.File.isFile sobre nulo` en `checkForFontAndColors`.
-  Tres APK byte-idénticas y gestor solo con el aviso `preferencias-memoria:`; cero peticiones fuera
-  del origen pendiente para Fase G. `docs/evidencia/15-apps-reales.md`.
+  **ya integrados en el checkout principal con `688a7ad`**, pin `a83ebcd…`): 223 → 64 → 408 →
+  503 → 719 → **3798** pasos como registro fechado y **4784** en la corrida final
+  (`~/.cache/apkc-web/integracion-final/termux.json`); desaparecen `Set.iterator` de propiedades,
+  `containsKey`/`contains`, conjuntos estáticos nulos e `ImmutableBiMap.entrySet`; la frontera
+  nueva es `Set.iterator` en `TerminalColorScheme.updateWith`. Tres APK byte-idénticas en el
+  registro fechado y gestor solo con el aviso `preferencias-memoria:`; cero peticiones fuera del
+  origen pendiente para Fase G. `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,

@@ -965,24 +965,44 @@ quedan fuera de esta medición.
 
 ---
 
-## 372. Recursos y preferencias de Termux: 223 → 3798 pasos en worktrees aún no integrados
+## 372. Recursos y preferencias de Termux: 223 → 3798 pasos, y 4784 en la integración final
 
-Medido el 2026-11-25 sobre los commits `af72d22`, `5558e02`, `4bdebeb`, `7162fdc` y `6366291` de
-los worktrees. **No están integrados en el checkout principal al escribir este `§`**: es una
-medición de los worktrees, no del árbol actual. Sin gate, CDP, red ni publicación.
+Medido el 2026-11-25. La medición original se tomó sobre los commits `af72d22`, `5558e02`,
+`4bdebeb`, `7162fdc` y `6366291` de los worktrees, cuando aún no estaban en el checkout principal;
+la cadena 223 → 64 → 408 → 503 → 719 → **3798** queda como **registro fechado** de ese momento, no
+como el estado del árbol actual. Los cinco commits ya están integrados en el checkout principal con
+`688a7ad feat(emulador): integra la correccion de Arrays y los recursos de Termux`, con pin del
+emulador `a83ebcd5654475c00bc2f52c134497e64190b646`. La guardia se comprueba con
+`git -C studio rev-parse HEAD:apkc-emulador`. Sin gate, CDP, red ni publicación.
 
-**Progreso de Termux**, con JSON en `~/.cache/apkc-web/recursos/salida/`: 223
+**Progreso de Termux (registro fechado)**, con JSON en `~/.cache/apkc-web/recursos/salida/`: 223
 (`base-termux-app_v0.118.3+github-debug_x86_64.json`) → 64 (`con-propiedades-termux.json`) → 408
 (`debug-termux.json`) → 503 (`contains-debug.json`) → 719 (`estaticos2-termux.json`) → **3798**
 (`inmutable2-termux.json`). Desaparecen `Set.iterator` de propiedades, `containsKey`/`contains`,
-los conjuntos estáticos nulos e `ImmutableBiMap.entrySet`. Queda la frontera `java.io.File.isFile
-sobre nulo` en `checkForFontAndColors`, en el `ejecucion.error` de `inmutable2-termux.json`.
+los conjuntos estáticos nulos e `ImmutableBiMap.entrySet`. En esa corrida quedaba la frontera
+`java.io.File.isFile sobre nulo` en `checkForFontAndColors`, en el `ejecucion.error` de
+`inmutable2-termux.json`.
 
-**Las otras cuatro APK.** Tres quedan byte a byte idénticas a la base —F-Droid
-(`9bd87930…`), NewPipe (`67b498c1…`) y Libre Memory Game (`1b70842e…`), con el mismo SHA en
-`base-*.json` y `inmutable2-*.json`— y el gestor solo con el aviso informativo
+**Corrida final sobre el checkout integrado.** El JSON es
+`~/.cache/apkc-web/integracion-final/termux.json`:
+
+```sh
+python3 -c "import json; d=json.load(open('/home/leonisauro/.cache/apkc-web/integracion-final/termux.json')); print('pasos', d['ejecucion']['pasos']); print('error', d['ejecucion'].get('error'))"
+```
+```
+pasos 4784
+error en com.termux.app.TermuxActivity.setTermuxTerminalViewAndClients: en com.termux.app.terminal.TermuxTerminalSessionClient.onCreate: en com.termux.app.terminal.TermuxTerminalSessionClient.checkForFontAndColors: en com.termux.terminal.TerminalColorScheme.updateWith: se llamó a java.util.Set.iterator sobre un objeto nulo
+```
+De **3798 a 4784 pasos**: la integración `688a7ad` corrige `Arrays.copyOfRange` y los recursos y
+preferencias de Termux, y deja una frontera nueva, `Set.iterator` dentro de
+`TerminalColorScheme.updateWith`, en lugar del `java.io.File.isFile sobre nulo` anterior.
+
+**Las otras cuatro APK.** En el registro fechado, tres quedan byte a byte idénticas a la base
+—F-Droid (`9bd87930…`), NewPipe (`67b498c1…`) y Libre Memory Game (`1b70842e…`), con el mismo SHA
+en `base-*.json` y `inmutable2-*.json`— y el gestor solo con el aviso informativo
 `preferencias-memoria: getSharedPreferences("com.martinmimigames.simplefileexplorer") usa un
 almacén en memoria, sin fichero` (`inmutable2-simplefileexplorer.json`).
 
 **Frontera.** La verificación de cero peticiones fuera del origen queda para Fase G. Los worktrees
-no se tocan desde esta medición y ninguna APK se da por funcionando; sin CDP, gate ni publicación.
+ya están integrados en el checkout principal (`688a7ad`); ninguna APK se da por funcionando; sin
+CDP, gate ni publicación.
