@@ -1567,23 +1567,23 @@ func ejecutaOnCreateConEventos(d *dexFile, tabla *tablaRecursos, actividad strin
 				// el hot swap del guion: el dex nuevo entra en la tabla de despacho de la sesión
 				// viva, sin recrear la actividad ni sus objetos. Va donde se escribió, así que un
 				// clic anterior ve el cuerpo viejo y uno posterior el nuevo.
-				d, err := readDex(orden.Dex)
+				nuevo, err := readDex(orden.Dex)
 				if err != nil {
 					errEventos = fmt.Errorf("--intercambiar %s: %w", orden.Dato, err)
 					break
 				}
-				var hechos []resultadoIntercambio
-				if orden.Metodo == "" {
-					hechos, err = m.intercambiaClase(d, orden.Clase)
-				} else {
-					var uno resultadoIntercambio
-					uno, err = m.intercambiaMetodo(d, orden.Clase, orden.Metodo, orden.Proto)
-					hechos = []resultadoIntercambio{uno}
-				}
+				cambios, err := deltaDeDexes(d, nuevo)
 				if err != nil {
 					errEventos = fmt.Errorf("--intercambiar %s: %w", orden.Dato, err)
 					break
 				}
+				hechos, err := m.aplicaDelta(cambios, nuevo)
+				if err != nil {
+					errEventos = fmt.Errorf("--intercambiar %s: %w", orden.Dato, err)
+					break
+				}
+				// la base del siguiente delta es el dex recién instalado; en fallo no se tocó
+				d = nuevo
 				res.Intercambios = append(res.Intercambios, hechos...)
 				estabiliza()
 				drena(m.ahora())

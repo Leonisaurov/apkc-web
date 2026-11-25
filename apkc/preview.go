@@ -34,6 +34,7 @@ import (
 	"flag"
 	"fmt"
 	"image/png"
+	"io"
 	"math"
 	"os"
 	"sort"
@@ -260,6 +261,86 @@ type contextoVista struct {
 	tabla *tablaRecursos
 }
 
+// opcionesPreview es lo que el parseo de `preview` produce. Separarlo del comando permite que la
+// sesión viva parse una orden sin que un error llame a os.Exit y se lleve la máquina por delante.
+type opcionesPreview struct {
+	layout      string
+	locale      string
+	sinEjecutar bool
+	guion       []eventoUsuario
+}
+
+// registrarBanderasPreview registra las banderas comunes del comando y de cada orden de la sesión.
+func registrarBanderasPreview(set *flag.FlagSet, o *opcionesPreview) {
+	set.StringVar(&o.layout, "layout", "", "nombre del recurso layout que se lee (por defecto main)")
+	set.StringVar(&o.locale, "locale", "", "idioma cuyos valores se leen (p. ej. es o es-MX; por defecto los valores base)")
+	set.BoolVar(&o.sinEjecutar, "sin-ejecutar", false, "no interpreta classes.dex: solo el modelo del layout")
+	set.Var(guionDeEntrada{tipo: "pulsar", eventos: &o.guion}, "pulsar",
+		"id de la vista (o dialogo/positivo|negativo|neutro, o id/lista:fila) cuyo oyente se ejecuta (repetible, en orden)")
+	set.Var(guionDeEntrada{tipo: "escribir", eventos: &o.guion}, "escribir",
+		"id/texto: entrega texto a un EditText como si el usuario tecleara (repetible)")
+	set.Var(guionDeEntrada{tipo: "marcar", eventos: &o.guion}, "marcar",
+		"id de la vista que se marca: CheckBox, RadioButton o Switch (repetible)")
+	set.Var(guionDeEntrada{tipo: "desmarcar", eventos: &o.guion}, "desmarcar",
+		"id de la vista que se desmarca (repetible)")
+	set.Var(ordenDeRecrear{eventos: &o.guion}, "recrear",
+		"recrea la actividad actual con su Bundle, como una rotación (repetible, en orden)")
+	set.Var(ordenDeMenu{eventos: &o.guion}, "menu",
+		"abre el menú de opciones: ejecuta onCreateOptionsMenu y publica sus ítems (repetible, en orden)")
+	set.Var(guionDeEntrada{tipo: ordenMenuItemTipo, eventos: &o.guion}, "menu-item",
+		"menu/N: pulsa el ítem N del menú (repetible, en orden)")
+	set.Var(guionDeEntrada{tipo: "avanzar", eventos: &o.guion}, "avanzar",
+		"milisegundos que avanza el reloj lógico y ejecuta las tareas vencidas (repetible, en orden)")
+	set.Var(ordenDeIntercambio{eventos: &o.guion}, "intercambiar",
+		"clase/metodo(proto)=fichero.dex: sustituye o añade ese método en la sesión viva (repetible, en orden)")
+}
+
+// parsePreview es puro: devuelve opciones, los argumentos posicionales y el error del flag, sin
+// imprimir ni salir. Es lo que la sesión usa para parsear el argv de cada orden.
+func parsePreview(argv []string) (opcionesPreview, []string, error) {
+	set := flag.NewFlagSet("preview", flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	o := opcionesPreview{}
+	registrarBanderasPreview(set, &o)
+	if err := set.Parse(argv); err != nil {
+		return opcionesPreview{}, nil, err
+	}
+	return o, set.Args(), nil
+}
+
+// ejecutaPreview contiene la lógica del comando, sin os.Exit; el wrapper solo imprime y sale.
+func ejecutaPreview(argv []string) (string, error) {
+	o, rutas, err := parsePreview(argv)
+	if err != nil {
+		return "", err
+	}
+	return ejecutaPreviewValidado(o, rutas)
+}
+
+// ejecutaPreviewValidado es la última capa pura: recibe las opciones ya parseadas y el apk, y
+// devuelve el modelo serializado o un error. Ni imprime ni sale: la sesión lo reutiliza.
+func ejecutaPreviewValidado(o opcionesPreview, rutas []string) (string, error) {
+	if len(rutas) != 1 {
+		return "", fmt.Errorf("se espera un apk")
+	}
+	if o.sinEjecutar && len(o.guion) > 0 {
+		return "", fmt.Errorf("--pulsar, --escribir, --marcar, --desmarcar, --recrear y --avanzar necesitan ejecutar el dex; quita --sin-ejecutar")
+	}
+	datos, err := os.ReadFile(rutas[0])
+	if err != nil {
+		return "", err
+	}
+	modelo, err := modeloVistaDeAPKConEventos(datos, o.layout, !o.sinEjecutar, o.guion, o.locale)
+	if err != nil {
+		return "", err
+	}
+	salida, err := json.Marshal(modelo)
+	if err != nil {
+		return "", err
+	}
+	return string(salida), nil
+}
+
 func preview() {
 	set := flag.NewFlagSet("preview", flag.ContinueOnError)
 	set.SetOutput(os.Stderr)
@@ -337,39 +418,21 @@ process is started and nothing is written, so it runs inside the tab.
 	set.Var(ordenDeIntercambio{eventos: &guion}, "intercambiar",
 		"clase/metodo(proto)=fichero.dex: sustituye o añade ese método en la sesión viva, sin "+
 			"recrear la actividad ni sus objetos; sin /metodo, toda la clase (repetible, en orden)")
-	if err := set.Parse(os.Args[2:]); err != nil {
-		// `flag` ya imprimió el error y la ayuda; se repite el error al final para que quien lee la
-		// última línea (la vista previa de la pestaña muestra esa) vea la causa y no el cierre de la
-		// ayuda. Un binario wasm anterior a un flag nuevo se diagnostica así en una línea.
-		fmt.Fprintln(os.Stderr, "preview:", err)
-		os.Exit(2)
+	// flag ya imprimió el error; el único os.Exit del comando está aquí al final, para que quien
+	// lee la última línea vea la causa y no el cierre de la ayuda.
+	var salida string
+	var err error
+	if e := set.Parse(os.Args[2:]); e != nil {
+		err = e
+	} else {
+		o := opcionesPreview{layout: *layout, locale: *locale, sinEjecutar: *sinEjecutar, guion: guion}
+		salida, err = ejecutaPreviewValidado(o, set.Args())
 	}
-	rutas := set.Args()
-	if len(rutas) != 1 {
-		fmt.Fprintln(os.Stderr, "preview: se espera un apk")
-		os.Exit(2)
-	}
-	if *sinEjecutar && len(guion) > 0 {
-		fmt.Fprintln(os.Stderr, "preview: --pulsar, --escribir, --marcar, --desmarcar, --recrear y "+
-			"--avanzar necesitan ejecutar el dex; quita --sin-ejecutar")
-		os.Exit(2)
-	}
-	datos, err := os.ReadFile(rutas[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "preview:", err)
 		os.Exit(2)
 	}
-	modelo, err := modeloVistaDeAPKConEventos(datos, *layout, !*sinEjecutar, guion, *locale)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "preview:", err)
-		os.Exit(2)
-	}
-	salida, err := json.Marshal(modelo)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "preview:", err)
-		os.Exit(2)
-	}
-	fmt.Println(string(salida))
+	fmt.Println(salida)
 }
 
 // ordenEjecucion es una orden del emulador en el orden en que se escribió: `pulsar` lleva el id de

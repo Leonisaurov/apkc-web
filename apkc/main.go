@@ -66,7 +66,11 @@ func main() {
 	case "verify":
 		verificar()
 	case "preview":
-		preview()
+		if len(os.Args) > 2 && os.Args[2] == "--sesion" {
+			previewSesion()
+		} else {
+			preview()
+		}
 	case "version":
 		// what a script asks when it has to know which apkc answered the rest
 		fmt.Println(buildStamp())
