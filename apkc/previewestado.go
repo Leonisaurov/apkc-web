@@ -151,6 +151,7 @@ type objetoEstado struct {
 	PaintColor     uint32               `json:"paint_color"`
 	PaintPuesto    bool                 `json:"paint_puesto"`
 	PaintGrosor    float64              `json:"paint_grosor"`
+	PaintTamano    float64              `json:"paint_tamano"`
 	AnchoVista     int32                `json:"ancho_vista"`
 	AltoVista      int32                `json:"alto_vista"`
 }
@@ -474,7 +475,8 @@ func capturaObjeto(o *objetoDalvik, to *tablaObjetos) objetoEstado {
 		Adaptador: capturaValor(o.adaptador, to), LayoutID: o.layoutID,
 		Mensaje: o.mensajeExcepcion, Indice: o.indice, Bluetooth: o.bluetoothActivo,
 		PaintColor: o.paintColor, PaintPuesto: o.paintPuesto, PaintGrosor: o.paintGrosor,
-		AnchoVista: o.anchoVista, AltoVista: o.altoVista,
+		PaintTamano: o.paintTamano,
+		AnchoVista:  o.anchoVista, AltoVista: o.altoVista,
 		Campos: map[string]nodoValor{}, Bundle: map[string]nodoValor{},
 		Editor: map[string]nodoValor{}, Vistas: map[uint32]int{},
 	}
@@ -782,6 +784,7 @@ func rellenaObjeto(o *objetoDalvik, oe objetoEstado, objs []*objetoDalvik, arrs 
 	o.paintColor = oe.PaintColor
 	o.paintPuesto = oe.PaintPuesto
 	o.paintGrosor = oe.PaintGrosor
+	o.paintTamano = oe.PaintTamano
 	o.anchoVista = oe.AnchoVista
 	o.altoVista = oe.AltoVista
 }

@@ -5,11 +5,11 @@ package main
 // veía vacía y nada lo decía. Aquí se ejecuta el `onDraw` del proyecto con un Canvas que anota las
 // operaciones que el intérprete sí sabe medir (color de fondo, línea, rectángulo, círculo y texto).
 //
-// La frontera se dice con nombre, no se disfraza: la instancia es nueva y se construye con el
-// constructor de la clase, así que el estado que la actividad guardó en otra instancia (un
-// `findViewById` con un `setValor`) no viaja; y un `<vector>`, una fuente o un `Paint` con sombras
-// no se dibujan. Cuando el `onDraw` no se puede ejecutar, `dibujo.frontera` lleva el motivo y no se
-// inventa ningún trazo.
+// La frontera se dice con nombre, no se disfraza: los campos que la actividad escribió en la vista
+// real (un `findViewById` con un `setToques` desde el `onClick`) se heredan antes de dibujar, pero
+// el Canvas y el Paint son nuevos en cada dibujado; y un `<vector>`, una fuente o un `Paint` con
+// sombras no se dibujan. Cuando el `onDraw` no se puede ejecutar, `dibujo.frontera` lleva el motivo
+// y no se inventa ningún trazo.
 
 import (
 	"fmt"
@@ -27,7 +27,7 @@ type dibujoVista struct {
 // operacionDibujo es una llamada al Canvas que el modelo puede publicar sin inventar geometría. Las
 // coordenadas son las que pasó la app, en píxeles del modelo (la pantalla de 160 dpi). `x1`/`y1` es
 // el punto de una línea, la esquina del rectángulo o el centro del círculo, y `x2`/`y2` el otro
-// extremo; `radio` solo lo lleva el círculo y `texto` el `drawText`.
+// extremo; `radio` solo lo lleva el círculo y `texto`/`tamano` el `drawText`.
 type operacionDibujo struct {
 	Operacion string  `json:"operacion"`
 	Color     string  `json:"color,omitempty"`
@@ -38,6 +38,7 @@ type operacionDibujo struct {
 	Y2        float64 `json:"y2,omitempty"`
 	Radio     float64 `json:"radio,omitempty"`
 	Texto     string  `json:"texto,omitempty"`
+	Tamano    float64 `json:"tamano,omitempty"`
 }
 
 // anotaDibujo guarda una operación del Canvas en el dibujo en curso. Fuera de un `onDraw`
@@ -95,6 +96,15 @@ func colorDeArgumento(v any) string {
 func grosorDeArgumento(v any) float64 {
 	if p, ok := v.(*objetoDalvik); ok {
 		return p.paintGrosor
+	}
+	return 0
+}
+
+// tamanoDeArgumento es el `textSize` del Paint que un `drawText` recibió; un Paint que nadie
+// ajustó no publica tamaño, que es lo que el modelo hacía antes de que `setTextSize` existiera.
+func tamanoDeArgumento(v any) float64 {
+	if p, ok := v.(*objetoDalvik); ok {
+		return p.paintTamano
 	}
 	return 0
 }
@@ -160,6 +170,7 @@ func (m *maquinaDalvik) dibujaVista(nombre string, rect rectVista) *dibujoVista 
 		dib.Frontera = "no se pudo construir la vista " + nombre + ": " + err.Error()
 		return dib
 	}
+	m.heredaEstadoDeVista(desc, obj)
 	canvas := &objetoDalvik{clase: "Landroid/graphics/Canvas;", campos: map[string]any{}}
 	if _, err := m.ejecutaCuerpo(desc, met, []any{obj, canvas},
 		[]string{desc, "Landroid/graphics/Canvas;"}); err != nil {
@@ -170,6 +181,31 @@ func (m *maquinaDalvik) dibujaVista(nombre string, rect rectVista) *dibujoVista 
 			"drawCircle o drawText)"
 	}
 	return dib
+}
+
+// heredaEstadoDeVista pasa a la instancia que va a dibujar los campos que la actividad ya escribió
+// en la vista real. El `findViewById` del modelo devuelve una vista genérica a la que un
+// `check-cast` solo le cambia la clase: su constructor no corrió, así que lo único que hay en sus
+// campos es lo que la app puso después (un `setToques` del `onClick`, por ejemplo) y no un estado
+// inventado. Se copia DESPUÉS del constructor para que el Paint que este crea siga existiendo y
+// los valores que la app acaba de cambiar no se pierdan. Sin esto el `onDraw` se dibujaba siempre
+// con el estado inicial y un toque no cambiaba lo que se veía.
+func (m *maquinaDalvik) heredaEstadoDeVista(desc string, obj *objetoDalvik) {
+	var real *objetoDalvik
+	for id, v := range m.vistas {
+		if v == nil || v.clase != desc {
+			continue
+		}
+		if real == nil || id < real.id {
+			real = v
+		}
+	}
+	if real == nil {
+		return
+	}
+	for clave, valor := range real.campos {
+		obj.campos[clave] = valor
+	}
 }
 
 // construyeVistaPropia ejecuta el constructor de la clase con las formas que un inflado puede usar:

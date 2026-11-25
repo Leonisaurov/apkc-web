@@ -363,11 +363,12 @@ type objetoDalvik struct {
 	// bluetoothActivo es el estado del adaptador de `getDefaultAdapter`: se modela encendido para
 	// que la UI de la app pueda recorrer su camino completo sin un dispositivo.
 	bluetoothActivo bool
-	// lo que un `Paint` lleva para el dibujo de una vista propia: color y grosor. Se guarda en el
-	// objeto del framework porque un onDraw puede tener varios Paint a la vez.
+	// lo que un `Paint` lleva para el dibujo de una vista propia: color, grosor y tamaño del texto.
+	// Se guarda en el objeto del framework porque un onDraw puede tener varios Paint a la vez.
 	paintColor  uint32
 	paintPuesto bool
 	paintGrosor float64
+	paintTamano float64
 	// anchoVista y altoVista son el rect que el layout ya midió para esta vista, en píxeles del
 	// modelo. Un `onDraw` que pregunta por su tamaño los necesita: sin ellos `getWidth`/`getHeight`
 	// caerían en cero y todas las figuras se concentrarían en el origen.
@@ -4427,6 +4428,14 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 0 && esVista() {
 			return nil, true, nil
 		}
+	case "onDraw":
+		// `super.onDraw(canvas)` de una vista propia. El paso 1 ya ejecutó el `onDraw` del dex
+		// cuando existe: lo único que llega aquí es el `View.onDraw` del framework, que en Android
+		// dibuja nada. Es un no-op honesto, no un silencio: el cuerpo propio sigue corriendo en
+		// `dibujaVista` y publicando sus operaciones.
+		if len(vals) == 1 && es("Landroid/view/View;") {
+			return nil, true, nil
+		}
 	case "getWidth", "getHeight":
 		// El tamaño de la vista es el que el layout ya midió y se sembró al construir la instancia
 		// del `onDraw`. Sin él se devuelve cero, que es el valor que el modelo daba antes: se sigue
@@ -5128,6 +5137,17 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		if len(vals) == 0 && obj != nil && es("Landroid/graphics/Paint;") {
 			return float32(obj.paintGrosor), true, nil
 		}
+	case "setTextSize":
+		// `Paint.setTextSize(float)`: el tamaño que `drawText` ha de publicar con el texto. Antes
+		// caía al stub genérico, el aviso lo delataba y el modelo dibujaba sin tamaño ninguno.
+		if len(vals) == 1 && obj != nil && es("Landroid/graphics/Paint;") {
+			obj.paintTamano = flotanteDeDibujo(vals[0])
+			return nil, true, nil
+		}
+	case "getTextSize":
+		if len(vals) == 0 && obj != nil && es("Landroid/graphics/Paint;") {
+			return float32(obj.paintTamano), true, nil
+		}
 	case "setStyle", "setAntiAlias", "setStrokeCap", "setStrokeJoin", "setDither", "setFilterBitmap":
 		// propiedades de Paint que no cambian el trazo que el modelo publica: se aceptan sin
 		// inventar un efecto que no se dibuja
@@ -5208,7 +5228,8 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 		}
 	case "drawText":
 		// `drawText(String, x, y, Paint)` y su forma con CharSequence: el texto se publica como
-		// operación, no se mide con una fuente que el modelo no tiene
+		// operación, con el tamaño que su Paint lleva, sin medirlo con una fuente que el modelo
+		// no tiene.
 		if len(vals) == 4 && obj != nil && es("Landroid/graphics/Canvas;") {
 			m.anotaDibujo(operacionDibujo{
 				Operacion: "texto",
@@ -5217,6 +5238,7 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 				Y1:        flotanteDeDibujo(vals[2]),
 				Color:     colorDeArgumento(vals[3]),
 				Grosor:    grosorDeArgumento(vals[3]),
+				Tamano:    tamanoDeArgumento(vals[3]),
 			})
 			return nil, true, nil
 		}
