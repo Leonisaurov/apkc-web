@@ -3,9 +3,13 @@ package main
 // Falsaciones de la auditoría: destinos, memoria y tabla de motivos de cierre.
 
 import (
+	"context"
 	"net"
+	"net/http/httptest"
 	"runtime/debug"
+	"strconv"
 	"testing"
+	"time"
 )
 
 // Política inyectada solo desde los tests: permite el loopback de los servidores
@@ -79,6 +83,86 @@ func TestUDPSinDestinoAutorizado(t *testing.T) {
 	p := cierreDeDestino(t, url, 1, tipoFlujoUDP, "repo1.maven.org", 443)
 	if p.carga[0] != motivoDestinoBloqueado {
 		t.Fatalf("UDP a 443: motivo=0x%02x, quería 0x48", p.carga[0])
+	}
+}
+
+// servidorPruebaInyectado sustituye DNS y dial por falsificaciones: no consulta
+// la red real, pero mantiene la política de producción del destino.
+func servidorPruebaInyectado(t *testing.T,
+	resolver func(context.Context, string) ([]net.IPAddr, error),
+	dialer func(context.Context, string, string) (net.Conn, error),
+) (*httptest.Server, string) {
+	t.Helper()
+	allow, err := nuevaAllowlist(false, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := nuevoServidor(allow, 64, 8)
+	srv.resolver = resolver
+	srv.dialer = dialer
+	s := httptest.NewServer(srv)
+	t.Cleanup(s.Close)
+	return s, s.URL
+}
+
+// TestDestinoAutorizadoPermitido falsifica el caso que la auditoría encontró
+// roto: los dos hosts autorizados resuelven a una IP pública y el CONNECT debe
+// llegar a Dial, sin CLOSE, y hacer eco en el socket local del test.
+func TestDestinoAutorizadoPermitido(t *testing.T) {
+	hostLocal, puertoLocal := ecoTCP(t)
+	local := net.JoinHostPort(hostLocal, strconv.Itoa(int(puertoLocal)))
+	const ipPublica = "93.184.216.34"
+
+	type llamada struct{ red, dir string }
+	llamadas := make(chan llamada, 4)
+	resolver := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		return []net.IPAddr{{IP: net.ParseIP(ipPublica)}}, nil
+	}
+	dialer := func(ctx context.Context, red, dir string) (net.Conn, error) {
+		llamadas <- llamada{red: red, dir: dir}
+		return net.DialTimeout("tcp", local, 2*time.Second)
+	}
+
+	_, url := servidorPruebaInyectado(t, resolver, dialer)
+	cl := abrirCliente(t, url, origenProduccion)
+	ch := lectorFondo(cl.ws)
+	if p := esperarPaquete(t, ch); p.tipo != tipoContinue || p.streamID != 0 {
+		t.Fatalf("CONTINUE inicial: tipo=0x%02x stream=%d", p.tipo, p.streamID)
+	}
+
+	for i, host := range []string{"repo1.maven.org", "repo.maven.apache.org"} {
+		id := uint32(i + 1)
+		cl.connect(id, tipoFlujoTCP, host, puertoDestino)
+		cl.enviar(tipoData, id, []byte("hola"))
+
+		p := esperarPaquete(t, ch)
+		if p.tipo == tipoClose {
+			motivo := byte(0)
+			if len(p.carga) > 0 {
+				motivo = p.carga[0]
+			}
+			t.Fatalf("%s: CLOSE inesperado con motivo 0x%02x", host, motivo)
+		}
+		if p.tipo != tipoData || p.streamID != id || string(p.carga) != "hola" {
+			t.Fatalf("%s: paquete tipo=0x%02x stream=%d carga=%q", host, p.tipo, p.streamID, p.carga)
+		}
+
+		select {
+		case ll := <-llamadas:
+			if ll.red != "tcp" || ll.dir != ipPublica+":443" {
+				t.Fatalf("%s: Dial(%s, %s), quería tcp y %s:443", host, ll.red, ll.dir, ipPublica)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s: no se llegó a Dial", host)
+		}
+
+		select {
+		case lleg := <-ch:
+			if lleg.err == nil && lleg.p.tipo == tipoClose && lleg.p.streamID == id {
+				t.Fatalf("%s: CLOSE posterior al eco", host)
+			}
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 }
 

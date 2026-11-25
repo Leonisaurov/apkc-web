@@ -61,8 +61,10 @@ var politicaProduccion = politicaDestinos{
 		if direccionReservada(ip) {
 			return motivoInfoInvalida
 		}
-		// Ni siquiera una IP pública a secas: solo los dos nombres de la lista.
-		return motivoDestinoBloqueado
+		// El nombre y el puerto ya pasaron la allowlist; aquí solo se descartan
+		// direcciones reservadas. Bloquear también las públicas impediría los dos
+		// CONNECT legítimos a los espejos de Maven Central.
+		return 0
 	},
 }
 
@@ -73,7 +75,7 @@ func (s *servidor) resolverDestino(ctx context.Context, host string, puerto uint
 	if motivo := s.destinos.host(host, puerto, tipo); motivo != 0 {
 		return "", motivo
 	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	ips, err := s.lookupIP(ctx, host)
 	if err != nil || len(ips) == 0 {
 		return "", motivoHostInalcanzable
 	}

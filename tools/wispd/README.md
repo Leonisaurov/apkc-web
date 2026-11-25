@@ -40,7 +40,8 @@ Es falsificable con `curl`, así que **no es autenticación**.
 
 La allowlist de **destinos** (`destinos.go`) es la que impide el proxy abierto:
 solo `repo1.maven.org:443` y `repo.maven.apache.org:443` por TCP, resolvidos y
-comprobados antes de dialear. Se deniegan explícitamente literales IP, loopback
+comprobados antes de dialear: las IP públicas resueltas pasan y las reservadas
+se rechazan. Se deniegan explícitamente literales IP, loopback
 (`127/8`, `::1`), privadas (`10/8`, `172.16/12`, `192.168/16`, `fc00::/7`),
 link-local (`169.254/16`, `fe80::/10`) y cualquier otro puerto. Los CONNECT
 denegados reciben `CLOSE 0x41` (datos inválidos/reservados) o `0x48` (destino

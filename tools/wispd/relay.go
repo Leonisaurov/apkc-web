@@ -42,9 +42,27 @@ type servidor struct {
 	credito   uint32
 	maxFlujos int
 
+	// Inyeccion de tests: nil en producción. No hay bandera que las active.
+	resolver func(context.Context, string) ([]net.IPAddr, error)
+	dialer   func(context.Context, string, string) (net.Conn, error)
+
 	// Semaforos: se envia para tomar hueco y se recibe para liberarlo.
 	tokens     chan struct{}
 	conexiones chan struct{}
+}
+
+func (s *servidor) lookupIP(ctx context.Context, host string) ([]net.IPAddr, error) {
+	if s.resolver != nil {
+		return s.resolver(ctx, host)
+	}
+	return net.DefaultResolver.LookupIPAddr(ctx, host)
+}
+
+func (s *servidor) dial(ctx context.Context, red, dir string) (net.Conn, error) {
+	if s.dialer != nil {
+		return s.dialer(ctx, red, dir)
+	}
+	return (&net.Dialer{Timeout: plazoDial}).DialContext(ctx, red, dir)
 }
 
 func nuevoServidor(a *allowlist, credito uint32, maxFlujos int) *servidor {
@@ -359,7 +377,7 @@ func (c *conexion) abrirFlujo(id uint32, carga []byte) {
 	if sol.tipoFlujo == tipoFlujoUDP {
 		red = "udp"
 	}
-	conn, errDial := (&net.Dialer{Timeout: plazoDial}).DialContext(ctx, red, dir)
+	conn, errDial := c.srv.dial(ctx, red, dir)
 	if errDial != nil {
 		c.cerrarFlujo(id, motivoDial(errDial), true)
 		return
