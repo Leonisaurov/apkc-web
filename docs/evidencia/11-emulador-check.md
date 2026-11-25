@@ -1,4 +1,4 @@
-# Evidencia — §205-§240
+# Evidencia — §205-§240, §317
 
 ## 205. E1 del plan de emulación: ciclo de vida y navegación entre actividades propias
 
@@ -1347,4 +1347,56 @@ mensaje, en las dos direcciones; el `istore` de la cabecera se funde con el regi
 bucle sale bien en ART (`new Punto(1,2).hashCode()` da 33). No se corrió gate, chromium, red ni
 publicación en esa medición; **el gate de `§230` es anterior a este arreglo y no lo cubre**, y el
 repetido en `§242` sobre el árbol final salió verde.
+
+## 317. Apps de ejemplo: firma, alineación y ejecución en Droidloom verificadas
+
+Medido el 2026-11-24 sobre `09a05cf`: el comando 6 viene del informe del investigador
+`ses_defe9114affeVMfAoQoVT0LwSY` y los cinco comandos sobre el cell, de la medición del QA
+`ses_defe581b2ffeiFhf5cMQod0TJ0`. No se recompilaron los APKs: hay un builder escribiendo en `apkc/`.
+Los oráculos del wrapper son el `apksigner` y el `zipalign` de build-tools 36.0.0, con Go fijado en
+1.24.0 (§312).
+
+**Comando 6, en verde:**
+
+```sh
+sh tools/correr.sh -- sh -c 'for a in lienzo notas chatbt tareas cronometro; do apksigner verify --verbose "$HOME/.cache/apkc-web/apps-ejemplo/$a.apk"; zipalign -c -p 4 "$HOME/.cache/apkc-web/apps-ejemplo/$a.apk"; done'
+```
+
+**Resultado**: para los cinco APKs (`lienzo`, `notas`, `chatbt`, `tareas`, `cronometro`), `Verifies`,
+v1/v2/v3 `true`, v3.1/v4 `false`, SourceStamp `false`, `Number of signers: 1`, rc=0 en `apksigner`
+y rc=0 en `zipalign`. La salida archivada está en
+`~/.cache/apkc-web/apps-ejemplo-medicion/cmd6-salida.txt`.
+
+**Arranque del cell.** `droidloomctl status --json` →
+`{"message":"Droidloom is stopped","ok":true,"state":"stopped"}`; `droidloomctl start` →
+`Droidloom is running; Android is ready`; de nuevo `status --json` →
+`{"ok":true,"state":"running","message":"cell u1000 is running from /etc/droidloom/cell.json; Android is ready","host_pid":178471}`.
+
+**GNOME.** `gnome-extensions enable auto-move-windows@…`;
+`gsettings set … application-list "[17 entradas droidloom-*.desktop:3]"`; `gsettings get` devuelve las
+17; `gnome-extensions info` → `State: ACTIVE`; `num-workspaces=3` y `dynamic-workspaces=false`.
+
+**Dispositivo y apps.** `adb devices -l` →
+`10.177.0.2:5555 device product:aosp_cf_x86_64_only_phone model:Droidloom device:droidloom transport_id:1`;
+`wm size` → `1920x1080`; `wm density` → `213`; `pm list packages com.ejemplo` → presentes `lienzo`,
+`notas`, `chatbt`, `tareas` y `cronometro`; `droidloomctl launch … --user 0 --json` → `"ok": true`
+para cada app.
+
+**Cinco comandos, todos medidos en verde.**
+
+1. `screencap -p` → PNG `1920 x 1080`, 8-bit RGBA, `10608 bytes`.
+2. `am force-stop com.ejemplo.notas` + `am start -n com.ejemplo.notas/.MainActivity` →
+   `Starting: Intent { cmp=com.ejemplo.notas/.MainActivity }`, `pidof` → 1707.
+3. Igual para `com.ejemplo.tareas` → `pidof` 1822.
+4. `am start -n com.ejemplo.cronometro/.MainActivity` → `pidof` 1869.
+5. `bash -c 'set -o pipefail; adb … shell dumpsys bluetooth_manager | head -40; echo ADAPTER_RC=$?'`
+   → `Bluetooth Status: State: OFF`, `Bluetooth Service not connected`, `ADAPTER_RC=0` (rc real, sin
+   enmascaramiento).
+
+**Cierre.** `droidloomctl stop` → `Droidloom is stopped` y `status --json` → `stopped`. El workspace 3
+quedó configurado según la skill `droidloom-launch`.
+
+**Fronteras de este `§`**: fidelidad píxel a píxel aparato↔preview sin medir; el adaptador Bluetooth
+está apagado (dato de la medición 5, no fallo); sin gate, chromium ni publicación; `e2e.sh` sigue en
+verificación.
 

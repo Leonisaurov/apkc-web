@@ -758,3 +758,18 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
 - §299: el wasm vuelve a compilar (`cff8013` quita el `"net"` huérfano de `apkc/puente_wisp_js.go`; `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build` sin salida, rc 0), la suite Go completa da `ok github.com/ajinasokan/apkc 184.017s` con `tcr -c 3 -m 2G -r 200M` (el guardia por defecto mató el primer intento con 137), el corredor queda centralizado en `tools/entorno.sh` con `tools/correr.sh` (`GUARDIA_MB=300`, `LD_LIBRARY_PATH=…/shimlib`, falsificación WISP rechazada) y 297 `§` se reparten en 14 ficheros con `docs/evidencia.md` como índice. Frontera: el gate autorizado dio `e2e: 1 problemas` (`TypeError` en `proyecto.js:99` desde `leerZip :146`, bloque `--inc`); dos ejecuciones focales consecutivas del builder del WISP dejaron el 12c en verde con `256 comprobaciones bien, 0 mal`, rc=0, pero el gate completo no se ha repetido. Sin CDP final, segundo gate, push, CI ni publicación; `e2e.sh` sigue en verificación (`docs/plan.md:60`).
 - §310: ApkShare compila hoy con `--compiler go --linker go`, con y sin `--inc`: 21 clases y dex de `16504 B` idéntico byte a byte en nativo y wasm (SHA-256 `69fdb658…82db9` en los cuatro dex), APK de `305501`/`305500`/`305502 B` y `apksigner verify --verbose` con `Verifies` y v1/v2/v3 `true`; la segunda vuelta con `--inc` tardó `10.935453ms` y dio `the package did not change`. Frontera: la pestaña real con chromium no se re-ejecutó (§285 es transferida), sin suite Go completa ni gate aquí; `TestSondaHeredadaFuente` de §275 sigue sin verificar.
 - §312: Go queda fijado en `go1.24.0` (instalado desde el tarball oficial en `$HOME/sdk/go1.24.0`, sin sudo y sin tocar el Go del sistema, que sigue en `go1.27.4-X:nodwarf5`); `wasm_exec.js` es byte-idéntico al del Go local con SHA-256 `0c949f…`, 16992 bytes, y `tools/wasm-exec-hash.sh` valida versión y hash (rc 0; rc 1 con versión ajena o JS modificado). `tools/entorno.sh` antepone el toolchain fijado al PATH (`GOROOT=/home/leonisauro/sdk/go1.24.0`). Frontera: versión fijada, sin segunda pipeline; deudas abiertas y no verdes en `gate.yml:85` (W1 debe sustituir el `cp` directo por el verificador) y `studio/servidor.js` (cuarto sitio que sirve `wasm_exec.js` desde GOROOT); `e2e.sh` sigue en verificación, sin gate, CI ni publicación.
+- §317: Apps de ejemplo: firma, alineación y ejecución en Droidloom verificadas. Los cinco APKs
+  (`lienzo`, `notas`, `chatbt`, `tareas`, `cronometro`) pasan `apksigner verify --verbose` con
+  `Verifies`, v1/v2/v3 `true`, v3.1/v4 y SourceStamp `false`, un firmante, y `zipalign -c -p 4` con
+  rc=0 en los diez mandos (salida archivada en
+  `~/.cache/apkc-web/apps-ejemplo-medicion/cmd6-salida.txt`); sin recompilar, con build-tools 36.0.0
+  y Go 1.24.0 (§312). Droidloom arranca (`status --json` de `running`, `host_pid:178471`), el cell
+  sale en `adb devices -l` como `10.177.0.2:5555`, a `1920x1080` y densidad `213`, con las cinco
+  apps instaladas y lanzadas con `--user 0`; el workspace 3 queda configurado según
+  `droidloom-launch`. Los cinco comandos del QA están en verde: `screencap -p` da PNG
+  `1920 x 1080` de `10608 bytes`; `notas` y `tareas` se fuerzan y se arrancan (`pidof` 1707 y 1822),
+  `cronometro` arranca (`pidof` 1869); y `dumpsys bluetooth_manager` da `State: OFF`,
+  `Bluetooth Service not connected` con `ADAPTER_RC=0` real. Cierre con `droidloomctl stop`
+  (`stopped`). Frontera: fidelidad píxel a píxel aparato↔preview sin medir; el adaptador Bluetooth
+  está apagado (dato de la medición 5, no fallo); sin gate, chromium ni publicación; `e2e.sh` sigue
+  en verificación.
