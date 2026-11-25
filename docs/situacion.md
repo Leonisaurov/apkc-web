@@ -916,3 +916,12 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
    `ejecucion.error`, y `node prueba.js` → «prueba: todo en orden»; `studio` sigue limpio, sin
    gitlink nuevo. Frontera: sin gate, CDP, red ni publicación; el vigilante en vivo sigue
    `incierto`. Sostenido por `§357`.
+- **Traspaso para una sesión limpia (2026-11-24)**: `docs/ESTADO-SESION.md` recoge el estado verificado
+  de los tres repos (padre `65578d9`, studio `e30d3ad`, emulador `563e991`), lo hecho y verificado en
+  su capa, lo que sigue en verificación (CDP, `prueba-pestana.js`, `prueba-sitio.js`, `e2e.sh`, gate y
+  publicación), el frente en marcha del pin único del emulador, la vista previa viva en
+  `http://127.0.0.1:8801/` (`head-construido` = HEAD, wasm servido `1d27617a…`) y las decisiones del
+  usuario para no perderlas. `docs/plan-compatibilidad-apps-pausado.md` traslada el plan de apps reales
+  pausado: §354 y §355 ya están medidos, Fase A no se rehace y las Fases B-G se reanudan en `§358+`.
+  Ninguno de los dos ficheros añade una medición nueva: apuntan a los `§` citados, que siguen siendo
+  la fuente.
