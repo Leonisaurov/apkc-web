@@ -1007,11 +1007,11 @@ padre `84a7b90b84661450601cdd4d3554e86c49b2acd7`; la guardia vigente de la regla
 `ejecucion.error` en `setTerminalToolbarView: se leyó el campo
 android.view.ViewGroup$LayoutParams.height de un objeto nulo`; desaparece `Set.iterator` en
 `TerminalColorScheme.updateWith`. Las otras cuatro APK siguen byte a byte idénticas a las de
-`integracion-final/`. El JSON está en `~/.cache/apkc-web/integracion-color/termux.json` y se apunta
-con el comando `apkc preview` sobre esa ruta:
+`integracion-final/`. El JSON está en `~/.cache/apkc-web/integracion-color/termux.json` y se
+reproduce con `apkc preview` sobre la variante arm de la APK de Termux:
 
 ```sh
-apkc preview ~/.cache/apkc-web/integracion-color/termux.json
+apkc preview /home/leonisauro/Downloads/termux-app_v0.118.3+github-debug_armeabi-v7a.apk > ~/.cache/apkc-web/integracion-color/termux.json
 ```
 
 **Las otras cuatro APK.** En el registro fechado, tres quedan byte a byte idénticas a la base
