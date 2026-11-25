@@ -895,3 +895,14 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   nuevo compartido, `ArchTaskExecutor.getInstance usa el opcode 0x1d, que el intérprete MVP no
   decodifica`, y los layouts siguen siendo falsos; el bloqueo es del intérprete, no del lector. Sin
   gate, CDP, red ni publicación. Sostenido por `§355`.
+- §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
+  commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
+  guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,
+  `studio/apkc-emulador`, `apkc-emulador`), así que los nueve guiones de `banco/` no cambian y el
+  `cmp` de 34 ficheros sigue intacto. Suite Go en verde (248,739 s), wasm con el mismo JSON
+  (`pasos: 22`, sin `ejecucion.error`) y `node prueba.js` → «prueba: todo en orden». El sitio
+  empaquetado no lleva `*.go`, `.gitmodules` ni el directorio del submódulo, y el wasm servido es
+  byte a byte el compilado (`1c2f521b…`); los cinco checkouts de CI siguen con
+  `submodules: recursive`. Frontera: `studio` queda `ahead 3` sin empujar, la CI remota no verá el
+  gitlink anidado hasta que se autorice el push, el vigilante en vivo no se corrió (`incierto`) y
+  no hubo gate, CDP, red ni publicación. Sostenido por `§356`.
