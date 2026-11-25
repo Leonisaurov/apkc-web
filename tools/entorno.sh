@@ -124,7 +124,7 @@ tcr_o_directo() {
   fi
 }
 
-# El emulador vive en el submódulo apkc-emulador/ de studio/ (el padre guarda un pin espejo); sus
+# El único emulador vive en el submódulo apkc-emulador/ de studio/ (§357); sus
 # fuentes se materializan en apkc/ antes de cualquier compilación. Los cuatro puntos que compilan
 # (test, wasm, gate y sitio/publicar) pasan por aquí, así que ningún camino puede quedarse sin los
 # 34 ficheros preview*.go. APKC_EMULADOR_DIR permite apuntar a otro árbol (por ejemplo el del

@@ -906,3 +906,13 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `submodules: recursive`. Frontera: `studio` queda `ahead 3` sin empujar, la CI remota no verá el
   gitlink anidado hasta que se autorice el push, el vigilante en vivo no se corrió (`incierto`) y
   no hubo gate, CDP, red ni publicación. Sostenido por `§356`.
+- §357: el usuario acota que solo existe un emulador, el de `studio/apkc-emulador`, y se retira el
+   pin espejo del padre (`git rm -f apkc-emulador` y su sección de `.gitmodules`). La regla 14 del
+   `AGENTS.md` ya no compara dos gitlinks: vigila solo `git -C studio rev-parse HEAD:apkc-emulador`
+   → `563e991`. El resolvedor `materializar-emulador.sh` pierde la caída al pin del padre (quedan
+   argumento, `APKC_EMULADOR_DIR` y `studio/apkc-emulador`), con lo que los nueve guiones de
+   `banco/` heredan la fuente única sin editarse; `preview-automatica.sh` reintenta en vez de caer
+   al padre. 34 `cmp` idénticos, suite Go en verde (264,994 s), wasm con `pasos: 22` y sin
+   `ejecucion.error`, y `node prueba.js` → «prueba: todo en orden»; `studio` sigue limpio, sin
+   gitlink nuevo. Frontera: sin gate, CDP, red ni publicación; el vigilante en vivo sigue
+   `incierto`. Sostenido por `§357`.

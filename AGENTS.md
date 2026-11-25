@@ -26,7 +26,6 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 | `shim/navegador-sim.js` | hospedador con forma de navegador (un `fs` en memoria con la API de Node; monta ficheros reales con `--montar` y devuelve resultados con `--exportar`) | `node shim/navegador-sim.js "$PREFIX/tmp/apkc-wasm.wasm" create /miapp` |
 | `shim/prueba-salida.js`, `shim/prueba-relink.js` y `shim/prueba-modo.js` | falsaciones del hospedador: código de salida, árbol tras `unlink` y modo de creación | `node shim/prueba-<nombre>.js` (necesitan `go` y `shim/wasm_exec.js` del GOROOT) |
 | `apkc/` | **el fork de la herramienta** (subtree desde `../apkc`, MIT, pin `a909214`): donde se escribe el dexer, el compilador y los recursos en Go | `cd apkc && go test ./...` y el wasm: `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/apkc-web-wasm.wasm" .` |
-| `apkc-emulador/` | **pin espejo** del intérprete: la propiedad git la tiene `studio/apkc-emulador` (§356); sus 34 `preview*.go` se materializan en `apkc/` con `cmp` | `sh tools/materializar-emulador.sh`; `git -C studio submodule status` → `563e991…` |
 | `studio/` | apkc-studio: genera proyectos apkc, los edita y **hace correr `apkc.wasm` en la pestaña** (OPFS + worker); `_headers` es para Netlify/Cloudflare y **`sw.js` pone COOP/COEP en hosts que no los fijan**, con una recarga única | `cd studio && APKC=<binario> sh e2e.sh`; `APKC_WASM=… node studio/prueba-pestana.js`; sobre el host real, `SITIO_URL=… node studio/prueba-sitio.js` |
 | `sitio/` | el paquete estático que se sube a **`https://apkc-studio.surge.sh/`**; se construye, no se versiona, y lleva `CNAME` | `tools/entorno.sh sitio && cd sitio && surge . publish` |
 | `studio/EDITOR.md` | el editor de la pestaña: estructura, ids, atajos, pruebas y límites | leerlo |
@@ -118,13 +117,13 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      con `force: true` sin volver a pedir confirmación. El usuario autoriza **hasta 8 subagentes en
      paralelo**: mantén la cola llena con trabajo independiente; el límite lo marca esa autorización,
      no la prudencia de tokens.
-14. **`studio` posee el submódulo del emulador; el padre mantiene un pin espejo (§356).** Ambos
-    gitlinks —`HEAD:apkc-emulador` del padre y `apkc-emulador` dentro del `HEAD` de `studio`— deben
-    apuntar a `563e991`, y el `HEAD` de `studio` debe ser el gitlink `HEAD:studio` del padre. Ejecuta
-    la guardia de `rev-parse` al cerrar cada fase: si divergen, es un fallo, no un aviso. Subir el
-    emulador exige actualizar los dos gitlinks en el **mismo commit**. La fuente canónica la resuelve
-    `tools/materializar-emulador.sh` (argumento, `APKC_EMULADOR_DIR`, `studio/apkc-emulador`,
-    `apkc-emulador`) sin cambiar el contrato de 34 ficheros ni su `cmp` byte a byte.
+14. **El único emulador es el submódulo `studio/apkc-emulador` (§357).** El padre ya no guarda pin
+    espejo: el gitlink anidado de `studio` apunta a `563e991` y el `HEAD` de `studio` sigue siendo el
+    gitlink `HEAD:studio` del padre. Ejecuta la guardia al cerrar cada fase:
+    `git -C studio rev-parse HEAD:apkc-emulador` debe dar `563e991`; si no, es un fallo, no un aviso.
+    Subir el emulador exige actualizar ese gitlink en el **mismo commit**. La fuente canónica la
+    resuelve `tools/materializar-emulador.sh` (argumento, `APKC_EMULADOR_DIR`,
+    `studio/apkc-emulador`) sin cambiar el contrato de 34 ficheros ni su `cmp` byte a byte.
 
 ## Entorno (Termux/Android aarch64)
 

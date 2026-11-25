@@ -357,6 +357,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §351 | Copia gobernada de los 34 `preview*.go` con `cmp` byte a byte en los seis puntos de build y detección de deriva (falla en el byte 121) | [23-emulador-modulo.md](evidencia/23-emulador-modulo.md) |
 | §352 | Pestaña intacta: `go test ./...` en verde y `node prueba.js` → «prueba: todo en orden» sobre el wasm separado, sin CDP | [23-emulador-modulo.md](evidencia/23-emulador-modulo.md) |
 | §356 | El gitlink de `apkc-emulador` pasa a `studio/`, con el pin espejo del padre: fuente única, 34 `cmp`, wasm y sitio sin fuentes Go, sin push | [24-studio-emulador-submodulo.md](evidencia/24-studio-emulador-submodulo.md) |
+| §357 | Se retira el pin espejo del padre: `studio/apkc-emulador` es el único emulador, 34 `cmp`, suite Go, wasm (`pasos: 22`) y pestaña en orden | [25-un-solo-emulador.md](evidencia/25-un-solo-emulador.md) |
 | §354 | Apps reales en `~/Downloads`: los tres arrancan con `pasos:0` y una pantalla falsa; SHA de los cuatro APK | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §355 | Fase A: el lector acepta los dex reales sin tocar el escritor; los tres avanzan, pero aparece el opcode 0x1d del intérprete | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
@@ -374,15 +375,15 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
 aquí; `§78` no existe y su hueco está explicado en el preámbulo. La tabla sigue el orden del fichero
 original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica; las filas
-añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`, `§356`) se sitúan en el bloque de su fichero, no en orden numérico.
+añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`, `§356`, `§357`) se sitúan en el bloque de su fichero, no en orden numérico.
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
 `§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra),
 `§327-328` (J5), `§329-333` (diagnóstico) y `§340-347` (paneles). `§334-339` ya no está
 reservado: sus mediciones están escritas en este índice. `§348` ya no está reservado: su medición
 está escrita en este índice. `§349` ya no está reservado: su medición está escrita en este índice.
-`§350`, `§351`, `§352`, `§354`, `§355` y `§356` ya no están libres: sus mediciones están escritas en este índice.
-`§353` queda reservado a F5; `§357+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
+`§350`, `§351`, `§352`, `§354`, `§355`, `§356` y `§357` ya no están libres: sus mediciones están escritas en este índice.
+`§353` queda reservado a F5; `§358+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.

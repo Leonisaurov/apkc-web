@@ -30,22 +30,21 @@ while :; do
       corto=$(echo "$head_estable" | cut -c1-8)
       echo "[$(date -u +%FT%TZ)] HEAD $corto: reconstruyendo wasm" >> "$LOG"
       # El archive de apkc/ no incluye los preview*.go generados: el submódulo se extrae aparte,
-      # en el commit exacto que fijan los gitlinks de HEAD, y preview-local.sh los materializa.
-      # La propiedad git la tiene studio/: su gitlink anidado manda; si el HEAD es anterior al
-      # cambio de propietario, se cae al pin apkc-emulador del padre.
+      # en el commit exacto que fija el gitlink anidado de HEAD, y preview-local.sh los materializa.
+      # La propiedad git la tiene solo studio/: su gitlink anidado manda (§357); ya no hay pin
+      # espejo en el padre al que caer si falta ese gitlink.
       estudio_sha=$(git -C "$REPO" ls-tree "$head_estable" studio | awk '{print $3}' 2>>"$LOG")
       subsha=""
       if [ -n "$estudio_sha" ]; then
         subsha=$(git -C "$REPO/studio" ls-tree "$estudio_sha" apkc-emulador | awk '{print $3}' 2>>"$LOG")
       fi
-      if [ -n "$subsha" ]; then
-        origen_emulador=$REPO/studio/apkc-emulador
-        dir_emulador=$TEMPORAL/studio/apkc-emulador
-      else
-        subsha=$(git -C "$REPO" ls-tree "$head_estable" apkc-emulador | awk '{print $3}' 2>>"$LOG")
-        origen_emulador=$REPO/apkc-emulador
-        dir_emulador=$TEMPORAL/apkc-emulador
+      if [ -z "$subsha" ]; then
+        echo "[$(date -u +%FT%TZ)] HEAD $corto: sin gitlink de apkc-emulador en studio; se reintentara" >> "$LOG"
+        rm -rf "$TEMPORAL"
+        continue
       fi
+      origen_emulador=$REPO/studio/apkc-emulador
+      dir_emulador=$TEMPORAL/studio/apkc-emulador
       mkdir -p "$dir_emulador"
       if git -C "$REPO" archive "$head_estable" apkc -o "$TEMPORAL/apkc.tar" 2>>"$LOG" \
          && tar -x -f "$TEMPORAL/apkc.tar" -C "$TEMPORAL" 2>>"$LOG" \
