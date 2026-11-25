@@ -701,10 +701,12 @@ la fase.
   `PROCEDENCIA.md`.
 - Un release manual o etiquetado publica los mismos ficheros. El hash va en el
   cuerpo del release y en `SHA256SUMS`.
-- `tools/sitio.sh` copia `android-stub-34-min.jar` a `sitio/android-stub.jar`
+- `tools/sitio.sh` copia `android-stub-34-full.jar` a `sitio/android-stub-34.jar`
   (mismo origen) y el SW lo sirve con COOP/COEP. La página lo pide a
-  `/android-stub.jar`; se conserva `/android-jar` para el jar de la SDK elegido
-  por el usuario.
+  `/android-stub-34.jar` (2.916.833 B, SHA-256
+  `e2ddfb55b63b32890cb77e55d9249dabc521e78510fd35d0c2a3e639bd7c8827`,
+  descrito en `/android-stub.json`); se conserva `/android-jar` para el jar de
+  la SDK elegido por el usuario.
 - `studio/` es un submódulo: el cambio de la página se commitea primero en
   `apkc-studio` y luego se actualiza el puntero aquí, según la regla 8 de
   `AGENTS.md`.
@@ -799,9 +801,10 @@ Cada fase se cierra con su comando en verde y su párrafo en
 
 ### J5. Consumo desde el sitio
 
-- Criterio: `tools/sitio.sh` deja `sitio/android-stub.jar`; `studio/` lo pide
-  al mismo origen; `prueba-pestana.js` y `prueba-sitio.js` pasan con cero
-  peticiones fuera del origen.
+- Criterio: `tools/sitio.sh` deja `sitio/android-stub-34.jar` (el full de
+  2.916.833 B, hash `e2ddfb55b63b32890cb77e55d9249dabc521e78510fd35d0c2a3e639bd7c8827`)
+  y `sitio/android-stub.json`; `studio/` lo pide al mismo origen;
+  `prueba-pestana.js` y `prueba-sitio.js` pasan con cero peticiones fuera del origen.
 - Comando: `SITIO_URL=https://apkc-studio.surge.sh node studio/prueba-sitio.js`.
 - Criterio de rechazo: si el SW o el host no sirven el jar con COOP/COEP, la
   página vuelve al selector de fichero y la fase no se cierra.
