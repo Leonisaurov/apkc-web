@@ -1282,3 +1282,63 @@ frentes por separado, no la corrida final.
 aparezcan los cuatro nombres que se están siguiendo ni que la navegación esté terminada; `leeme.txt`
 sigue sin verse en la sonda final. F-Droid, NewPipe y Libre Memory Game quedan byte-idénticos a
 `integracion-color/` y Termux sin regresión. Sin CDP, gate ni publicación.
+
+## 376. Gestor de archivos: navegación y filas reales desde la ROM sembrada
+
+Medido el 2026-11-25, posterior a `§375`. Sobre el pin `2a42a846a87df44d66178ca9000aabdc764d9a04`
+entró un cherry-pick nuevo en `studio/apkc-emulador`:
+`0c01986d356c6eeb20a20809e5b96c74468d34ae`, del commit `fd1e5ac`, aplicado sobre `2a42a84`. El
+gitlink anidado de `studio` es `a7e5ec847b934678aa3ab096a9d8cac077157555` y el padre es `69e798c`;
+la guardia de la regla 14 da `0c01986d356c6eeb20a20809e5b96c74468d34ae`. No se ha corrido gate, CDP
+ni publicación. El gestor **no se da por funcionando**: aquí solo se registra que muestra dos entradas
+de la ROM sembrada.
+
+### Comando, guardia y contrato de ficheros
+
+```sh
+git show --stat --oneline 0c01986d356c6eeb20a20809e5b96c74468d34ae
+git -C studio rev-parse HEAD:apkc-emulador
+git rev-parse --short HEAD
+git -C studio rev-parse --short HEAD
+git ls-tree HEAD studio
+go test -count=1 ./...
+git diff --check
+```
+
+Salida de la guardia y de los dos `rev-parse --short`: `0c01986d356c6eeb20a20809e5b96c74468d34ae`,
+`69e798c` y `a7e5ec8`. `go test -count=1 ./...` → `ok … 197.304s`; 12 pruebas focales en PASS (el
+informe del integrador da el total sin desglosar sus nombres, que no se transcriben aquí). La
+materialización conserva los 34 ficheros `preview*.go` byte a byte con `cmp` (regla 14) y
+`git diff --check` da rc 0.
+
+### Tres pulsos sobre la ROM sembrada
+
+El comando literal, con el permiso concedido y tres pulsos encadenados, es:
+
+```sh
+apkc preview --rom studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk
+```
+
+La corrida escribe su JSON en `~/.cache/apkc-web/integracion-filas/gestor-tres-pulsos.json`:
+
+| Corrida | Pasos | `layout` | `id/list` |
+| --- | --- | --- | --- |
+| Sin pulsos (`§375`) | 1330 | `res/R5.xml` | 33 nodos, sin las dos entradas de la ROM |
+| Tres pulsos | 3596 | `res/R5.xml` | `fotos` y `leeme.txt` |
+
+Las dos dan `error=None`. La línea base sin pulsos es el efecto del lote anterior (`§375`), no una
+medición nueva de este `§`.
+
+```sh
+python3 -c "import json; d=json.load(open('/home/leonisauro/.cache/apkc-web/integracion-filas/gestor-tres-pulsos.json')); print(d['ejecucion']['pasos'], d['ejecucion'].get('error'), d['layout'])"
+```
+
+### Las cuatro APK de control
+
+Las cuatro APK que no son el gestor siguen byte-idénticas a las de `integracion-gestor-boolean/`:
+F-Droid, NewPipe, Libre Memory Game y Termux. El cotejo se transcribe del informe del integrador; las
+rutas de los JSON de esas cuatro corridas no se transmitieron en él y quedan pendientes de archivar.
+
+**Frontera.** El gestor no se da por funcionando: solo se afirma que, con la ROM sembrada y esos tres
+pulsos, `id/list` muestra `fotos` y `leeme.txt`. El icono y la extensión de esas filas quedan sin
+resolver: `String.lastIndexOf` sigue abierto. Sin CDP, gate ni publicación.

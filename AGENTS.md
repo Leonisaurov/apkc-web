@@ -8,7 +8,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 
 | Ruta | Qué es | Cómo se comprueba |
 | --- | --- | --- |
-| `docs/evidencia.md` | índice de las 345 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
+| `docs/evidencia.md` | índice de las 346 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
 | `docs/situacion.md` | el recap de lo medido, bullet por bullet (movido desde este fichero el 2026-11-03); el original es el `§` que cada bullet cita | leerlo y comprobar que su `§` existe |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
@@ -119,10 +119,10 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      no la prudencia de tokens.
 14. **El único emulador es el submódulo `studio/apkc-emulador` (§357).** El padre ya no guarda pin
     espejo: el gitlink anidado de `studio` apunta a
-    `2a42a846a87df44d66178ca9000aabdc764d9a04` y el `HEAD` de `studio` sigue siendo el
+    `0c01986d356c6eeb20a20809e5b96c74468d34ae` y el `HEAD` de `studio` sigue siendo el
     gitlink `HEAD:studio` del padre. Ejecuta la guardia al cerrar cada fase:
     `git -C studio rev-parse HEAD:apkc-emulador` debe dar
-    `2a42a846a87df44d66178ca9000aabdc764d9a04`; si no, es un fallo, no un aviso.
+    `0c01986d356c6eeb20a20809e5b96c74468d34ae`; si no, es un fallo, no un aviso.
     Nota (§358): el emulador subió y actualizó su gitlink en el mismo commit, así que el pin pasó de
     `563e991` a `4117a8f`; la guardia sigue siendo `git -C studio rev-parse HEAD:apkc-emulador`.
     Nota (§368, registro histórico fechado): al integrar C → B → D → E, el pin pasó a
@@ -136,7 +136,9 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
     `a83ebcd…`, hoy registro histórico. Actualización (esquema de colores de Termux, commit
     `84a7b90`): el pin pasó a `bf7477e…`, hoy registro histórico. Actualización (lote
     Boolean/gestor, commit `c179a0b`): el pin pasó a `2a42a846a87df44d66178ca9000aabdc764d9a04`,
-    vigilado con la guardia de arriba.
+    vigilado con la guardia de arriba. Actualización (filas del gestor, commit `69e798c`): el pin pasó
+    a `0c01986d356c6eeb20a20809e5b96c74468d34ae`, vigilado con la guardia de arriba; `2a42a84…`
+    queda como registro histórico fechado.
     Subir el emulador exige actualizar ese gitlink en el **mismo commit**. La fuente canónica la
     resuelve `tools/materializar-emulador.sh` (argumento, `APKC_EMULADOR_DIR`,
     `studio/apkc-emulador`) sin cambiar el contrato de 34 ficheros ni su `cmp` byte a byte.
