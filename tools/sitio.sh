@@ -40,6 +40,12 @@ for dev in .gitignore AGENTS.md EDITOR.md README.md e2e.sh package.json servidor
   rm -f "$DESTINO/$dev"
 done
 rm -rf "$DESTINO/.github"
+# studio/ posee el gitlink de apkc-emulador: `git archive` versiona .gitmodules como fichero y
+# crea apkc-emulador/ como directorio vacío. Ninguna fuente Go viaja en el sitio (regla 4): el
+# wasm ya se compila fuera y se sirve como artefacto. El directorio se quita con rm -rf, no con
+# rm -f: sobre un directorio, rm -f falla con set -eu y abortaría el empaquetado.
+rm -f "$DESTINO/.gitmodules"
+rm -rf "$DESTINO/apkc-emulador"
 
 cp "$WASM" "$DESTINO/apkc.wasm"
 # El navegador baja la versión comprimida (3,4 MB frente a 12,8 MB) y la descomprime con
