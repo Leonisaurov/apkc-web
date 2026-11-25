@@ -17,8 +17,10 @@ import (
 )
 
 // jarDePrueba escribe un zip con las entradas dadas: las `.class` con deflate y el resto guardadas,
-// para que el lector propio pase por los dos métodos de compresión.
-func jarDePrueba(t *testing.T, ruta string, entradas map[string][]byte) {
+// para que el lector propio pase por los dos métodos de compresión. Con metodoFijo se fuerza un método
+// para todas las entradas: zip.Store hace que el tamaño del jar dependa solo de la longitud de los
+// datos y no de su contenido, que es lo que necesita la prueba que cambia bytes sin cambiar tamaño.
+func jarDePrueba(t *testing.T, ruta string, entradas map[string][]byte, metodoFijo ...uint16) {
 	t.Helper()
 	f, err := os.Create(ruta)
 	if err != nil {
@@ -34,6 +36,9 @@ func jarDePrueba(t *testing.T, ruta string, entradas map[string][]byte) {
 		metodo := zip.Store
 		if strings.HasSuffix(nombre, ".class") {
 			metodo = zip.Deflate
+		}
+		if len(metodoFijo) > 0 {
+			metodo = metodoFijo[0]
 		}
 		w, err := zw.CreateHeader(&zip.FileHeader{Name: nombre, Method: metodo})
 		if err != nil {
@@ -76,11 +81,13 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 		t.Fatal(err)
 	}
 	jar := filepath.Join(raiz, "android.jar")
+	// Store: el tamaño tiene que depender solo de la longitud de los datos, para que la reescritura
+	// de abajo cambie el contenido sin cambiar el tamaño y la huella tenga que mirar el CRC.
 	jarDePrueba(t, jar, map[string][]byte{
 		"p/A.class":            {1, 2, 3, 4, 5},
 		"p/B.class":            {6, 7, 8},
 		"META-INF/MANIFEST.MF": []byte("Manifest-Version: 1.0\n"),
-	})
+	}, zip.Store)
 
 	b, err := abrirBuscador(jar)
 	if err != nil {
@@ -142,7 +149,7 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 		"p/A.class":            {9, 9, 9, 9, 9},
 		"p/B.class":            {6, 7, 8},
 		"META-INF/MANIFEST.MF": []byte("Manifest-Version: 1.0\n"),
-	})
+	}, zip.Store)
 	despuesDe, err := os.Stat(jar)
 	if err != nil {
 		t.Fatal(err)
@@ -197,6 +204,48 @@ func TestIndiceDelJarSeReutilizaYSeInvalida(t *testing.T) {
 		t.Fatal("el índice no tiene la clase que se añadió al jar")
 	}
 	b.cerrar()
+}
+
+// TestJarDePruebaMismoTamanoConDistintoContenido falsifica el fixture de la prueba anterior: fuerza
+// zip.Store, así que un jar con entradas de la misma longitud y bytes distintos tiene que medir
+// exactamente lo mismo. Si alguien vuelve a dejar que el deflate decida el tamaño, esta prueba falla
+// antes de que la de arriba pierda su sentido (o vuelva a fallar por los 2 bytes de la compresión).
+func TestJarDePruebaMismoTamanoConDistintoContenido(t *testing.T) {
+	raiz := t.TempDir()
+	original := filepath.Join(raiz, "original.jar")
+	reescrito := filepath.Join(raiz, "reescrito.jar")
+	jarDePrueba(t, original, map[string][]byte{
+		"p/A.class":            {1, 2, 3, 4, 5},
+		"META-INF/MANIFEST.MF": []byte("Manifest-Version: 1.0\n"),
+	}, zip.Store)
+	jarDePrueba(t, reescrito, map[string][]byte{
+		"p/A.class":            {9, 9, 9, 9, 9},
+		"META-INF/MANIFEST.MF": []byte("Manifest-Version: 1.0\n"),
+	}, zip.Store)
+
+	antes, err := os.Stat(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	despues, err := os.Stat(reescrito)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if antes.Size() != despues.Size() {
+		t.Fatalf("el fixture volvió a generar tamaños distintos: %d y %d", antes.Size(), despues.Size())
+	}
+	// y el contenido sí tiene que cambiar: si no, la huella no tendría nada que invalidar
+	_, crcOriginal, err := huellaDelJar(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, crcReescrito, err := huellaDelJar(reescrito)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crcOriginal == crcReescrito {
+		t.Fatal("el fixture cambió el tamaño del jar pero no su contenido")
+	}
 }
 
 // TestDirectorioCentralDelJarContraArchiveZip comprueba el lector propio contra archive/zip sobre el
