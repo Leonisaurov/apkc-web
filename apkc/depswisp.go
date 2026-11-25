@@ -390,8 +390,11 @@ func (c ConfigWISP) validarRelayAutorizado(u *url.URL) error {
 	if c.PermitirRelaysPersonalizados {
 		return nil
 	}
-	// El relay propio no está en relaysWISP para no alterar la lista de terceros;
-	// se autoriza solo si la URL escrita coincide byte a byte con la constante.
+	// Decisión explícita del usuario: se acepta solo nuestra URL, por comparación exacta
+	// y sin PermitirRelaysPersonalizados. El relay propio no está en relaysWISP para no
+	// alterar la lista de terceros. Las variantes canónicas —puerto 443 explícito,
+	// mayúsculas en el esquema o el host, ruta distinta— se rechazan a propósito: aquí
+	// no se normaliza con relayCanonico, que sí se usa para la lista de terceros.
 	if c.Relay == relayPropioWISP {
 		return nil
 	}
