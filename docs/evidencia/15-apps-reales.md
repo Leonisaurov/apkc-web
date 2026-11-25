@@ -1006,3 +1006,52 @@ almacén en memoria, sin fichero` (`inmutable2-simplefileexplorer.json`).
 **Frontera.** La verificación de cero peticiones fuera del origen queda para Fase G. Los worktrees
 ya están integrados en el checkout principal (`688a7ad`); ninguna APK se da por funcionando; sin
 CDP, gate ni publicación.
+
+---
+
+## 373. Relay WISP propio como opción configurada, sin activar el módulo
+
+Medido el 2026-11-25 sobre los commits integrados de `studio/` (`ffcc49a`, `64eac8a`, `deda61c`)
+y del padre (`18a564b`, `d15cf3c`, `682c6ec`). Sin gate externo, CDP, red ni publicación.
+
+**Dominio y puertos.** `getent hosts wisp.dolci-vita.link` → `163.192.151.24`. El dominio es del
+usuario, registrado en Namecheap, y el correo de Let's Encrypt es `leonisaurox@proton.me`. Los
+puertos 80 y 443 están abiertos y persistidos en la VM; la sonda con `curl` al dominio devuelve
+`Connection refused`, porque todavía no hay ningún servicio escuchando.
+
+```sh
+getent hosts wisp.dolci-vita.link
+```
+
+**La opción queda configurada, no activa.** Studio `ffcc49a` precarga
+`wss://wisp.dolci-vita.link/wisp/` en `#wisp-url` (`studio/index.html:1279`). Studio `64eac8a`
+guarda `if (!eleccion.activo()) throw new Error("módulo WISP desactivado…")` en `relayActual`
+(`studio/wisp.js:598-601`): el campo puede estar precargado, pero con el módulo apagado no se
+devuelve ninguna URL. La falsación es parte de la medición: sin ese guarda, `prueba.js` fallaba
+devolviendo la URL apagada (`studio/prueba.js:5882-5886`). Studio `deda61c` hace que el contador
+del gate cuente solo `obtener`.
+
+En el padre, `18a564b` y `d15cf3c` introducen la constante `relayPropioWISP`
+(`apkc/depswisp.go:77`) y la aceptación por igualdad exacta de la URL en
+`validarRelayAutorizado` (`apkc/depswisp.go:389-412`), sin activar
+`PermitirRelaysPersonalizados` (`apkc/depswisp.go:390`). Las variantes canónicas —puerto 443
+explícito, mayúsculas en el esquema o el host, ruta distinta— se rechazan a propósito: el relay
+propio no se normaliza como la lista de terceros. `682c6ec` integra el gitlink del submódulo.
+
+**Gates y pruebas**, cada una con su comando:
+
+```sh
+sh tools/correr.sh wisp          # rc 0
+sh tools/correr.sh wisp-externo  # sin variable externa: rc 2, «gate externo omitido»
+cd studio && node prueba.js      # prueba: todo en orden
+cd apkc && go test -run TestRelayPropioAceptadoPorComparacionExacta -v .  # PASS
+sh tools/correr.sh test          # ok … 205.713s
+```
+
+**Sin activación del módulo.** `#wisp-selector` sigue `hidden` (`studio/index.html:1273`), los
+seis relays de terceros siguen en `RelaysWISP()` (`apkc/depswisp.go:63`),
+`PermitirRelaysPersonalizados` no se activa y no hay campo nuevo en el JSON del emulador.
+
+**Frontera.** El relay Go de `tools/wispd/` está aprobado para despliegue, pero **aún no está
+desplegado**: no se afirma que WSS funcione. Sin petición externa mientras el módulo está apagado;
+el gate `wisp-externo` se omite sin su variable; sin CDP, red ni publicación.

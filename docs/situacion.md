@@ -971,6 +971,18 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   nueva es `Set.iterator` en `TerminalColorScheme.updateWith`. Tres APK byte-idénticas en el
   registro fechado y gestor solo con el aviso `preferencias-memoria:`; cero peticiones fuera del
   origen pendiente para Fase G. `docs/evidencia/15-apps-reales.md`.
+- §373: relay WISP propio como opción precargada en `#wisp-url`, sin activar el módulo: DNS
+  `163.192.151.24` (`getent hosts wisp.dolci-vita.link`), puertos 80/443 abiertos y persistidos en
+  la VM pero `curl` → `Connection refused`; studio `ffcc49a`, `64eac8a` (guarda en `relayActual`,
+  falsado: sin él `prueba.js` devolvía la URL apagada) y `deda61c`, padre `18a564b`, `d15cf3c` y
+  `682c6ec`; aceptación por igualdad exacta con rechazo de variantes canónicas. `#wisp-selector`
+  sigue `hidden`, los seis relays de terceros siguen en `RelaysWISP()` y no hay campo nuevo en el
+  JSON del emulador. `sh tools/correr.sh wisp` rc 0, `wisp-externo` sin variable rc 2,
+  `cd studio && node prueba.js` → «prueba: todo en orden», test
+  `TestRelayPropioAceptadoPorComparacionExacta` → PASS y suite `205.713s`. El relay Go de
+  `tools/wispd/` está aprobado pero no desplegado: sin WSS en funcionamiento, sin petición externa
+  mientras el módulo está apagado, sin CDP, gate externo ni publicación.
+  `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,
