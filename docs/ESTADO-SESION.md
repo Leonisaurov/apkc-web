@@ -10,24 +10,31 @@ Este fichero no es una medición nueva: es el índice operativo de lo que ya est
 Comandos ejecutados sobre `/home/leonisauro/Develop/Go/apkc-web` (padre) y sus submódulos:
 
 ```
-git rev-parse HEAD                          → 65578d9e9c1e580402a7630114de7d82cbfd1a0a
+git rev-parse --short HEAD                  → 3a5f557
 git status -sb                              → ## web...origin/web
 git rev-list --count @{u}..HEAD             → 0
-git ls-tree HEAD studio                     → 160000 commit e30d3ad329f60694c83a21a0b0c8edeb0939815e	studio
+git ls-tree HEAD studio                     → 160000 commit 4a17f84	studio
 git ls-tree HEAD apkc-emulador              → 160000 commit 563e991de1fac3c863e5278483c2ff745d57bbb2	apkc-emulador
-git -C studio rev-parse HEAD                → e30d3ad329f60694c83a21a0b0c8edeb0939815e
+git -C studio rev-parse --short HEAD        → 4a17f84
 git -C studio status -sb                    → ## emulador-sin-topes...origin/emulador-sin-topes
 git -C studio rev-list --count @{u}..HEAD   → 0
 git -C studio ls-tree HEAD apkc-emulador    → 160000 commit 563e991de1fac3c863e5278483c2ff745d57bbb2	apkc-emulador
 git -C apkc-emulador rev-parse HEAD         → 563e991de1fac3c863e5278483c2ff745d57bbb2
 git -C apkc-emulador status -sb             → ## HEAD (no branch)
 git -C apkc-emulador rev-list --count @{u}..HEAD → fatal: HEAD does not point to a branch (rc 128)
+git -C studio rev-parse --short HEAD:apkc-emulador → 4117a8f
 ```
 
 El emulador está en `HEAD` desconectado y sin rama, así que no tiene `@{u}`: su «ahead» es
-**incierto** por diseño, no un fallo. Los tres gitlinks cuadran: studio en el padre = `e30d3ad`, y el
-pin del emulador es `563e991` tanto en el padre como dentro de `studio` (regla 14 y §356). Actualización (§358): el pin pasó a `4117a8f` en el mismo commit que subió el emulador y la guardia de la regla 14 espera ahora `4117a8f`. El push
-autorizado está ejecutado: padre y studio tienen `rev-list --count @{u}..HEAD` a cero.
+**incierto** por diseño, no un fallo. Las líneas del bloque que conservan `563e991` son el registro
+histórico de §356/§357: en §356 el pin del emulador era `563e991`; tras §358 el gitlink anidado de
+`studio` apunta a `4117a8f` (regla 14) y el padre no guarda pin espejo.
+
+Actualización (§358, push ejecutado): el pin vigente es `4117a8f`
+(`git -C studio rev-parse --short HEAD:apkc-emulador`), subido en el mismo commit que el emulador.
+Los rangos empujados fueron emulador `563e991..4117a8f` → `origin/emulador-modulo`, studio
+`e30d3ad..4a17f84` → `origin/emulador-sin-topes` y padre `8ea01c3..3a5f557` → `origin/web`; padre
+y studio quedan con `rev-list --count @{u}..HEAD` a cero.
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)
 
@@ -101,17 +108,23 @@ autorizado está ejecutado: padre y studio tienen `rev-list --count @{u}..HEAD` 
 - Ninguna de las tres APK reales se da por funcionando: los layouts siguen siendo los falsos de §354
   y el bloqueo compartido es `ArchTaskExecutor.getInstance usa el opcode 0x1d` (§355).
 
-## 4. Frente en marcha al cortar: pin duplicado del emulador en el padre
+## 4. Frente en marcha al cortar: registro de §358 y reserva de §366
 
-Builder `ses_deefc4628ffemxMKqOEaCWnBaW`, worktree
-`/home/leonisauro/.local/share/opencode/worktree/c6f089/quitar-pin-emulador-padre`. Estado verificado
-en ese worktree: `HEAD 65578d9`, `## HEAD (no branch)` y cambios preparados `M .gitmodules`,
+El frente del pin duplicado se cerró en `5f2d600` (§357) y quedó integrado con §358: el pin vigente
+de la regla 14 es `4117a8f` y el push está ejecutado. El frente en marcha es ahora el registro:
+`§358` (opcode, en curso) y `§366` (reservado a la línea base del cuarto APK, sin medición
+publicada), según `docs/evidencia.md:389,393`. No se afirma medición nueva: esto solo apunta a los
+`§` citados, que siguen siendo la fuente (regla 11).
+
+Registro histórico del frente ya cerrado (no reabrir): builder `ses_deefc4628ffemxMKqOEaCWnBaW`,
+worktree `/home/leonisauro/.local/share/opencode/worktree/c6f089/quitar-pin-emulador-padre`. Estado
+verificado en ese worktree: `HEAD 65578d9`, `## HEAD (no branch)` y cambios preparados `M .gitmodules`,
 `D apkc-emulador`, `M tools/entorno.sh`, `M tools/materializar-emulador.sh`,
 `M tools/preview-automatica.sh`, más `AGENTS.md` sin preparar. `git ls-tree HEAD apkc-emulador` todavía
 muestra el gitlink `563e991` porque el borrado aún no está commiteado.
 
-Objetivo: que el único emulador sea `studio/apkc-emulador` y el padre deje de tener su pin espejo.
-Criterio de cierre acordado:
+Objetivo (cerrado en `5f2d600`): que el único emulador sea `studio/apkc-emulador` y el padre dejara
+de tener su pin espejo. Criterio de cierre acordado:
 
 1. `git ls-tree HEAD apkc-emulador` → vacío.
 2. `git -C studio ls-tree HEAD apkc-emulador` → `563e991`.
@@ -120,24 +133,30 @@ Criterio de cierre acordado:
 5. Wasm compilado y `node prueba.js` → «prueba: todo en orden».
 6. `git push` **solo con autorización expresa** del usuario.
 
-Si este frente consume `§357`, el plan de apps pausadas se reanuda en `§358+`.
+El frente consumió `§357` y se cerró en `5f2d600`; el plan de apps pausadas se reanudó en `§358+`
+(`§358` opcode en curso, `§366` reservado sin medición publicada).
 
 ## 5. Vista previa local vigente
 
-- URL: `http://127.0.0.1:8801/`; `curl -s -i` da `HTTP/1.1 200 OK` con `Cross-Origin-Opener-Policy:
-  same-origin`, `Cross-Origin-Embedder-Policy: require-corp` y `Cache-Control: no-store`.
-- `head-construido` = `65578d9e9c1e580402a7630114de7d82cbfd1a0a` = HEAD del padre
-  (`~/.cache/apkc-web/preview-automatica/head-construido`).
+- URL: `http://127.0.0.1:8801/`; `curl -s -i http://127.0.0.1:8801/` da `HTTP/1.1 200 OK` con
+  `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp` y
+  `Cache-Control: no-store`.
+- `cat ~/.cache/apkc-web/preview-automatica/head-construido` = `3a5f557` = `git rev-parse --short
+  HEAD` del padre (medido en esta sesión, tras integrar §358). El valor anterior de este traspaso era
+  `65578d9e9c1e580402a7630114de7d82cbfd1a0a` (registro histórico).
 - SHA del wasm servido, verificado con `curl -s http://127.0.0.1:8801/apkc.wasm | sha256sum`:
-  `1d27617ab6e1cdabeaac811be8a321df705d8637676cee7b4bd73ad1db67ca11`, idéntico al de
-  `~/.cache/apkc-web/preview/apkc.wasm` y al último «wasm actualizado» del vigilante
-  (`~/.cache/apkc-web/preview-automatica/vigilante.log`).
+  `fd4d1014…`, byte a byte idéntico al de `~/.cache/apkc-web/preview/apkc.wasm` y al último
+  «wasm actualizado» del vigilante (`~/.cache/apkc-web/preview-automatica/vigilante.log`). El SHA
+  anterior de este traspaso era
+  `1d27617ab6e1cdabeaac811be8a321df705d8637676cee7b4bd73ad1db67ca11` (registro histórico).
 - Procesos vivos: `node servidor.js 8801` y `sh tools/preview-automatica.sh`.
-- El vigilante compara solo HEAD (`tools/preview-automatica.sh:22-77`); que se reinicie al cambiar
-  `preview-local.sh` o `preview-automatica.sh` es **incierto** con la evidencia recogida: en el guion
-  no hay detector de cambios de esos ficheros. Si el orquestador lo reinicia por otro mecanismo,
-  documentarlo aquí al retomar. El log muestra reintentos fallidos por «falta el submódulo del
-  emulador» y, desde las 04:39 UTC, «wasm actualizado» con el SHA de arriba.
+- Medido en esta sesión (`tools/preview-automatica.sh:22-77`): el vigilante está vivo con
+  `head-construido` = HEAD y el wasm servido byte-idéntico al de disco (`fd4d1014…`), con COOP/COEP
+  y `no-store` en la respuesta y los dos procesos de arriba activos. Lo que no se afirma es el
+  reinicio automático al cambiar `preview-local.sh` o `preview-automatica.sh`: en el guion no hay
+  detector de cambios de esos ficheros, así que esa cuestión concreta no se da por medida. El log
+  muestra reintentos fallidos por «falta el submódulo del emulador» y, desde las 04:39 UTC,
+  «wasm actualizado».
 
 ## 6. Decisiones del usuario que no se pueden perder
 
