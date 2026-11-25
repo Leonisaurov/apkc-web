@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§348`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§348`, con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -344,6 +344,12 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §314 | Medición reproducible del incremental en wasm y nativo | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
+| §334 | F0: el diff del §311 nunca integrado aplica limpio sobre `035744f` | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
+| §335 | F1: la lista de notas enseña N filas en la sesión viva, sin el aviso del `getCount` | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
+| §336 | F2: cinco botones dentro de 360 dp y no-intersección separada con huecos de 64 dp | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
+| §337 | F3: el `clip` sigue y la capa del EditText se recorta al canvas | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
+| §338 | F4: el EditText del emulador toma el tema del aparato, no el del editor | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
+| §339 | Cierre del frente de fidelidad: pruebas focales, falsaciones y frontera CDP | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
 | §348 | Navegación viva entre actividades en la sesión | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
