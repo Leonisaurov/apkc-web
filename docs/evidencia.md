@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§368` (338 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§372` (342 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -381,6 +381,10 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §333 | Matriz de cobertura Java/XML con estado medido | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §346 | Persistencia versionada de paneles, migración de claves antiguas y z-order al conectar | [22-panels-flotantes.md](evidencia/22-panels-flotantes.md) |
 | §347 | Paneles flotantes para todos los módulos: geometría y persistencia en node; CDP, Droidloom, gate y publicación en verificación | [22-panels-flotantes.md](evidencia/22-panels-flotantes.md) |
+| §369 | ROM con permisos: `id/list` del gestor gana 2 filas con `/storage/emulated/0` solo con `READ` concedido; `checkSelfPermission` → `-1` y `MANAGE_EXTERNAL_STORAGE` denegado | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §370 | Lote integrado de cuatro frentes sobre `c448442`: suite `go test -count=1 ./...` → `ok … 257.828s` y cinco APK con `pasos` 700/508/284/1137/547, sin CDP ni gate | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §371 | Colecciones, cadenas y trazas: 13 focales en verde y avisos integrados → deuda (F-Droid 4→4 con `forName`, Libre Memory Game 6→4, Termux 7→6), sin campo JSON nuevo | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §372 | Recursos y preferencias de Termux en worktrees aún no integrados: 223 → 64 → 408 → 503 → 719 → 3798 pasos, tres APK byte-idénticas y frontera `java.io.File.isFile` sobre nulo | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
@@ -398,7 +402,7 @@ está escrita en este índice. `§349` ya no está reservado: su medición está
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.
-Actualización de la numeración del plan de apps reales reanudado: `§358` medido y registrado (opcode `0x1d`/`0x1e`), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G, en ese orden; `§365` ya está medido en este índice. **`§366` ya está medido**: línea base del cuarto APK (`com.martinmimigames.simplefileexplorer_20.apk`), anterior a Fase D, con su fila en el índice y el recuento en 332. Sus 12 avisos y su `ejecucion.error` son pre-corrección y no se fusionan con `§361`. **`§367` ya está medido**: quinta APK (`org.quentin_bettoum.librememorygame_9.apk`), caso negativo fail-closed con la etiqueta «solo envoltorio, sin lógica Godot», con su fila en el índice y el recuento en 333; no sustituye a `§366`, no se cuenta como app cubierta y no se fusiona con `§361`. **`§359` (Fase C), `§360` (Fase B), `§361` (Fase D), `§362` (Fase E) y `§368` (integración de los cuatro frentes) ya están medidos**: cada uno con su fila en el índice y el recuento en 338; C, B, D y E quedan hechos en capa Go/node y en verificación CDP/gate, sin que ninguna APK se dé por funcionando.
+Actualización de la numeración del plan de apps reales reanudado: `§358` medido y registrado (opcode `0x1d`/`0x1e`), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G, en ese orden; `§365` ya está medido en este índice. **`§366` ya está medido**: línea base del cuarto APK (`com.martinmimigames.simplefileexplorer_20.apk`), anterior a Fase D, con su fila en el índice y el recuento en 332. Sus 12 avisos y su `ejecucion.error` son pre-corrección y no se fusionan con `§361`. **`§367` ya está medido**: quinta APK (`org.quentin_bettoum.librememorygame_9.apk`), caso negativo fail-closed con la etiqueta «solo envoltorio, sin lógica Godot», con su fila en el índice y el recuento en 333; no sustituye a `§366`, no se cuenta como app cubierta y no se fusiona con `§361`. **`§359` (Fase C), `§360` (Fase B), `§361` (Fase D), `§362` (Fase E) y `§368` (integración de los cuatro frentes) ya están medidos**: cada uno con su fila en el índice y el recuento en 338; C, B, D y E quedan hechos en capa Go/node y en verificación CDP/gate, sin que ninguna APK se dé por funcionando. **`§369` (ROM con permisos), `§370` (lote integrado sobre `c448442`), `§371` (colecciones, cadenas y trazas) y `§372` (recursos y preferencias de Termux, aún en worktrees) ya están medidos**: cada uno con su fila en el índice y el recuento en 342; las cuatro mediciones siguen en `docs/evidencia/15-apps-reales.md`, con CDP, gate y publicación fuera, y sin que ninguna APK se dé por funcionando.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

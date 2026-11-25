@@ -946,6 +946,29 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `error=None`/0 avisos de familia/`res/R5.xml`/30 nodos y Libre Memory Game mismo error,
   `layout=''`, 1 nodo, 6 avisos y marco «Libre Memory Game». Hecho en capa Go/node, en verificación
   CDP/gate; ninguna APK se da por funcionando. `docs/evidencia/15-apps-reales.md`.
+- §369: ROM de un solo usuario con permisos por prefijo (`03b772d`/`49a5726`, en el lote `6a207cd`):
+  sobre `/storage/emulated/0`, `id/list` del gestor gana 2 filas solo con
+  `--permiso android.permission.READ_EXTERNAL_STORAGE`, no con el clic; SHA `28a6e68a…` →
+  `e603739d…` → `88eb9f85…`; `checkSelfPermission` → `-1` y `MANAGE_EXTERNAL_STORAGE` denegado.
+  Los hijos llegan de `id/drive_list` como aproximación documentada. Sin CDP ni publicación.
+  `docs/evidencia/15-apps-reales.md`.
+- §370: lote integrado de cuatro frentes sobre `c448442` (`99a4c3b`, `a7683be`, `157eab5`,
+  `9c5ca8d`, `1fbaaa1`, `5b591ba`, `c3f1e55`, `6a207cd`; integración `1e1bb03`): suite
+  `go test -count=1 ./...` → `ok … 257.828s`; cinco APK, base → lote, 468→700/12→4 en F-Droid,
+  379→508/8→3 en NewPipe, 223→284 en Termux con denegación de la ROM, 1131→1137 con `error=None`
+  en el gestor y 333→547 en Libre Memory Game. Ninguna app se da por funcionando.
+  `docs/evidencia/15-apps-reales.md`.
+- §371: colecciones, cadenas y trazas (`5676be4`/`8ef0b12`/`ec842d4`): 13 focales en verde; avisos
+  integrados → deuda, F-Droid 4→4 (`forName` queda), NewPipe 3→3, Libre Memory Game 6→4, Termux
+  7→6 y gestor 1→1, con `layout`/`nodos` idénticos en las cinco. `copyOfRange` cotejado con java 17
+  (`2 > 1` y `arraycopy: length -2 is negative`). Sin campo JSON nuevo ni CDP.
+  `docs/evidencia/15-apps-reales.md`.
+- §372: recursos y preferencias de Termux (`af72d22`, `5558e02`, `4bdebeb`, `7162fdc`, `6366291`,
+  **aún no integrados en el checkout principal**): 223 → 64 → 408 → 503 → 719 → **3798** pasos;
+  desaparecen `Set.iterator`, `containsKey`/`contains`, conjuntos estáticos nulos e
+  `ImmutableBiMap.entrySet`; queda `java.io.File.isFile sobre nulo` en `checkForFontAndColors`.
+  Tres APK byte-idénticas y gestor solo con el aviso `preferencias-memoria:`; cero peticiones fuera
+  del origen pendiente para Fase G. `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,

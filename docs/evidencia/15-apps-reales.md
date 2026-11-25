@@ -838,3 +838,151 @@ ejecutar. Ninguna de las cinco APK se da por funcionando: Libre Memory Game sigu
 negativo «solo envoltorio, sin lógica Godot» (`§367`) y F-Droid declara `sin-layout-xml:`. El pin
 vigente del emulador, actualizado en la integración, es `a2a6c29111783ee09f6e74729c4b303b0dd8242d`
 (regla 14 de `AGENTS.md`).
+
+---
+
+## 369. ROM con permisos: el gestor solo ve `/storage/emulated/0` con `READ` concedido
+
+Medido el 2026-11-25 sobre los commits `03b772d` y `49a5726` del emulador, integrados en el lote
+`6a207cd` (integración `1e1bb03` en el padre). Sin gate, CDP, chromium, red, `git push` ni
+publicación. La ROM es un árbol fijo en memoria: `/sdcard` es solo alias de `/storage/emulated/0`, no
+se toca el sistema de ficheros del aparato ni del navegador. `checkSelfPermission` devuelve `-1`
+(`PERMISSION_DENIED`) por defecto y `MANAGE_EXTERNAL_STORAGE` queda denegado siempre, aunque se pida
+con `--permiso`. La tabla de decisiones de los cinco permisos del corpus está en
+`studio/apkc-emulador/ROM-PERMISSOS.md:24-33`.
+
+**Tres SHA del gestor**, sobre `com.martinmimigames.simplefileexplorer_20.apk`:
+
+```sh
+sha256sum ~/.cache/apkc-web/rom-permisos/json/verificado-sin-clic.json ~/.cache/apkc-web/rom-permisos/json/verificado-con-clic.json ~/.cache/apkc-web/rom-permisos/json/verificado-con-permiso.json
+```
+```
+28a6e68a772c244eee1d9f5a48a4ddf3722f5e0067cd330ec867b8669268e8c3  /home/leonisauro/.cache/apkc-web/rom-permisos/json/verificado-sin-clic.json
+e603739d2643cf3c1819e4346369ea895c747c5e223c89741f42791c98e930fb  /home/leonisauro/.cache/apkc-web/rom-permisos/json/verificado-con-clic.json
+88eb9f850be99d02c2b79658a918a37c36f874b28b9e0f99aa0fd4092c6fe831  /home/leonisauro/.cache/apkc-web/rom-permisos/json/verificado-con-permiso.json
+```
+El de sin clic es idéntico al de `§361` y `§368`: la ROM no reescribe esa medición. Los tres JSON se
+obtienen con las tres formas del comando:
+
+```sh
+apkc preview --rom … <apk>
+apkc preview --rom … --pulsar id/menu_quick_switch <apk>
+apkc preview --rom … --permiso android.permission.READ_EXTERNAL_STORAGE <apk>
+```
+
+**Avisos de familia de permisos.** Los extrae este comando sobre los mismos JSON:
+
+```sh
+python3 -c "import json; b='/home/leonisauro/.cache/apkc-web/rom-permisos/json/'; [(lambda a: print(n, [x for x in a if 'ROM' in x or 'permiso' in x]))(json.load(open(b+n+'.json'))['ejecucion']['avisos']) for n in ['verificado-sin-clic','verificado-con-clic','verificado-con-permiso']]"
+```
+```
+verificado-sin-clic []
+verificado-con-clic ['java.io.File.canRead: la ROM deniega el acceso sin android.permission.READ_EXTERNAL_STORAGE concedido sobre la ruta']
+verificado-con-permiso []
+```
+
+`id/list` gana **2 filas** con `/storage/emulated/0` solo en la tercera corrida (con permiso); en la
+del clic el SHA cambia, pero `id/list` sigue con 0 hijos y aparece el aviso de denegación. Los hijos
+vienen de `id/drive_list` y se publican en `id/list` como **aproximación documentada**, sin inventar
+contenido. `pasos`: 1131 sin clic, 1213 con clic y 1251 con permiso; `error=None` en las tres.
+
+**Frontera.** Los JSON quedan en `~/.cache/apkc-web/rom-permisos/json/`; no se afirma que la app
+funcione; la mitad CDP, `tools/entorno.sh gate` y la publicación siguen fuera.
+
+---
+
+## 370. Lote integrado de cuatro frentes sobre `c448442`
+
+Medido el 2026-11-25. Sin gate, CDP, chromium, red, `git push` ni publicación. Sobre `c448442` (red
+sin peticiones reales) se integran en el emulador `99a4c3b` (lifecycle e hilos), `a7683be`
+(comentario de `getObserverConstructorType`), `157eab5` (`<clinit>` y `fill-array-data`), `9c5ca8d`
+(objetos inertes para nativos, WebView y Media3), `1fbaaa1` (retornos de arreglo inerte y avisos
+recortados), `5b591ba` (avisos recortados repetidos contados una sola vez), `c3f1e55` (ROM con
+permisos) y `6a207cd` (vistas añadidas por código). La integración en el padre es `1e1bb03` y la
+guardia del pin se actualizó en `5b3a774`.
+
+**Suite integrada.**
+
+```sh
+cd apkc && go test -count=1 ./...
+```
+```
+ok github.com/ajinasokan/apkc 257.828s
+```
+
+**Cinco APK, base → lote.** Los JSON de la corrida están en
+`~/.cache/apkc-web/integracion-frentes/` (con el binario `apkc-integracion-frentes`, los `.err` y
+`gotmp/`):
+
+| APK | `pasos` | avisos |
+| --- | --- | --- |
+| F-Droid (`fdroid.json`) | 468 → 700 | 12 → 4 |
+| NewPipe (`newpipe.json`) | 379 → 508 | 8 → 3 |
+| Termux (`termux.json`) | 223 → 284 | con texto de denegación de la ROM |
+| Gestor (`simplefileexplorer.json`) | 1131 → 1137 | `error=None` |
+| Libre Memory Game (`librememorygame.json`) | 333 → 547 | sin cambio de clasificación |
+
+En Termux los avisos incluyen `java.io.File.exists` e `isFile` con «la ROM deniega el acceso sin
+`android.permission.READ_EXTERNAL_STORAGE` concedido sobre la ruta».
+
+**Frontera.** No se afirma que ninguna app funcione: F-Droid y NewPipe conservan su
+`ejecucion.error` de `Lifecycling`, Termux el de `Set.iterator` sobre nulo y Libre Memory Game el
+caso negativo «solo envoltorio, sin lógica Godot» de `§367`; el gestor es el único con `error=None`.
+Sin CDP, comparación visual, gate ni publicación.
+
+---
+
+## 371. Colecciones, cadenas y trazas: la deuda baja sin tocar el modelo
+
+Medido el 2026-11-25 sobre los commits `5676be4`, `8ef0b12` y `ec842d4` del emulador, en el checkout
+principal (donde `d924101` integra mapas, cadenas y trazas). Sin gate, CDP, red ni publicación.
+Focales en verde, 13 `--- PASS`:
+
+```sh
+cd apkc && go test -run 'TestColecciones|TestCadenas|TestStackTrace|TestArraysCopyOfRange|TestIteradorDelSet' -v .
+```
+
+**Avisos integrados → deuda**, con JSON en `~/.cache/apkc-web/colecciones/salida-integrada/` y
+`~/.cache/apkc-web/colecciones/salida-deuda/`:
+
+| APK | integrada | deuda |
+| --- | --- | --- |
+| F-Droid (`fdroid.json`) | 4 | 4 (`forName` queda) |
+| NewPipe (`newpipe.json`) | 3 | 3 |
+| Libre Memory Game (`librememorygame.json`) | 6 | 4 |
+| Termux (`termux.json`) | 7 | 6 |
+| Gestor (`simplefileexplorer.json`) | 1 | 1 |
+
+`layout` y `nodos` son idénticos en las cinco entre las dos corridas: `''`/1 en F-Droid y Libre
+Memory Game, `res/v9.xml`/6 en NewPipe, `res/layout/activity_termux.xml`/13 en Termux y
+`res/R5.xml`/30 en el gestor. Queda como frontera el aviso `forName: la reflexión no está en el
+subconjunto` (`salida-deuda/fdroid.json`), sin campo JSON nuevo. `copyOfRange` se corrigió contra
+java 17: `IllegalArgumentException: 2 > 1` y `ArrayIndexOutOfBoundsException: arraycopy: length -2
+is negative` (`previewstubsframework_test.go:1453-1455`).
+
+**Frontera.** Ninguna de las cinco APK se da por funcionando; la mitad CDP, el gate y la publicación
+quedan fuera de esta medición.
+
+---
+
+## 372. Recursos y preferencias de Termux: 223 → 3798 pasos en worktrees aún no integrados
+
+Medido el 2026-11-25 sobre los commits `af72d22`, `5558e02`, `4bdebeb`, `7162fdc` y `6366291` de
+los worktrees. **No están integrados en el checkout principal al escribir este `§`**: es una
+medición de los worktrees, no del árbol actual. Sin gate, CDP, red ni publicación.
+
+**Progreso de Termux**, con JSON en `~/.cache/apkc-web/recursos/salida/`: 223
+(`base-termux-app_v0.118.3+github-debug_x86_64.json`) → 64 (`con-propiedades-termux.json`) → 408
+(`debug-termux.json`) → 503 (`contains-debug.json`) → 719 (`estaticos2-termux.json`) → **3798**
+(`inmutable2-termux.json`). Desaparecen `Set.iterator` de propiedades, `containsKey`/`contains`,
+los conjuntos estáticos nulos e `ImmutableBiMap.entrySet`. Queda la frontera `java.io.File.isFile
+sobre nulo` en `checkForFontAndColors`, en el `ejecucion.error` de `inmutable2-termux.json`.
+
+**Las otras cuatro APK.** Tres quedan byte a byte idénticas a la base —F-Droid
+(`9bd87930…`), NewPipe (`67b498c1…`) y Libre Memory Game (`1b70842e…`), con el mismo SHA en
+`base-*.json` y `inmutable2-*.json`— y el gestor solo con el aviso informativo
+`preferencias-memoria: getSharedPreferences("com.martinmimigames.simplefileexplorer") usa un
+almacén en memoria, sin fichero` (`inmutable2-simplefileexplorer.json`).
+
+**Frontera.** La verificación de cero peticiones fuera del origen queda para Fase G. Los worktrees
+no se tocan desde esta medición y ninguna APK se da por funcionando; sin CDP, gate ni publicación.
