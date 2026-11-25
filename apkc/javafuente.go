@@ -993,7 +993,9 @@ func (a *analizadorJava) nombrePunto() (string, error) {
 	for {
 		t := a.actual()
 		if t.kind != 'i' && !(t.kind == 'k' && esNombreDeTipo(t.valor)) {
-			return "", fmt.Errorf("linea %d: se esperaba un nombre y hay %q", t.donde.linea, t.valor)
+			// el token que interrumpe el nombre trae su columna (también el de fin de fichero), así
+			// que el informe apunta al sitio exacto y no solo a la línea (§331).
+			return "", fmt.Errorf("%s: se esperaba un nombre y hay %q", t.donde.sitio(), t.valor)
 		}
 		sb.WriteString(t.valor)
 		a.avanzar()

@@ -355,6 +355,11 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
+| §329 | Coste real de `check`: medianas en nativo y en la pestaña por CDP | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §330 | Asignación cualificada: receptor `this` y receptor con tipo | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §331 | La columna del parser apunta al token, no a una línea inventada | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §332 | Overhead de arranque: decisión incierta, sin sesión persistente | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §333 | Matriz de cobertura Java/XML con estado medido | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §346 | Persistencia versionada de paneles, migración de claves antiguas y z-order al conectar | [22-panels-flotantes.md](evidencia/22-panels-flotantes.md) |
 | §347 | Paneles flotantes para todos los módulos: geometría y persistencia en node; CDP, Droidloom, gate y publicación en verificación | [22-panels-flotantes.md](evidencia/22-panels-flotantes.md) |
 

@@ -28,12 +28,13 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
   dejó el build) y los errores salen con `archivo:línea:columna`. Los tests están en
   `apkc/check_test.go`, `apkc/javaemisor_argumento_estatico_test.go` (byte a byte contra javac 17)
   y en la comprobación del diagnóstico de `studio/prueba-pestana.js`.
-- **D2 pendiente y sin medir.** Lo único que hay son los números de D1, que son la línea base:
-  `check` de un solo fichero cuesta ~15 ms en nativo; con `--proyecto` y la `R` ya escrita en
-  `src/`, ~30 ms; si hay que enlazar `res/` porque no hay `R.java`, ~200 ms, y de esos ~170 ms la
-  mayor parte es releer y parsear `resources.arsc` del `android.jar` en cada invocación. En la
-  pestaña, a eso se le suma el arranque de una instancia de wasm por comando. Son cifras de una
-  máquina de escritorio, no de un teléfono: la sonda de D2 tiene que repetirlas en la pestaña.
+- **D2 medida el 2026-11-24 (§329).** La sonda nativa nueva (`apkc/check_tiempo_test.go`) da 8,4 ms
+  sin proyecto, 181,6 ms sin `R` enlazando `res/` y 7,6 ms con `R` y `--proyecto`; la sonda CDP
+  (`studio/sonda-check.js`) imprime las cinco cifras, el salto de pasadas limpias y las dos formas de
+  encadenar checks. Las cifras antiguas de D1 (~15/~30/~200 ms) y las de §232 e I5 quedan como
+  transferidas y en verificación, no como resultado de este frente. La conclusión sobre el overhead
+  de arranque depende de una mediana inestable y se deja en verificación en §332. Son cifras de un
+  escritorio, no de un teléfono.
 - **D3 hecha el 2026-11-22** (§201, ampliación final). El editor sugiere recursos del proyecto
   (`R.layout.*`, `R.id.*`) y APIs del `android.jar` sin red: el jar se indexa por trozos
   (1 354 339 de 26 361 808 bytes, 3837 clases, ~50 ms, 0 peticiones), `Tab` acepta y entra en el
@@ -45,19 +46,36 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
 
 ### Cola D4-D6 (ampliación del usuario, 2026-11-22)
 
-- **D4, en cola.** El usuario golpeó el error concreto `Apk.java:14`: `this.filePath = filePath;`
-  produce «una asignacion con mas de un nombre en el destino no esta medida». El builder del frente
-  `jar/` (`deps-check`) está haciendo que `apkc check` vea el classpath completo, pero esa es una
-  causa distinta: aquí hay que resolver el receptor `this` y el campo contra la clase en el
-  analizador/emisor, sin mover la `LineNumberTable` (los dex se comparan byte a byte).
-- **D5, en cola y sin medir.** D2 sigue con solo las cifras de D1 como línea base (~15 ms nativo,
-  ~30 ms con `--proyecto`, ~200 ms si hay que enlazar `res/`). La ampliación pide además overhead
-  mínimo: no crear una instancia de wasm por tecla, cancelar checks obsoletos y reutilizar I5.
-- **D6, en cola.** D3 cubre `R.*` y APIs del jar, y el linter de XML es local; faltan la matriz de
-  cobertura, el autocompletado tras `.` y el de atributos XML con su contexto, y mensajes que
-  expliquen qué no está medido sin repetir la posición.
-- Orden: **D4 → D5 → D6**, un agente por paso en cuanto se libere un hueco de los cuatro actuales.
-  Ninguno se marca hecho sin su sonda, su `§` y su commit (regla 10 de `AGENTS.md`).
+- **D4 hecha el 2026-11-24 (§330).** `this.filePath = filePath` y `appInfo.sourceDir = filePath`
+  salen con cero errores; el control nombra el campo en `Apk.java:7`; el receptor sin tipo dice
+  «no se conoce el tipo del receptor appInfo»; el dex sigue byte a byte contra javac 17.
+- **D5 en verificación (§331 y §332).** La columna del parser ya apunta al token (§331, con su
+  falsación). La decisión de sesión persistente queda **incierta**: las tres medianas de la sonda,
+  tomadas antes de reconciliar con `6496918`/`1a60875`, dieron 24,3 % / 10,1 % / 67,7 % frente al
+  umbral de ⅓; no se implanta `--sesion` y se pide la mediana estable con `REPES=7` sobre el árbol
+  reconciliado antes de decidir. No se cancelan checks obsoletos sin una cifra fija.
+- **D6 matriz medida en node, fila 8 en verificación (§333).** Las siete filas de módulos puros están
+  en verde en `node studio/prueba.js` sobre el submódulo reconciliado `a41db75` (matriz D6 más
+  bombeo del cronómetro). La octava se comprobó en `prueba-pestana.js` **antes** de la reconciliación
+  (`240 comprobaciones bien, 3 mal`); `6496918` arregla D7, pero la corrección prohíbe CDP/chromium
+  y no se ha reejecutado sobre `1a60875`: no se afirma que los fallos sigan ni que desaparecieron.
+  No se anuncia cobertura completa por analogía.
+
+### Matriz D6 (medida en §333)
+
+| # | Lenguaje | Caso | Comando | Estado medido |
+| --- | --- | --- | --- | --- |
+| 1 | Java | `R.layout.` y `R.id.` sin guardar | `node studio/prueba.js` | `matriz 1 …: ok` (tipos, valores y `@+id` del buffer) |
+| 2 | Java | `View.` y `v.` con declaración; sin declaración | `node studio/prueba.js` | `matriz 2 …: ok` (`contexto === null`) |
+| 3 | Java | `this.campo` propio y prefijo `Acti` | `node studio/prueba.js` | `matriz 3 …: ok` |
+| 4 | Java | cursor en bloque `/* … */` o cadena | `node studio/prueba.js` | `matriz 4 …: ok` (sin contexto) |
+| 5 | XML | `<` en layout, manifiesto y `values` | `node studio/prueba.js` | `matriz 5 …: ok` (sin cruzar grupos) |
+| 6 | XML | `android:` y valores enumerados | `node studio/prueba.js` | `matriz 6 …: ok` |
+| 7 | XML | `@strin` y fila del linter | `node studio/prueba.js` | `matriz 7 …: ok` (`origen:"XML"`, `archivo:línea:columna`) |
+| 8 | Errores | cada fila del panel nombra qué falta y dónde | `node studio/prueba-pestana.js` | medido antes de `6496918` (fila propia verde, global `240 bien, 3 mal`); **`incierto`** sobre el árbol reconciliado por la prohibición de CDP |
+
+Orden seguido: **F0 → F1 → F2 → F3 → F4 → F5**, un solo builder y capas secuenciales. Ninguna fila
+se marcó hecha sin su comando y su `§` (regla 11).
 
 ### Reconciliación (F0, sin medición propia)
 

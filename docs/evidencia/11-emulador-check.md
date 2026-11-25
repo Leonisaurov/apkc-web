@@ -1435,3 +1435,237 @@ presentes y rc 0.
 **Frontera incierta**: `versionDeExtraccionAar = "e3"` queda **incierto** para I3/I4/I5: ningún test
 demuestra la invalidación de cachés; no se afirma. Sin gate, chromium, red ni publicación.
 
+
+## 329. Coste real de `check`: medianas en nativo y en la pestaña por CDP
+
+Medido el 2026-11-24 sobre el frente `d2-d6-diagnostico` **reconciliado en `1a60875`** (incluye
+`6496918`). D2 salía de las cifras de D1 (~15 / ~30 / ~200 ms) y de las transferidas de §232 e I5;
+aquí se miden con reloj de pared las tres formas que ve el editor. La sonda nativa es
+`apkc/check_tiempo_test.go` (nueva, con 11 repeticiones) y la de la pestaña es `studio/sonda-check.js`
+(3 repeticiones). No se reutiliza ninguna cifra de §214, §232 ni I5 como propia.
+
+```sh
+# wasm para la sonda de pestaña
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$PREFIX/tmp/d2/apkc-wasm.wasm" .
+# sonda nativa sobre el árbol reconciliado (tres tests, cada uno con su mediana)
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestCheckTiempo|TestMarcoCacheadoMideElAhorro|TestIndiceDelJarMideElAhorro' -v .
+# sonda de la pestaña: ejecutada antes de la reconciliación, NO reejecutada aquí
+ANDROID_JAR=… APKC_WASM="$PREFIX/tmp/d2/apkc-wasm.wasm" CHROME_BIN=… node studio/sonda-check.js
+```
+
+**Salida nativa (literal, árbol reconciliado).** `TestCheckTiempo` imprime sus medianas y `ok
+github.com/ajinasokan/apkc 3.518s`; los otros dos tests pasan con sus propias medianas:
+
+```
+medida check_sin_proyecto_ms 7.7
+medida check_sin_R_enlazando_res_ms 190.3
+medida check_con_proyecto_y_R_ms 7.3
+resumen: sin proyecto 7.7 ms; sin R enlazando res 190.3 ms; con proyecto y R 7.3 ms
+medianas: archive/zip 12.5 ms; lector propio con la caché vacía 5.5 ms; con la caché puesta 2.0 ms; proyecto mínimo 10.7 y 7.7 ms
+medianas: sin caché 174.9 ms; con la caché 6.4 ms
+```
+
+Segunda ejecución del mismo test sobre el mismo árbol, `ok github.com/ajinasokan/apkc 2.877s`:
+
+```
+medida check_sin_proyecto_ms 6.4
+medida check_sin_R_enlazando_res_ms 187.5
+medida check_con_proyecto_y_R_ms 27.4
+resumen: sin proyecto 6.4 ms; sin R enlazando res 187.5 ms; con proyecto y R 27.4 ms
+```
+
+El auditor midió **20,0 / 261,6 / 28,5 ms** en el mismo escenario. La cifra de `check con proyecto y
+R` se reporta por tanto como **rango 7,3–28,5 ms** (27,4 ms en la segunda corrida aquí), no como un
+punto: las cuatro ejecuciones quedan por debajo de los 30 ms del objetivo histórico, pero con un
+margen que el ruido del escritorio puede estrechar. La aserción `<30 ms` se retiró por eso (estaba a
+1,5 ms del margen) y se sustituyó por una falsificación robusta: el camino con `R` no puede costar
+la mitad que enlazar `res/` (`conR < sinR/2`), que sí se cumple (7,3–27,4 frente a 187,5–261,6 ms).
+Enlazar `res/` sin `R.java` sigue siendo una orden de magnitud más caro. Las dos últimas líneas de la
+primera salida son los tests de §232 e I5 reejecutados aquí: confirman el ahorro del marco
+(174,9 → 6,4 ms) y del índice del jar, pero sus cifras históricas siguen siendo transferidas.
+
+**Salida de la pestaña (literal, medida antes de la reconciliación; no reejecutada por la
+prohibición expresa de CDP/chromium en la corrección).** La página arrancó aislada y la sonda
+salió con rc 0:
+
+```
+medida preparacion {"create":0,"jar":26361808,"fuente":387}
+medida version_ms [80.00999999977648,163.53999999910593,178.2949999999255]
+medida check_sin_proyecto_ms [245.88000000081956,323.785000000149,392.85999999940395]
+medida check_sin_R_enlazando_res_ms [710.5850000008941,720.0750000011176,753.7249999996275]
+medida caro_dos_checks_esperando_ms 1041
+medida caro_dos_checks_cancelando_ms 818
+medida cancelacion_disponible true
+medida build_deja_R {"codigo":1,"r":399}
+medida check_con_proyecto_y_R_ms [218.839999999851,241.5200000014156,252.81000000052154]
+medida rapido_dos_checks_esperando_ms 317
+medida rapido_dos_checks_cancelando_ms 746
+medida diagnostico_saltos {"pasadas0":1,"saltadas0":0,"pasadas1":1,"saltadas1":1,"trasEspacios":"sin errores · Java","pasadas2":2,"corrio":true}
+resumen {
+  "version": 163.53999999910593,
+  "sinProyecto": 323.785000000149,
+  "conR": 241.5200000014156,
+  "sinR": 720.0750000011176,
+  "caroEsperar": 1040.7249999996275,
+  "caroCancelar": 818.3700000010431,
+  "rapidoEsperar": 317.08500000089407,
+  "rapidoCancelar": 745.6199999991804,
+  "reps": 3
+}
+```
+
+**Lo que entra en §332.** `diagnostico_saltos` falsa el salto: `pasadas1 === pasadas0` al añadir solo
+espacios y `pasadas2 > pasadas0` al cambiar `R.layout.main` por `R.layout.noexiste`.
+`build_deja_R` dejó 399 bytes de `R.java`. La decisión de §332 no se toma de una sola corrida:
+las tres mediciones de la sonda de pestaña dieron medianas de `version_ms` 84,6 / 84,4 / 163,5 ms
+y de `check_con_proyecto_y_R_ms` 347,9 / 836,5 / 241,5 ms, con razones 24,3 % / 10,1 % / 67,7 %.
+Por debajo del tercio en dos y por encima en una: la señal no es estable y se declara **incierta**
+en §332 en vez de improvisar una sesión persistente. Esas tres corridas son anteriores a la
+reconciliación con `6496918`; no se ha medido de nuevo en la pestaña sobre el árbol reconciliado.
+
+**Fronteras de este `§`.** Once repeticiones por cifra en nativo y tres en la sonda de pestaña
+(anteriores a la reconciliación), en un solo escritorio: no se extrapola a un teléfono. `§214`, §232
+e I5 se citan como transferidos y en verificación. No se corrió el gate final, no se publicó, no se
+tocó red externa y **no se ejecutó CDP/chromium sobre el árbol reconciliado** por la restricción
+expresa de la corrección.
+
+## 330. Asignación cualificada: receptor `this` y receptor con tipo
+
+Medido el 2026-11-24 sobre el frente `d2-d6-diagnostico`. D4 tenía el código y los tests escritos
+desde antes (`apkc/check_test.go:205-334`, `apkc/javaemisor.go:8526-8542`) pero sin `§` propio: leerlo
+no bastaba para marcarlo hecho (regla 11). Se ejecuta su comando sobre el árbol final.
+
+```sh
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestCheckAsignacionCualificada|TestCheckAsignacionPorReceptor|TestCheckAsignacionReceptorSinTipo|TestAsignacionCualificadaContraJavac17' -v .
+```
+
+**Resultado literal**: seis `--- PASS` y `ok github.com/ajinasokan/apkc 1.983s`, sin saltados.
+
+```
+--- PASS: TestCheckAsignacionCualificadaThis (0.20s)
+--- PASS: TestCheckAsignacionCualificadaNombraElCampo (0.19s)
+--- PASS: TestCheckAsignacionPorReceptor (0.20s)
+--- PASS: TestCheckAsignacionPorReceptorNombraElCampo (0.18s)
+--- PASS: TestCheckAsignacionReceptorSinTipo (0.18s)
+--- PASS: TestAsignacionCualificadaContraJavac17 (0.99s)
+```
+
+`this.filePath = filePath` sale con `"errores":[]` y `emisor:true`; el control `this.noExiste` nombra
+el campo y cae en `Apk.java:7` sin el mensaje «mas de un nombre en el destino»; `appInfo.sourceDir =
+filePath` da cero errores; y el receptor sin tipo dice «no se conoce el tipo del receptor appInfo».
+`TestAsignacionCualificadaContraJavac17` confirma el dex byte a byte contra javac 17, así que la
+resolución no movió la `LineNumberTable`.
+
+**Fronteras de este `§`.** Sin gate final, chromium ni publicación. El código residía en `HEAD
+4b723ae`: aquí se mide, no se reescribe.
+
+## 331. La columna del parser apunta al token, no a una línea inventada
+
+Medido el 2026-11-24 sobre el frente `d2-d6-diagnostico`. La infraestructura ya estaba en
+`apkc/check.go:42-103` (`posicionEnMensaje`, `limpiarMensaje` y `posicion` aceptan `linea N, columna
+C:`) y el token de fin de fichero ya guardaba su columna en `apkc/javafuente.go:705-713`; lo que la
+descartaba era `nombrePunto` (`:999`), que formateaba solo `linea %d`. Ese sitio usa ahora
+`t.donde.sitio()`. Un intento de cambiar también `comer` (`:923`) se revirtió: rompía
+`TestPorCadaFalsificacion` y `TestTipoCualificadoLocalFalsificacion`, que comparan dos caminos y no
+debían ver columna en un mensaje ajeno a este frente.
+
+```sh
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 \
+  -run 'TestCheckBloqueSinCerrarApuntaALaUltimaLinea|TestCheckColumnaEnCaracteres' -v .
+```
+
+**Resultado literal**: los dos `PASS` y `ok github.com/ajinasokan/apkc 0.228s`. El bloque sin cerrar
+pasa de `MainActivity.java:5` a `MainActivity.java:5:C` con `C>0`, y el mensaje sale limpio (sin
+`linea 5`). `TestCheckColumnaEnCaracteres` sigue contando la columna en caracteres (runes), con un
+emoji delante del token, no en bytes ni en unidades UTF-16.
+
+**Falsificación ejecutada.** Poner la columna del token de fin de fichero a cero
+(`pos{linea: finLinea, columna: finColumna * 0}` en `apkc/javafuente.go:713`) rompió el test con
+`la posición es "MainActivity.java:5", medida "MainActivity.java:5:C" con C>0` y `la columna es 0 y
+el error nació en un token`; al revertirlo volvieron los dos `PASS`. No se tocó la
+`LineNumberTable`: el dex se compara byte a byte en §330.
+
+**Fronteras de este `§`.** Los errores del emisor que no nacen de un token siguen sin columna, que es
+la forma exigida; no se inventa una columna para ellos. Sin gate final ni publicación.
+
+## 332. Overhead de arranque: decisión incierta, sin sesión persistente
+
+La regla de F4 se fijó antes de medir: si la mediana de `version_ms` es ≥ ⅓ de la de
+`check_con_proyecto_y_R_ms`, se implanta una sesión persistente de `check`; si no, se documenta que
+el arranque no justifica el cambio y se pide la decisión al usuario, sin cerrar D5. Las tres corridas
+de la sonda de pestaña (§329) dieron **24,3 % / 10,1 % / 67,7 %**: dos por debajo del umbral y una
+por encima, y todas son **anteriores a la reconciliación con `6496918`/`1a60875`**. La señal no es
+estable, así que **la decisión queda `incierta`**: no se implanta `apkc check --sesion`, no se
+conecta `studio/diagnostico-vivo.js` a un id de sesión y **D5 no se da por hecha** (regla 11). La vía
+siguiente concreta es repetir `node studio/sonda-check.js` con `REPES=7` en una sesión sin otros
+gates ni CDP concurrentes; si entonces supera el tercio, se implanta la sesión y se falsifica con
+`instanciasWasm === 1`.
+
+La prueba de la pestaña se ejecutó con el wasm de **antes de la reconciliación**:
+
+```sh
+APKC_WASM="$PREFIX/tmp/d2/apkc-wasm.wasm" node studio/prueba-pestana.js
+```
+
+**Resultado literal de esa corrida**: `240 comprobaciones bien, 3 mal`. Las tres son de D7
+(navegación entre actividades: «un clic en id/abrir abre la segunda actividad…», «la segunda pantalla
+tiene un rectángulo pulsable para id/volver» y «el recorrido de dos actividades se ve igual…»).
+**Se retira la afirmación anterior de que eran «preexistentes»**: `6496918` (`fix(sesion): navega
+entre actividades y publica el recorrido de pantallas`, ya integrado en `1a60875`) arregla D7
+añadiendo `pantallas` al modelo, y no hay medición suya sobre ese árbol que permita llamarlas
+preexistentes ni afirmar que desaparecieron. En aquella corrida pasaron las comprobaciones de este
+frente (`diagnostico_saltos` con `pasadas1 === pasadas0` y `pasadas2 > pasadas0`, linter XML
+etiquetado `XML`, contextos Java/XML sin cruzarse y `la pestaña no pide nada fuera de su origen (509
+peticiones, 0 websockets)`), pero eso no prueba el árbol reconciliado.
+
+**Estado de la reconciliación: `incierto`.** Motivo literal: la corrección impone «Sin
+CDP/chromium/red/gate/push/publicación», de modo que **no se reejecutó `prueba-pestana.js` sobre
+`1a60875`**. La vía siguiente es ejecutarla con el entorno completo (`KS_RELEASE`, `AAB_EJEMPLO`,
+`APKC_WISP_EXTERNO`, `ANDROID_JAR`) en cuanto se autorice CDP; solo entonces se podrá escribir
+`pestaña: N comprobaciones, 0 mal` o documentar el fallo que quede.
+
+**Fronteras de este `§`.** No se corrió el gate final, no se publicó, no se tocó red externa ni se
+usó chromium en la corrección. D5 permanece **en verificación** a la espera de la mediana estable y
+de la decisión del usuario.
+
+## 333. Matriz de cobertura Java/XML con estado medido
+
+Medido el 2026-11-24. La matriz vive en `docs/plan-diagnostico.md`; `studio/prueba.js` imprime una
+línea por fila desde los módulos puros y `studio/prueba-pestana.js` comprueba el pintado en chromium.
+
+```sh
+# cwd = raíz del worktree
+node studio/prueba.js
+APKC_WASM="$PREFIX/tmp/d2/apkc-wasm.wasm" node studio/prueba-pestana.js
+```
+
+**Salida literal de la matriz en node**, dentro de un `prueba: todo en orden`:
+
+```
+matriz 1 Java R.layout y R.id: ok
+matriz 2 Java View. y v. sin adivinar: ok
+matriz 3 Java this.campo y prefijo Acti: ok
+matriz 4 Java comentario y cadena: ok
+matriz 5 XML < en layout, values y manifiesto: ok
+matriz 6 XML android: y valores enumerados: ok
+matriz 7 XML @strin y fila del linter: ok
+matriz 8 errores del panel: comprobada en prueba-pestana.js por CDP
+```
+
+La matriz se reejecutó sobre el árbol reconciliado (submódulo `a41db75`, con la matriz D6 y el
+bombeo del cronómetro) con el mismo `prueba: todo en orden` y las ocho líneas anteriores.
+
+En la corrida CDP **anterior a la reconciliación**, las filas comprobadas incluyeron
+`el contexto no se cruza: ni etiquetas XML en .java ni R. en .xml`,
+`el linter de XML marca @string/noexiste con archivo:línea:columna y origen XML`
+(`{"posicion":"xmlauto.xml:2:27", …}`), `al pasar a .java el error XML desaparece y vuelve el
+diagnóstico de Java` y `el diagnóstico en vivo marca el error con la vista previa abierta`; el global
+fue `240 comprobaciones bien, 3 mal`. **No se reejecutó sobre `1a60875`**: la corrección prohíbe
+CDP/chromium, así que la fila 8 queda `incierto` en el árbol reconciliado (motivo en §332) y no se
+afirma que los tres fallos D7 desaparecieron ni que son preexistentes.
+
+**Fronteras de este `§`.** Las filas 1-7 están medidas en node sobre el árbol reconciliado; la 8 queda
+**en verificación** por la restricción de CDP. No se anuncia cobertura completa por analogía. Sin
+gate final, publicación ni red externa.

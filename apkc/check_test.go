@@ -564,10 +564,13 @@ public class MainActivity extends Activity {
 	if e.Linea != 5 {
 		t.Errorf("el error se pone en la línea %d y la última con contenido es la 5 (%q)", e.Linea, e.Posicion)
 	}
-	// el error es del parser: lleva la línea y no la columna (frontera escrita en el plan), pero la
-	// posición no puede apuntar a la línea vacía de después del salto
-	if e.Posicion != "MainActivity.java:5" {
-		t.Errorf("la posición es %q, medida \"MainActivity.java:5\"", e.Posicion)
+	// el error nace en el token de fin de fichero, que ya guarda su columna: ahora apunta al sitio
+	// exacto de la última línea con contenido, nunca a la línea vacía de después del salto (§331).
+	if !strings.HasPrefix(e.Posicion, "MainActivity.java:5:") {
+		t.Errorf("la posición es %q, medida \"MainActivity.java:5:C\" con C>0", e.Posicion)
+	}
+	if e.Columna < 1 {
+		t.Errorf("la columna es %d y el error nació en un token", e.Columna)
 	}
 	if e.Mensaje == "" || strings.Contains(e.Mensaje, "linea 5") {
 		t.Errorf("el mensaje no es una explicación limpia: %q", e.Mensaje)
