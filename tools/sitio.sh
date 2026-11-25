@@ -1,8 +1,10 @@
 #!/bin/sh
 # Empaqueta el sitio estático que se publica: los ficheros versionados de studio/ (submódulo),
-# apkc.wasm y wasm_exec.js. No mete el android.jar, keystores ni OPFS: eso vive en el navegador.
+# apkc.wasm y wasm_exec.js. No mete keystores ni OPFS: eso vive en el navegador. El android.jar
+# sintético de AOSP se mete solo si se pasa ANDROID_STUB_JAR (F3); el de la SDK nunca se versiona.
 #
 # uso: APKC_WASM=$PREFIX/tmp/apkc-wasm.wasm sh tools/sitio.sh [destino]
+#      ANDROID_STUB_JAR=$PREFIX/androidjar/android-stub-34-full.jar APKC_WASM=… sh tools/sitio.sh
 #      tools/entorno.sh sitio [destino]
 # por defecto el destino es ./sitio, listo para `cd sitio && surge .`
 # sale 0 y deja <destino>/ y <destino>.zip
@@ -64,6 +66,76 @@ PY
 cp "$WASM_EXEC_ORIGEN" "$DESTINO/wasm_exec.js"
 [ -n "$CNAME" ] && printf '%s\n' "$CNAME" > "$DESTINO/CNAME"
 
+# F2: el índice y los artefactos de dependencias no se versionan (regla 2) y `git archive HEAD` no
+# los ve. Si se da DEPS_DIR con un paquete generado fuera del repo, se copia al árbol ya empaquetado
+# ANTES de calcular VERSION: así entran en la huella del service worker y un cambio en ellos cambia
+# la versión. Sin DEPS_DIR el sitio se construye idéntico salvo la CSP apkc-sw añadida más abajo.
+# No se toca git: el destino está ignorado y nada de esto se añade al índice del repo.
+if [ -n "${DEPS_DIR:-}" ]; then
+  [ -f "$DEPS_DIR/deps-index.json" ] ||
+    { printf 'no existe %s/deps-index.json\n' "$DEPS_DIR" >&2; exit 1; }
+  [ -d "$DEPS_DIR/deps" ] ||
+    { printf 'no existe %s/deps\n' "$DEPS_DIR" >&2; exit 1; }
+  # Validar el índice contra los ficheros que describe: tamaño y SHA-256 de cada artefacto.
+  python3 - "$DEPS_DIR" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import sys
+
+raiz = Path(sys.argv[1])
+indice = json.loads((raiz / "deps-index.json").read_text())
+artefactos = indice.get("artefactos")
+if not isinstance(artefactos, list) or not artefactos:
+    raise SystemExit("deps-index.json sin artefactos")
+base = (raiz / "deps").resolve()
+for e in artefactos:
+    fichero = e.get("fichero", "")
+    if not isinstance(fichero, str) or not fichero.startswith("deps/"):
+        raise SystemExit("fichero fuera de deps/: " + str(fichero))
+    # Contención: ni components '..', ni absolutos, ni barras invertidas, y la resolución real
+    # (incluidos symlinks) debe seguir dentro de deps/. Un índice hostil no puede sacar ficheros.
+    if ".." in fichero.split("/") or "\\" in fichero or fichero.startswith("/"):
+        raise SystemExit("fichero con traversal rechazado: " + fichero)
+    destino = (raiz / fichero).resolve()
+    if base not in destino.parents:
+        raise SystemExit("fichero escapa de deps/: " + fichero)
+    datos = destino.read_bytes()
+    if len(datos) != e.get("bytes"):
+        raise SystemExit("bytes no coinciden: " + fichero)
+    if hashlib.sha256(datos).hexdigest() != e.get("sha256"):
+        raise SystemExit("sha256 no coincide: " + fichero)
+print("deps: " + str(len(artefactos)) + " artefacto(s) validado(s)")
+PY
+  cp "$DEPS_DIR/deps-index.json" "$DESTINO/deps-index.json"
+  cp -R "$DEPS_DIR/deps" "$DESTINO/deps"
+fi
+
+# F3: el android.jar sintético de AOSP viaja en el propio origen, sin versionarse (regla 2): se
+# copia del ANDROID_STUB_JAR que pase quien empaqueta —el artifact del workflow J4— y se describe
+# en un JSON pequeño con su versión, tamaño y SHA-256. Va ANTES de calcular VERSION: el hash del SW
+# cubre todo el destino salvo CNAME, así que un jar nuevo cambia la versión y un visitante con caché
+# no se queda sin él. Sin la variable el sitio se empaqueta igual que antes y la página cae al SDK.
+if [ -n "${ANDROID_STUB_JAR:-}" ]; then
+  [ -f "$ANDROID_STUB_JAR" ] || { printf 'no existe el android stub jar: %s\n' "$ANDROID_STUB_JAR" >&2; exit 1; }
+  cp "$ANDROID_STUB_JAR" "$DESTINO/android-stub-34.jar"
+  python3 - "$DESTINO/android-stub-34.jar" "$DESTINO/android-stub.json" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import sys
+
+binario = Path(sys.argv[1]).read_bytes()
+Path(sys.argv[2]).write_text(json.dumps({
+    "version": 34,
+    "bytes": len(binario),
+    "sha256": hashlib.sha256(binario).hexdigest(),
+    "tag": "android-14.0.0_r75",
+    "origen": "AOSP",
+}))
+PY
+fi
+
 # Los hosts sin cabeceras (Surge) necesitan el service worker: se registra con una versión en la
 # URL para que un cambio de binario no se quede servido por la caché del navegador. El hash se
 # inyecta en el SW, index.html y offline.js; en el árbol de desarrollo el marcador es literal y
@@ -106,7 +178,10 @@ for cuerpo in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re
     hashes.append("'sha256-" + base64.b64encode(
         hashlib.sha256(cuerpo.encode("utf-8")).digest()).decode("ascii") + "'")
 csp = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval' " + " ".join(hashes) +
-       "; require-trusted-types-for 'script'; trusted-types apkc-studio; " +
+       # `index.html` crea también la política `apkc-sw` para registrar el service worker desde el
+       # <head> (commit 47fc826 del submódulo): sin nombrarla aquí, Chromium bloquea el register y
+       # la página nunca consigue crossOriginIsolated en un host sin cabeceras (prueba-sitio.js).
+       "; require-trusted-types-for 'script'; trusted-types apkc-studio apkc-sw; " +
        "worker-src 'self'; connect-src 'self'; img-src 'self' data:; " +
        "style-src 'self'; font-src 'self' data:; object-src 'none'; " +
        "form-action 'none'; base-uri 'none'; frame-ancestors 'none'")
