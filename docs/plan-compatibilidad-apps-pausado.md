@@ -147,14 +147,19 @@ Los tres tienen recursos ofuscados por aapt2 (F-Droid y NewPipe): los ficheros v
 aapt2 dump resources F-Droid.apk | grep -A1 'layout/main_tab_nearby'
     resource 0x7f0b0039 layout/main_tab_nearby
       () (file) res/f_.xml type=XML
-aapt2 dump resources org.schabi.newpipe_1017.apk | grep -A2 'layout/activity_main'
+aapt2 dump resources org.schabi.newpipe_1017.apk | grep -A4 'layout/activity_main'
     resource 0x7f0d001e layout/activity_main
       () (file) res/v9.xml type=XML
+    resource 0x7f0d001f layout/activity_player_queue_control
+      () (file) res/tC.xml type=XML
       (land) (file) res/El.xml type=XML
 ```
 Termux conserva rutas legibles (`res/layout/activity_termux.xml`); tiene 137 layouts, 119 vectores,
 58 `anim`/`animator`, 19 `xml` y 2 `raw`. F-Droid **no tiene** `layout/main` ni `activity_main`: su
-pantalla es Compose. NewPipe sí tiene `layout/activity_main`.
+pantalla es Compose: el `layout/main_tab_nearby` medido (`res/f_.xml`) no es la pantalla de esa
+actividad, y la identidad de la lanzadora sigue como hipótesis a confirmar en Fase C (§359).
+NewPipe sí tiene `layout/activity_main` (`res/v9.xml`); el `(land) res/El.xml` pertenece a
+`layout/activity_player_queue_control`, no a `activity_main`.
 
 ### 1.4 Temas, bibliotecas y APIs (`strings` sobre los dex y el arsc)
 
