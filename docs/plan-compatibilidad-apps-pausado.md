@@ -227,8 +227,7 @@ En los tres, el árbol pintado es el mismo `LinearLayout` con `id/action_bar_tit
 
 ### 1.6 Registro obligatorio de `§350` antes de ejecutar `§351`
 
-`§350` está medido arriba, pero hoy solo vive en este worktree. **Antes de ejecutar Fase A
-(`§351`)** hay que registrarlo en el corpus, en este orden:
+`§350` está medido arriba. **No rehacer Fase A (§355, ya hecha; ver docs/evidencia/15-apps-reales.md:71-177); el frente siguiente es §358 opcode**. El registro en el corpus quedó en este orden:
 
 1. Crear el cuerpo `## 350. Apps reales en ~/Downloads: estado actual` en
    `docs/evidencia/15-apps-reales.md` (o el fichero libre que se elija). Incluir, con los comandos
@@ -286,9 +285,10 @@ identidad se confirma en Fase C, no se da por medida aquí.
 ## 4. Fases de implementación, priorizadas por «desbloquea más apps»
 
 Convención: cada fase lleva su `§` propuesto, ficheros, comando focal, criterio falsable y commit.
-El índice está en `§349` (medido: `docs/evidencia.md:9,355,378`) y `§350+` queda libre, así que la
-numeración nueva empieza en `§350` (medido en §1 de este plan, aún por registrar) y continúa por
-`§351`. Regla 11: **nada se marca «hecho» sin medición propia**;
+El índice está en `§349` (`docs/evidencia.md:357`) y `§350`-`§357` ya están ocupados por la separación
+y el pin del emulador (`docs/evidencia.md:388`); la asignación vigente está en `docs/evidencia.md:389,393`:
+Fase A `§355` (hecha), `§358` opcode, C `§359`, B `§360`, D `§361`, E `§362`, F `§363` y G `§364`, con `§366` reservado.
+Regla 11: **nada se marca «hecho» sin medición propia**;
 los `§` de abajo son criterios, no resultados.
 
 ### Fase A — §355: lector de dex tolerante con dex de R8/javac real (desbloquea 3/3)
@@ -470,7 +470,7 @@ registro la hace el orquestador.
 6. La variante Termux x86_64 no se ejecutó con `apkc preview`; su sha y su estructura están
    registradas, su comportamiento es `incierto`.
 
-**Siguiente paso concreto**: ejecutar Fase A (`§351`) con las tuplas byte a byte de los tres dex,
+**Siguiente paso concreto**: no rehacer Fase A (§355, ya hecha; ver docs/evidencia/15-apps-reales.md:71-177); el frente siguiente es §358 opcode. Con las tuplas byte a byte de los tres dex,
 medir con `go test` focal y `apkc preview`, y solo entonces abrir Fase B sobre el módulo ya
 separado. Si el módulo aún no está separado, esperar a la separación para B en vez de duplicar
 código en dos árboles.
