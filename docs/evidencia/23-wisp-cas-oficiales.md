@@ -143,10 +143,22 @@ política de Mozilla permite redistribuir el store. Con esto se levanta el bloqu
 `git push` de `apkc-studio` que imponía este §349; la huella `CAS_WISP_SHA256` sigue fijada y cualquier
 cambio del bundle queda en el historial de git.
 
+**Alcance exacto de la confirmación** (para no sobreafirmar): la frase literal de MPL 2.0 de curl se
+refiere a su propio `cacert.pem` convertido; estos tres PEM vienen de
+`/etc/ca-certificates/extracted/cadir/` (p11-kit, fuente `mozilla.trust.p11-kit`) y no llevan licencia
+local adjunta. Son las mismas raíces del store Mozilla que cubre la Root Store Policy v3.1, que
+autoriza expresamente redistribuir el store con sus licencias; no hay una declaración MPL 2.0
+adjunta a estos tres ficheros concretos. **Uso real verificado**: `cas-wisp.js` se importa en
+`studio/wisp.js:13`; `prepararCASOficial()` (`:411-415`) entrega `{pem,huella}` a `cargarCAsEnNucleo`
+(`:426-447`) antes de `obtener`, y el puente Go lo guarda en `apkc/puente_wisp_js.go:171-193` y lo
+usa como `CertPool` en `:134-138,164`. Por defecto WISP está desactivado (`deps-index.json`); solo
+se usan estos PEM al activar `localStorage["apkc-studio/wisp"]`. El push a `apkc-studio` se ejecutó
+(`e9274dd..a4e983c`) con esta salvedad registrada.
+
 Fuentes ausentes: `ls -ld /usr/share/doc/ca-certificates/` da
 `ls: cannot access '/usr/share/doc/ca-certificates/': No such file or directory`; el `README`
 local de `/etc/ca-certificates/` tiene 4 líneas (`README:1-4`) y solo remite a
 `update-ca-trust(8)`, sin licencia ni copyright. La fuente declarada de los PEM es
-`mozilla.trust.p11-kit`. **No publicar** (`surge publish`, `git push` a `apkc-studio`) hasta
-confirmar por escrito MPL 2.0 y la Mozilla CA Certificate Policy y anotarlo aquí. Sin gate, CI,
-chromium ni red en esta corrida.
+`mozilla.trust.p11-kit`. La confirmación escrita de MPL 2.0 y de la Root Store Policy v3.1 está
+anotada arriba; el `push` a `apkc-studio` se autorizó y ejecutó. `surge publish` sigue pendiente de
+autorización expresa del usuario, no de licencia. Sin gate, CI ni chromium en esta corrida.

@@ -352,7 +352,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §338 | F4: el EditText del emulador toma el tema del aparato, no el del editor | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
 | §339 | Cierre del frente de fidelidad: pruebas focales, falsaciones y frontera CDP | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
 | §348 | Navegación viva entre actividades en la sesión | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
-| §349 | CAs oficiales del propio origen para WISP, bundle de 3494 B con huella fija; licencia sin verificar, sin publicar | [23-wisp-cas-oficiales.md](evidencia/23-wisp-cas-oficiales.md) |
+| §349 | CAs oficiales del propio origen para WISP, bundle de 3494 B con huella fija; se usan solo al activar WISP, MPL 2.0 / Mozilla Root Store Policy v3.1 confirmadas por escrito, publicación autorizada | [23-wisp-cas-oficiales.md](evidencia/23-wisp-cas-oficiales.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
