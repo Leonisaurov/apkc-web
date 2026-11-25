@@ -93,6 +93,11 @@ y studio quedan con `rev-list --count @{u}..HEAD` a cero.
   `VALUE_NULL`, y sustituto suelto `ed a0 80` convertido en un solo `U+FFFD` (MUTF-8 18/20)—. Tests
   focales y suite en verde, escritor de dex con el mismo SHA; los tres `preview` pasan de
   `pasos:0` a **292, 286 y 207**. `docs/evidencia/15-apps-reales.md:71-177`.
+- **Registro de §358, §365 y §366**: apuntan, no re-miden. §358 cierra el opcode 0x1d/0x1e en los tres
+  APK, §365 fija la capa wasm final (0 FAIL/871 PASS/30 SKIP, rc 0) y §366 la línea base pre-D del
+  cuarto APK; ninguna de las cuatro apps se da por funcionando y §366 no se fusiona con §361.
+  Índice en `docs/evidencia.md:365-367`; fuentes en `docs/evidencia/15-apps-reales.md` y
+  `docs/evidencia/14-banco-wisp-lienzo.md`.
 
 ## 3. En verificación o no hecho
 
@@ -108,55 +113,59 @@ y studio quedan con `rev-list --count @{u}..HEAD` a cero.
 - Ninguna de las tres APK reales se da por funcionando: los layouts siguen siendo los falsos de §354
   y el bloqueo compartido es `ArchTaskExecutor.getInstance usa el opcode 0x1d` (§355).
 
-## 4. Frente en marcha al cortar: registro de §358 y reserva de §366
+## 4. Frente en marcha al cortar: §358 cerrado; C (§359) y B (§360) sin implementar
 
-El frente del pin duplicado se cerró en `5f2d600` (§357) y quedó integrado con §358: el pin vigente
-de la regla 14 es `4117a8f` y el push está ejecutado. El frente en marcha es ahora el registro:
-`§358` (opcode, en curso) y `§366` (reservado a la línea base del cuarto APK, sin medición
-publicada), según `docs/evidencia.md:389,393`. No se afirma medición nueva: esto solo apunta a los
-`§` citados, que siguen siendo la fuente (regla 11).
+El pin y los rangos empujados están registrados en el apartado 1: el pin vigente de la regla 14 es
+`4117a8f`, subido en el mismo commit que el emulador, y los tres rangos (`origin/emulador-modulo`,
+`origin/emulador-sin-topes` y `origin/web`) quedaron con `rev-list --count @{u}..HEAD` a cero en su
+momento. `§358` está medido, registrado y cerrado: el opcode `0x1d`/`0x1e` dejó de bloquear los tres
+APK (`docs/evidencia.md:365`). Después de ese push hay commits documentales posteriores **sin
+empujar**; el recuento de `ahead` lo da `git status -sb` en el momento de la lectura (no se fija aquí
+una cifra, porque cambia con cada commit), y cualquier nuevo push necesita autorización expresa.
 
-Registro histórico del frente ya cerrado (no reabrir): builder `ses_deefc4628ffemxMKqOEaCWnBaW`,
-worktree `/home/leonisauro/.local/share/opencode/worktree/c6f089/quitar-pin-emulador-padre`. Estado
-verificado en ese worktree: `HEAD 65578d9`, `## HEAD (no branch)` y cambios preparados `M .gitmodules`,
-`D apkc-emulador`, `M tools/entorno.sh`, `M tools/materializar-emulador.sh`,
-`M tools/preview-automatica.sh`, más `AGENTS.md` sin preparar. `git ls-tree HEAD apkc-emulador` todavía
-muestra el gitlink `563e991` porque el borrado aún no está commiteado.
+El plan de apps pausadas sigue este orden: C `§359` → B `§360` → D `§361` → E `§362` → F `§363` →
+G `§364` (`docs/evidencia.md:391,395`).
 
-Objetivo (cerrado en `5f2d600`): que el único emulador sea `studio/apkc-emulador` y el padre dejara
-de tener su pin espejo. Criterio de cierre acordado:
+### C (§359) — criterios finales
 
-1. `git ls-tree HEAD apkc-emulador` → vacío.
-2. `git -C studio ls-tree HEAD apkc-emulador` → `563e991`.
-3. 34 `cmp` byte a byte con `sh tools/materializar-emulador.sh`.
-4. `go test ./...` en verde.
-5. Wasm compilado y `node prueba.js` → «prueba: todo en orden».
-6. `git push` **solo con autorización expresa** del usuario.
+1. Ejecutar y registrar `apkanalyzer manifest print` y `aapt2 dump badging` de F-Droid **antes** de
+   usar `org.fdroid.MainActivity`. Hoy eso es hipótesis: `MAIN` + `LEANBACK_LAUNCHER`, alias
+   habilitado `IconActivity` → `MainActivity` y alias deshabilitados `IconCalculatorActivity` /
+   `CalculatorActivity`.
+2. `habilitado` se decide sobre `valor.tipo == tipoBooleano`, nunca sobre `s != "false"`.
+3. El orden de elección es `pedido` → `layoutID` → `activity_<Nombre>` → `errSinLayoutXML`, sin
+   fallback alfabético.
+4. El sentinel `sin-layout-xml:` va en `avisos` y Fase D cuenta por familia, no con `len(avisos)`.
 
-El frente consumió `§357` y se cerró en `5f2d600`; el plan de apps pausadas se reanudó en `§358+`
-(`§358` opcode en curso, `§366` reservado sin medición publicada).
+C se abre en worktree propio y se re-falsa después de B.
+
+### B (§360) — criterio final
+
+`ejecucion.actividad == claseCorta(descriptorDeActividad(paquete, nombreActividadC))` (el descriptor
+es el de C, no un valor inyectado) **y**, en el test, `met.dex == dx[1]`. Además `Error==""`, `Ciclo`
+con `onCreate` y `Capturas` con texto real y sin señuelo. **No se añade campo nuevo al JSON.** Las
+colisiones de descriptor son error explícito (0 duplicados medidos en cinco APK). NewPipe y el cuarto
+APK no deben registrar regresión.
+
+Ninguna app se da por funcionando; F (Compose) queda para `§363`; `tools/entorno.sh gate`, CDP y
+publicación siguen sin ejecutar y `studio/e2e.sh` está en verificación.
 
 ## 5. Vista previa local vigente
 
-- URL: `http://127.0.0.1:8801/`; `curl -s -i http://127.0.0.1:8801/` da `HTTP/1.1 200 OK` con
+- Vista previa viva: `curl -s -D - -o /dev/null http://127.0.0.1:8801/` → `HTTP/1.1 200` con
   `Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp` y
   `Cache-Control: no-store`.
-- `cat ~/.cache/apkc-web/preview-automatica/head-construido` = `3a5f557` = `git rev-parse --short
-  HEAD` del padre (medido en esta sesión, tras integrar §358). El valor anterior de este traspaso era
-  `65578d9e9c1e580402a7630114de7d82cbfd1a0a` (registro histórico).
-- SHA del wasm servido, verificado con `curl -s http://127.0.0.1:8801/apkc.wasm | sha256sum`:
-  `fd4d1014…`, byte a byte idéntico al de `~/.cache/apkc-web/preview/apkc.wasm` y al último
-  «wasm actualizado» del vigilante (`~/.cache/apkc-web/preview-automatica/vigilante.log`). El SHA
-  anterior de este traspaso era
-  `1d27617ab6e1cdabeaac811be8a321df705d8637676cee7b4bd73ad1db67ca11` (registro histórico).
 - Procesos vivos: `node servidor.js 8801` y `sh tools/preview-automatica.sh`.
-- Medido en esta sesión (`tools/preview-automatica.sh:22-77`): el vigilante está vivo con
-  `head-construido` = HEAD y el wasm servido byte-idéntico al de disco (`fd4d1014…`), con COOP/COEP
-  y `no-store` en la respuesta y los dos procesos de arriba activos. Lo que no se afirma es el
-  reinicio automático al cambiar `preview-local.sh` o `preview-automatica.sh`: en el guion no hay
-  detector de cambios de esos ficheros, así que esa cuestión concreta no se da por medida. El log
-  muestra reintentos fallidos por «falta el submódulo del emulador» y, desde las 04:39 UTC,
-  «wasm actualizado».
+- `head-construido` = `git rev-parse HEAD` del padre; se comprueba en
+  `~/.cache/apkc-web/preview-automatica/head-construido`. No se fija aquí un SHA ni un recuento de
+  `ahead`: ambos cambian con cada commit; para el estado del árbol, `git status -sb`, y para el
+  historial de construcciones, `~/.cache/apkc-web/preview-automatica/vigilante.log`.
+- El wasm servido es byte a byte idéntico al de `~/.cache/apkc-web/preview/apkc.wasm`, verificado con
+  `sha256sum` de la respuesta de `http://127.0.0.1:8801/apkc.wasm` frente al fichero de disco. El
+  valor concreto cambia con cada reconstrucción y se lee en `vigilante.log` («wasm actualizado»).
+- Lo que sigue **sin medir**: el reinicio automático al cambiar los guiones del vigilante
+  (`preview-local.sh` / `preview-automatica.sh`). El guion no tiene detector de cambios de esos
+  ficheros, así que esa cuestión concreta no se da por medida.
 
 ## 6. Decisiones del usuario que no se pueden perder
 
