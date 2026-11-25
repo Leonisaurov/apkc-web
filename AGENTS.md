@@ -8,7 +8,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 
 | Ruta | Qué es | Cómo se comprueba |
 | --- | --- | --- |
-| `docs/evidencia.md` | índice de las 316 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
+| `docs/evidencia.md` | índice de las 321 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
 | `docs/situacion.md` | el recap de lo medido, bullet por bullet (movido desde este fichero el 2026-11-03); el original es el `§` que cada bullet cita | leerlo y comprobar que su `§` existe |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
