@@ -589,6 +589,8 @@ Salida relevante: `classes.dex` 5.177.092 B; `lib/arm64-v8a/libgodot_android.so`
 
 ```sh
 apkanalyzer manifest print /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk > /home/leonisauro/.cache/apkc-web/quinto-apk/manifest.xml
+wc -l /home/leonisauro/.cache/apkc-web/quinto-apk/manifest.xml
+grep -n -E 'GodotApp|org.godotengine.library.version|rendering.method' /home/leonisauro/.cache/apkc-web/quinto-apk/manifest.xml
 grep -c AndroidContextProvider /home/leonisauro/.cache/apkc-web/quinto-apk/manifest.xml
 ```
 `rc 0` y 141 líneas en `manifest.xml`. En `:42-65`, `GodotApp` con `MAIN` + `LAUNCHER`; en

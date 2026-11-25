@@ -137,6 +137,11 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 - **Go queda fijado en 1.24.0** (§312): `tools/entorno.sh` antepone `$HOME_REAL/sdk/go1.24.0/bin`
   al PATH y `tools/wasm-exec-hash.sh` valida versión y SHA de `wasm_exec.js` antes de copiarlo. No
   usar el Go del sistema (`go1.27.4-X:nodwarf5`) para compilar este repo; no borrar el toolchain fijado.
+- **Dependencias de las pruebas de paridad en este escritorio**: `JAVAC17=/home/leonisauro/opt/jdk17/bin/javac`
+  (existe; también está `/home/leonisauro/opt/jdk21/bin/javac`) y el jar de stubs sin borrado
+  `/home/leonisauro/.cache/apkc-web/androidjar/android-stub-34-full.jar`, seleccionable con
+  `APKC_ANDROID_JAR_STUB` (`apkc/javaemisor_vuelta_generica_test.go:59-74`). **No** están en
+  `~/.local/share/opencode/.cache/apkc-web/...`: buscarlos ahí produce un falso «incierto por entorno».
 - **El shell puede arrancar con `HOME=/home/leonisauro`**, que no tiene `Develop/` ni `Android/`; el repo
   y el SDK viven bajo `/data/data/com.termux/files/home`. Los guiones que usan `$HOME/Develop` o `../apkc`
   fallan con ENOENT. `tools/entorno.sh` fija `HOME`, `PREFIX`, `ANDROID_HOME` y `PATH`, y evita repetir
