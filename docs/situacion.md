@@ -940,7 +940,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `docs/evidencia/15-apps-reales.md`.
 - §368: integración de C `98cedf1`, B `28c22de`, D `376def6`, E1 `77dc8e5` y E2 `a2a6c29` en el
   emulador y `4d4dbd9`+`6cf42c1` en studio, con los cinco frentes conservados. Suite integrada
-  `go test -count=1 ./...` → `ok … 196.940s`, rc 0, 960 tests. Cinco JSON en
+  `go test -count=1 ./...` → `ok … 196.940s`, rc 0, 0 `FAIL`. Cinco JSON en
   `~/.cache/apkc-web/integracion/`: F-Droid `org.fdroid.MainActivity`/`layout=''`/centinela,
   NewPipe `res/v9.xml`/6 nodos, Termux `TermuxActivity`/`activity_termux.xml`/13 nodos, gestor
   `error=None`/0 avisos de familia/`res/R5.xml`/30 nodos y Libre Memory Game mismo error,

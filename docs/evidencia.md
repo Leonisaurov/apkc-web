@@ -369,7 +369,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §360 | Fase B: `dexDelApk` descubre los `classes*.dex` en orden numérico y el `onCreate` se ejecuta en `classes2.dex`, con el descriptor derivado del manifiesto | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §361 | Fase D: 12 stubs bajan a 0 los avisos de la familia en el cuarto APK (`pasos` 162 → 1131), sin regresión en las otras tres | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §362 | Fase E: el tema se resuelve por id de atributo, sin campos nuevos en el JSON; suite `505.205s` y `prueba: todo en orden` | [15-apps-reales.md](evidencia/15-apps-reales.md) |
-| §368 | Integración de C, B, D y E: suite `go test -count=1 ./...` en verde (`196.940s`, 960 tests) y cinco JSON en `~/.cache/apkc-web/integracion/` | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §368 | Integración de C, B, D y E: suite `go test -count=1 ./...` en verde (`196.940s`, rc 0, 0 `FAIL`; sin recuento de funciones) y cinco JSON en `~/.cache/apkc-web/integracion/` | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §365 | La capa `wasm` se re-ejecuta sobre el árbol final: 0 `FAIL`, 871 `PASS`, 30 `SKIP` (901 `=== RUN`), rc 0 | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |

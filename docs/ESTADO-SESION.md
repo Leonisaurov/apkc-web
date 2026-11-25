@@ -134,7 +134,7 @@ histórico fechado.
   medición en `docs/evidencia/15-apps-reales.md`; las cifras de suite son propias de cada frente
   (`460.631s`, `210.695s`, `438.144s` y `505.205s`).
 - **Suite integrada en verde (§368)**: re-ejecutada con `-count=1` sobre el HEAD integrado
-  `5b9d5e4`, `go test -count=1 ./...` → `ok github.com/ajinasokan/apkc 196.940s`, rc 0, 960 tests,
+  `5b9d5e4`, `go test -count=1 ./...` → `ok github.com/ajinasokan/apkc 196.940s`, rc 0, 0 `FAIL`,
   0 `FAIL`. Los cinco JSON de la corrida están en `~/.cache/apkc-web/integracion/`: F-Droid con
   `org.fdroid.MainActivity`/`layout=''`/centinela, NewPipe con `res/v9.xml`/6 nodos, Termux con
   `activity_termux.xml`/13 nodos, el gestor con `error=None`/0 avisos de familia/`res/R5.xml`/30
@@ -164,7 +164,7 @@ histórico fechado.
 ## 4. Frente en marcha ahora (2026-11-25): modo teléfono en `studio/` y F0 de Compose
 
 Tras la integración de §368, C (`§359`), B (`§360`), D (`§361`) y E (`§362`) están hechos en capa
-Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940s`, rc 0, 960 tests,
+Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940s`, rc 0, 0 `FAIL`,
 0 `FAIL`). El frente en marcha es el **modo teléfono en `studio/`** y **F0 de Compose** (Fase F,
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
