@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§356` (328 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§357` (329 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
