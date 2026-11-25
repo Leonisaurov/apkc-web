@@ -773,3 +773,16 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   (`stopped`). Frontera: fidelidad píxel a píxel aparato↔preview sin medir; el adaptador Bluetooth
   está apagado (dato de la medición 5, no fallo); sin gate, chromium ni publicación; `e2e.sh` sigue
   en verificación.
+- §313: la vista previa corre como **una sola sesión viva**: `go.argv=["apkc","preview","--sesion",id,apk]`
+  y `APKC_SESION_ID` sostienen `apkcSesion.siguiente()` entre órdenes, `setTimeout(...,0)` y un canal
+  ceden al event loop, y cada orden publica `apkc:fin-orden` con id y código sin `exit` por orden
+  (`os.Exit(2)` solo en el wrapper). Siete tests nuevos con Go 1.24.0 y `-count=1` dan `--- PASS` y
+  `ok github.com/ajinasokan/apkc 0.190s`; el timeline medido es
+  `["Pulsos: 0","1","2","3","4","4","9"]`, con cinco líneas `onClick` (no nueve), `salir=0` y un
+  `fin-orden` por orden. La sonda node da `ordenes: 1,2`, `fin-orden: [1,2]`, `instancias: 1` y
+  `timeline: 0,1,2`, y con `--ocupado` falla con `TIMEOUT: sin fin-orden para la orden 2` (rc 1). El
+  error pegajoso se corta: `actualizaRes()` limpia `res.Error` (`previewsesion.go:94`) y las dos sendas
+  de fallo lo reasignan después (`:205`, `:227`), así que la orden mala publica `error` y la buena
+  siguiente no. `TestIndiceDelJarSeReutilizaYSeInvalida` (`jarindice_test.go:151`, 416 frente a 414)
+  falla igual en árbol limpio y no es de este cambio. Frontera: sin CDP ni gate; el timeline real en
+  navegador y el reclamo del «40» siguen abiertos, no se da por cerrado el `40`.

@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§261`, pero la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§317`, pero la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -280,6 +280,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §238 | Hot swap en el intérprete: identidad, estado y despacho | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §239 | Los records: `invokedynamic` desugrado a métodos directos | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §240 | Los puntos de unión: el reparto de registros reconciliado | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §317 | Apps de ejemplo: firma, alineación y ejecución en Droidloom verificadas | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §241 | ApkShare desde el zip: diamante, `for` con dos puntos y comodines | [12-wisp-emisor.md](evidencia/12-wisp-emisor.md) |
 | §242 | El gate final sobre el árbol final, en verde | [12-wisp-emisor.md](evidencia/12-wisp-emisor.md) |
 | §243 | Las dos fronteras que quedan: `condy` y API < 21 | [12-wisp-emisor.md](evidencia/12-wisp-emisor.md) |
@@ -341,12 +342,17 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §299 | El wasm vuelve a compilar, el corredor se centraliza y el gate destapa el bloque `--inc` | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
-| §317 | Apps de ejemplo: firma, alineación y ejecución en Droidloom verificadas | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
 aquí; `§78` no existe y su hueco está explicado en el preámbulo. La tabla sigue el orden del fichero
-original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica.
+original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica; las filas
+añadidas después (`§313`, `§317`) se sitúan en el bloque de su fichero, no en orden numérico.
+
+**Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
+`§311` (fidelidad), `§314-316` (incremental), `§318-325` (dependencias e infra), `§326` (selector de
+idioma) y `§327+` (J5). `§313` ya no está reservado: su medición está escrita en este índice.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

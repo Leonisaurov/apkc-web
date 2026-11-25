@@ -1,4 +1,4 @@
-# Evidencia — §274-§312
+# Evidencia — §274-§313
 
 ## 274. El banco no es verificable en este escritorio; su mitad local sí
 
@@ -1880,3 +1880,40 @@ go version go1.24.0 linux/amd64
 **Decisión.** Permanecer en go1.24.0; no usar el Go del sistema para compilar el repo. Deudas abiertas,
 no verdes: `gate.yml:85` (W1 debe sustituir el `cp` directo por el verificador) y `studio/servidor.js`
 (cuarto sitio que sirve `wasm_exec.js` desde GOROOT). Sin gate, CI ni publicación.
+
+## 313. Sesión viva de preview: una instancia, sin replay y sin error pegajoso
+
+Evidencia del builder `ses_df0263325ffeds2w253F2b7Qds`, aprobada por el crítico
+`ses_defdb3ccfffelZrraWRgzO7x7O` y ya integrada en el árbol principal (`93db6c3`). Archivos nuevos en
+`apkc/`: `previewsesion.go`, `previewsesion_js.go`, `previewsesion_nojs.go`, `previewsesion_test.go` y
+`sonda-sesion.js`; modificados `main.go`, `preview.go` y `previewinterprete.go`.
+
+**Siete tests Go**, con Go 1.24.0 y `-count=1`: los siete dan `--- PASS` y la suite cierra con
+`ok github.com/ajinasokan/apkc 0.190s`. Son `TestLaSesionAplicaSoloLaOrdenNueva`,
+`TestLaSesionConservaElModeloAcumulado`, `TestLaSesionAplicaDeltaEnElCaminoReal`,
+`TestLaSesionNoLlamaExitPorOrden`, `TestElSegundoDeltaUsaLaBaseActualizada`, `TestLaSionFallaCerrada` y
+`TestLaSesionNoPegaElErrorDeUnaOrdenMala`.
+
+**Orden y timeline.** La secuencia medida es `["Pulsos: 0","1","2","3","4","4","9"]`, con cinco
+líneas `onClick` (no nueve); `salir=0` y un `apkc:fin-orden` por orden.
+
+**Sonda node.** `APKC_GOROOT=… node apkc/sonda-sesion.js <wasm> <apk>`:
+
+```text
+ordenes: 1,2; fin-orden: [1,2]; instancias: 1; timeline: 0,1,2
+```
+
+Con `--ocupado` (o `APKC_SESION_OCUPADO=1`) da `TIMEOUT: sin fin-orden para la orden 2`, rc 1.
+
+**El error pegajoso.** `actualizaRes()` limpia `res.Error` (`previewsesion.go:94`) y las dos sendas de
+fallo lo reasignan después (`:205` y `:227`): la orden mala publica `error`, la buena siguiente no.
+
+**Contrato de la sesión.** `go.argv=["apkc","preview","--sesion",id,apk]`, `APKC_SESION_ID`,
+`apkcSesion.siguiente()`, `setTimeout(...,0)` más un canal para ceder al event loop, y `postMessage` de
+`apkc:fin-orden` con id y código, sin `exit` por orden; `os.Exit(2)` queda solo en el wrapper.
+
+**Fallo ajeno.** `TestIndiceDelJarSeReutilizaYSeInvalida` (`jarindice_test.go:151`, 416 frente a 414)
+falla igual en árbol limpio; no es atribuible a este cambio.
+
+**Frontera de `§313`.** No se corrió CDP ni gate: el timeline real en navegador y el reclamo del
+reporte «40» siguen abiertos. No se da por cerrado el `40`.
