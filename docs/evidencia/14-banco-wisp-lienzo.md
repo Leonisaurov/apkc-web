@@ -1,4 +1,4 @@
-# Evidencia — §274-§314
+# Evidencia — §274-§314, §348
 
 ## 274. El banco no es verificable en este escritorio; su mitad local sí
 
@@ -1935,3 +1935,39 @@ REPETICIONES=1 PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH tcr -c 2 -m 2G -r 40
 **Nativo.** `r1-plain-frio 993`, `r1-plain-caliente 555`, `r1-inc-frio 808`, `r1-inc-caliente 486`, `r1-incremental.json-bytes 35579`; `dex por clase: la vuelta caliente y el dexado completo son identicos`; `entradas: 80, con bytes distintos: 0`; `Verifies`, v1/v2/v3 `true`, `zipalign: correcto`. Árbol limpio antes y después.
 
 **Frontera de `§314`.** La medición 3 original usaba un parche que hoy está versionado en `shim/navegador-sim.js:285-307` y `shim/prueba-relink.js:14-134` (134 líneas); `/tmp/opencode/inc-web/` ya no existe. La capa wasm completa sigue con fallos ambientales (§279 15/RC=1, §284 0/29/805, `docs/evidencia.md:15-24` 32/38): **no** reclamar capa wasm verde, solo la prueba focal con jar montado. `REPETICIONES=1` deja vacías las medianas de tres repeticiones: es artefacto del guion, no fallo. El shim no es OPFS; sin gate final, chromium, red ni commits.
+
+## 348. Navegación viva entre actividades en la sesión
+
+Medido el 2026-11-24 sobre el árbol integrado en el commit `6496918`
+(`fix(sesion): navega entre actividades y publica el recorrido de pantallas`). Quien escribe este
+`§` no ejecutó tests, CDP, chromium, gate ni commits: la evidencia de abajo es la que llegó del
+árbol ya integrado y del builder de D7.
+
+**Test Go focal.** Con Go 1.24.0, sobre el árbol integrado:
+
+```sh
+cd apkc && env PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH GOROOT=/home/leonisauro/sdk/go1.24.0 go test -run TestLaSesionNavegaEntreActividades -count=1 -v .
+```
+
+da `--- PASS: TestLaSesionNavegaEntreActividades (0.02s)` y cierra con
+`ok github.com/ajinasokan/apkc 0.232s`. El auditor falsó el test: al restaurar `previewsesion.go` a
+`HEAD` falla con cinco aserciones (la actividad sigue siendo `MainActivity`, `pantallas:[MainActivity]`
+y falta el `id/volver`), así que la prueba sí ejercita el arreglo.
+
+**Qué cambia el código.** `apkc/previewsesion.go` gana `pila` y `pantallas` (`:23-28`);
+`estabilizaSesion()` (`:83`) abre `m.pendiente` sin reenviar el guion; `aplicaEvento` (`:164-176`)
+lo llama justo después de `entregaEvento`; y `actualizaRes` (`:188`) publica
+`res.Pantallas = append([]string(nil), s.pantallas...)`. `finish()` con la pila vacía ya no paniquea.
+
+**CDP del builder de D7 (no ejecutado por quien escribe).** El log
+`~/.cache/apkc-web/tmp/cdp-d7.log` cierra con `247 comprobaciones bien, 0 mal` en `:262` y cinco
+líneas `ok … (D7)` en `:127-131`. El total es 247 frente a los 258 de corridas anteriores porque
+esta corrida no fijó `KS_RELEASE`, `AAB_EJEMPLO` ni `APKC_WISP_EXTERNO`; se registra tal cual, no se
+oculta.
+
+**Frontera de `§348`.** El único `FAIL` de `go test ./...` es
+`TestIndiceDelJarSeReutilizaYSeInvalida` (`jarindice_test.go:151`, 416 frente a 414): preexistente y
+reproducido en `HEAD`, no se presenta como verde. `gofmt -l` está limpio en los dos ficheros tocados
+(a nivel global lista cuatro ficheros preexistentes no tocados). El CDP sobre el árbol integrado con
+las variables completas queda pendiente de temperatura y autorización; sin CDP, chromium, gate ni
+commits por este `§`.

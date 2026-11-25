@@ -819,3 +819,22 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   peticiones ajenas) y cuatro falsaciones de traversal (`deps/../../shadow.txt`, `/etc/passwd`,
   barras invertidas y symlink) dieron rc 1 con mensaje explícito. Frontera: DEPS **no publicado**, F3
   pendiente de autorización; `e2e.sh` sigue **en verificación**; sin gate, chromium ni red.
+- §348: navegación viva entre actividades en la sesión, ya integrada en el árbol principal en el
+  commit `6496918` (`fix(sesion): navega entre actividades y publica el recorrido de pantallas`). El
+  test focal con Go 1.24.0 (`cd apkc && env PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH
+  GOROOT=/home/leonisauro/sdk/go1.24.0 go test -run TestLaSesionNavegaEntreActividades -count=1 -v .`)
+  da `--- PASS: TestLaSesionNavegaEntreActividades (0.02s)` y `ok github.com/ajinasokan/apkc 0.232s`;
+  al restaurar `previewsesion.go` a `HEAD` falla con cinco aserciones (la actividad sigue siendo
+  `MainActivity`, `pantallas:[MainActivity]`, sin `id/volver`), así que el test sí ejercita el
+  arreglo. `apkc/previewsesion.go` gana `pila` y `pantallas` (`:23-28`), `estabilizaSesion()` (`:83`)
+  abre `m.pendiente` sin reenviar el guion, `aplicaEvento` (`:164-176`) lo llama tras `entregaEvento`
+  y `actualizaRes` (`:188`) publica `res.Pantallas = append([]string(nil), s.pantallas...)`; `finish()`
+  con la pila vacía no paniquea. El CDP del builder de D7 (no ejecutado por quien escribe) cerró
+  `~/.cache/apkc-web/tmp/cdp-d7.log` con `247 comprobaciones bien, 0 mal` en `:262` y cinco líneas
+  `ok … (D7)` en `:127-131`; el total 247 frente a los 258 de corridas anteriores se explica porque
+  esta corrida no fijó `KS_RELEASE`, `AAB_EJEMPLO` ni `APKC_WISP_EXTERNO`, y no se oculta. Frontera:
+  el único `FAIL` de `go test ./...` es `TestIndiceDelJarSeReutilizaYSeInvalida`
+  (`jarindice_test.go:151`, 416 frente a 414), preexistente y reproducido en `HEAD`, no se da por
+  verde; `gofmt -l` limpio en los dos ficheros tocados (global lista cuatro preexistentes no
+  tocados); CDP sobre el árbol integrado con las variables completas pendiente de temperatura y
+  autorización; sin CDP, chromium, gate ni commits por este `§`.
