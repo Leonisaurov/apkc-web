@@ -2230,8 +2230,10 @@ func (m *maquinaDalvik) cuentaDelAdaptador(adaptador any) (int, error) {
 	if !ok || obj == nil {
 		return 0, fmt.Errorf("el adaptador no es un objeto del dex")
 	}
-	// sin getCount propio, el ArrayAdapter del framework cuenta los elementos que recibió
-	if m.buscaMetodo(obj.clase, "getCount", "()I") == nil && obj.elementos != nil {
+	// sin getCount propio, el ArrayAdapter del framework cuenta los elementos que recibió,
+	// también cuando son cero: el respaldo es del adaptador, no de un método del dex (§335).
+	if m.buscaMetodo(obj.clase, "getCount", "()I") == nil &&
+		m.esDe(obj, "Landroid/widget/ArrayAdapter;") {
 		return len(obj.elementos), nil
 	}
 	v, err := m.ejecutaDelAdaptador(obj, "getCount", "()I", nil, nil)
@@ -4170,11 +4172,15 @@ func (m *maquinaDalvik) intentaStub(candidatos []string, nombre, proto string, v
 			obj.intentClase = claseDeLiteral(vals[1])
 		}
 		// el constructor de un ArrayAdapter recibe sus elementos: se guardan para el respaldo de
-		// getCount/getItem/getView de una subclase del proyecto que no los reescriba
+		// getCount/getItem/getView de una subclase del proyecto que no los reescriba. Un arreglo
+		// vacío es el estado inicial de una lista (§335): `append` sobre nil devolvería nil y
+		// entonces getCount no tendría respaldo; `make` deja una lista vacía NO nula.
 		if obj != nil && es("Landroid/widget/ArrayAdapter;") {
 			for _, v := range vals {
 				if arr, ok := v.(*arregloDalvik); ok {
-					obj.elementos = append([]any(nil), arr.datos...)
+					elementos := make([]any, len(arr.datos))
+					copy(elementos, arr.datos)
+					obj.elementos = elementos
 					break
 				}
 			}

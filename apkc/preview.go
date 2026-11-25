@@ -1036,6 +1036,14 @@ func expandeListas(raiz *nodoVista, ejecucion *resultadoEjecucion, tabla *tablaR
 		}
 		if n.IDRef != "" {
 			porID[n.IDRef] = n
+			// el mismo id de recurso puede venir en hexadecimal o en decimal: el del ListView
+			// se formatea ahora y el del nodo se leyó del AXML (§335)
+			if id, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(n.IDRef), "0x"), 16, 32); err == nil {
+				porID[fmt.Sprintf("%d", id)] = n
+			}
+		}
+		if n.ID != "" {
+			porID[n.ID] = n
 		}
 		for _, h := range n.Hijos {
 			recorre(h)
@@ -1044,6 +1052,9 @@ func expandeListas(raiz *nodoVista, ejecucion *resultadoEjecucion, tabla *tablaR
 	recorre(raiz)
 	for _, lista := range listas {
 		n := porID[fmt.Sprintf("%#08x", lista.ID)]
+		if n == nil {
+			n = porID[fmt.Sprintf("%d", lista.ID)]
+		}
 		if n == nil {
 			continue
 		}

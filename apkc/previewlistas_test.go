@@ -10,6 +10,9 @@ package main
 // los dos puntos y la posición después.
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -364,5 +367,196 @@ func TestElPreviewPintaUnaListaConSuAdaptador(t *testing.T) {
 	}
 	if len(conClic.Raiz.Hijos[0].Hijos) != 3 {
 		t.Errorf("tras el clic la lista tiene %d filas", len(conClic.Raiz.Hijos[0].Hijos))
+	}
+}
+
+// fuenteMainNotas es el esqueleto del bloc de notas de la plantilla: el adaptador se reconstruye
+// con una copia del arreglo en cada cambio, y el primer `redibujar` recibe un String[0]. Ese arreglo
+// vacío es el que dejaba `elementos` nulo y hacía fallar al getCount del framework (§335).
+const fuenteMainNotas = `package com.hola.listas;
+
+import android.app.*;
+import android.os.*;
+import android.view.*;
+import android.widget.*;
+
+public class MainActivity extends Activity implements View.OnClickListener {
+    private String[] notas;
+    private int cuantas;
+
+    public void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.main);
+        notas = new String[8];
+        cuantas = 0;
+        redibujar();
+        findViewById(R.id.pie).setOnClickListener(this);
+    }
+
+    public void onClick(View vista) {
+        notas[cuantas] = "Nota " + cuantas;
+        cuantas = cuantas + 1;
+        redibujar();
+    }
+
+    private void redibujar() {
+        String[] copia = new String[cuantas];
+        for (int i = 0; i < cuantas; i++) {
+            copia[i] = notas[i];
+        }
+        ListView lista = (ListView) findViewById(R.id.lista);
+        lista.setAdapter(new ArrayAdapter(this, R.layout.fila, copia));
+    }
+
+    public void onStart() { }
+    public void onResume() { }
+    public void onPause() { }
+    public void onStop() { }
+    public void onDestroy() { }
+}
+`
+
+// apkDeNotasDevuelve el apk en memoria, sin binarios versionados, y el dex suelto para el hot swap.
+func apkDeNotas(t *testing.T) ([]byte, []byte) {
+	t.Helper()
+	manifiesto, err := escribeAXML(manifiestoDeListas())
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	main, err := escribeAXML(layoutDeLaLista())
+	if err != nil {
+		t.Fatalf("el layout main: %v", err)
+	}
+	fila, err := escribeAXML(layoutDeLaFila())
+	if err != nil {
+		t.Fatalf("el layout fila: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDeListas())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	r, err := rDeTabla(tablaDeListas())
+	if err != nil {
+		t.Fatalf("el R.java: %v", err)
+	}
+	dex := dexDeFuentes(t,
+		fuenteJava{nombre: "R.java", contenido: r},
+		fuenteJava{nombre: "MainActivity.java", contenido: fuenteMainNotas})
+	return zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": main,
+		"res/layout/fila.xml": fila,
+		"classes.dex":         dex,
+	}), dex
+}
+
+// filasDeNotas lee el modelo publicado por una orden y devuelve los textos de las filas de la lista
+// y los avisos de la ejecución, para no repetir el parseo en cada aseveración.
+func filasDeNotas(t *testing.T, linea string) ([]string, []string) {
+	t.Helper()
+	var modelo struct {
+		Raiz struct {
+			Hijos []struct {
+				Tipo  string `json:"tipo"`
+				Hijos []struct {
+					Texto string `json:"texto"`
+				} `json:"hijos"`
+			} `json:"hijos"`
+		} `json:"raiz"`
+		Ejecucion struct {
+			Avisos []string `json:"avisos"`
+		} `json:"ejecucion"`
+	}
+	if err := json.Unmarshal([]byte(linea), &modelo); err != nil {
+		t.Fatalf("el modelo no se lee: %v", err)
+	}
+	var filas []string
+	for _, n := range modelo.Raiz.Hijos {
+		if n.Tipo == "ListView" {
+			for _, h := range n.Hijos {
+				filas = append(filas, h.Texto)
+			}
+		}
+	}
+	return filas, modelo.Ejecucion.Avisos
+}
+
+// TestElPreviewPintaDosNotasEs la falsación de §335: la primera pantalla de un bloc de notas vacío
+// no deja avisos, dos altas pintan dos filas, y la sesión viva conserva las dos filas después de un
+// hot swap sin replay. Antes de la corrección el String[0] inicial dejaba `elementos` nulo y el
+// getCount del framework fallaba con «no tiene getCount()I».
+func TestElPreviewPintaDosNotas(t *testing.T) {
+	apk, dex := apkDeNotas(t)
+
+	reposo, err := modeloVistaDeAPKConPulsos(apk, "", true, nil)
+	if err != nil {
+		t.Fatalf("el apk de notas no se lee: %v", err)
+	}
+	if avisos := strings.Join(reposo.Ejecucion.Avisos, "\n"); avisos != "" {
+		t.Errorf("la lista vacía dejó avisos: %v", reposo.Ejecucion.Avisos)
+	}
+	if lista := reposo.Raiz.Hijos[0]; lista.Tipo != "ListView" || len(lista.Hijos) != 0 {
+		t.Fatalf("la pantalla inicial no es una lista vacía: %+v", reposo.Raiz.Hijos[0])
+	}
+
+	conNotas, err := modeloVistaDeAPKConPulsos(apk, "", true, []string{"id/pie", "id/pie"})
+	if err != nil {
+		t.Fatalf("las dos notas fallaron: %v", err)
+	}
+	if avisos := strings.Join(conNotas.Ejecucion.Avisos, "\n"); avisos != "" {
+		t.Errorf("las dos notas dejaron avisos: %v", conNotas.Ejecucion.Avisos)
+	}
+	esperadas := []string{"Nota 0", "Nota 1"}
+	lista := conNotas.Raiz.Hijos[0]
+	if len(lista.Hijos) != len(esperadas) {
+		t.Fatalf("la lista tiene %d filas y se esperaban 2", len(lista.Hijos))
+	}
+	for i, fila := range lista.Hijos {
+		if texto := textoDeLaFila(fila); texto != esperadas[i] {
+			t.Errorf("la fila %d dice %q y se esperaba %q", i, texto, esperadas[i])
+		}
+	}
+
+	// la misma secuencia, pero entregada de una orden en una sesión viva, sin replay del guion
+	s, err := nuevaSesionPreview(apk, "", "")
+	if err != nil {
+		t.Fatalf("la sesión de notas no arrancó: %v", err)
+	}
+	linea := ""
+	for _, argv := range [][]string{
+		{"--pulsar", "id/pie"},
+		{"--pulsar", "id/pie"},
+	} {
+		if codigo := s.ejecutaOrden("notas", argv, func(l string) { linea = l }); codigo != 0 {
+			t.Fatalf("la orden %v devolvió %d", argv, codigo)
+		}
+	}
+	filas, avisos := filasDeNotas(t, linea)
+	if len(avisos) != 0 {
+		t.Errorf("la sesión dejó avisos: %v", avisos)
+	}
+	if strings.Join(filas, ",") != strings.Join(esperadas, ",") {
+		t.Errorf("la sesión pinta %v y se esperaba %v", filas, esperadas)
+	}
+
+	// el hot swap con el MISMO dex no cambia la máquina: las dos filas siguen vivas
+	ruta := filepath.Join(t.TempDir(), "mismo.dex")
+	if err := os.WriteFile(ruta, dex, 0o644); err != nil {
+		t.Fatalf("el dex del hot swap no se escribió: %v", err)
+	}
+	linea = ""
+	codigo := s.ejecutaOrden("notas", []string{
+		"--intercambiar", "Lcom/hola/listas/MainActivity;/onClick(Landroid/view/View;)V=" + ruta,
+	}, func(l string) { linea = l })
+	if codigo != 0 {
+		t.Fatalf("el hot swap devolvió %d", codigo)
+	}
+	filas, avisos = filasDeNotas(t, linea)
+	if len(avisos) != 0 {
+		t.Errorf("el hot swap dejó avisos: %v", avisos)
+	}
+	if strings.Join(filas, ",") != strings.Join(esperadas, ",") {
+		t.Errorf("tras el hot swap la sesión pinta %v y se esperaba %v", filas, esperadas)
 	}
 }
