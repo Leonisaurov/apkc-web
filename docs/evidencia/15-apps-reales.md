@@ -997,6 +997,23 @@ De **3798 a 4784 pasos**: la integración `688a7ad` corrige `Arrays.copyOfRange`
 preferencias de Termux, y deja una frontera nueva, `Set.iterator` dentro de
 `TerminalColorScheme.updateWith`, en lugar del `java.io.File.isFile sobre nulo` anterior.
 
+**Nota del 2026-11-25 (esquema de colores de Termux, posterior a la corrida final).** El frente
+avanzó con el cherry-pick `bf7477e7feef577a9ea554120a5b07d824274dde` en
+`studio/apkc-emulador`, el gitlink de studio `ed39a58f29f89f445b45f4a0181fcbbb813b774f` y el
+padre `84a7b90b84661450601cdd4d3554e86c49b2acd7`; la guardia vigente de la regla 14 da
+`git -C studio rev-parse HEAD:apkc-emulador` → `bf7477e…`. La suite integrada
+`go test -count=1 ./...` → `ok github.com/ajinasokan/apkc 170.448s`, 0 `FAIL`, y las focales
+`ok … 0.041s`. Termux llega a **6599 pasos** (antes 4784) y la nueva frontera es
+`ejecucion.error` en `setTerminalToolbarView: se leyó el campo
+android.view.ViewGroup$LayoutParams.height de un objeto nulo`; desaparece `Set.iterator` en
+`TerminalColorScheme.updateWith`. Las otras cuatro APK siguen byte a byte idénticas a las de
+`integracion-final/`. El JSON está en `~/.cache/apkc-web/integracion-color/termux.json` y se apunta
+con el comando `apkc preview` sobre esa ruta:
+
+```sh
+apkc preview ~/.cache/apkc-web/integracion-color/termux.json
+```
+
 **Las otras cuatro APK.** En el registro fechado, tres quedan byte a byte idénticas a la base
 —F-Droid (`9bd87930…`), NewPipe (`67b498c1…`) y Libre Memory Game (`1b70842e…`), con el mismo SHA
 en `base-*.json` y `inmutable2-*.json`— y el gestor solo con el aviso informativo
@@ -1077,6 +1094,8 @@ La VM es Oracle, Ubuntu 22.04.5, con IP `163.192.151.24`. Los puertos 80 y 443 e
 persistidos con iptables: `4 dpt:22 ACCEPT`, `5 dpt:443`, `6 dpt:80` y `7 REJECT`. SSH sigue intacto.
 
 ```sh
+lsb_release -a
+hostname -I
 iptables -S
 ```
 
@@ -1090,11 +1109,13 @@ git show --stat --oneline a7ac8d2 a836010 3cc6ee7
 ```
 
 El certificado es de Let's Encrypt para `wisp.dolci-vita.link`, con correo `leonisaurox@proton.me`,
-`notAfter=2027-02-23` y `certbot.timer` activo (89 días de validez al medir).
+`notAfter=2027-02-23` y `certbot.timer` activo (90 días de validez al medir: 2026-11-25 →
+2027-02-23 con `date -d`).
 
 ```sh
 openssl x509 -in /etc/letsencrypt/live/wisp.dolci-vita.link/cert.pem -noout -enddate
 systemctl status certbot.timer
+echo $(( ( $(date -d 2027-02-23 +%s) - $(date -d 2026-11-25 +%s) ) / 86400 ))
 ```
 
 El servicio `wispd.service` está `active` y `enabled`: `ExecStart=/home/ubuntu/wispd -addr :443

@@ -968,9 +968,11 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   503 → 719 → **3798** pasos como registro fechado y **4784** en la corrida final
   (`~/.cache/apkc-web/integracion-final/termux.json`); desaparecen `Set.iterator` de propiedades,
   `containsKey`/`contains`, conjuntos estáticos nulos e `ImmutableBiMap.entrySet`; la frontera
-  nueva es `Set.iterator` en `TerminalColorScheme.updateWith`. Tres APK byte-idénticas en el
-  registro fechado y gestor solo con el aviso `preferencias-memoria:`; cero peticiones fuera del
-  origen pendiente para Fase G. `docs/evidencia/15-apps-reales.md`.
+  nueva es `Set.iterator` en `TerminalColorScheme.updateWith`. Actualización (esquema de colores de
+  Termux, commit `84a7b90`, pin `bf7477e…`): **6599 pasos** y frontera `setTerminalToolbarView` sobre
+  `ViewGroup$LayoutParams.height` nulo, sin `Set.iterator`.
+  Tres APK byte-idénticas en el registro fechado y gestor solo con el aviso `preferencias-memoria:`;
+  cero peticiones fuera del origen pendiente para Fase G. `docs/evidencia/15-apps-reales.md`.
 - §373: relay WISP propio como opción precargada en `#wisp-url`, sin activar el módulo: DNS
   `163.192.151.24` (`getent hosts wisp.dolci-vita.link`), puertos 80/443 abiertos y persistidos en
   la VM pero `curl` → `Connection refused`; studio `ffcc49a`, `64eac8a` (guarda en `relayActual`,

@@ -55,8 +55,12 @@ Actualización (lote integrado, commit `1e1bb03` en `web`, `d592102` en `studio`
 `git -C studio rev-parse HEAD:apkc-emulador`. La nota de la familia de red queda como registro
 histórico. Actualización (integración final, commit `688a7ad`): el pin pasó a
 `a83ebcd5654475c00bc2f52c134497e64190b646`, guardia ejecutada aquí con
-`git -C studio rev-parse HEAD:apkc-emulador`. La nota del lote integrado queda como registro
-histórico fechado.
+`git -C studio rev-parse HEAD:apkc-emulador`; hoy es registro histórico. Actualización (esquema de
+colores de Termux, commit `84a7b90`): el pin pasó a
+`bf7477e7feef577a9ea554120a5b07d824274dde`, con cherry-pick del mismo SHA en
+`studio/apkc-emulador`, gitlink de studio `ed39a58f29f89f445b45f4a0181fcbbb813b774f` y guardia
+`git -C studio rev-parse HEAD:apkc-emulador` → `bf7477e…`. La nota de la integración final queda como
+registro histórico fechado.
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)
 
@@ -169,17 +173,27 @@ Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El pin vigente de la regla 14 es `a83ebcd5654475c00bc2f52c134497e64190b646`
-(`git -C studio rev-parse HEAD:apkc-emulador`, ejecutado y anotado en el apartado 1), vigente tras
-integrar la corrección de `Arrays` y los recursos de Termux (`688a7ad` en `web`).
-Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de §368 queda
-como registro histórico. Actualización (lote integrado, commit `1e1bb03`): el pin pasó a `6a207cd…`.
-Actualización (integración final, commit `688a7ad`): el pin pasó a `a83ebcd…`. Los pins `563e991`,
-`4117a8f`, `a2a6c29`, `c448442`, `6a207cd` y `ec842d4` quedan como registros históricos fechados.
+El pin vigente de la regla 14 es `bf7477e7feef577a9ea554120a5b07d824274dde`
+(`git -C studio rev-parse HEAD:apkc-emulador` → `bf7477e…`, ejecutado y anotado en el apartado 1),
+vigente tras integrar el esquema de colores de Termux (`84a7b90` en el padre, `ed39a58f` como gitlink
+de studio). Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de
+§368 queda como registro histórico. Actualización (lote integrado, commit `1e1bb03`): el pin pasó a
+`6a207cd…`. Actualización (integración final, commit `688a7ad`): el pin pasó a `a83ebcd…`.
+Actualización (esquema de colores de Termux, commit `84a7b90`): el pin pasó a `bf7477e…`. Los pins
+`563e991`, `4117a8f`, `a2a6c29`, `c448442`, `6a207cd`, `ec842d4` y `a83ebcd` quedan como registros
+históricos fechados.
 El gitlink anidado de `studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
 push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el
 recuento de `ahead` lo da `git status -sb` al leer este fichero (antes del commit documental de
 §368 era `[ahead 6]` y sube con cada commit local).
+
+El frente del esquema de colores de Termux está integrado y medido sobre ese pin: suite
+`go test -count=1 ./...` → `ok github.com/ajinasokan/apkc 170.448s`, 0 `FAIL`, y focales
+`ok … 0.041s`. Termux pasa de 4784 a **6599 pasos**, con `ejecucion.error` en
+`setTerminalToolbarView`: se leyó el campo `android.view.ViewGroup$LayoutParams.height` de un objeto
+nulo, y desaparece `Set.iterator` en `TerminalColorScheme.updateWith`. Las otras cuatro APK siguen
+byte a byte idénticas a `integracion-final/`; el JSON está en
+`~/.cache/apkc-web/integracion-color/termux.json` (§372). CDP, gate y publicación siguen fuera.
 
 El orden del plan de apps se mantiene: C → B → D → E hechos, F `§363` en diseño y G `§364` sin
 ejecutar (`docs/evidencia.md:401`). Ninguna de las cinco APK se da por funcionando;
