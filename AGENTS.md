@@ -8,7 +8,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 
 | Ruta | Qué es | Cómo se comprueba |
 | --- | --- | --- |
-| `docs/evidencia.md` | índice de las 333 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
+| `docs/evidencia.md` | índice de las 338 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
 | `docs/situacion.md` | el recap de lo medido, bullet por bullet (movido desde este fichero el 2026-11-03); el original es el `§` que cada bullet cita | leerlo y comprobar que su `§` existe |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
@@ -118,11 +118,16 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      paralelo**: mantén la cola llena con trabajo independiente; el límite lo marca esa autorización,
      no la prudencia de tokens.
 14. **El único emulador es el submódulo `studio/apkc-emulador` (§357).** El padre ya no guarda pin
-    espejo: el gitlink anidado de `studio` apunta a `4117a8f` y el `HEAD` de `studio` sigue siendo el
+    espejo: el gitlink anidado de `studio` apunta a
+    `a2a6c29111783ee09f6e74729c4b303b0dd8242d` y el `HEAD` de `studio` sigue siendo el
     gitlink `HEAD:studio` del padre. Ejecuta la guardia al cerrar cada fase:
-    `git -C studio rev-parse HEAD:apkc-emulador` debe dar `4117a8f`; si no, es un fallo, no un aviso.
+    `git -C studio rev-parse HEAD:apkc-emulador` debe dar
+    `a2a6c29111783ee09f6e74729c4b303b0dd8242d`; si no, es un fallo, no un aviso.
     Nota (§358): el emulador subió y actualizó su gitlink en el mismo commit, así que el pin pasó de
     `563e991` a `4117a8f`; la guardia sigue siendo `git -C studio rev-parse HEAD:apkc-emulador`.
+    Nota (§368): al integrar C → B → D → E, el pin pasó a
+    `a2a6c29111783ee09f6e74729c4b303b0dd8242d` en el mismo commit del emulador; esa es la guardia
+    vigente y la nota de §358 queda como registro histórico fechado.
     Subir el emulador exige actualizar ese gitlink en el **mismo commit**. La fuente canónica la
     resuelve `tools/materializar-emulador.sh` (argumento, `APKC_EMULADOR_DIR`,
     `studio/apkc-emulador`) sin cambiar el contrato de 34 ficheros ni su `cmp` byte a byte.

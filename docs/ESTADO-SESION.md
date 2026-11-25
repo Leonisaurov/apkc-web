@@ -23,6 +23,14 @@ git -C apkc-emulador rev-parse HEAD         → (histórico §356/§357: 563e991
 git -C apkc-emulador status -sb             → (histórico §356/§357: ## HEAD (no branch))
 git -C apkc-emulador rev-list --count @{u}..HEAD → (histórico: fatal … rc 128; hoy no aplica)
 git -C studio rev-parse --short HEAD:apkc-emulador → 4117a8f
+
+# estado verificado antes del commit documental de §368 (2026-11-25), ejecutado aquí:
+git rev-parse --short HEAD                        → 5b9d5e4
+git ls-tree HEAD studio                           → 160000 commit 6cf42c1d50409fab5426715d96d7bc383ae6fb8b	studio
+git -C studio rev-parse --short HEAD              → 6cf42c1
+git -C studio status -sb                          → ## HEAD (no branch)
+git -C studio ls-tree HEAD apkc-emulador          → 160000 commit a2a6c29111783ee09f6e74729c4b303b0dd8242d	apkc-emulador
+git -C studio rev-parse HEAD:apkc-emulador        → a2a6c29111783ee09f6e74729c4b303b0dd8242d
 ```
 
 El emulador está en `HEAD` desconectado y sin rama, así que no tiene `@{u}`: su «ahead» es
@@ -30,11 +38,14 @@ El emulador está en `HEAD` desconectado y sin rama, así que no tiene `@{u}`: s
 histórico de §356/§357: en §356 el pin del emulador era `563e991`; tras §358 el gitlink anidado de
 `studio` apunta a `4117a8f` (regla 14) y el padre no guarda pin espejo.
 
-Actualización (§358, push ejecutado): el pin vigente es `4117a8f`
+Actualización (§358, push ejecutado): el pin de entonces pasó a `4117a8f`
 (`git -C studio rev-parse --short HEAD:apkc-emulador`), subido en el mismo commit que el emulador.
 Los rangos empujados fueron emulador `563e991..4117a8f` → `origin/emulador-modulo`, studio
 `e30d3ad..4a17f84` → `origin/emulador-sin-topes` y padre `8ea01c3..3a5f557` → `origin/web`; padre
 y studio quedan con `rev-list --count @{u}..HEAD` a cero.
+Actualización (§368, sin push en esta sesión): el pin vigente de la regla 14 es
+`a2a6c29111783ee09f6e74729c4b303b0dd8242d`, subido en el mismo commit del emulador al integrar
+C → B → D → E; los rangos de §358 quedan como registro del push anterior.
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)
 
@@ -104,6 +115,22 @@ y studio quedan con `rev-list --count @{u}..HEAD` a cero.
   `Thread.getStackTrace sobre un objeto nulo`; etiqueta «solo envoltorio, sin lógica Godot». No se da
   por funcionando ni se cuenta como app cubierta. Índice en `docs/evidencia.md`; medición en
   `docs/evidencia/15-apps-reales.md`.
+- **C, B, D y E integrados (§359-§362, §368)**: C `98cedf1` (lanzadora y layout del manifiesto,
+  centinela `sin-layout-xml:`), B `28c22de` (`classes2.dex`/`classes20.dex` con descriptor del
+  manifiesto), D `376def6` (12 stubs, avisos de familia 12 → 0 en el cuarto APK) y E1 `77dc8e5` /
+  E2 `a2a6c29` (tema por id de atributo, en `preview.go:1019-1071`), con `4d4dbd9` y `6cf42c1` en
+  `studio`. Los conflictos se resolvieron conservando los cinco frentes. Cada frente tiene su
+  medición en `docs/evidencia/15-apps-reales.md`; las cifras de suite son propias de cada frente
+  (`460.631s`, `210.695s`, `438.144s` y `505.205s`).
+- **Suite integrada en verde (§368)**: re-ejecutada con `-count=1` sobre el HEAD integrado
+  `5b9d5e4`, `go test -count=1 ./...` → `ok github.com/ajinasokan/apkc 196.940s`, rc 0, 960 tests,
+  0 `FAIL`. Los cinco JSON de la corrida están en `~/.cache/apkc-web/integracion/`: F-Droid con
+  `org.fdroid.MainActivity`/`layout=''`/centinela, NewPipe con `res/v9.xml`/6 nodos, Termux con
+  `activity_termux.xml`/13 nodos, el gestor con `error=None`/0 avisos de familia/`res/R5.xml`/30
+  nodos y Libre Memory Game con el mismo error de `§367`/`layout=''`/1 nodo/6 avisos. Ninguna de las
+  cinco APK se da por funcionando. El preview local sirve el HEAD integrado (wasm `dc29af669c…`);
+  el valor concreto se lee en `~/.cache/apkc-web/preview-automatica/vigilante.log`. CDP, gate y
+  publicación siguen sin ejecutar.
 
 ## 3. En verificación o no hecho
 
@@ -116,46 +143,32 @@ y studio quedan con `rev-list --count @{u}..HEAD` a cero.
   publicado**. `empaquetar no es publicar` (regla 11).
 - Fidelidad 1:1 del emulador (§334-§339) y separación en su mitad CDP/gate: **en verificación** en
   `docs/plan.md:66-67`. D5 y la fila 8 de D6 siguen `incierto` en `docs/plan.md:57`.
-- Ninguna de las tres APK reales se da por funcionando: los layouts siguen siendo los falsos de §354,
-  re-medidos tras `§358` (3 nodos, `res/A1.xml` / `abc_action_bar_title_item.xml`, 414/355/282 pasos);
-  el bloqueo compartido de `§355` (`ArchTaskExecutor.getInstance usa el opcode 0x1d`) quedó resuelto
-  en `§358` (`docs/evidencia.md:365`), y los errores actuales son de stubs, pendientes de Fase D.
+- Ninguna de las cinco APK reales se da por funcionando. Las tres primeras dejaron los layouts
+  falsos de `§354` atrás: tras integrar C y E, F-Droid declara `sin-layout-xml:` con un solo
+  `FrameLayout` (§359), NewPipe da `res/v9.xml` de 6 nodos y Termux
+  `res/layout/activity_termux.xml` de 13 (§368); las cuatro y quinta APK dan `res/R5.xml`/30 nodos
+  y `layout=''`/1 nodo respectivamente. C, B, D y E están hechos en capa Go/node (§359-§362), pero
+  CDP, gate y publicación siguen sin ejecutar (regla 11).
 
-## 4. Frente en marcha al cortar: §358 cerrado; C (§359) y B (§360) sin implementar
+## 4. Frente en marcha ahora (2026-11-25): modo teléfono en `studio/` y F0 de Compose
 
-El pin y los rangos empujados están registrados en el apartado 1: el pin vigente de la regla 14 es
-`4117a8f`, subido en el mismo commit que el emulador, y los tres rangos (`origin/emulador-modulo`,
-`origin/emulador-sin-topes` y `origin/web`) quedaron con `rev-list --count @{u}..HEAD` a cero en su
-momento. `§358` está medido, registrado y cerrado: el opcode `0x1d`/`0x1e` dejó de bloquear los tres
-APK (`docs/evidencia.md:365`). Tras el push final no hay commits documentales sin empujar; el recuento de `ahead` lo da `git status -sb` en el momento de la lectura (no se fija aquí
-una cifra, porque cambia con cada commit), y cualquier nuevo push necesita autorización expresa.
+Tras la integración de §368, C (`§359`), B (`§360`), D (`§361`) y E (`§362`) están hechos en capa
+Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940s`, rc 0, 960 tests,
+0 `FAIL`). El frente en marcha es el **modo teléfono en `studio/`** y **F0 de Compose** (Fase F,
+`§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
+suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El plan de apps pausadas sigue este orden: C `§359` → B `§360` → D `§361` → E `§362` → F `§363` →
-G `§364` (`docs/evidencia.md:391,395`).
+El pin vigente de la regla 14 es `a2a6c29111783ee09f6e74729c4b303b0dd8242d`
+(`git -C studio rev-parse HEAD:apkc-emulador`, ejecutado y anotado en el apartado 1), subido en el
+mismo commit del emulador al integrar C → B → D → E. El gitlink anidado de `studio` es el único sitio
+donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
+push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el
+recuento de `ahead` lo da `git status -sb` al leer este fichero (antes del commit documental de
+§368 era `[ahead 6]` y sube con cada commit local).
 
-### C (§359) — criterios finales
-
-1. Ejecutar y registrar `apkanalyzer manifest print` y `aapt2 dump badging` de F-Droid **antes** de
-   usar `org.fdroid.MainActivity`. Hoy eso es hipótesis: `MAIN` + `LEANBACK_LAUNCHER`, alias
-   habilitado `IconActivity` → `MainActivity` y alias deshabilitados `IconCalculatorActivity` /
-   `CalculatorActivity`.
-2. `habilitado` se decide sobre `valor.tipo == tipoBooleano`, nunca sobre `s != "false"`.
-3. El orden de elección es `pedido` → `layoutID` → `activity_<Nombre>` → `errSinLayoutXML`, sin
-   fallback alfabético.
-4. El sentinel `sin-layout-xml:` va en `avisos` y Fase D cuenta por familia, no con `len(avisos)`.
-
-C se abre en worktree propio y se re-falsa después de B.
-
-### B (§360) — criterio final
-
-`ejecucion.actividad == claseCorta(descriptorDeActividad(paquete, nombreActividadC))` (el descriptor
-es el de C, no un valor inyectado) **y**, en el test, `met.dex == dx[1]`. Además `Error==""`, `Ciclo`
-con `onCreate` y `Capturas` con texto real y sin señuelo. **No se añade campo nuevo al JSON.** Las
-colisiones de descriptor son error explícito (0 duplicados medidos en cinco APK). NewPipe y el cuarto
-APK no deben registrar regresión.
-
-Ninguna app se da por funcionando; F (Compose) queda para `§363`; `tools/entorno.sh gate`, CDP y
-publicación siguen sin ejecutar y `studio/e2e.sh` está en verificación.
+El orden del plan de apps se mantiene: C → B → D → E hechos, F `§363` en diseño y G `§364` sin
+ejecutar (`docs/evidencia.md:401`). Ninguna de las cinco APK se da por funcionando;
+`tools/entorno.sh gate`, CDP, publicación y `studio/e2e.sh` siguen sin ejecutar o en verificación.
 
 ## 5. Vista previa local vigente
 

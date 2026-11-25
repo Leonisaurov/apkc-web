@@ -635,3 +635,181 @@ contenga `Thread.getStackTrace sobre un objeto nulo`, `nodos=2`,
 etiqueta explícita «solo envoltorio, sin lógica Godot». Se refuta si al cambiar el envoltorio Java
 el JSON no cambia de forma reproducible, o si alguien presenta texto del juego sin ejecutar el
 `.so`. Sin gate, CDP, red ni publicación. Sostenido por `§367`.
+
+---
+
+## 359. Fase C: la lanzadora y el layout salen del manifiesto, sin pantalla inventada
+
+Medido el 2026-11-25 sobre el commit integrado `98cedf1` (original `7fb6857`). Sin gate, CDP,
+chromium, red, `git push` ni publicación. La actividad y la ruta del layout se leen del manifiesto y
+de los recursos del propio APK: no se fija una actividad a mano ni se elige un layout por su nombre.
+
+**Reglas medidas.** `enabled` se decide sobre el valor tipado (`tipoBooleano`), nunca con
+`s != "false"`; un alias con `targetActivity` se resuelve a su actividad destino; la prioridad es
+`MAIN` + `LAUNCHER` + `DEFAULT`; el orden de elección es `pedido` → `layoutID` → `activity_<Nombre>`;
+y cuando no hay layout XML se emite el centinela `sin-layout-xml:` en `avisos`, **sin fallback
+alfabético**. Siete tests focales pasan y la suite completa da `460.631s`:
+
+```sh
+cd apkc && go test -run 'TestLanzadora|TestSinLayoutXml|TestRutaDelLayout' -v .
+cd apkc && go test -count=1 ./...
+```
+Siete `--- PASS`; `ok github.com/ajinasokan/apkc 460.631s`.
+
+**Oráculo del manifiesto.** Los volcados quedan en `~/.cache/apkc-web/fase-c-evidencia/`:
+`fdroid-manifest.txt` (709 líneas) y `fdroid-badging.txt` (118 líneas).
+
+```sh
+wc -l ~/.cache/apkc-web/fase-c-evidencia/fdroid-manifest.txt ~/.cache/apkc-web/fase-c-evidencia/fdroid-badging.txt
+```
+```
+709 /home/leonisauro/.cache/apkc-web/fase-c-evidencia/fdroid-manifest.txt
+118 /home/leonisauro/.cache/apkc-web/fase-c-evidencia/fdroid-badging.txt
+```
+
+**Salidas de `preview`.** JSON en `~/.cache/apkc-web/fase-c/fdroid-preview-final.json`:
+
+```sh
+/home/leonisauro/.cache/apkc-web/fase-c/apkc-fase-c preview /home/leonisauro/Downloads/F-Droid.apk > ~/.cache/apkc-web/fase-c/fdroid-preview-final.json
+```
+`actividad=org.fdroid.MainActivity`, `layout=''`, **1 nodo** `FrameLayout` con texto «F-Droid»,
+aviso `sin-layout-xml:`; cero apariciones de `IconCalculatorActivity` y de `res/A1.xml` (las dos
+respuestas falsas de `§354`). El cuarto APK, en
+`~/.cache/apkc-web/fase-c/simplefileexplorer-preview-final.json`: `res/R5.xml`, 30 nodos y recurso
+`0x7f040000 layout/activity_main`.
+
+**Frontera.** La lanzadora y el layout ya no se inventan, pero `sin-layout-xml:` declara que F-Droid
+no trae un layout XML que el modelo pueda atribuir: ese nodo `FrameLayout` no se da por pantalla real
+de la app. Sin CDP, comparación visual en navegador, gate ni publicación.
+
+---
+
+## 360. Fase B: el modelo ejecuta el `onCreate` del segundo dex
+
+Medido el 2026-11-25 sobre el commit integrado `28c22de` (original `9527958`). Sin gate, CDP,
+chromium, red, `git push` ni publicación. `dexDelApk` descubre `classes.dex`, `classes2.dex`, … en
+orden numérico y rechaza descriptores duplicados; `ejecutaOnCreateConEventos(dxs, …)` recibe todos los
+dex y elige el método por su descriptor.
+
+**Criterio.** `ejecucion.actividad == claseCorta(descriptorDeActividad(paquete, nombreActividadC))`,
+con el descriptor derivado del manifiesto (el de Fase C, no un valor inyectado) **y**, en el test,
+`met.dex == dx[1]`. No se añade ningún campo nuevo al JSON. Cuatro tests focales pasan y la suite da
+`210.695s`:
+
+```sh
+cd apkc && go test -run 'DescubreTodosLosDexEnOrdenNumerico|ElMetodoEjecutadoEsDelSegundoDex|ElModeloNoRegresaDelSegundoDex|RechazaDescriptorDuplicado' -v .
+cd apkc && go test -count=1 ./...
+```
+Cuatro `--- PASS`; `ok github.com/ajinasokan/apkc 210.695s`. `dexdump` fija las actividades en
+`classes2.dex` y `classes20.dex`, así que el criterio no se apoya en el primer dex.
+
+**Salidas.** Los JSON de la corrida están en `~/.cache/apkc-web/fase-b-evidencia/`
+(`F-Droid.json`, `newpipe.json`, `termux.json` y `simplefileexplorer.json`, con sus `.err`). NewPipe y
+el cuarto APK no registran regresión frente a `§358` y `§366`.
+
+```sh
+ls ~/.cache/apkc-web/fase-b-evidencia/
+```
+
+**Frontera.** `Error==""` y las capturas reales en F-Droid y Termux quedan para las fases D y C;
+aquí solo se mide que el descriptor elegido y el dex ejecutado son el correcto. Ninguna app se da por
+funcionando; sin CDP, gate ni publicación.
+
+---
+
+## 361. Fase D: la familia de avisos de stubs baja a cero en el cuarto APK
+
+Medido el 2026-11-25 sobre el commit integrado `376def6` (original `6fa1d34`). Sin gate, CDP,
+chromium, red, `git push` ni publicación. Entran **12 stubs**: `getAction()` devuelve
+`android.intent.action.MAIN`, `getClass()` devuelve un `Class` sintético y
+`Dialog.setContentView` no toca `m.layoutID` (para no reescribir la ruta leída en Fase C). El guardián
+de nulo queda intacto.
+
+**Cuarto APK.** Salida en `~/.cache/apkc-web/fase-d-evidencia/preview-post.json`:
+
+```sh
+sha256sum ~/.cache/apkc-web/apk-nuevo-baseline-final/preview.json ~/.cache/apkc-web/fase-d-evidencia/preview-post.json
+```
+```
+f207c0435930c3d4f5256ac68add74915651f10ec3bdd056d007df7f445741a7  /home/leonisauro/.cache/apkc-web/apk-nuevo-baseline-final/preview.json
+28a6e68a772c244eee1d9f5a48a4ddf3722f5e0067cd330ec867b8669268e8c3  /home/leonisauro/.cache/apkc-web/fase-d-evidencia/preview-post.json
+```
+`error=None`, avisos de la familia «no está en el dex ni en los stubs» **12 → 0**, `pasos` **162 → 1131**,
+`layout=res/R5.xml`, `nodos=30`. La suite da `ok github.com/ajinasokan/apkc 438.144s`:
+
+```sh
+cd apkc && go test -count=1 ./...
+```
+
+**Otras tres APK, sin regresión.** Los JSON post están en
+`~/.cache/apkc-web/fase-d-evidencia/{fdroid,newpipe,termux}-post.json`: F-Droid conserva 13 avisos,
+NewPipe 8 y Termux 3 (los valores de `§358`, no una familia nueva).
+
+**Frontera.** Los doce avisos desaparecen solo en el cuarto APK; los otros tres siguen con los suyos y
+con `ejecucion.error`. No se afirma que ninguna app funcione; sin CDP, comparación visual, gate ni
+publicación.
+
+---
+
+## 362. Fase E: el tema se resuelve por id de atributo, sin campos nuevos
+
+Medido el 2026-11-25 sobre los commits integrados `77dc8e5` y `a2a6c29` (originales `1c22cd2` y
+`4c5f514`) en el emulador, y `4d4dbd9` en `studio`. Sin gate, CDP, chromium, red, `git push` ni
+publicación. El tema se aplica **por id de atributo** (`textColorPrimary`, `colorBackground` y
+`windowBackground`), no por el nombre del estilo, y no se añade ningún campo al JSON. Las filas salen
+de `expandeListas` (`preview.go:1019-1071`).
+
+**Falsación y suite.**
+
+```sh
+cd apkc && go test -run TestElModeloNoInventaColorSinTema -v .
+PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH tcr -r 256M -- sh -c 'cd apkc && go test -count=1 ./...'
+cd studio && node prueba.js
+```
+El test negativo `TestElModeloNoInventaColorSinTema` impide inventar un color cuando no hay tema;
+la suite da `ok github.com/ajinasokan/apkc 505.205s` y `node prueba.js` → `prueba: todo en orden`.
+
+**Frontera.** La comparación visual en navegador y la publicación quedan pendientes para Fase G
+(`§364`). Sin CDP, gate ni publicación.
+
+---
+
+## 368. Integración de C, B, D y E sobre el emulador y la pestaña
+
+Medido el 2026-11-25. Sin gate, CDP, chromium, red, `git push` ni publicación. Se integran los commits
+del emulador C `98cedf1`, B `28c22de`, D `376def6`, E1 `77dc8e5` y E2 `a2a6c29`, y los de `studio`
+`4d4dbd9` y `6cf42c1`. Los conflictos se resolvieron conservando los cinco frentes: ninguno se
+descartó al fusionar.
+
+**Suite integrada.**
+
+```sh
+cd apkc && go test -count=1 ./...
+```
+`ok github.com/ajinasokan/apkc 196.940s`, `rc 0`, 960 tests, 0 `FAIL`.
+
+**Cinco JSON de la corrida integrada**, en `~/.cache/apkc-web/integracion/` (junto a
+`apkc-integracion`, los `.err` y `gotmp/`):
+
+| APK | Actividad | Layout | Nodos | Estado |
+| --- | --- | --- | --- | --- |
+| F-Droid (`fdroid.json`) | `org.fdroid.MainActivity` | `''` | 1 | centinela `sin-layout-xml:`; marco con texto «F-Droid» |
+| NewPipe (`newpipe.json`) | `org.schabi.newpipe.MainActivity` | `res/v9.xml` | 6 | sin regresión de Fase C |
+| Termux (`termux.json`) | `com.termux.app.TermuxActivity` | `res/layout/activity_termux.xml` | 13 | sin regresión de Fase C |
+| Gestor (`simplefileexplorer.json`) | `com.martinmimigames.simplefileexplorer.MainActivity` | `res/R5.xml` | 30 | `error=None`, 0 avisos de la familia |
+| Libre Memory Game (`librememorygame.json`) | `com.godot.game.GodotApp` | `''` | 1 | mismo `error` de `§367`, 6 avisos, marco «Libre Memory Game» |
+
+```sh
+sha256sum ~/.cache/apkc-web/integracion/simplefileexplorer.json
+```
+```
+28a6e68a772c244eee1d9f5a48a4ddf3722f5e0067cd330ec867b8669268e8c3  /home/leonisauro/.cache/apkc-web/integracion/simplefileexplorer.json
+```
+El SHA del gestor coincide con el de `§361`: la integración no reescribe su medición.
+
+**Frontera.** C, B, D y E están hechos en la capa Go/node y verificados sobre la suite integrada;
+la mitad CDP (comparación visual en navegador), `tools/entorno.sh gate` y la publicación siguen sin
+ejecutar. Ninguna de las cinco APK se da por funcionando: Libre Memory Game sigue siendo caso
+negativo «solo envoltorio, sin lógica Godot» (`§367`) y F-Droid declara `sin-layout-xml:`. El pin
+vigente del emulador, actualizado en la integración, es `a2a6c29111783ee09f6e74729c4b303b0dd8242d`
+(regla 14 de `AGENTS.md`).

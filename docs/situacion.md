@@ -913,6 +913,39 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
     fail-closed: **solo envoltorio, sin lógica Godot**; no se cuenta como app cubierta ni sustituye a
     las cuatro anteriores. Índice en `docs/evidencia.md`; medición en
     `docs/evidencia/15-apps-reales.md`. Sin gate, CDP, red ni publicación. Sostenido por `§367`.
+- §359: Fase C (`98cedf1`, original `7fb6857`): `enabled` tipado con `tipoBooleano`, alias con
+  `targetActivity`, prioridad `MAIN`+`LAUNCHER`+`DEFAULT`, orden `pedido` → `layoutID` →
+  `activity_<Nombre>` y centinela `sin-layout-xml:` sin fallback alfabético. Siete focales en verde y
+  suite `460.631s`; F-Droid da `org.fdroid.MainActivity`, `layout=''`, un `FrameLayout` con texto
+  «F-Droid» y cero `IconCalculatorActivity`/`res/A1.xml`; el gestor da `res/R5.xml` de 30 nodos.
+  Original en `docs/evidencia/15-apps-reales.md`; volcados en `~/.cache/apkc-web/fase-c-evidencia/`
+  (709/118 líneas) y JSON en `~/.cache/apkc-web/fase-c/`. Sin CDP ni publicación.
+- §360: Fase B (`28c22de`, original `9527958`): `dexDelApk` enumera `classes.dex`,
+  `classes2.dex`, … en orden numérico y rechaza duplicados; `ejecutaOnCreateConEventos(dxs, …)`
+  comprueba el descriptor del manifiesto **y** `met.dex == dx[1]`, sin campo JSON nuevo. Cuatro
+  focales en verde y suite `210.695s`; `dexdump` sitúa las actividades en `classes2.dex` y
+  `classes20.dex`. JSON en `~/.cache/apkc-web/fase-b-evidencia/`; `docs/evidencia/15-apps-reales.md`.
+  `Error==""` y capturas reales quedan para D y C.
+- §361: Fase D (`376def6`, original `6fa1d34`): 12 stubs (`getAction` → `android.intent.action.MAIN`,
+  `getClass` → `Class` sintético, `Dialog.setContentView` sin tocar `m.layoutID`, guardián de nulo
+  intacto). En el cuarto APK, avisos de la familia 12 → 0, `pasos` 162 → 1131, `error=None`,
+  `res/R5.xml` de 30 nodos y SHA `f207c043…` → `28a6e68a…`; suite `438.144s`. Otros tres sin
+  regresión (13/8/3 avisos). JSON en `~/.cache/apkc-web/fase-d-evidencia/preview-post.json`;
+  `docs/evidencia/15-apps-reales.md`.
+- §362: Fase E (`77dc8e5`/`a2a6c29`, originales `1c22cd2`/`4c5f514`, y studio `4d4dbd9`): tema por
+  id de atributo (`textColorPrimary`, `colorBackground`, `windowBackground`), sin campos nuevos;
+  filas vía `expandeListas` (`preview.go:1019-1071`), test negativo
+  `TestElModeloNoInventaColorSinTema`, suite `505.205s` con `tcr -r 256M` y `node prueba.js` →
+  «prueba: todo en orden». Comparación visual y publicación pendientes (Fase G).
+  `docs/evidencia/15-apps-reales.md`.
+- §368: integración de C `98cedf1`, B `28c22de`, D `376def6`, E1 `77dc8e5` y E2 `a2a6c29` en el
+  emulador y `4d4dbd9`+`6cf42c1` en studio, con los cinco frentes conservados. Suite integrada
+  `go test -count=1 ./...` → `ok … 196.940s`, rc 0, 960 tests. Cinco JSON en
+  `~/.cache/apkc-web/integracion/`: F-Droid `org.fdroid.MainActivity`/`layout=''`/centinela,
+  NewPipe `res/v9.xml`/6 nodos, Termux `TermuxActivity`/`activity_termux.xml`/13 nodos, gestor
+  `error=None`/0 avisos de familia/`res/R5.xml`/30 nodos y Libre Memory Game mismo error,
+  `layout=''`, 1 nodo, 6 avisos y marco «Libre Memory Game». Hecho en capa Go/node, en verificación
+  CDP/gate; ninguna APK se da por funcionando. `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,
