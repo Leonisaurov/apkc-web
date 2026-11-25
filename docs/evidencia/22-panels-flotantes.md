@@ -64,7 +64,9 @@ y la segunda ronda dio `6/6`.
 `prueba-navegador.js`: ambas mediciones 1:1 del plan (`:46-55`) quedan **en verificación**, porque
 exigen chromium por CDP, Tctl ≤43 °C y autorización expresa, y hoy no hay ninguna de las tres. El
 z-order medido aquí es el del estado puro, el del fuente y el de la regla CSS; el orden visual
-final en la pestaña no se reclama.
+final en la pestaña no se reclama. **Aclaración posterior (decisión del usuario, 2026-11-24):** la
+temperatura dejó de ser bloqueo; el motivo vigente para no correr CDP es la falta de autorización
+expresa, no la lectura de `Tctl`. El umbral se conserva aquí como texto histórico de la medición.
 
 ## 347. Paneles flotantes para todos los módulos
 
@@ -91,7 +93,9 @@ reescribe `#codigo`, `estadoPestana` ni OPFS.
 
 **Frontera de `§347`.** Quedan **en verificación**, sin ejecutar: (a) la medición 1:1 con
 `getBoundingClientRect()` de `prueba-pestana.js` y de `prueba-navegador.js` (plan `:46-55`), que
-necesita chromium por CDP con Tctl ≤43 °C y autorización expresa; (b) el oráculo visual de
+necesita chromium por CDP con Tctl ≤43 °C y autorización expresa —el usuario retiró después la
+temperatura como bloqueo, así que hoy basta la falta de autorización para mantenerla en verificación—;
+(b) el oráculo visual de
 Droidloom; (c) `tools/entorno.sh gate` (incluido `studio/e2e.sh`); y (d) la publicación en
 `apkc-studio.surge.sh`. No se reclama cero peticiones fuera del origen, ni pestaña verificada, ni
 sitio publicado por analogía con el `node prueba.js` verde. Tampoco se ha actualizado el puntero

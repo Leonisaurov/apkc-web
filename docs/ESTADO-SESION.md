@@ -141,8 +141,10 @@ Si este frente consume `§357`, el plan de apps pausadas se reanuda en `§358+`.
 
 ## 6. Decisiones del usuario que no se pueden perder
 
-- No medir temperatura como bloqueo. Los documentos aún citan umbrales `Tctl` en algún `§` (p. ej.
-  `docs/evidencia/22-panels-flotantes.md:94`): conviene aclarar esa contradicción al retomar.
+- No medir temperatura como bloqueo. Los `§` que citan umbrales `Tctl` (p. ej.
+  `docs/evidencia/22-panels-flotantes.md:65,94`) conservan el texto histórico de la medición, pero
+  se aclaró al retomar que el motivo vigente para no correr CDP es solo la falta de autorización
+  expresa; lo mismo dicen ahora `docs/situacion.md` (§348) y `docs/plan.md:66`.
 - No empujar sin autorización; la autorización posterior al push de todo fue ejecutada (padre y studio
   a `rev-list --count @{u}..HEAD` cero). Los futuros pushes vuelven a necesitar autorización.
 - Quiere **un solo** `apkc-emulador`, dentro de `studio/` (frente en marcha del apartado 4).
