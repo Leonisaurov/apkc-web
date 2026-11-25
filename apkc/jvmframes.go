@@ -331,6 +331,57 @@ func podaHuecos(e estadoFrame, indices []int) estadoFrame {
 	return e
 }
 
+// accesoLocal dice qué hueco lee y qué hueco escribe una instrucción; -1 si no toca ninguno. Las
+// formas con operando (y la forma `wide`) pasan por `indiceLocal`, igual que en `aplica`, para que
+// las dos lecturas del mismo bytecode no se desincronicen. Las formas cortas no traen operandos:
+// llevan el hueco en el propio opcode y cada familia repite los cuatro («_0» a «_3»), así que el
+// número se saca con `% 4` (tabla en `jvmopcode.go:43-61` y `:100-107`, `:125-142`).
+func accesoLocal(in jvmInstr) (lee, escribe int) {
+	lee, escribe = -1, -1
+	conIndice := len(in.ops) >= 1 && (!in.ancho || len(in.ops) >= 2)
+	op := in.op
+	switch {
+	case op >= 0x15 && op <= 0x19: // iload, lload, fload, dload, aload
+		if conIndice {
+			lee = indiceLocal(in)
+		}
+	case op >= 0x1a && op <= 0x2d: // iload_0 .. aload_3, cuatro huecos por familia
+		lee = int(op-0x1a) % 4
+	case op == 0x84: // iinc: lee el hueco y lo vuelve a escribir
+		if conIndice {
+			lee, escribe = indiceLocal(in), indiceLocal(in)
+		}
+	case op >= 0x36 && op <= 0x3a: // istore, lstore, fstore, dstore, astore
+		if conIndice {
+			escribe = indiceLocal(in)
+		}
+	case op >= 0x3b && op <= 0x4e: // istore_0 .. astore_3, cuatro huecos por familia
+		escribe = int(op-0x3b) % 4
+	}
+	return
+}
+
+// seLeeDesde dice si el hueco `idx` se lee desde el pc `desde` antes de volver a escribirse. Una
+// muerte de ámbito solo puede podar un hueco que quede muerto a partir de ese pc: si el código lo
+// lee, la muerte no describe este cuerpo. El emisor acumula `muertes` entre métodos, así que una
+// muerte del método anterior cae aquí en medio del cuerpo y deja un `iload` sin asignar aunque el
+// local esté vivo (medido en `Mod000.java`, hueco 3 del `protegido` con la muerte del constructor).
+func seLeeDesde(instrs []jvmInstr, desde, idx int) bool {
+	for _, in := range instrs {
+		if in.pc < desde {
+			continue
+		}
+		lee, escribe := accesoLocal(in)
+		if lee == idx {
+			return true
+		}
+		if escribe == idx {
+			return false
+		}
+	}
+	return false
+}
+
 // fusiona mete `nuevo` en el estado de `pc` y dice si cambio. Un stack distinto de alto en el mismo
 // punto es un defecto del emisor, no del fuente, y se nombra.
 func fusiona(estados map[int]estadoFrame, pc int, nuevo estadoFrame, poda map[int][]int) (bool, error) {
@@ -1284,7 +1335,14 @@ func framesDeMetodo(code []byte, desc string, estatico bool, propio string, pool
 	estados := map[int]estadoFrame{0: inicial}
 	poda := map[int][]int{}
 	for _, m := range muertes {
-		poda[m.pc] = append(poda[m.pc], m.indices...)
+		// Los huecos vivos después del cierre no son del ámbito que se cerró: son los que el
+		// emisor arrastró del método anterior. Podarlos aquí convertiría un local asignado en
+		// `top` antes del `iload` que lo lee (ver `seLeeDesde`).
+		for _, idx := range m.indices {
+			if !seLeeDesde(instrs, m.pc, idx) {
+				poda[m.pc] = append(poda[m.pc], idx)
+			}
+		}
 	}
 	if len(poda[0]) > 0 {
 		estados[0] = podaHuecos(inicial, poda[0])
