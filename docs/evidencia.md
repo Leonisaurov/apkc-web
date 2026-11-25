@@ -348,6 +348,8 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
+| §346 | Persistencia versionada de paneles, migración de claves antiguas y z-order al conectar | [22-panels-flotantes.md](evidencia/22-panels-flotantes.md) |
+| §347 | Paneles flotantes para todos los módulos: geometría y persistencia en node; CDP, Droidloom, gate y publicación en verificación | [22-panels-flotantes.md](evidencia/22-panels-flotantes.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
@@ -361,6 +363,7 @@ idioma), `§327-328` (J5), `§329-333` (diagnóstico), `§334-339` (fidelidad) y
 (paneles). `§348` ya no está reservado: su medición está escrita en este índice. `§349+` queda
 libre. `§313` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
+`§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y
