@@ -521,27 +521,28 @@ analogía.
   `--linker go --compiler go` sin jars.
 - **No promete un apk incremental de instalación.** La v4 (`.idsig`) ya existe y es otra cosa.
 - **No promete reducir la firma.** Medido: en wasm no baja con la reutilización de entradas.
-- **Solo es reproducible desde el repo la parte nativa.** `banco/incremental.sh` y
+- **La medición 3 ya es reproducible desde el repo.** `banco/incremental.sh` y
   `banco/gen-proyecto-grande.py` son autocontenidos (generan su SDK mínimo de datos, su keystore y su
-  proyecto, y no versionan binarios). La medición 3 depende de `/tmp/opencode/inc-web/`: el test que
-  llama a `_build` dos veces, el guion de montaje y la copia parcheada del shim. Llevarlo al repo es
-  la tarea aparte del hallazgo de arriba.
+  proyecto, y no versionan binarios); la medición 3 corre con `sh banco/incremental-wasm.sh`, que
+  compila el test de `apkc/incremental_wasm_test.go` a wasm, monta el proyecto grande y el
+  `android.jar` en el hospedador y fija Go 1.24.0. El parche del shim está versionado, así que ya no
+  hay copia de trabajo de la que dependa la cifra.
 
 ## Hallazgo del harness: el shim no borra directorios como POSIX
 
 `shim/navegador-sim.js` implementaba `unlink` sobre un directorio borrando el nodo y dejando sus
 hijos huérfanos en el mapa; el segundo `RemoveAll("build/res")` dentro del mismo proceso rompía el
 build con `open build/res/layout/…: No such file or directory`. Es un defecto del hospedador
-simulado, no de `apkc`. Para poder medir la segunda pasada se parcheó **solo la copia de trabajo**
-(`/tmp/opencode/inc-web/shim/navegador-sim.js`): `unlink` de un directorio devuelve `EISDIR` y
-`rmdir` comprueba cualquier descendiente, no solo los hijos directos.
+simulado, no de `apkc`. El parche está versionado en `shim/navegador-sim.js:285-307` (commit
+`2420922`): `unlink` de un directorio devuelve `EISDIR` y `rmdir` comprueba cualquier descendiente,
+no solo los hijos directos. La falsación está en `shim/prueba-relink.js:14-134` (134 líneas; `:1-11`
+es solo el comentario): dos `RemoveAll` sobre el mismo árbol dejan el mapa coherente y `unlink`
+respeta `EISDIR`.
 
-- Reproducción: `tcr -c 2 -m 2G -r 400M -- bash /tmp/opencode/inc-web/correr-wasm.sh`, cambiando
-  antes la copia de `/tmp/opencode/inc-web/shim/navegador-sim.js` por el `shim/navegador-sim.js` del
-  repo (sin el parche); el segundo build del mismo árbol falla en el enlace de recursos.
-- Propuesta (tarea separada, no incluida aquí): llevar ese parche al repo con una prueba en `shim/`
-  que haga dos `RemoveAll` sobre el mismo árbol y compare. Mientras no se haga, la medición 3 no es
-  reproducible con el shim versionado y así se declara abajo.
+- Reproducción: `node shim/prueba-relink.js` imprime `prueba-relink: RemoveAll deja el árbol
+  coherente y unlink respeta EISDIR`.
+- `/tmp/opencode/inc-web/` ya no existe: el test que llama a `_build` dos veces por modo y el guion
+  de montaje están en `apkc/incremental_wasm_test.go` y `banco/incremental-wasm.sh`.
 
 ## Registro previsto en `docs/evidencia.md`
 

@@ -343,6 +343,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
+| §314 | **RESERVADA** — reserva de sesión del incremental wasm (I4/I5): `§311` fidelidad, `§312` Go en disco, `§313` bucle de sesión; aún sin cuerpo | — (sin medición) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
