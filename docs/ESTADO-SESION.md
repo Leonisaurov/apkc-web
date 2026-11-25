@@ -110,8 +110,10 @@ y studio quedan con `rev-list --count @{u}..HEAD` a cero.
   publicado**. `empaquetar no es publicar` (regla 11).
 - Fidelidad 1:1 del emulador (§334-§339) y separación en su mitad CDP/gate: **en verificación** en
   `docs/plan.md:66-67`. D5 y la fila 8 de D6 siguen `incierto` en `docs/plan.md:57`.
-- Ninguna de las tres APK reales se da por funcionando: los layouts siguen siendo los falsos de §354
-  y el bloqueo compartido es `ArchTaskExecutor.getInstance usa el opcode 0x1d` (§355).
+- Ninguna de las tres APK reales se da por funcionando: los layouts siguen siendo los falsos de §354,
+  re-medidos tras `§358` (3 nodos, `res/A1.xml` / `abc_action_bar_title_item.xml`, 414/355/282 pasos);
+  el bloqueo compartido de `§355` (`ArchTaskExecutor.getInstance usa el opcode 0x1d`) quedó resuelto
+  en `§358` (`docs/evidencia.md:365`), y los errores actuales son de stubs, pendientes de Fase D.
 
 ## 4. Frente en marcha al cortar: §358 cerrado; C (§359) y B (§360) sin implementar
 
