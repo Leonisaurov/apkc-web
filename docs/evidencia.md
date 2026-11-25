@@ -366,8 +366,9 @@ añadidas después (`§313`, `§314`, `§317`, `§348`) se sitúan en el bloque 
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
 `§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra),
-`§327-328` (J5), `§329-333` (diagnóstico), `§334-339` (fidelidad) y `§340-347`
-(paneles). `§348` ya no está reservado: su medición está escrita en este índice. `§349+` queda
+`§327-328` (J5), `§329-333` (diagnóstico) y `§340-347` (paneles). `§334-339` ya no está
+reservado: sus mediciones están escritas en este índice. `§348` ya no está reservado: su medición
+está escrita en este índice. `§349+` queda
 libre. `§313` ya no está reservado: su medición está escrita en este índice.
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.

@@ -181,7 +181,7 @@ superproyecto `6ca2341 fix(preview): refluye las filas horizontales que desborda
 
 ## 337. F3: capas y recorte
 
-`vista-previa.js:570-573` conserva `ctx.save()/beginPath()/rect(marcoRect)/clip()`. Se añadió
+`vista-previa.js:591-594` conserva `ctx.save()/beginPath()/rect(marcoRect)/clip()`. Se añadió
 `recortaACaja(rect, caja)` (puro, exportado) y `colocarCampoTexto()` lo usa para que el `<input>` del
 EditText no se vea nunca fuera del canvas. Las aseveraciones de node son propias:
 
@@ -207,7 +207,7 @@ Commit del submódulo: `a72965d fix(previa): recorta la capa del EditText al can
 `caret-color: #30323a` y `border: 1px solid transparent`, y añade
 `.previa-campo-texto:focus` para que la regla genérica `input:focus { border-color: var(--foco) }` no
 reintroduzca `#007fd4`. Se mantienen `previa-panel.js` (borrado de `textoDinamico`) y
-`vista-previa.js:573-587` (subrayado y texto en reposo).
+`vista-previa.js:628-635` (subrayado) y `:667,689-697` (texto en reposo).
 
 `prueba-pestana.js` devuelve ahora los cuatro estilos computados, normalizados con
 `.replace(/\s/g, "")` antes de compararlos con los literales exactos del plan:
