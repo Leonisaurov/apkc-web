@@ -1,4 +1,4 @@
-# Evidencia — §140-§182
+# Evidencia — §140-§182, §320
 
 ## 140. Abrir la pestaña en Brave Nightly desde Termux: el `BOOTCLASSPATH` que `am` no trae
 
@@ -1262,4 +1262,25 @@ bytes y verificada`, build de la pestaña verificado por apksigner, zipalign, zi
 `wasm` rc=0 con `PASS`; el fuzzing diferencial de 20 casos contra javac `--release 8` y d8,
 `ok ... 39.378s`. No se anuncia «0 pendientes»: la firma y ART siguen siendo fronteras escritas en
 §178 y §181.
+
+## 320. DEPS empaquetado en el sitio, todavía sin publicar
+
+Medido el 2026-11-24 (F2). El paquete de dependencias generado fuera del repo se copia al árbol del
+sitio antes de calcular `VERSION`, de modo que un cambio en el índice o en los artefactos cambie la
+huella del service worker.
+
+```sh
+node studio/deps-index-local.mjs
+DEPS_DIR=… sh tools/sitio.sh
+cd studio && SITIO_DIR=../sitio node prueba-sitio.js
+```
+
+**Resultado**: el índice se generó con 1 artefacto (205 B, SHA `7dfda8807e76…`); `tools/sitio.sh`
+empaquetó 70 ficheros y `VERSION` cambió de `5c81ac704338` a `de190ccf8ee5` (con el wasm exacto);
+`prueba-sitio.js` dio `13 comprobaciones bien, 0 mal`, incluidas índice 200, artefacto con SHA y
+cero peticiones ajenas. Cuatro falsaciones de traversal (`deps/../../shadow.txt`, `/etc/passwd`,
+barras invertidas y symlink) dan rc 1 con mensaje explícito.
+
+**Frontera**: nada publicado; F3 queda pendiente de autorización; `e2e.sh` sigue en verificación;
+sin gate, chromium ni red.
 

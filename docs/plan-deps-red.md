@@ -275,14 +275,14 @@ hallazgos confirmados: atacó la ruta de salida, el duplicado, la entrada `lib/x
 rebuild incremental al cambiar el `.so` y la regresión de I3/I4/I5. **Re-medido en esta sesión**:
 `cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run
 'TestPreviewRecursosDeAarDrawableAnimYFont|TestPreviewVeElDrawableXmlDeLaDependencia|TestDedupeDeValuesPorClave|TestDedupeDeStyleablesPorClave'
--v .` da cuatro `--- PASS` y `ok ... 1.246s`. Se cierran así, re-medidas aquí, las dos fronteras
+-v .` da cuatro `--- PASS` y `ok ... 1.372s`. Se cierran así, re-medidas aquí, las dos fronteras
 declaradas que ya tenían medición en §233 (tipos de recurso `drawable` XML, `anim`, `font` y `values`)
 y §256/§280 (dos AAR con la misma clave `values`/`styleable`). Sigue **viva** la frontera del
 `R.txt` del AAR: no se fusiona, porque `R.java` se regenera del enlace (medido con un campo
 fantasma que solo está en el `R.txt` del AAR). La del `AndroidManifest.xml` ya tiene código en F1
-y `TestManifiestoDeAar` en verde, pero su evidencia está reservada en §319 y la marca de
+y `TestManifiestoDeAar` en verde, pero su evidencia está medida en §319 y la marca de
 extracción `e3` sigue **incierta** para I3/I4/I5: el test de rebuild no la demostró. Evidencia:
-§216 y la re-medición reservada en §318 de `docs/evidencia.md`.
+§216 y la re-medición medida en §318 de `docs/evidencia.md`.
 
 Criterios de abandono comunes: si el importador cubre el caso de uso real (traer
 una librería que el usuario ya tiene), las fases 3 y 4 mueren; si la cuota de

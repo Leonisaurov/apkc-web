@@ -343,8 +343,9 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
-| §318 | Reservada a esta sesión (F0, re-medición de Fase K: recursos de AAR y dedupe de claves); el cuerpo lo escribe el documentador con la salida del test | (reservada) |
-| §319 | Reservada a esta sesión (F1, manifiesto del AAR y bump `e3`); el efecto del bump en I3/I4/I5 queda **incierto** hasta que lo demuestre un test de rebuild, y el cuerpo lo escribe el documentador | (reservada) |
+| §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
+| §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
@@ -354,7 +355,7 @@ añadidas después (`§313`, `§317`) se sitúan en el bloque de su fichero, no 
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
 `§311` (fidelidad), `§314-316` (incremental), `§318-325` (dependencias e infra), `§326` (selector de
-idioma) y `§327+` (J5). `§313` ya no está reservado: su medición está escrita en este índice.
+idioma) y `§327-328` (J5). `§329+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

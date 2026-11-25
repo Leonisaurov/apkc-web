@@ -786,3 +786,21 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   siguiente no. `TestIndiceDelJarSeReutilizaYSeInvalida` (`jarindice_test.go:151`, 416 frente a 414)
   falla igual en árbol limpio y no es de este cambio. Frontera: sin CDP ni gate; el timeline real en
   navegador y el reclamo del «40» siguen abiertos, no se da por cerrado el `40`.
+- §318: Fase K re-medida sobre el árbol final (F0): cuatro `--- PASS` (más subtests), `ok
+  github.com/ajinasokan/apkc 1.372s`, 0 saltados, con el comando `tcr -c 2 -m 1536M -r 256M -- go
+  test -count=1 -run 'TestPreviewRecursosDeAarDrawableAnimYFont|TestPreviewVeElDrawableXmlDeLaDependencia|TestDedupeDeValuesPorClave|TestDedupeDeStyleablesPorClave' -v .`.
+  Quedan cerradas, re-medidas, las dos fronteras de §233 y §256/§280: tipos de recurso de §216
+  (`drawable` XML, `anim`, `font` y `values`) y claves `values`/`styleable` duplicadas entre AAR.
+  Frontera viva: el `R.txt` no se fusiona (`R.java` se regenera del enlace); sin gate, chromium, red
+  ni publicación.
+- §319: manifiesto del AAR (F1): fusión de hijos de `<manifest>`/`<application>`, prioridad proyecto
+  > isla > AAR con `LogW` al colisionar, rechazo explícito de `tools:`, y `R.txt` no fusionado;
+  `PASS`, `ok github.com/ajinasokan/apkc 0.764s`, con `apksigner`/`zipalign`/`unzip` presentes y rc 0.
+  Frontera honesta: `versionDeExtraccionAar = "e3"` queda **incierto** para I3/I4/I5 —ningún test
+  demuestra la invalidación de cachés—; sin gate, chromium, red ni publicación.
+- §320: DEPS empaquetado en el sitio (F2): índice con 1 artefacto (205 B, SHA `7dfda8807e76…`),
+  `tools/sitio.sh` con 70 ficheros y `VERSION` de `5c81ac704338` a `de190ccf8ee5` con el wasm exacto;
+  `prueba-sitio.js` dio `13 comprobaciones bien, 0 mal` (índice 200, artefacto con SHA, cero
+  peticiones ajenas) y cuatro falsaciones de traversal (`deps/../../shadow.txt`, `/etc/passwd`,
+  barras invertidas y symlink) dieron rc 1 con mensaje explícito. Frontera: DEPS **no publicado**, F3
+  pendiente de autorización; `e2e.sh` sigue **en verificación**; sin gate, chromium ni red.

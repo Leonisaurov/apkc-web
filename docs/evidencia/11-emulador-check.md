@@ -1,4 +1,4 @@
-# Evidencia — §205-§240, §317
+# Evidencia — §205-§240, §317-§319
 
 ## 205. E1 del plan de emulación: ciclo de vida y navegación entre actividades propias
 
@@ -1399,4 +1399,39 @@ quedó configurado según la skill `droidloom-launch`.
 **Fronteras de este `§`**: fidelidad píxel a píxel aparato↔preview sin medir; el adaptador Bluetooth
 está apagado (dato de la medición 5, no fallo); sin gate, chromium ni publicación; `e2e.sh` sigue en
 verificación.
+
+## 318. Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves
+
+Medido el 2026-11-24 sobre el árbol final (F0, re-medición de Fase K). Se cierran, re-medidas aquí,
+las dos fronteras que ya tenían medición en §233 y §256/§280: los tipos de recurso que faltaban en
+§216 (`drawable` XML, `anim`, `font` y `values`) y dos AAR con la misma clave `values`/`styleable`.
+
+```sh
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestPreviewRecursosDeAarDrawableAnimYFont|TestPreviewVeElDrawableXmlDeLaDependencia|TestDedupeDeValuesPorClave|TestDedupeDeStyleablesPorClave' -v .
+```
+
+**Resultado**: cuatro `--- PASS` (más subtests), `ok github.com/ajinasokan/apkc 1.372s`, 0 saltados.
+
+**Fronteras**: el `R.txt` del AAR sigue sin fusionarse: `R.java` se regenera del enlace (medido con
+un campo fantasma que solo está en el `R.txt` del AAR). La fusión del manifiesto se mide en §319 y la
+marca de extracción `e3` queda incierta para I3/I4/I5. Sin gate, chromium, red ni publicación: la
+medición es nativa.
+
+## 319. Manifiesto del AAR: fusión de hijos, prioridad y rechazo de `tools:`
+
+Medido el 2026-11-24 (F1). El `AndroidManifest.xml` extraído de cada AAR se fusiona con el del
+proyecto: se juntan los hijos de `<manifest>` y de `<application>`, con prioridad proyecto > isla >
+AAR y un `LogW` cuando colisionan. Una directiva `tools:` se rechaza por su nombre, en vez de
+escribir un manifiesto que diga algo que no se aplicó. El `R.txt` no se fusiona: `R.java` se regenera
+del enlace.
+
+```sh
+cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run 'TestAarEnJarAportaRecursosYNativos|TestManifiestoDeAar|TestManifiestoDeAarRechazaTools|TestApkConDosAarsLlevaUnSoloSo|TestCompilarEnGoInvalidaElReusoSiCambiaUnaDependencia' -v .
+```
+
+**Resultado**: `PASS`, `ok github.com/ajinasokan/apkc 0.764s`, con `apksigner`, `zipalign` y `unzip`
+presentes y rc 0.
+
+**Frontera incierta**: `versionDeExtraccionAar = "e3"` queda **incierto** para I3/I4/I5: ningún test
+demuestra la invalidación de cachés; no se afirma. Sin gate, chromium, red ni publicación.
 
