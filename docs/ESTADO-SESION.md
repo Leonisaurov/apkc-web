@@ -48,7 +48,7 @@ autorizado está ejecutado: padre y studio tienen `rev-list --count @{u}..HEAD` 
 - **Fidelidad F0-F4 (§334-§339)**: medición propia en node y Go, `gofmt -l` sin salida, siete
   `node --check` mudos y `prueba: todo en orden`, con los focales `TestElPreviewPintaDosNotas`,
   `TestElPreviewPintaUnaListaConSuAdaptador` y los de sesión en verde (`rc=0`).
-  `docs/evidencia/21-emulador-fiel.md:236-262`. La mitad CDP y Droidloom sigue en verificación
+  `docs/evidencia/21-emulador-fiel.md:238-264`. La mitad CDP y Droidloom sigue en verificación
   (`docs/plan.md:66`).
 - **Paneles flotantes (§340-§347)**: los seis commits del submódulo (`19d92b9`, `e31b073`, `08e747b`,
   `c0727b6`, `c2215f2`, `b0d16c9`) y la persistencia (`12b98f9`); sobre el árbol final, tres
