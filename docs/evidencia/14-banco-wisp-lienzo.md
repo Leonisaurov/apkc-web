@@ -1778,11 +1778,29 @@ sh tools/gate-local.sh
 ```text
 e2e: 1 problemas
 FALLO: la pestaña con apkc.wasm
-TypeError: Cannot read properties of null (reading 'buffer') en proyecto.js:99 desde leerZip :146, bloque 12c (--inc)
+253 comprobaciones bien, 3 mal
 ```
 
+Salida literal del gate (`~/.cache/apkc-web/e2e-final/e2e.log:31,43,52`, fichero de las 12:23):
+`FALLO: la pestaña con apkc.wasm`, `253 comprobaciones bien, 3 mal` y `e2e: 1 problemas`. En ese
+fichero **no** aparece `TypeError`, `buffer`, `proyecto.js` ni `inc`:
+`grep -n 'TypeError\|buffer\|proyecto\.js\|inc' ~/.cache/apkc-web/e2e-final/e2e.log` da sin salida.
+
+El `TypeError: Cannot read properties of null (reading 'buffer')`, con la pila en
+`proyecto.js:99:29` y `leerZip` en `proyecto.js:146:17`, es una reproducción **posterior** al gate:
+`~/.cache/apkc-web/tmp/studio-pestana.log:229-231`, de las 16:44 del 2026-11-24, y
+`~/.cache/apkc-web/sonda-edit-text/panel-fix.log:203`, de las 13:37 del mismo día; las fechas salen
+de `ls --time-style=long-iso` sobre ambos ficheros y el hallazgo de
+`grep -rn "Cannot read properties of null" ~/.cache/apkc-web/tmp/`. Tampoco aparece la atribución
+`bloque 12c (--inc)` en esos tres ficheros (búsquedas con `grep` sobre `e2e.log`,
+`studio-pestana.log` y `panel-fix.log`).
+
 Prueba focal posterior: 12c en verde, `256 comprobaciones bien, 0 mal` y rc=0 en dos ejecuciones
-consecutivas del builder del WISP (`~/.cache/apkc-web/tmp/pestana-focal-final.log`, `~/.cache/apkc-web/tmp/pestana-focal-final2.log`). El gate
+consecutivas del builder del WISP (`~/.cache/apkc-web/tmp/pestana-focal-final.log:283` y
+`~/.cache/apkc-web/tmp/pestana-focal-final2.log:283`, de las 17:24 y 17:27). El commit `f088939`
+del submódulo `studio/` —`test(pestana): espera el apk y actualiza el contrato WISP del reposo`—
+se hizo a las 17:30:46, **después** de esas dos pruebas focales
+(`git -C studio show --format='%H %ci %s' --no-patch f088939`). El gate
 completo no se ha repetido: **no** se da `e2e` por verde.
 
 **Frontera de `§299`.** Sin CDP final, sin segundo gate autorizado, sin push, CI ni publicación.
