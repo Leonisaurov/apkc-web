@@ -50,6 +50,10 @@ Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; 
 como registro histórico. Guardia ejecutada aquí: `git -C studio rev-parse HEAD:apkc-emulador` →
 `c4484424140b13baef66d5d72f54bc4b2ec886cd` (y `git -C studio ls-tree HEAD apkc-emulador` →
 `160000 commit c4484424140b13baef66d5d72f54bc4b2ec886cd apkc-emulador`).
+Actualización (lote integrado, commit `1e1bb03` en `web`, `d592102` en `studio`): el pin pasó a
+`6a207cdc7204256bb6fc2da2701320dfad603056`, guardia ejecutada aquí con
+`git -C studio rev-parse HEAD:apkc-emulador`. La nota de la familia de red queda como registro
+histórico.
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)
 
@@ -162,11 +166,12 @@ Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El pin vigente de la regla 14 es `c4484424140b13baef66d5d72f54bc4b2ec886cd`
-(`git -C studio rev-parse HEAD:apkc-emulador`, ejecutado y anotado en el apartado 1), subido en el
-mismo commit del emulador al integrar la familia de red. Actualización (familia de red, commit
-`3dbf574`): el pin pasó a `c448442…`; la nota de §368 queda como registro histórico. El gitlink
-anidado de `studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
+El pin vigente de la regla 14 es `6a207cdc7204256bb6fc2da2701320dfad603056`
+(`git -C studio rev-parse HEAD:apkc-emulador`, ejecutado y anotado en el apartado 1), vigente tras
+integrar el lote de lifecycle, `<clinit>`, nativos y ROM (`1e1bb03` en `web`, `d592102` en `studio`).
+Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de §368 queda
+como registro histórico. Actualización (lote integrado, commit `1e1bb03`): el pin pasó a `6a207cd…`. El gitlink anidado de
+`studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
 push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el
 recuento de `ahead` lo da `git status -sb` al leer este fichero (antes del commit documental de
 §368 era `[ahead 6]` y sube con cada commit local).
