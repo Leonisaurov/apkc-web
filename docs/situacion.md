@@ -980,8 +980,20 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   JSON del emulador. `sh tools/correr.sh wisp` rc 0, `wisp-externo` sin variable rc 2,
   `cd studio && node prueba.js` → «prueba: todo en orden», test
   `TestRelayPropioAceptadoPorComparacionExacta` → PASS y suite `205.713s`. El relay Go de
-  `tools/wispd/` está aprobado pero no desplegado: sin WSS en funcionamiento, sin petición externa
-  mientras el módulo está apagado, sin CDP, gate externo ni publicación.
+  `tools/wispd/` estaba aprobado al medir, sin petición externa con el módulo apagado, sin CDP, gate
+  externo ni publicación. Actualización del 2026-11-25: el relay sí se desplegó y se verificó en
+  remoto (`§374`).
+  `docs/evidencia/15-apps-reales.md`.
+- §374: primer relay WISP propio desplegado y verificado en remoto (nota fechada del 2026-11-25):
+  VM Oracle Ubuntu 22.04.5 en `163.192.151.24`, 80/443 persistidos con iptables, binario `~/wispd`
+  con SHA `0c7f334b…` desde `tools/wispd/` (commits `a7ac8d2`, `a836010`, `3cc6ee7`), certificado
+  de Let's Encrypt para `wisp.dolci-vita.link` hasta `2027-02-23` con `certbot.timer` activo y
+  `wispd.service` `active`/`enabled` (`MemoryMax=640M`, capacidades conservadas,
+  `debug.SetMemoryLimit(512<<20)` como único mecanismo de memoria). Siete resultados Wisp v1:
+  handshake de 9 bytes, dos orígenes rechazados con `403`, tres CONNECT cerrados (`0x41`, `0x41`,
+  `0x48`) y `repo1.maven.org:443` sin `CLOSE` en 6 s; literal IP con `0x41` aceptado como
+  comportamiento válido. Módulo WISP apagado y sin integrar en la navegación, con
+  `prueba-sitio.js`/CDP pendientes de autorización y sin gate con variable externa ni publicación.
   `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una

@@ -1052,6 +1052,105 @@ sh tools/correr.sh test          # ok … 205.713s
 seis relays de terceros siguen en `RelaysWISP()` (`apkc/depswisp.go:63`),
 `PermitirRelaysPersonalizados` no se activa y no hay campo nuevo en el JSON del emulador.
 
-**Frontera.** El relay Go de `tools/wispd/` está aprobado para despliegue, pero **aún no está
-desplegado**: no se afirma que WSS funcione. Sin petición externa mientras el módulo está apagado;
-el gate `wisp-externo` se omite sin su variable; sin CDP, red ni publicación.
+**Frontera de la medición original (2026-11-25).** Las cifras de gates de arriba se conservan tal
+como se midieron: el relay Go de `tools/wispd/` estaba aprobado para despliegue y no se afirmaba
+que WSS funcionara, sin petición externa mientras el módulo estaba apagado, con el gate
+`wisp-externo` omitido sin su variable y sin CDP, red ni publicación.
+
+**Nota del 2026-11-25 (fechada, posterior a la medición).** El relay sí se desplegó en la VM
+`163.192.151.24` y se verificó en remoto; el despliegue y sus siete resultados están en `§374`. La
+frontera actual es otra: el módulo WISP de la página sigue apagado, el relay no está integrado en la
+navegación y `prueba-sitio.js`/CDP quedan pendientes de autorización.
+
+---
+
+## 374. Primer relay WISP propio desplegado y verificado en remoto
+
+Nota del 2026-11-25, posterior a `§373`: el relay Go de `tools/wispd/` pasó de aprobado a
+desplegado. Las cifras del `§373` se conservan tal como se publicaron; aquí se registra el
+despliegue y su verificación en remoto. No se ha corrido gate con variable externa, CDP ni
+`prueba-sitio.js`, y no hay publicación: la red se usó solo para desplegar y medir el relay.
+
+### Despliegue
+
+La VM es Oracle, Ubuntu 22.04.5, con IP `163.192.151.24`. Los puertos 80 y 443 están abiertos y
+persistidos con iptables: `4 dpt:22 ACCEPT`, `5 dpt:443`, `6 dpt:80` y `7 REJECT`. SSH sigue intacto.
+
+```sh
+iptables -S
+```
+
+El binario subido a `~/wispd` tiene SHA256
+`0c7f334b9ae0d1317baf96c7a39b225f064be5331b1b2c9c7be8760ccebbbeed` y está compilado desde
+`tools/wispd/`, integrado en `web` en los commits `a7ac8d2`, `a836010` y `3cc6ee7`.
+
+```sh
+sha256sum ~/wispd
+git show --stat --oneline a7ac8d2 a836010 3cc6ee7
+```
+
+El certificado es de Let's Encrypt para `wisp.dolci-vita.link`, con correo `leonisaurox@proton.me`,
+`notAfter=2027-02-23` y `certbot.timer` activo (89 días de validez al medir).
+
+```sh
+openssl x509 -in /etc/letsencrypt/live/wisp.dolci-vita.link/cert.pem -noout -enddate
+systemctl status certbot.timer
+```
+
+El servicio `wispd.service` está `active` y `enabled`: `ExecStart=/home/ubuntu/wispd -addr :443
+-cert …/fullchain.pem -key …/privkey.pem`, `Restart=on-failure`, `MemoryMax=640M`, `User=ubuntu` y
+`AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_DAC_READ_SEARCH`. La capacidad se conserva por una
+decisión consciente: certbot recrea la clave como `root:root 600` y sustituir la capacidad exigiría
+un deploy-hook. `debug.SetMemoryLimit(512<<20)` en `main.go` es el único mecanismo de memoria; el
+`Environment=GOMEMLIMIT` de la unidad se está retirando.
+
+```sh
+systemctl status wispd.service
+systemctl cat wispd.service
+```
+
+Desde el escritorio, `curl https://wisp.dolci-vita.link/wisp/` → `403` al no llevar `Origin`.
+Desde la VM, `curl -Iv` da `SSL certificate verify ok`, TLS 1.3 y ALPN `h2`.
+
+```sh
+curl -sS -o /dev/null -w '%{http_code}\n' https://wisp.dolci-vita.link/wisp/
+curl -Iv https://wisp.dolci-vita.link/wisp/
+```
+
+No hay `-dev`; los seis relays de terceros siguen intactos y el módulo WISP de la página sigue
+apagado.
+
+### Verificación Wisp v1 en remoto
+
+Cliente Go de sonda, con `GOPROXY=off`, contra `wss://wisp.dolci-vita.link/wisp/`. El literal del
+programa de sonda no se conserva en los datos recibidos: su forma canónica es la de un `go run` con
+el módulo resuelto sin red, y las tramas que siguen se transcriben tal como se observaron, sin
+inventar salidas.
+
+```sh
+GOPROXY=off go run <sonda Wisp v1>
+```
+
+| # | Sonda | Resultado observado | Lectura |
+| --- | --- | --- | --- |
+| 1 | primer mensaje del handshake | 9 bytes `030000000040000000` | `tipo=0x03`, `streamID=0`, `bufferRemaining=64` |
+| 2 | `Origin: https://mal.example` | `403` | origen ajeno, rechazado |
+| 3 | `Origin: null` | `403` | origen `null`, rechazado |
+| 4 | CONNECT `127.0.0.1:443` | `040100000041` | `CLOSE`, motivo `0x41`, antes de DATA |
+| 5 | CONNECT `repo1.maven.org:80` | `040200000041` | `CLOSE`, motivo `0x41` |
+| 6 | CONNECT `example.com:443` | `040700000048` | `CLOSE`, motivo `0x48` |
+| 7 | CONNECT `repo1.maven.org:443` | sin `CLOSE` en 6 s | flujo aceptado, sin tráfico HTTP |
+
+Los rechazos de origen son falsificables con `curl`, así que no son autenticación:
+
+```sh
+curl -i -H 'Origin: https://mal.example' https://wisp.dolci-vita.link/wisp/  # 403
+curl -i -H 'Origin: null' https://wisp.dolci-vita.link/wisp/                 # 403
+```
+
+**Discrepancia aceptada.** Un literal IP cierra con `0x41` (información inválida), no con `0x48`
+(destino bloqueado). Se acepta como comportamiento válido del relay, no como fallo de seguridad.
+
+**Frontera.** El relay está desplegado y verificado en remoto, pero no se ha integrado en la
+navegación de la página: el módulo WISP sigue apagado. `prueba-sitio.js`/CDP siguen pendientes de
+autorización; sin gate con variable externa, red adicional ni publicación.
