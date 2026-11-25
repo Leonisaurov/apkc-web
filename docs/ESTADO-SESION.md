@@ -10,18 +10,18 @@ Este fichero no es una medición nueva: es el índice operativo de lo que ya est
 Comandos ejecutados sobre `/home/leonisauro/Develop/Go/apkc-web` (padre) y sus submódulos:
 
 ```
-git rev-parse --short HEAD                  → 3a5f557
+git rev-parse --short HEAD                  → 3a5f557 (al cortar; este commit es b038662, hoy ahead 1)
 git status -sb                              → ## web...origin/web
-git rev-list --count @{u}..HEAD             → 0
+git rev-list --count @{u}..HEAD             → 0 (al cortar; hoy 1)
 git ls-tree HEAD studio                     → 160000 commit 4a17f84	studio
-git ls-tree HEAD apkc-emulador              → 160000 commit 563e991de1fac3c863e5278483c2ff745d57bbb2	apkc-emulador
+git ls-tree HEAD apkc-emulador              → (vacío; el padre no guarda pin espejo, regla 14)
 git -C studio rev-parse --short HEAD        → 4a17f84
 git -C studio status -sb                    → ## emulador-sin-topes...origin/emulador-sin-topes
 git -C studio rev-list --count @{u}..HEAD   → 0
-git -C studio ls-tree HEAD apkc-emulador    → 160000 commit 563e991de1fac3c863e5278483c2ff745d57bbb2	apkc-emulador
-git -C apkc-emulador rev-parse HEAD         → 563e991de1fac3c863e5278483c2ff745d57bbb2
-git -C apkc-emulador status -sb             → ## HEAD (no branch)
-git -C apkc-emulador rev-list --count @{u}..HEAD → fatal: HEAD does not point to a branch (rc 128)
+git -C studio ls-tree HEAD apkc-emulador    → 160000 commit 4117a8f6d4cdbab896e82b6f89b29a2cc00d54f6 apkc-emulador
+git -C apkc-emulador rev-parse HEAD         → (histórico §356/§357: 563e991…; hoy no aplica, directorio retirado)
+git -C apkc-emulador status -sb             → (histórico §356/§357: ## HEAD (no branch))
+git -C apkc-emulador rev-list --count @{u}..HEAD → (histórico: fatal … rc 128; hoy no aplica)
 git -C studio rev-parse --short HEAD:apkc-emulador → 4117a8f
 ```
 
