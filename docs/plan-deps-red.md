@@ -326,8 +326,8 @@ hot swap** (§249, `9a61a23`). Quedan abiertas las **Actions por tag**, pendient
 - Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`). Re-medida en
   esta sesión con el comando del párrafo de Fase K (cuatro `--- PASS`, `ok`): cerradas, por re-medición
   de §233/§256/§280, las fronteras de tipos de recurso y de `values` duplicados entre AAR; sigue viva
-  la del `R.txt`, que no se fusiona. La del manifiesto tiene código y test en F1, evidencia reservada
-  §319 y marca `e3` incierta para I3/I4/I5.
+  la del `R.txt`, que no se fusiona. La del manifiesto tiene código y test en F1, evidencia cerrada
+  en §319 y marca `e3` incierta para I3/I4/I5.
 - Opción A (importar desde disco u OPFS) es la vía.
 - Vendorizar un catálogo curado queda detrás.
 - WISP como módulo opcional opt-in en implementación (§254); el modo por defecto sigue sin
