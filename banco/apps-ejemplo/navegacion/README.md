@@ -1,0 +1,3 @@
+Con `$JAR=$(sh tools/entorno.sh jar)`, `$KS` creado por `apkc debug-keystore` y `$APKC` compilado, genera el APK desde esta carpeta: `"$APKC" build --linker go --compiler go --android-jar "$JAR" --sdk-version 34 --codename 14 --keystore "$KS"`.
+Binarios desde `apkc/`: `go build -o "$APKC" .` y `GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$APKC_WASM" .` (el wasm es el que corre la pestaña).
+Pestaña: desde esta carpeta, `zip -0 -r "$PREFIX/tmp/navegacion.zip" AndroidManifest.xml README.md res src -x '*/R.java'` y en el estudio Inicio → Importar proyecto; `"$APKC" preview --pulsar id/abrir --pulsar id/volver build/app.apk` imprime tres pantallas y «Pulsos: 1».
