@@ -10,7 +10,7 @@ B-G se ejecutan sobre el módulo separado.
 **Numeración al reanudar.** La numeración `§350`-`§357` que propone el plan original **no es la del
 corpus**: al registrar las mediciones se usaron `§354` (medición base, cuatro SHA y los tres errores
 de dex) y `§355` (Fase A, ya hecha), y `§350`-`§352` y `§356` están ocupados por la separación. El
-frente del pin único del emulador consume `§357`, así que **al reanudar se usan `§358` opcode (en curso), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G**, en ese orden; `§366` queda reservado a la línea base del cuarto APK. `§353` no se reutiliza para Fase C: sigue siendo reserva vacía de F5 en `docs/evidencia.md:389`.
+frente del pin único del emulador consume `§357`, así que **al reanudar se usan `§358` opcode (ya medido y registrado), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G**, en ese orden; `§366` ya está medido y registrado como línea base del cuarto APK. `§353` no se reutiliza para Fase C: sigue siendo reserva vacía de F5 en `docs/evidencia.md:389`.
 No se rehace Fase A: sus tuplas byte a byte y su frontera (`pasos
 292/286/207`, bloqueo `ArchTaskExecutor … opcode 0x1d`) están en `docs/evidencia/15-apps-reales.md:71-177`.
 
