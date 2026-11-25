@@ -4,6 +4,7 @@ package main
 // proveedor del wasm se sustituye por llamadas directas a ejecutaOrden, que es puro y no sale.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -243,6 +244,150 @@ func mustLinea(t *testing.T, s *sesionPreview, id string, argv []string) string 
 		t.Fatalf("la orden %s falló con %d", id, codigo)
 	}
 	return linea
+}
+
+// Helpers del hot swap de recursos --------------------------------------------------------------
+
+// apkDelContadorConLayout arma el apk del contador con el main.xml que se le dé, sin cambiar el
+// manifiesto ni la tabla: es el segundo build que el usuario obtiene al editar solo el layout.
+func apkDelContadorConLayout(t *testing.T, layout documentoAXML, fuentes ...fuenteJava) []byte {
+	t.Helper()
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	layoutBytes, err := escribeAXML(layout)
+	if err != nil {
+		t.Fatalf("el layout: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	return zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"res/layout/main.xml": layoutBytes,
+		"classes.dex":         dexDeFuentes(t, fuentes...),
+	})
+}
+
+// ordenSwapRecursos escribe el dex y el apk nuevos donde el parser puede leerlos y devuelve una
+// SOLA orden con las dos banderas: el código y la interfaz viajan juntos, como en la pestaña.
+func ordenSwapRecursos(t *testing.T, dex, apk []byte) []string {
+	t.Helper()
+	dir := t.TempDir()
+	rutaDex := filepath.Join(dir, "nuevo.dex")
+	if err := os.WriteFile(rutaDex, dex, 0o644); err != nil {
+		t.Fatalf("el dex nuevo no se escribió: %v", err)
+	}
+	rutaApk := filepath.Join(dir, "nuevo.apk")
+	if err := os.WriteFile(rutaApk, apk, 0o644); err != nil {
+		t.Fatalf("el apk nuevo no se escribió: %v", err)
+	}
+	return []string{
+		"--intercambiar", claseListenerContador + "/onClick(Landroid/view/View;)V=" + rutaDex,
+		"--intercambiar-recursos", rutaApk,
+	}
+}
+
+// nodoPublicado es el trozo del JSON que el test lee del layout publicado.
+type nodoPublicado struct {
+	ID    string          `json:"id"`
+	IDRef string          `json:"idRef"`
+	Texto string          `json:"texto"`
+	Hijos []nodoPublicado `json:"hijos"`
+}
+
+func raizPublicada(t *testing.T, linea string) nodoPublicado {
+	t.Helper()
+	var modelo struct {
+		Raiz nodoPublicado `json:"raiz"`
+	}
+	if err := json.Unmarshal([]byte(linea), &modelo); err != nil {
+		t.Fatalf("el modelo no se lee: %v", err)
+	}
+	return modelo.Raiz
+}
+
+func nodoPorIDRef(raiz nodoPublicado, idRef string) *nodoPublicado {
+	if raiz.IDRef == idRef {
+		return &raiz
+	}
+	for i := range raiz.Hijos {
+		if n := nodoPorIDRef(raiz.Hijos[i], idRef); n != nil {
+			return n
+		}
+	}
+	return nil
+}
+
+// TestElHotSwapDeRecursosRepintaElLayoutSinReiniciar es la falsación del defecto reportado: sin
+// entregar el apk nuevo a la sesión viva, `modeloConResultado` re-parseaba SIEMPRE el main.xml de
+// arranque. Aquí el segundo build cambia el id y el texto del TextView; el modelo tiene que publicar
+// el nuevo y conservar el contador de los dos clics previos y el id de la orden.
+func TestElHotSwapDeRecursosRepintaElLayoutSinReiniciar(t *testing.T) {
+	s := sesionDelContador(t)
+
+	// estado vivo antes del swap: dos clics con el sumador +1 del arranque
+	for n := 0; n < 2; n++ {
+		entrega(t, s, fmt.Sprintf("clic-%d", n+1), []string{"--pulsar", "id/pulsar"})
+	}
+	if got := len(s.res.Pulsaciones); got != 2 {
+		t.Fatalf("Pulsaciones = %v y se esperaban 2 antes del swap", s.res.Pulsaciones)
+	}
+	antes := raizPublicada(t, mustLinea(t, s, "antes", []string{}))
+	if n := nodoPorIDRef(antes, "0x7f010001"); n == nil || n.Texto != "Pulsos: 0" {
+		t.Fatalf("la pantalla de arranque no trae el TextView original: %+v", antes.Hijos)
+	}
+
+	// segundo build: el dex pasa a sumar +5 y el main.xml trae otro id y otro texto literal
+	dexNuevo := dexDelContadorCon(t, "5")
+	layout := layoutDelContador()
+	layout.raiz.hijos[0].attrs[0].datos = 0x7f010010 // era id/total (0x7f010001)
+	layout.raiz.hijos[0].attrs[4].texto = "Interfaz cambiada"
+	apkNuevo := apkDelContadorConLayout(t, layout, fuentesDelContador(t)...)
+
+	base := s.base
+	ids := []string{}
+	s.publica = func(id any, codigo int) {
+		if codigo != 0 {
+			t.Errorf("la orden swap devolvió código %d", codigo)
+		}
+		ids = append(ids, fmt.Sprint(id))
+	}
+	linea := mustLinea(t, s, "swap", ordenSwapRecursos(t, dexNuevo, apkNuevo))
+
+	// la pantalla sale del apk NUEVO: el TextView viejo desaparece y aparece el id y el texto nuevos
+	raiz := raizPublicada(t, linea)
+	if viejo := nodoPorIDRef(raiz, "0x7f010001"); viejo != nil {
+		t.Fatalf("el modelo sigue trayendo el TextView del apk viejo: %+v", viejo)
+	}
+	nuevo := nodoPorIDRef(raiz, "0x7f010010")
+	if nuevo == nil || nuevo.Texto != "Interfaz cambiada" {
+		t.Fatalf("el modelo no publica el main.xml nuevo: %+v", raiz.Hijos)
+	}
+
+	// el estado de la máquina, el dex y el id de la orden sobreviven al cambio de interfaz
+	if got := len(s.res.Pulsaciones); got != 2 {
+		t.Fatalf("el swap repitió o perdió clics: Pulsaciones = %v", s.res.Pulsaciones)
+	}
+	if s.base == base {
+		t.Fatal("el dex no se intercambió en la misma orden")
+	}
+	if !bytes.Equal(s.datos, apkNuevo) {
+		t.Fatal("la sesión no guardó el apk nuevo como fuente del layout")
+	}
+	if total := totalDe(t, linea); total != "Pulsos: 2" {
+		t.Fatalf("el contador acumulado se perdió: %q", total)
+	}
+	if got := strings.Join(ids, ","); got != "swap" {
+		t.Fatalf("el id de la sesión cambió: publicó %q", got)
+	}
+	// y sigue viva: un clic con el dex nuevo suma +5 sobre los dos clics anteriores
+	if total := totalDe(t, mustLinea(t, s, "clic-final", []string{"--pulsar", "id/pulsar"})); total != "Pulsos: 7" {
+		t.Fatalf("tras el swap el clic dio %q y se esperaba Pulsos: 7", total)
+	}
 }
 
 func TestLaSionFallaCerrada(t *testing.T) {

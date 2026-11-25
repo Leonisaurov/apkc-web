@@ -10,6 +10,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strings"
 )
 
 // sesionPreview es el estado que sobrevive a todas las órdenes de una instancia.
@@ -33,6 +35,58 @@ type sesionPreview struct {
 	// ponen contadores y comprueban que salir nunca se llama por una orden.
 	salir   func(int)
 	publica func(id any, codigo int)
+}
+
+// Contrato del hot swap de recursos, paralelo al del dex:
+//
+//   - `--intercambiar firma=ruta.dex` sustituye el código vivo (deltaDeDexes + aplicaDelta);
+//   - `--intercambiar-recursos ruta.apk` sustituye la fuente de la interfaz. El apk nuevo viaja
+//     como ruta porque en la pestaña el hospedador lo escribe en el fs de OPFS antes de la orden,
+//     igual que hace con el dex; en nativo es un fichero cualquiera.
+//
+// Los dos flags pueden ir en la MISMA orden y conservan el id de sesión y el estado de la máquina:
+// ninguno reinicia onCreate ni recoloca los objetos vivos. El evento de recursos se encola al final
+// del guion para que, si el dex o cualquier otra orden falla, la sesión siga leyendo el apk viejo.
+// Los bytes del apk viajan en `eventoUsuario.Dex` (el campo ya existe para el dex y aquí se reusa;
+// no se añade un campo nuevo al tipo compartido con el comando de una pasada).
+const (
+	banderaIntercambiarRecursos   = "intercambiar-recursos"
+	ordenIntercambiarRecursosTipo = "intercambiar-recursos"
+)
+
+// extraeIntercambiarRecursos saca del argv de la orden `--intercambiar-recursos <ruta.apk>` (o su
+// forma `--intercambiar-recursos=<ruta.apk>`), lee el apk y devuelve el argv sin esa bandera. Se hace
+// ANTES de parsePreview: la bandera es de la sesión viva, no del comando de una pasada, así que no se
+// registra en registrarBanderasPreview (preview.go) y el parser de flag común nunca la ve.
+func extraeIntercambiarRecursos(argv []string) ([]string, []byte, error) {
+	limpio := make([]string, 0, len(argv))
+	var datos []byte
+	for i := 0; i < len(argv); i++ {
+		arg := argv[i]
+		valor, conIgual := strings.CutPrefix(arg, "--"+banderaIntercambiarRecursos+"=")
+		if !conIgual && arg == "--"+banderaIntercambiarRecursos {
+			if i+1 >= len(argv) {
+				return nil, nil, fmt.Errorf("--%s necesita la ruta del apk nuevo", banderaIntercambiarRecursos)
+			}
+			i++
+			valor = argv[i]
+		} else if !conIgual {
+			limpio = append(limpio, arg)
+			continue
+		}
+		if strings.TrimSpace(valor) == "" {
+			return nil, nil, fmt.Errorf("--%s necesita la ruta del apk nuevo", banderaIntercambiarRecursos)
+		}
+		if datos != nil {
+			return nil, nil, fmt.Errorf("--%s no se puede repetir en una misma orden", banderaIntercambiarRecursos)
+		}
+		leidos, err := os.ReadFile(valor)
+		if err != nil {
+			return nil, nil, fmt.Errorf("--%s: %w", banderaIntercambiarRecursos, err)
+		}
+		datos = leidos
+	}
+	return limpio, datos, nil
 }
 
 // modeloDeBytes es el arranque de la sesión: el mismo modelo que el comando normal, sin leer un
@@ -144,6 +198,17 @@ func (s *sesionPreview) estabilizaSesion() {
 // aplicaEvento entrega UNA orden a la máquina viva. El intercambio pasa siempre por deltaDeDexes
 // y aplicaDelta; el dex base solo se sustituye después de un éxito.
 func (s *sesionPreview) aplicaEvento(ev eventoUsuario) error {
+	if ev.Tipo == ordenIntercambiarRecursosTipo {
+		// Validar antes de mutar: un apk que no sea zip se rechaza con código 2 y la sesión sigue
+		// publicando el layout anterior. No hay caché de recursos que invalidar: modeloConResultado
+		// abre `s.datos` y re-parsea resources.arsc y el AXML en CADA orden, así que sustituir
+		// `s.datos` es ya la invalidación completa. La máquina (y su contador) no se toca.
+		if _, err := zip.NewReader(bytes.NewReader(ev.Dex), int64(len(ev.Dex))); err != nil {
+			return fmt.Errorf("--%s: el apk nuevo no es un zip: %w", banderaIntercambiarRecursos, err)
+		}
+		s.datos = ev.Dex
+		return nil
+	}
 	if ev.Tipo == ordenIntercambiarTipo {
 		nuevo, err := readDex(ev.Dex)
 		if err != nil {
@@ -221,7 +286,10 @@ func (s *sesionPreview) actualizaRes() {
 }
 
 // modeloConResultado vuelve a pintar el layout con el resultado acumulado; es la cola de
-// modeloVistaDeAPKConEventos (preview.go:715-754) con la apk ya abierta.
+// modeloVistaDeAPKConEventos (preview.go:715-754) con la apk ya abierta. No guarda ni el zip, ni la
+// tabla, ni el AXML: los abre desde `s.datos` en CADA orden. Por eso el hot swap de recursos solo
+// tiene que sustituir `s.datos` para que el siguiente modelo traiga el main.xml nuevo, sin tocar la
+// máquina ni su estado.
 func (s *sesionPreview) modeloConResultado() (*modeloVista, error) {
 	zr, err := zip.NewReader(bytes.NewReader(s.datos), int64(len(s.datos)))
 	if err != nil {
@@ -291,10 +359,18 @@ func (s *sesionPreview) ejecutaOrden(id any, argv []string, escribir func(string
 		publica(2)
 		return 2
 	}
-	o, posicionales, err := parsePreview(argv)
+	argvLimpio, recursos, errRecursos := extraeIntercambiarRecursos(argv)
+	o, posicionales, err := parsePreview(argvLimpio)
+	if err == nil && errRecursos != nil {
+		err = errRecursos
+	}
 	if err == nil && len(posicionales) > 0 {
 		// el apk va en el argv de ARRANQUE; una orden no puede traer otro
 		err = fmt.Errorf("la orden no acepta un apk: %s", posicionales[0])
+	}
+	if err == nil && recursos != nil {
+		// al final del guion: si el dex o cualquier orden anterior falla, no se sustituye el apk
+		o.guion = append(o.guion, eventoUsuario{Tipo: ordenIntercambiarRecursosTipo, Dex: recursos})
 	}
 	if err != nil {
 		s.actualizaRes()
