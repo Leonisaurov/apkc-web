@@ -383,7 +383,7 @@ añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351
 reservado: sus mediciones están escritas en este índice. `§348` ya no está reservado: su medición
 está escrita en este índice. `§349` ya no está reservado: su medición está escrita en este índice.
 `§350`, `§351`, `§352`, `§354`, `§355`, `§356` y `§357` ya no están libres: sus mediciones están escritas en este índice.
-`§353` queda reservado a F5; `§358+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
+`§353` sigue reservado a F5 como **reserva vacía, no como medición**: F5 está cerrado en `d22fe3a`/`36a69c0` con crítico APROBAR condicionado al gate (`docs/auditorias.md:30-33`) y no tiene `§` propio (`docs/evidencia/21-emulador-fiel.md` solo `§334-§339`). La etiqueta se libera solo al escribir esa medición con su comando; mientras tanto no se reutiliza, en particular Fase C de `docs/plan-compatibilidad-apps-pausado.md` pasa a `§359`. `§358+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.

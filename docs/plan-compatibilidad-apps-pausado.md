@@ -10,8 +10,8 @@ B-G se ejecutan sobre el módulo separado.
 **Numeración al reanudar.** La numeración `§350`-`§357` que propone el plan original **no es la del
 corpus**: al registrar las mediciones se usaron `§354` (medición base, cuatro SHA y los tres errores
 de dex) y `§355` (Fase A, ya hecha), y `§350`-`§352` y `§356` están ocupados por la separación. El
-frente del pin único del emulador consume `§357`, así que **al reanudar se usan `§358+`** para B, C,
-D, E, F y G, en ese orden. No se rehace Fase A: sus tuplas byte a byte y su frontera (`pasos
+frente del pin único del emulador consume `§357`, así que **al reanudar se usan `§358+`** para B, C, D, E, F y G, en ese orden. `§353` no se reutiliza para Fase C: sigue siendo reserva vacía de F5 en `docs/evidencia.md:386`.
+No se rehace Fase A: sus tuplas byte a byte y su frontera (`pasos
 292/286/207`, bloqueo `ArchTaskExecutor … opcode 0x1d`) están en `docs/evidencia/15-apps-reales.md:71-177`.
 
 **Estado del traslado.** §354 y §355 están medidos y publicados en el índice
@@ -132,7 +132,7 @@ Comando: bucle con `unzip -l <apk> | grep -cE '^ *[0-9]+ '`, `grep -oE 'classes[
 
 **Multidex real en los tres.** Con `dexdump` (estricto, `grep 'Class descriptor.*L<clase>;'`) se
 localizó la clase candidata a lanzadora (cuál es la lanzadora real queda como hipótesis a confirmar
-en Fase C, §353):
+en Fase C, §359):
 ```
 F-Droid  : org/fdroid/MainActivity      -> classes2.dex   -> 1 definición
 NewPipe  : org/schabi/newpipe/MainActivity -> classes.dex -> 1 definición
@@ -336,7 +336,7 @@ los `§` de abajo son criterios, no resultados.
 - **Dependencia de la separación**: **este frente se ejecuta después de separar el módulo**
   (vive en `preview.go`, dentro del paquete que se va a extraer).
 
-### Fase C — §353: lanzadora y layout correctos, sin pantallas inventadas
+### Fase C — §359: lanzadora y layout correctos, sin pantallas inventadas
 
 - **Ficheros**: `apkc/preview.go:1245-1313` (`actividadLanzadora`, `esLanzadora`),
   `:1124-1241` (`rutaDelLayoutDeLaActividad`, `rutaDelLayout`).
