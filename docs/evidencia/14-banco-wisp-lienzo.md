@@ -1604,7 +1604,7 @@ cd studio && node prueba-wisp-gates.mjs
 falsificación: los dos gates rechazan lo que tienen que rechazar
 ```
 
-**Frontera de `§296`.** `e2e.sh` no se registra en verde: sigue **en verificación** (`docs/plan.md:60`), con `e2e: 1 problemas` en el gate autorizado por el `TypeError` del bloque `--inc` y `256 comprobaciones bien, 0 mal` (rc=0) en dos ejecuciones focales consecutivas del builder del WISP; el gate completo no se ha repetido (logs `~/.cache/apkc-web/tmp/pestana-focal-final.log` y `~/.cache/apkc-web/tmp/pestana-focal-final2.log`). El puente se
+**Frontera de `§296`.** `e2e.sh` no se registra en verde: sigue **en verificación** (`docs/plan.md:60`), con `e2e: 1 problemas` y `253 comprobaciones bien, 3 mal` en el gate, sin `TypeError` en su log (§299) y `256 comprobaciones bien, 0 mal` (rc=0) en dos ejecuciones focales consecutivas del builder del WISP; el gate completo no se ha repetido (logs `~/.cache/apkc-web/tmp/pestana-focal-final.log` y `~/.cache/apkc-web/tmp/pestana-focal-final2.log`). El puente se
 mide con núcleo simulado, nunca contra relays reales. Sin push del submódulo ni publicación.
 
 ## 297. Content-Length menor que el cuerpo en el puente WISP
@@ -1705,7 +1705,7 @@ plantillas entran con `b11c08d` (selector, `LEEME.txt` y prueba).
 **Frontera de `§298`.** La suite Go completa queda pendiente; no se
 ejecutó gate final, CI, publicación ni resolución contra un relay real.
 
-## 299. El wasm vuelve a compilar, el corredor se centraliza y el gate destapa el bloque `--inc`
+## 299. El wasm vuelve a compilar, el corredor se centraliza y el gate falla sin `TypeError` en su log
 
 Medido el 2026-11-24 sobre `HEAD 0379182`. Cuatro frentes con evidencia de esta sesión: el binario
 wasm, la suite Go completa, el corredor de tareas y el gate autorizado que destapó el bloque `--inc`.

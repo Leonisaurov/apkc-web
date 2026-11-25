@@ -339,7 +339,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §296 | Arreglo del AXML, latch del puente, destino canónico y validación | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §297 | Content-Length menor que el cuerpo en el puente WISP | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §298 | Cierre del puente de reposo, lienzo, pista y descripciones | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
-| §299 | El wasm vuelve a compilar, el corredor se centraliza y el gate destapa el bloque `--inc` | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
+| §299 | El wasm vuelve a compilar, el corredor se centraliza y el gate falla sin `TypeError` en su log | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
