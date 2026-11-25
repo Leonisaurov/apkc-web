@@ -352,16 +352,20 @@ los `§` de abajo son criterios, no resultados.
   (5) si no hay layout XML para la actividad, **no** caer al alfabético: publicar
   `sin-layout-xml` en el modelo y un marco raíz con la etiqueta de la app.
 - **Criterio falsable (lanzadora aún como hipótesis)**: no se da por probado que
-  `org.fdroid.MainActivity` sea la lanzadora real hasta ejecutar completos
+  `org.fdroid.MainActivity` sea la lanzadora real que debe usar el modelo hasta ejecutar completos
   `apkanalyzer manifest print /home/leonisauro/Downloads/F-Droid.apk` y
-  `aapt2 dump badging /home/leonisauro/Downloads/F-Droid.apk`, y confirmar con su salida literal que
-  `<activity android:name="org.fdroid.MainActivity">` lleva `MAIN`+`LAUNCHER`, y que
-  `org.fdroid.IconCalculatorActivity` es un `activity-alias` con `enabled="false"` cuyo
-  `targetActivity` apunta a esa activity. Hoy solo está medido
-  `leanback-launchable-activity: name='org.fdroid.MainActivity'`: la identidad de la lanzadora es
-  **hipótesis a confirmar con comando y salida esperada**, no dato. Tras confirmarla: el modelo dice
-  esa activity y no `IconCalculatorActivity`; NewPipe usa `res/v9.xml` (`layout/activity_main`);
-  Termux usa `res/layout/activity_termux.xml`; en los tres desaparece `id/action_bar_title`.
+  `aapt2 dump badging /home/leonisauro/Downloads/F-Droid.apk`. Esa medición muestra, con su salida
+  literal, que `<activity android:name="org.fdroid.MainActivity">` lleva `MAIN`+`LEANBACK_LAUNCHER`
+  (no `LAUNCHER`); que el alias habilitado por omisión es `org.fdroid.IconActivity` con
+  `MAIN`+`LAUNCHER` y `targetActivity=org.fdroid.MainActivity` (sin `android:enabled`, habilitado
+  por defecto); y que `IconCalculatorActivity` y `CalculatorActivity` están `enabled=false`, ambos
+  con `targetActivity=org.fdroid.MainActivity`. `aapt2 dump badging` solo reporta
+  `leanback-launchable-activity: name='org.fdroid.MainActivity'`, sin `launchable-activity`. No
+  existen `layout/main` ni `layout/activity_main`; `layout/main_tab_nearby` → `res/f_.xml` no es la
+  pantalla de `MainActivity`. La evidencia literal se registrará como apoyo bajo `§359` cuando se
+  mida esa fase (regla 11): hoy la lanzadora correcta es **hipótesis hasta entonces**, no dato.
+  Tras medirla: NewPipe usa `res/v9.xml` (`layout/activity_main`); Termux usa
+  `res/layout/activity_termux.xml`; en los tres desaparece `id/action_bar_title`.
 - **Commit**: `fix(preview): elige lanzadora y layout reales sin inventar pantalla`.
 - **Dependencia de la separación**: **después de separar el módulo**.
 
