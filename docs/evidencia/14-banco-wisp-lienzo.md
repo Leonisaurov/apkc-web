@@ -825,9 +825,7 @@ nativo `ok … 192.981s`, con `vet` y `gofmt` limpios. La crítica
 `tcr -r 256M -- sh tools/entorno.sh wasm` → final `PASS`, **0 `--- FAIL`**, sin `t.Skip`
 nuevos; nativo `ok … 184.524s` con los dos tests movidos en `PASS`.
 
-**Cierre.** La capa wasm final quedó con 0 `FAIL`, 29 `SKIP` y 805 `PASS`, `rc=0`, medidos por el
-QA `ses_df1f12649ffeGtpp1o1HfFooeh` sobre `fe64417` (log
-`~/.cache/apkc-web/wasm-cierre-final-v.log`).
+**Cierre de `§284` (medición histórica sobre `fe64417`).** La capa wasm quedó con 0 `FAIL`, 29 `SKIP` y 805 `PASS`, `rc=0`, medidos por el QA `ses_df1f12649ffeGtpp1o1HfFooeh` (log `~/.cache/apkc-web/wasm-cierre-final-v.log`); el árbol final se midió después en `§365` (0 `FAIL`, 871 `PASS`, 30 `SKIP`).
 Antes de `0d8df36` el binario ni compilaba: el test del `else/goto` llamaba a un ayudante de un
 fichero `!js`; movido ese test a `javaemisor_else_goto_paridad_test.go`, el vet wasm está limpio.
 Este `§` queda auditado con los dos veredictos de crítica recibidos y el recuento final.
@@ -1952,7 +1950,7 @@ REPETICIONES=1 PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH tcr -c 2 -m 2G -r 40
 
 **Nativo.** `r1-plain-frio 993`, `r1-plain-caliente 555`, `r1-inc-frio 808`, `r1-inc-caliente 486`, `r1-incremental.json-bytes 35579`; `dex por clase: la vuelta caliente y el dexado completo son identicos`; `entradas: 80, con bytes distintos: 0`; `Verifies`, v1/v2/v3 `true`, `zipalign: correcto`. Árbol limpio antes y después.
 
-**Frontera de `§314`.** La medición 3 original usaba un parche que hoy está versionado en `shim/navegador-sim.js:285-307` y `shim/prueba-relink.js:14-134` (134 líneas); `/tmp/opencode/inc-web/` ya no existe. La capa wasm completa sigue con fallos ambientales (§279 15/RC=1, §284 0/29/805, `docs/evidencia.md:15-24` 32/38): **no** reclamar capa wasm verde, solo la prueba focal con jar montado. `REPETICIONES=1` deja vacías las medianas de tres repeticiones: es artefacto del guion, no fallo. El shim no es OPFS; sin gate final, chromium, red ni commits.
+**Frontera de `§314`.** La medición 3 original usaba un parche que hoy está versionado en `shim/navegador-sim.js:285-307` y `shim/prueba-relink.js:14-134` (134 líneas); `/tmp/opencode/inc-web/` ya no existe. En el momento de `§314` la capa wasm completa tenía fallos ambientales (§279 15/RC=1, §284 0/29/805, `docs/evidencia.md:15-24` 32/38): **no** se reclamaba capa wasm verde, solo la prueba focal con jar montado; el estado medido sobre el árbol final está en `§365`, no aquí. `REPETICIONES=1` deja vacías las medianas de tres repeticiones: es artefacto del guion, no fallo. El shim no es OPFS; sin gate final, chromium, red ni commits.
 
 ## 348. Navegación viva entre actividades en la sesión
 
@@ -1990,7 +1988,7 @@ reproducido en `HEAD`, no se presenta como verde. `gofmt -l` está limpio en los
 las variables completas queda pendiente de temperatura y autorización; sin CDP, chromium, gate ni
 commits por este `§`.
 
-### §365. La capa `wasm` se re-ejecuta sobre el árbol final
+## 365. La capa `wasm` se re-ejecuta sobre el árbol final
 
 Re-ejecución de la capa wasm sobre el árbol medido `2da3008`/`e97629c`. Comando literal:
 

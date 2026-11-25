@@ -378,7 +378,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
 aquí; `§78` no existe y su hueco está explicado en el preámbulo. La tabla sigue el orden del fichero
 original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica; las filas
-añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`, `§356`, `§357`) se sitúan en el bloque de su fichero, no en orden numérico.
+añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`, `§356`, `§357`, `§365`) se sitúan en el bloque de su fichero, no en orden numérico.
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
 `§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra),
