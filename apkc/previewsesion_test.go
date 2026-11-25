@@ -4,6 +4,7 @@ package main
 // proveedor del wasm se sustituye por llamadas directas a ejecutaOrden, que es puro y no sale.
 
 import (
+	"archive/zip"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -387,6 +388,68 @@ func TestElHotSwapDeRecursosRepintaElLayoutSinReiniciar(t *testing.T) {
 	// y sigue viva: un clic con el dex nuevo suma +5 sobre los dos clics anteriores
 	if total := totalDe(t, mustLinea(t, s, "clic-final", []string{"--pulsar", "id/pulsar"})); total != "Pulsos: 7" {
 		t.Fatalf("tras el swap el clic dio %q y se esperaba Pulsos: 7", total)
+	}
+}
+
+// TestElHotSwapRechazaUnApkSinLayoutSinTocarLaInterfazViva es la falsación del defecto confirmado:
+// un zip válido sin `res/layout/main.xml` pasaba la comprobación de zip, se asignaba a `s.datos` y
+// la sesión quedaba apuntando a un apk que modeloConResultado no puede pintar. La orden tiene que
+// fallar cerrada con código 2 y conservar el layout anterior.
+func TestElHotSwapRechazaUnApkSinLayoutSinTocarLaInterfazViva(t *testing.T) {
+	s := sesionDelContador(t)
+	datosViejos := append([]byte(nil), s.datos...)
+	entrega(t, s, "clic", []string{"--pulsar", "id/pulsar"})
+
+	// zip válido: el manifiesto y la tabla siguen apuntando a main.xml, pero la entrada del
+	// layout no está. Es el build que el crítico encontró irrepresentable.
+	manifiesto, err := escribeAXML(manifiestoConActividad(".Casos"))
+	if err != nil {
+		t.Fatalf("el manifiesto: %v", err)
+	}
+	arsc, err := escribeTablaRecursos(tablaDelContador())
+	if err != nil {
+		t.Fatalf("la tabla: %v", err)
+	}
+	sinLayout := zipDeEntradas(t, map[string][]byte{
+		"AndroidManifest.xml": manifiesto,
+		"resources.arsc":      arsc,
+		"classes.dex":         dexDeFuentes(t, fuentesDelContador(t)...),
+	})
+	if _, err := zip.NewReader(bytes.NewReader(sinLayout), int64(len(sinLayout))); err != nil {
+		t.Fatalf("el apk de la prueba no es un zip: %v", err)
+	}
+	ruta := filepath.Join(t.TempDir(), "sin-layout.apk")
+	if err := os.WriteFile(ruta, sinLayout, 0o644); err != nil {
+		t.Fatalf("el apk sin layout no se escribió: %v", err)
+	}
+
+	linea, codigo := entrega(t, s, "sin-layout", []string{"--intercambiar-recursos", ruta})
+	if codigo != 2 {
+		t.Fatalf("un apk sin layout devolvió %d y se esperaba 2", codigo)
+	}
+	if !bytes.Equal(s.datos, datosViejos) {
+		t.Fatal("la sesión sustituyó el apk por uno sin layout")
+	}
+	if !strings.Contains(linea, banderaIntercambiarRecursos) ||
+		!strings.Contains(linea, "res/layout/main.xml") {
+		t.Fatalf("el error no dice qué falló: %s", linea)
+	}
+
+	// el modelo posterior sigue leyendo el layout viejo, y la orden siguiente sigue viva
+	modelo, err := s.modeloConResultado()
+	if err != nil {
+		t.Fatalf("el modelo posterior al rechazo falló: %v", err)
+	}
+	if modelo.Layout != "res/layout/main.xml" {
+		t.Fatalf("el layout posterior es %q y se esperaba el viejo", modelo.Layout)
+	}
+	lineaDespues := mustLinea(t, s, "despues", []string{})
+	if total := totalDe(t, lineaDespues); total != "Pulsos: 1" {
+		t.Fatalf("el estado posterior al rechazo dio %q y se esperaba Pulsos: 1", total)
+	}
+	raiz := raizPublicada(t, lineaDespues)
+	if n := nodoPorIDRef(raiz, "0x7f010001"); n == nil || n.ID != "id/total" {
+		t.Fatalf("la pantalla posterior al rechazo no trae el layout viejo: %+v", raiz.Hijos)
 	}
 }
 

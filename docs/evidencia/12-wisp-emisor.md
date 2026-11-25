@@ -640,7 +640,9 @@ cualquier relay del camino queda en posición de hacer MITM, y que de 98 relays 
 handshake. La spec es la **v1.2** (CC-BY-4.0, sin copia en el repo; se cita en
 `docs/plan-deps-red.md:47-48`): paquetes de 5 B, un `CONTINUE` inicial y `CLOSE`. **En
 implementación, núcleo en curso**: el gate por defecto sigue con **cero peticiones ajenas** y el
-módulo solo se activa a mano.
+módulo solo se activa a mano. Desde `§349` sus trust roots son las CAs oficiales de los dos hosts,
+**servidas del mismo origen con huella sha256 fija** (`studio/cas-wisp.js`), con un `File` local como
+override; el relay **nunca** es fuente de CAs y el módulo sigue opt-in, no activado por defecto.
 
 **`deps-index` (`6157786` en el repo, `d70b8e7` en `studio/`).** El generador local
 `studio/deps-index-local.mjs` produce un índice mínimo y reproducible **sin red** —coordenada,
@@ -703,7 +705,9 @@ relay vea el contenido.
 `GOOS=js` y Go hace el handshake TLS encima del `net.Conn`, de modo que el relay solo transporta
 bytes cifrados. Coste estimado **~2-3 MB más de wasm**, y las CAs hay que **embeberlas**, porque en
 `js/wasm` no existe `SystemCertPool`. Es **HIPÓTESIS sin compilar** —no se midió el tamaño real ni
-el handshake— y su núcleo está en implementación.
+el handshake— y su núcleo está en implementación. La forma de embeberlas quedó revuelta en `§349`:
+ya no es solo un `File` local, sino un bundle de 3494 B con huella fija en el propio origen, sin
+petición ni relay como fuente; el `File` local sigue como override.
 
 **Relays.** El gist `CompactAIOfficial/bedf67779c2afd8bbd0225328ac210c9` lista **98** entradas; un
 handshake WISP real con Node 26 hizo contestar a **54 (27 hosts únicos)**. Las mejores latencias de
@@ -927,13 +931,17 @@ creación; una anónima anidada no gasta número del exterior (`Exterior$1$1`, y
 contador viejo y da un dex divergente, así que el arreglo no es vacuo. Queda una deuda medida: una
 anónima dentro de una clase anidada **con nombre** sigue rechazada (`apkc/javafuente.go:3049`).
 
-**WISP en la página: las CAs de un `File` local (`3794daf`, `c726329`).** El bundle de CAs se lee
-de un `File` del dispositivo, **nunca** por `fetch`: un bundle que llegara por el relay convertiría
-al relay en una CA. Se valida la extensión (`.pem`/`.crt`), que el nombre no sea una URL, el tope de
-**64 KiB** (`MAX_CAS_BYTES`), que solo haya bloques `CERTIFICATE` y una huella sha256 opcional; y se
-pasa al núcleo como `{pem, huella}` por `apkcWispCargarCAs` **antes** de `obtener`
-(`studio/wisp.js:204-207`). Las tres falsificaciones fallan como se espera. Un fallo **ajeno** a
-esto queda en `prueba-pestana.js`, en la sección de SW/offline con el wasm de fixture.
+**WISP en la página: el bundle oficial del propio origen y el `File` local como override
+(`3794daf`, `c726329`, revuelto en `§349`).** Por defecto se usa el bundle de CAs oficiales
+incrustado en `studio/cas-wisp.js` (3494 B, sha256 fijo `c52dbce4…08dade`), sin `fetch`; el bundle
+de un `File` del dispositivo gana si la persona lo elige. El relay **nunca** aporta CAs: un bundle
+que llegara por él convertiría al relay en una CA. Se valida la extensión (`.pem`/`.crt`), que el
+nombre no sea una URL, el tope de **64 KiB** (`MAX_CAS_BYTES`), que solo haya bloques
+`CERTIFICATE` y una huella sha256 (fija para el bundle del sitio, opcional para el `File`); y se
+pasa al núcleo como `{pem, huella}` por `apkcWispCargarCAs` **antes** de `obtener`. Si la huella
+falla, `SIN_CAS` avisa en `#wisp-cas-estado` y no se abre socket. Las falsificaciones fallan como se
+espera. Un fallo **ajeno** a esto queda en `prueba-pestana.js`, en la sección de SW/offline con el
+wasm de fixture.
 
 **El núcleo WISP sigue inerte (`ae6bc0e`).** El arreglo de la cola, los plazos y las CAs está
 aprobado, pero el módulo queda **fuera del wasm**: el linker lo elimina al no tener llamadores y

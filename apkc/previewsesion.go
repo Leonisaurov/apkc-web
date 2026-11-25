@@ -200,12 +200,16 @@ func (s *sesionPreview) estabilizaSesion() {
 // y aplicaDelta; el dex base solo se sustituye después de un éxito.
 func (s *sesionPreview) aplicaEvento(ev eventoUsuario) error {
 	if ev.Tipo == ordenIntercambiarRecursosTipo {
-		// Validar antes de mutar: un apk que no sea zip se rechaza con código 2 y la sesión sigue
-		// publicando el layout anterior. No hay caché de recursos que invalidar: modeloConResultado
-		// abre `s.datos` y re-parsea resources.arsc y el AXML en CADA orden, así que sustituir
-		// `s.datos` es ya la invalidación completa. La máquina (y su contador) no se toca.
-		if _, err := zip.NewReader(bytes.NewReader(ev.Dex), int64(len(ev.Dex))); err != nil {
-			return fmt.Errorf("--%s: el apk nuevo no es un zip: %w", banderaIntercambiarRecursos, err)
+		// Validar antes de mutar: un zip válido sin el layout de esta actividad también es un apk
+		// irrepresentable, y basta con mirar el zip para no verlo. Se construye el modelo contra
+		// una copia de la sesión con los bytes candidatos; solo si se resuelve y lee el AXML se
+		// sustituye `s.datos`. No hay caché que invalidar: modeloConResultado abre `s.datos` y
+		// re-parsea resources.arsc y el layout en CADA orden. La máquina (y su contador) no se toca.
+		candidata := *s
+		candidata.datos = ev.Dex
+		if _, err := candidata.modeloConResultado(); err != nil {
+			return fmt.Errorf("--%s: el apk nuevo no sirve para esta sesión: %w",
+				banderaIntercambiarRecursos, err)
 		}
 		s.datos = ev.Dex
 		return nil

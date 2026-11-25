@@ -838,3 +838,14 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   verde; `gofmt -l` limpio en los dos ficheros tocados (global lista cuatro preexistentes no
   tocados); CDP sobre el árbol integrado con las variables completas pendiente de temperatura y
   autorización; sin CDP, chromium, gate ni commits por este `§`.
+- §349: las CAs oficiales de `repo1.maven.org` (GTS Root R4 self-signed) y
+  `repo.maven.apache.org` (ISRG Root X1, opcionalmente X2) entran como bundle incrustado en
+  `studio/cas-wisp.js`: 3494 B, sha256 fijo `c52dbce40b49e83f750f697796b24aee2dd039fe736b75bfb25aa5c18408dade`,
+  verificado con `go version go1.24.0 linux/amd64` del toolchain fijado y con `x509.Verify` rc 0 en
+  la medición previa (`ses_def6dfe01ffe7a5G21zMMH5eEp`). `wisp.js` lo prepara con la huella fija
+  antes de `obtener`, sin `fetch`, sin MIME ni entrada en SW; un `File` local sigue como override y
+  el relay nunca aporta CAs. `node --check` limpio y `cd studio && node prueba.js` → «prueba: todo
+  en orden», rc 0; la falsación de un byte del bundle se rechaza por huella. Frontera: WISP **sigue
+  opt-in y apagado por defecto**; la licencia de las raíces (MPL 2.0 / Mozilla CA Certificate
+  Policy) **no verificada localmente**, así que no se publica ni se hace `git push` a `apkc-studio`;
+  sin gate, CI, CDP ni red en esta corrida.

@@ -598,7 +598,9 @@ ajenas a la pestaña y a los relays; el tráfico que mide el CDP son las 481 pet
 
 **Veredicto.** VERDE con semántica de fallo cerrado: el externo pasa **porque el módulo está
 inerte**, no porque se haya abierto un socket a un relay real. WISP sigue siendo excepción opt-in y
-no está activado por defecto.
+no está activado por defecto. Desde `§349` sus trust roots se sirven del mismo origen con huella
+sha256 fija (`studio/cas-wisp.js`), con `File` local como override; el relay nunca es fuente de
+CAs y no se hicieron peticiones nuevas para medirlo.
 
 ```sh
 tcr -- sh tools/entorno.sh wisp

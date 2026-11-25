@@ -314,8 +314,9 @@ func HuellaCAsPEM(bundle []byte) [sha256.Size]byte {
 
 // CargarCAsPEMFijadas exige que el bundle tenga la huella esperada y después
 // aplica las mismas comprobaciones que CargarCAsPEM. La huella se fija en el
-// código o en la interfaz y el PEM se lee de un fichero local: así ni un cambio
-// en el fichero ni un bundle servido por el relay pasan inadvertidos.
+// código o en la interfaz: el bundle incrustado viaja en el propio origen con
+// huella fija y un `File` local es override; así ni un cambio en el bundle ni
+// uno servido por el relay pasan inadvertidos.
 func CargarCAsPEMFijadas(bundle []byte, huella [sha256.Size]byte) (*x509.CertPool, error) {
 	if real := HuellaCAsPEM(bundle); real != huella {
 		return nil, fmt.Errorf("wisp: la huella sha256 del bundle de CAs no coincide: %x != %x", real, huella)
