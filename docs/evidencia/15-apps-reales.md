@@ -1179,3 +1179,106 @@ curl -i -H 'Origin: null' https://wisp.dolci-vita.link/wisp/                 # 4
 **Frontera.** El relay está desplegado y verificado en remoto, pero no se ha integrado en la
 navegación de la página: el módulo WISP sigue apagado. `prueba-sitio.js`/CDP siguen pendientes de
 autorización; sin gate con variable externa, red adicional ni publicación.
+
+---
+
+## 375. Boolean, opcode `0xd5` y primeras filas reales del gestor
+
+Medido el 2026-11-25, posterior a `§374`. Sobre el pin `bf7477e7feef577a9ea554120a5b07d824274dde`
+entraron cuatro cherry-picks en `studio/apkc-emulador`; el primer destino real fue el gestor de
+archivos (`com.martinmimigames.simplefileexplorer`). No se ha corrido gate, CDP ni publicación. El
+gestor **no se da por funcionando** y no se afirma que aparezcan los cuatro nombres de fichero que se
+están siguiendo: aquí solo se registran la actividad, los textos y la frontera que muestra el modelo.
+
+### Cuatro cherry-picks y la guardia vigente
+
+| Commit | Cambio |
+| --- | --- |
+| `f33bfdb` | Boolean y opcode `0xd5` (`and-int/lit16`) |
+| `7213e25` | `listFiles` con filtro para el gestor |
+| `6d84fcf` | clic por índice sobre hijos con `onClick` |
+| `2a42a84` | `Callable.call` en `FutureTask` |
+
+```sh
+git show --stat --oneline f33bfdb 7213e25 6d84fcf 2a42a84   # desde studio/apkc-emulador
+git -C studio rev-parse HEAD:apkc-emulador
+git rev-parse --short HEAD
+git -C studio rev-parse --short HEAD
+git ls-tree HEAD studio
+```
+
+Salida de las cuatro últimas órdenes: `2a42a846a87df44d66178ca9000aabdc764d9a04`, `c179a0b`,
+`a4d8f43` y `160000 commit a4d8f434988bf55391d5c647613e709e6199f82c	studio`. Es el pin vigente de
+la regla 14; `bf7477e…` queda como registro histórico fechado.
+
+### Suite y contrato de ficheros
+
+`go test -count=1 ./...` → `ok … 162.890s`, 0 `FAIL`; 11 pruebas focales en PASS. Los siete nombres
+que añaden los cuatro commits son `TestAndIntLit16LeeLosNibblesDeD8`,
+`TestPreviewBooleanValueOfGuardaElBit`, `TestListFilesConFiltroQueAceptaTodo`,
+`TestListFilesFiltraPorExtension`, `TestPulsarHijoContenedorSinId`,
+`TestFutureTaskEjecutaCallDiferido` y `TestFutureTaskNoRompeRunnableRun`; el informe del integrador
+da el total de 11 focales sin desglosar las otras cuatro, que no se transcriben aquí. La materialización
+del emulador conserva los 34 ficheros `preview*.go` byte a byte con `cmp` (regla 14) y
+`git diff --check` da rc 0.
+
+```sh
+go test -count=1 ./...
+go test -count=1 -v -run 'TestAndIntLit16LeeLosNibblesDeD8|TestPreviewBooleanValueOfGuardaElBit|TestListFilesConFiltroQueAceptaTodo|TestListFilesFiltraPorExtension|TestPulsarHijoContenedorSinId|TestFutureTaskEjecutaCallDiferido|TestFutureTaskNoRompeRunnableRun' .
+git diff --check
+```
+
+### Las cinco APK
+
+Binario: `~/.cache/apkc-web/integracion-gestor-boolean/apkc-integracion-gestor-boolean`. Cada corrida
+escribe su JSON en `~/.cache/apkc-web/integracion-gestor-boolean/`:
+
+```sh
+apkc preview /home/leonisauro/Downloads/F-Droid.apk > ~/.cache/apkc-web/integracion-gestor-boolean/fdroid.json
+apkc preview /home/leonisauro/Downloads/org.schabi.newpipe_1017.apk > ~/.cache/apkc-web/integracion-gestor-boolean/newpipe.json
+apkc preview /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk > ~/.cache/apkc-web/integracion-gestor-boolean/librememorygame.json
+apkc preview /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk > ~/.cache/apkc-web/integracion-gestor-boolean/simplefileexplorer.json
+apkc preview /home/leonisauro/Downloads/termux-app_v0.118.3+github-debug_armeabi-v7a.apk > ~/.cache/apkc-web/integracion-gestor-boolean/termux.json
+```
+
+| APK | JSON | Pasos y nodos medidos |
+| --- | --- | --- |
+| F-Droid | `fdroid.json` | 758 pasos, 1 nodo, `layout=''`; byte-idéntica a `integracion-color/fdroid.json` |
+| NewPipe | `newpipe.json` | 508 pasos, 6 nodos, `res/v9.xml`; byte-idéntica a `integracion-color/newpipe.json` |
+| Libre Memory Game | `librememorygame.json` | 1688 pasos, 1 nodo, `layout=''`; byte-idéntica a `integracion-color/librememorygame.json` |
+| Gestor de archivos | `simplefileexplorer.json` | 1137 → **1330** pasos y 30 → **33** nodos, `error=None`, `layout=res/R5.xml`; la línea base es `control-simplefileexplorer.json` |
+| Termux | `termux.json` | 6599 pasos, 13 nodos, sin regresión; frontera `LayoutParams.height` en `setTerminalToolbarView` |
+
+```sh
+cmp ~/.cache/apkc-web/integracion-gestor-boolean/fdroid.json ~/.cache/apkc-web/integracion-color/fdroid.json
+cmp ~/.cache/apkc-web/integracion-gestor-boolean/newpipe.json ~/.cache/apkc-web/integracion-color/newpipe.json
+cmp ~/.cache/apkc-web/integracion-gestor-boolean/librememorygame.json ~/.cache/apkc-web/integracion-color/librememorygame.json
+python3 -c "import json; d=json.load(open('/home/leonisauro/.cache/apkc-web/integracion-gestor-boolean/simplefileexplorer.json')); print(d['ejecucion']['pasos'], d['nodos'], d['ejecucion'].get('error'), d['layout'])"
+```
+
+### El gestor: cómo avanza y dónde se queda
+
+Sin clic, el JSON `simplefileexplorer.json` pasa de 1137/30 a **1330/33**, con `error=None` y
+`layout=res/R5.xml`. Entre los 17 textos de `ejecucion.capturas` aparecen `Loading...` y
+`Access Denied`; son escrituras de `TextView.setText`, no capturas visuales ni una lista de ficheros
+confirmada.
+
+Con dos sondas de clic sobre el mismo binario se ve el primer cambio de actividad:
+
+```sh
+apkc preview --pulsar id/menu_quick_switch --pulsar id/drive_list:0 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk
+apkc preview --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk
+```
+
+La primera entra en `MainActivity.k(File)`; la segunda entra en `Download` y muestra `fotos`, pero
+todavía no muestra `leeme.txt`. Los JSON de estas dos sondas finales no quedaron guardados en
+`integracion-gestor-boolean/` (pendiente de archivar): las salidas se transcriben del informe del
+integrador. Las sondas de cada frente sí dejaron su JSON —`~/.cache/apkc-web/gestor-listfiles/sfm-switch.json`,
+`~/.cache/apkc-web/gestor-filtro/final.json` y
+`~/.cache/apkc-web/gestor-futuretask/sfm-click-futuretask-download.json`—, que son mediciones de los
+frentes por separado, no la corrida final.
+
+**Frontera.** El gestor avanza y cambia de actividad, pero no se da por funcionando: no se afirma que
+aparezcan los cuatro nombres que se están siguiendo ni que la navegación esté terminada; `leeme.txt`
+sigue sin verse en la sonda final. F-Droid, NewPipe y Libre Memory Game quedan byte-idénticos a
+`integracion-color/` y Termux sin regresión. Sin CDP, gate ni publicación.

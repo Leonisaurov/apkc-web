@@ -997,6 +997,13 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   comportamiento válido. Módulo WISP apagado y sin integrar en la navegación, con
   `prueba-sitio.js`/CDP pendientes de autorización y sin gate con variable externa ni publicación.
   `docs/evidencia/15-apps-reales.md`.
+- §375: lote Boolean/gestor (cherry-picks `f33bfdb`, `7213e25`, `6d84fcf` y `2a42a84`, integrado en
+  `c179a0b`, pin vigente `2a42a84…`): cuatro piezas nuevas en el intérprete con la suite en verde
+  (`162.890s`, 11 focales PASS, 34 ficheros byte-idénticos y `diff --check` rc 0). En el gestor, sin
+  clic 1137→1330 pasos y 30→33 nodos con `Loading...` y `Access Denied`; las sondas de clic cambian
+  de actividad hasta `Download` y muestran `fotos`, pero todavía no `leeme.txt`. F-Droid, NewPipe y
+  Libre Memory Game siguen byte-idénticos a `integracion-color/` y Termux sin regresión (6599 pasos).
+  Sin CDP, gate ni publicación; el gestor no se da por funcionando. `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,
