@@ -225,7 +225,7 @@ En los tres, el árbol pintado es el mismo `LinearLayout` con `id/action_bar_tit
 `id/action_bar_subtitle`, estilo `style/RtlOverlay.Widget.AppCompat.ActionBar.TitleItem`.
 **Es una pantalla falsa, no una aproximación de la app.**
 
-### 1.6 Registro obligatorio de `§350` antes de ejecutar `§351`
+### 1.6 Registro obligatorio de `§354` antes de registrar `§355`
 
 `§350` está medido arriba. **No rehacer Fase A (§355, ya hecha; ver docs/evidencia/15-apps-reales.md:71-177); el frente siguiente es §358 opcode**. El registro en el corpus quedó en este orden:
 
@@ -245,7 +245,7 @@ En los tres, el árbol pintado es el mismo `LinearLayout` con `id/action_bar_tit
    `docs/evidencia.md`, junto a la de `§349`, y ajustar el preámbulo a `§1`–`§350`.
 3. Añadir un bullet en `docs/situacion.md` con el recap: los tres APK arrancan con `pasos:0` y el
    layout falso `res/A1.xml`, sostenido por ese `§`.
-4. Solo después de los tres pasos anteriores, ejecutar `§351`. El orquestador ajusta `AGENTS.md`
+4. Solo después de los tres pasos anteriores, registrar `§355` (Fase A; ya medido). El orquestador ajusta `AGENTS.md`
    al integrar; este plan no lo toca.
 
 Nota: en `§350` la lanzadora de F-Droid aparece solo como `leanback-launchable-activity`; su
@@ -428,7 +428,7 @@ los `§` de abajo son criterios, no resultados.
 Otro agente está diseñando la separación del módulo de emulación. Este plan no la redefine; solo
 declara la frontera:
 
-- **Antes de separar**: únicamente Fase A (`§351`). Está en el lector compartido
+- **Antes de separar**: únicamente Fase A (`§355`, ya hecha). Está en el lector compartido
   (`dexcode.go`/`dexreader.go`) y su prueba de no-regresión es que el escritor de dex quede byte a
   byte igual.
 - **Después de separar el módulo**: Fases B, C, D, E, F y G. Todas viven en `preview*.go`, en los
@@ -437,7 +437,7 @@ declara la frontera:
   `--pulsar`/`--escribir`/`--marcar`/`--recrear`/`--avanzar`/`--locale`) y la sesión viva
   (`previewsesion.go`, §313), porque las pruebas de las fases B-F se apoyan en él.
 - Si la separación cambia la ruta de importación o mueve `dexcode.go`/`dexreader.go` a
-  `apkc-emulador/`, `§351` se re-ancla antes de seguir con `grep -n` sobre la ruta nueva (ver Fase A);
+  `apkc-emulador/`, `§355` se re-ancla antes de seguir con `grep -n` sobre la ruta nueva (ver Fase A);
   no se duplica el trabajo en dos árboles.
 
 ---
@@ -445,7 +445,7 @@ declara la frontera:
 ## 6. Reglas, límites e incertidumbre
 
 **Reglas que rigen la ejecución**: una medición, un `§` con comando literal (regla 1); `§350` ya
-está medido aquí, `§351+` son planes con criterio, no hechos (regla 11); `docs/evidencia.md` solo
+está medido aquí, `§358+` son planes con criterio, no hechos (regla 11); `docs/evidencia.md` solo
 enruta y el texto va a `docs/evidencia/NN-*.md`; si cambia el subconjunto aceptado, se actualiza la
 fila del inventario de Fase 5 de `docs/plan.md`; commits `<type>(<scope>): <summary>`; prosa en
 español con tildes y sin caracteres de otros alfabetos salvo literales; sin binarios versionados;
