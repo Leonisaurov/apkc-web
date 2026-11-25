@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/adler32"
 	"sort"
+	"unicode/utf8"
 )
 
 const (
@@ -551,7 +552,15 @@ func decodeMUTF8(b []byte) (string, error) {
 				if low >= 0xdc00 && low <= 0xdfff {
 					r = 0x10000 + (r-0xd800)*0x400 + (low - 0xdc00)
 					i += 3
+				} else {
+					// pareja partida: el dex de Termux trae un sustituto alto seguido de U+FEFF
+					// (§354). Emitir el sustituto como UTF-8 hace que Go lo lea como tres
+					// RuneError y utf16Len cuente de más; un solo U+FFFD conserva la unidad.
+					r = utf8.RuneError
 				}
+			} else if r >= 0xd800 && r <= 0xdfff {
+				// sustituto suelto, alto o bajo: una unidad UTF-16, no tres
+				r = utf8.RuneError
 			}
 			out = appendRune(out, r)
 		default:

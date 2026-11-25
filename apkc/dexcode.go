@@ -41,19 +41,28 @@ const (
 	valueBool       = 0x1f
 )
 
-// anchoValor: cuantos bytes llevan detras del byte de tipo. Los tipos cortos codifican su tamano
-// en los bits 5..7 como "size - 1"; VALUE_NULL y VALUE_BOOLEAN no llevan ninguno. Lo que seria un
-// indice o una estructura variable devuelve -1: se rechaza, no se adivina.
+// anchoVariable marca los encoded_value que no tienen una anchura fija: VALUE_ARRAY y
+// VALUE_ANNOTATION llevan su propia longitud por dentro y hay que recorrerlos (§355).
+const anchoVariable = -2
+
+// anchoValor: cuantos bytes llevan detras del byte de tipo. Los tipos cortos codifican su tamaño
+// en los bits 5..7 como "size - 1"; VALUE_NULL y VALUE_BOOLEAN no llevan ninguno. Los índices de
+// tabla (string, tipo, campo, método…) van en esos mismos bytes little-endian, que es como los
+// escribe este fork (dexanota.go:243) y como los trae el dex de F-Droid medido en §354. Las dos
+// estructuras variables devuelven anchoVariable; el resto de tipos desconocidos sigue siendo -1.
 func anchoValor(vf byte) int {
 	size := int(vf>>5&7) + 1
 	switch vf & 0x1f {
 	case valueByte:
 		return 1
 	case valueShort, valueChar, valueInt, valueLong, valueFloat, valueDouble,
-		valueMethodType, valueMethodHand:
+		valueMethodType, valueMethodHand, valueString, valueType, valueField,
+		valueMethod, valueEnum:
 		return size
 	case valueNull, valueBool:
 		return 0
+	case valueArray, valueAnnotation:
+		return anchoVariable
 	}
 	return -1
 }
@@ -356,11 +365,9 @@ func (d *dexFile) methodsDeCadaClase() (map[string]classData, error) {
 			if err != nil {
 				return nil, fmt.Errorf("%s: static values: %w", c.name, err)
 			}
-			// el encoded_array_item va en el orden de la lista de campos estaticos; si la cuenta
-			// no cuadra, el fichero esta roto y se dice, no se rellena con ceros
-			if len(valores) != len(cd.staticFields) {
-				return nil, fmt.Errorf("%s: %d static values for %d static fields",
-					c.name, len(valores), len(cd.staticFields))
+			valores, err = completaValoresEstaticos(valores, len(cd.staticFields))
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", c.name, err)
 			}
 			for i := range cd.staticFields {
 				cd.staticFields[i].valueType = valores[i].valueType
@@ -372,10 +379,26 @@ func (d *dexFile) methodsDeCadaClase() (map[string]classData, error) {
 	return out, nil
 }
 
-// valoresEstaticos lee un encoded_array_item. El tamano esta medido como uleb128, no como u32:
-// las tres areas de R empiezan en 2465, 2471 y 2477, seis bytes cada una, y un `uint size` de
-// cuatro mas el VALUE_INT de cuatro ocuparian nueve. Con el u32 el primer item diria que tiene
-// 25601 valores, que es la senal de que la lectura es otra (§22).
+// completaValoresEstaticos alinea el encoded_array_item con la lista de campos estaticos. R8
+// recorta la cola de valores cuando todos son null (§354: SpacerKt declara 8 campos y trae 4
+// valores); esa cola equivale a VALUE_NULL, así que se rellena en vez de rechazar el dex. Si sobran
+// valores, el fichero sí está roto y se dice.
+func completaValoresEstaticos(valores []encodedField, campos int) ([]encodedField, error) {
+	if len(valores) > campos {
+		return nil, fmt.Errorf("%d static values for %d static fields", len(valores), campos)
+	}
+	out := make([]encodedField, campos)
+	copy(out, valores)
+	for i := len(valores); i < campos; i++ {
+		out[i].valueType = valueNull
+	}
+	return out, nil
+}
+
+// valoresEstaticos lee un encoded_array_item. El tamaño está medido como uleb128, no como u32:
+// las tres áreas de R empiezan en 2465, 2471 y 2477, seis bytes cada una, y un `uint size` de
+// cuatro más el VALUE_INT de cuatro ocuparían nueve. Con el u32 el primer item diría que tiene
+// 25601 valores, que es la señal de que la lectura es otra (§22).
 func (d *dexFile) valoresEstaticos(off uint32) ([]encodedField, error) {
 	n, at, err := d.uleb(off)
 	if err != nil {
@@ -383,26 +406,80 @@ func (d *dexFile) valoresEstaticos(off uint32) ([]encodedField, error) {
 	}
 	out := []encodedField{}
 	for i := uint32(0); i < n; i++ {
-		if int(at) >= len(d.raw) {
-			return nil, fmt.Errorf("value #%d runs past the end of the file", i)
+		f, next, err := d.leeValorEstatico(at)
+		if err != nil {
+			return nil, fmt.Errorf("value #%d: %w", i, err)
 		}
-		vf := d.raw[at]
-		at++
-		f := encodedField{valueType: vf & 0x1f}
-		ancho := anchoValor(vf)
+		out = append(out, f)
+		at = next
+	}
+	return out, nil
+}
+
+// leeValorEstatico lee un encoded_value y devuelve el campo junto con la posición siguiente.
+// Los arrays y las anotaciones se recorren de forma recursiva: el intérprete no necesita su
+// contenido, pero sí saber dónde acaban para no perder el siguiente valor del array (§355).
+func (d *dexFile) leeValorEstatico(at uint32) (encodedField, uint32, error) {
+	var f encodedField
+	if int(at) >= len(d.raw) {
+		return f, at, fmt.Errorf("runs past the end of the file")
+	}
+	vf := d.raw[at]
+	at++
+	f.valueType = vf & 0x1f
+	ancho := anchoValor(vf)
+	switch ancho {
+	case anchoVariable:
+		switch f.valueType {
+		case valueArray:
+			n, next, err := d.uleb(at)
+			if err != nil {
+				return f, at, fmt.Errorf("array size: %w", err)
+			}
+			at = next
+			for i := uint32(0); i < n; i++ {
+				_, next, err = d.leeValorEstatico(at)
+				if err != nil {
+					return f, at, fmt.Errorf("array value #%d: %w", i, err)
+				}
+				at = next
+			}
+		case valueAnnotation:
+			_, next, err := d.uleb(at) // type_idx
+			if err != nil {
+				return f, at, fmt.Errorf("annotation type: %w", err)
+			}
+			at = next
+			n, next, err := d.uleb(at)
+			if err != nil {
+				return f, at, fmt.Errorf("annotation size: %w", err)
+			}
+			at = next
+			for i := uint32(0); i < n; i++ {
+				_, next, err = d.uleb(at) // name_idx
+				if err != nil {
+					return f, at, fmt.Errorf("annotation name #%d: %w", i, err)
+				}
+				at = next
+				_, at, err = d.leeValorEstatico(at)
+				if err != nil {
+					return f, at, fmt.Errorf("annotation value #%d: %w", i, err)
+				}
+			}
+		}
+	default:
 		if ancho < 0 {
-			return nil, fmt.Errorf("value #%d of type %#x is not read by this fork yet", i, f.valueType)
+			return f, at, fmt.Errorf("type %#x is not read by this fork yet", f.valueType)
 		}
 		if int(at)+ancho > len(d.raw) {
-			return nil, fmt.Errorf("value #%d claims %d bytes past the end of the file", i, ancho)
+			return f, at, fmt.Errorf("claims %d bytes past the end of the file", ancho)
 		}
 		for k := 0; k < ancho; k++ {
 			f.value |= uint64(d.raw[at]) << (8 * k) // little endian, truncado como el formato
 			at++
 		}
-		out = append(out, f)
 	}
-	return out, nil
+	return f, at, nil
 }
 
 // desmontaPalabras convierte las palabras de un code_item en instrucciones legibles. Nace de la
