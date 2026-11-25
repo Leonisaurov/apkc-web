@@ -92,7 +92,7 @@ autorizado está ejecutado: padre y studio tienen `rev-list --count @{u}..HEAD` 
 - CDP y chromium: no ejecutados en el frente de paneles ni en el de fidelidad; `prueba-pestana.js` y
   `prueba-sitio.js` no corrieron en §347/§352; `docs/plan.md:66` y `docs/plan.md:67`.
 - `studio/e2e.sh`: **en verificación** en `docs/plan.md:60`; la corrida sobre el árbol final dio
-  `e2e: 1 problemas` con `253 comprobaciones bien, 3 mal`, sin `TypeError` en el log del gate (§299)
+  `e2e: 1 problemas` con `253 comprobaciones bien, 3 mal`, sin `TypeError` en el log del gate
   (§299). La prueba focal dejó `256 comprobaciones bien, 0 mal`, pero el gate completo no se repitió.
 - `tools/entorno.sh gate`, CI y `surge . publish`: sin ejecutar; sitio público de este árbol **no
   publicado**. `empaquetar no es publicar` (regla 11).
