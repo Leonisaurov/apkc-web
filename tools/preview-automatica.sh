@@ -29,8 +29,15 @@ while :; do
       TEMPORAL=$(mktemp -d "$BASE/build.XXXXXX")
       corto=$(echo "$head_estable" | cut -c1-8)
       echo "[$(date -u +%FT%TZ)] HEAD $corto: reconstruyendo wasm" >> "$LOG"
+      # El archive de apkc/ no incluye los preview*.go generados: el submódulo se extrae aparte,
+      # en el commit exacto que fija el gitlink de HEAD, y preview-local.sh los va a materializar.
+      subsha=$(git -C "$REPO" ls-tree "$head_estable" apkc-emulador | awk '{print $3}' 2>>"$LOG")
+      mkdir -p "$TEMPORAL/apkc-emulador"
       if git -C "$REPO" archive "$head_estable" apkc -o "$TEMPORAL/apkc.tar" 2>>"$LOG" \
          && tar -x -f "$TEMPORAL/apkc.tar" -C "$TEMPORAL" 2>>"$LOG" \
+         && [ -n "$subsha" ] \
+         && git -C "$REPO/apkc-emulador" archive "$subsha" -o "$TEMPORAL/emulador.tar" 2>>"$LOG" \
+         && tar -x -f "$TEMPORAL/emulador.tar" -C "$TEMPORAL/apkc-emulador" 2>>"$LOG" \
          && APKC_PREVIEW_WASM="$DEST" HOME="$HOME_DIR" \
             tcr -c 2 -m 2G -r 256M -- sh "$REPO/tools/preview-local.sh" "$TEMPORAL" >>"$LOG" 2>&1; then
         # Revalida HEAD tras el mv atomico: si hubo un commit durante el build, NO escribas

@@ -50,6 +50,8 @@ python3 "$AQUI/banco/gen-proyecto-grande.py" "$PROY" "$NCLASES" >/dev/null
 # El hospedador lee ./wasm_exec.js; se copia solo tras pasar el verificador (regla 2: no se versiona).
 ( cd "$AQUI/shim" && . "$AQUI/tools/wasm-exec-hash.sh" && cp "$WASM_EXEC_ORIGEN" . )
 
+# los preview*.go se materializan desde el submódulo antes de compilar el banco
+sh "$AQUI/tools/materializar-emulador.sh" "$AQUI"
 ( cd "$AQUI/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$TMP/inc.wasm" . )
 
 # --montar solo acepta ficheros sueltos, así que se enumera el árbol generado. Se guarda la lista

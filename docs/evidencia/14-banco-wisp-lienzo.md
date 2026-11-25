@@ -1098,7 +1098,7 @@ acoplar y redimensionar en navegador no está verificado (CDP no ejecutada por t
 
 **B. Teclado en los `EditText` (`95dd4b3`/`75cf6c7`).** Builder
 `ses_df1a60ad7ffeZM2piCQa6kqw7T`; crítica `ses_df19b08d1ffePGFWQT6U6OEgpS` APROBAR.
-`apkc preview` ya acepta `--escribir id/texto` (`apkc/preview.go:267`, `:319-320`, `:869-897`);
+`apkc preview` ya acepta `--escribir id/texto` (`apkc-emulador/preview.go:267`, `:319-320`, `:869-897`);
 la página añade `editableEnPunto` (`previa-panel.js:475`), `textosEscritos` (`:748`), campo
 real (`:749-750`), foco y cierre (`:2749-2762`, `:4876`), y reenvía el guion (`:741-756`). No
 muta el documento ni OPFS (contrato `AGENTS.md:188`). `node --check` ×4 y `node prueba.js` sin
@@ -1140,9 +1140,9 @@ stubs: se devuelve el cero de I`— y `apkc preview --pulsar id/lienzo` sobre `l
 cero implícito, así que la rama «concedido» no se mueve. Con el guion
 `--escribir id/entrada/hola --pulsar id/enviar` las capturas antes y después son las mismas cinco,
 incluida `Bluetooth listo - 0 vinculos - 2 mensajes`. `invalidate` devuelve el cero de `V` sin
-captura ni contador: `pintaVistasPropias` (`apkc/previewdibujo.go:102-127`) ejecuta el `onDraw` una
+captura ni contador: `pintaVistasPropias` (`apkc-emulador/previewdibujo.go:102-127`) ejecuta el `onDraw` una
 sola vez al construir la pantalla, con una instancia nueva de la vista
-(`apkc/previewdibujo.go:133-169`); no hay ciclo de fotogramas ni estado de la instancia que viaje,
+(`apkc-emulador/previewdibujo.go:133-169`); no hay ciclo de fotogramas ni estado de la instancia que viaje,
 así que programar un redibujado sería inventar lo que el modelo no puede medir. Tras el clic en
 `id/lienzo` siguen las 17 operaciones y los textos `fotograma 0`, `toques 0`, igual que antes.
 
@@ -1235,9 +1235,9 @@ cd apkc && go test -overlay=<overlay.json> -run TestAuditoriaCruce -count=1 -v .
 
 Medición previa, en `46a9a792`: la APK de `traducido` (`string/saludo`) mostraba `Hello!` en el
 modelo de `apkc preview` mientras `aapt2 dump resources` ya veía `(es) "Hola!"`. El lector elegía
-la configuración base (`apkc/recursos.go:604`, `:624`), no había flag (`apkc/preview.go:267`) y
-`esConfiguracionBase` (`apkc/preview.go:2545`) excluía `values-es`. Ahora `tablaRecursos` lleva
-`locale` (`apkc/recursos.go:390`), que el flag asigna tras `leeTabla` (`apkc/preview.go:645`), y
+la configuración base (`apkc/recursos.go:604`, `:624`), no había flag (`apkc-emulador/preview.go:267`) y
+`esConfiguracionBase` (`apkc-emulador/preview.go:2545`) excluía `values-es`. Ahora `tablaRecursos` lleva
+`locale` (`apkc/recursos.go:390`), que el flag asigna tras `leeTabla` (`apkc-emulador/preview.go:645`), y
 `valorDeId` (`apkc/recursos.go:754`) elige el bloque por `language` en +8/+9 y `country` en +10/+11
 (§94, §107): prefiere el país exacto al país vacío y cae a la base si la entrada localizada falta,
 está `ausente` o es compleja. No se tocaron `bloqueDeTipo` ni `entradaDeId`, así que los ids, las

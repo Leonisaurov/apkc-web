@@ -19,6 +19,13 @@ else
   printf 'aviso: no hay toolchain go1.24.0 en %s; se usa la del PATH\n' "$GOROOT" >&2
 fi
 
+# materializar el emulador antes del build. El script se busca junto a este fichero (no bajo
+# $RAIZ) porque el vigilante llama a este guion con un árbol temporal que solo contiene apkc/.
+HERRAMIENTAS=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd)
+materializar=${APKC_MATERIALIZAR:-$HERRAMIENTAS/materializar-emulador.sh}
+SUBMODULO=${APKC_EMULADOR_DIR:-$RAIZ/apkc-emulador}
+sh "$materializar" "$RAIZ" "$SUBMODULO"
+
 TEMPORAL=$DESTINO.tmp.$$
 GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -C "$RAIZ/apkc" -ldflags='-s -w' -o "$TEMPORAL" .
 mv -f "$TEMPORAL" "$DESTINO"

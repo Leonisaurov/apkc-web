@@ -57,8 +57,8 @@ posteriores desplazan la numeración.
 
 **Qué cambió, con su línea.** (1) Una actividad abierta por `startActivity` que no llama a
 `setContentView` devuelve error y `estabiliza` avisa y reanuda la anterior, en vez de pintar el
-layout `main` de la lanzadora (`apkc/previewinterprete.go:777`; el resultado se recibe en
-`apkc/preview.go:314` y el layout se elige después en `:336`). (2) Un `setOnClickListener`
+layout `main` de la lanzadora (`apkc-emulador/previewinterprete.go:777`; el resultado se recibe en
+`apkc-emulador/preview.go:314` y el layout se elige después en `:336`). (2) Un `setOnClickListener`
 registrado en `onCreate` gana al `android:onClick` del XML sobre la misma vista, como en Android: el
 enlace declarativo se salta si ya hay un oyente programático (`previewinterprete.go:990`). `pulsa` no
 cambia de contrato: sigue valiendo el último oyente registrado, y el programático es el último. (3) El tope de 32 clics se
@@ -177,7 +177,7 @@ $AAPT2 dump resources out.apk | grep -i -C3 probe
 
 **Resultado**: `resource 0x7f010000 color/probe` y `() #ff336699`; leído directo el `Res_value` del
 `resources.arsc`, `dataType=0x1d data=0xff336699`. `762b328` añade `tipoColorRGB8 = 0x1d` en
-`apkc/preview.go:70` y lo incluye en `colorDeCon` (`:1227`), con la prueba nueva
+`apkc-emulador/preview.go:70` y lo incluye en `colorDeCon` (`:1227`), con la prueba nueva
 `TestElColorRGB8DeAapt2SeLeeComoColor` (`previewvisual_test.go:265`), que pasa el `Res_value` de la
 sonda (`0x1d`, `0xff336699`) y exige `#336699`. Verificación sobre cinco pruebas:
 
@@ -189,7 +189,7 @@ cd apkc && APKC_ANDROID_JAR=/home/leonisauro/opt/android-sdk/platforms/android-3
 **Resultado**: cinco `--- PASS` y `ok github.com/ajinasokan/apkc 0.101s`.
 
 **H5, frontera decidida (sin código).** `ladosDe` usa los ids de atributo `idVistaPadding*` como
-claves de estilo tanto para `padding` como para `layout_margin` (`apkc/preview.go:1165-1173`); para
+claves de estilo tanto para `padding` como para `layout_margin` (`apkc-emulador/preview.go:1165-1173`); para
 leer `layout_margin` desde `@style` harían falta los ids `layout_margin*` del framework, que no
 están en el alcance escrito de E4. Queda como frontera honesta: `layout_margin` desde `@style` no
 se resuelve, y no se finge que sí.
@@ -236,7 +236,7 @@ previa en el worktree dejó además las líneas `PASS` de `TestElPreviewPulsaElL
 
 **Pregunta abierta (INCIERTA, no bloqueante).** No se ejecutó una sonda combinada `--recrear` más
 `--pulsar id/lista:1`; la convivencia de la lista con la recreación se verificó por inspección
-(`apkc/previewinterprete.go:854-860` y `:944`, líneas de `a76422d`), no con una prueba. Queda
+(`apkc-emulador/previewinterprete.go:854-860` y `:944`, líneas de `a76422d`), no con una prueba. Queda
 pendiente decidir si esa sonda entra en E5 o en la prueba de pestaña.
 
 **Fronteras de este `§`.** (1) Quedan fuera `RecyclerView` con `LayoutManager` real, el reciclado,
@@ -330,7 +330,7 @@ con los pasos`); `apkc/` no cambió entre ese commit y `6243d9d`, que solo mueve
 **Causa raíz.** Los defectos de E6 eran aritmética y estado derivado sin función total: dos sumas
 de reloj sin guardia y un presupuesto de pasos global que cortaba la cola y publicaba un destino
 que no se había ejecutado. Se corrigió con la guardia de desbordamiento en `difiere`
-(`apkc/previewinterprete.go:674-684`), el presupuesto por tarea (`pasosBase`, `:654`, con el
+(`apkc-emulador/previewinterprete.go:674-684`), el presupuesto por tarea (`pasosBase`, `:654`, con el
 límite en `:2458-2461`) y el corte solo cuando hay una tarea vencida (`vence:648`). Las dos únicas
 sumas de reloj (`avanza:604-607` y `difiere:678`) tienen guardia; las demás son asignaciones.
 
@@ -479,7 +479,7 @@ cero: esa frontera ya no existe.
 **Fronteras de este `§`.** El `finally` y el multi-catch **no** se han medido: el compilador los emite
 como catch-all y como varias filas del mismo handler, y el despacho debería cubrirlos, pero eso no
 está probado y no se afirma. Una excepción que cruce de una actividad a otra **sí** ocurre, como
-aproximación: la pila `pila` existe (`apkc/previewinterprete.go:1280,1307`), y si la segunda
+aproximación: la pila `pila` existe (`apkc-emulador/previewinterprete.go:1280,1307`), y si la segunda
 actividad lanza, su arranque se degrada a aviso («B no arrancó: …IllegalStateException: boomB») y la
 primera reanuda con `Error=""` y `Pantallas=[A]`. Lo midió el crítico
 `ses_df93095c5ffeyRt8kl6K1MhO3T` con `go test -run TestCriticoExcepcionCruzaActividad` (prueba
@@ -1067,7 +1067,7 @@ una vista propia se interpretan. Un APK de terceros arrastrado al emulador,
 test correspondiente falla.
 
 **Mensajes del rechazo.** Un APK sin layout responde `el apk no lleva ningún res/layout/*.xml`
-(`apkc/preview.go:962`) y un zip roto, `el apk no es un zip` (`apkc/preview.go:465`).
+(`apkc-emulador/preview.go:962`) y un zip roto, `el apk no es un zip` (`apkc-emulador/preview.go:465`).
 
 **Fronteras de este `§`.** `onDraw` corre sobre una instancia nueva con un `Canvas` de mentira, no
 sobre el árbol dibujado real. `vista-previa.js` todavía no pinta `nodo.dibujo`. Un APK ofuscado puede

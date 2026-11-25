@@ -55,6 +55,7 @@ mkdir -p "$CACHE"
 APKC=${APKC:-$CACHE/apkc}
 if [ ! -x "$APKC" ]; then
 	echo "compilando apkc en $APKC"
+	sh "$RAIZ/tools/materializar-emulador.sh" "$RAIZ"
 	if command -v tcr >/dev/null 2>&1; then
 		( cd "$RAIZ/apkc" && tcr -c 4 -m 3G go build -o "$APKC" . )
 	else

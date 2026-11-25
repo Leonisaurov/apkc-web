@@ -326,7 +326,7 @@ lee `@string/saludo`, y abre la sesión por la misma puerta que el arranque wasm
 `nuevaSesionPreviewDelEntorno` lee `APKC_SESION_LOCALE` y lo pasa como tercer argumento de
 `nuevaSesionPreview`. El valor queda en `s.locale` y `modeloConResultado()` lo reaplica en cada
 repintado, así que una orden `--pulsar id/pulsar` **sin** `--locale` sigue devolviendo `Hola!`.
-`apkc/previewsesion_js.go:45` llama a ese mismo helper, y `studio/hospedador.js` pone la variable en
+`apkc-emulador/previewsesion_js.go:45` llama a ese mismo helper, y `studio/hospedador.js` pone la variable en
 `go.env` al crear la instancia (quitando `--locale` del argv de arranque, que el `FlagSet` de
 `preview --sesion` no acepta).
 

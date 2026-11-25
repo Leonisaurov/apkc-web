@@ -21,44 +21,44 @@ que se mide cada fase; nada de lo que sigue se da por bueno sin su comando.
 
 ### 1.1 Lectura del APK y del layout
 
-- `apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… app.apk` (`apkc/preview.go:178`)
+- `apkc preview [--layout nombre] [--sin-ejecutar] [--pulsar id]… app.apk` (`apkc-emulador/preview.go:178`)
   lee el `AndroidManifest.xml`, el `resources.arsc` y un `res/layout/*.xml` del propio APK con los
   lectores del fork (`leeAXML` y `leeTabla`), y emite **una línea de JSON**: paquete, versión,
   actividad, layout, pantalla, nodos y el árbol con tipo, id, texto, tamaño declarado, `gravity`,
-  `padding`, margen, peso y rectángulo (`modeloVista` en `apkc/preview.go:142`).
+  `padding`, margen, peso y rectángulo (`modeloVista` en `apkc-emulador/preview.go:142`).
 - La colocación aplica reglas de `LinearLayout` (orientación, `gravity`, `layout_gravity`,
   `layout_weight`, `weightSum`, `padding` y márgenes) y el apilado de `FrameLayout` y del resto de
-  `*Layout` (`tipoDeContenedor`, `apkc/preview.go:1170`). `RelativeLayout` se reconoce como
+  `*Layout` (`tipoDeContenedor`, `apkc-emulador/preview.go:1170`). `RelativeLayout` se reconoce como
   contenedor apilado, **no** se resuelve su álgebra de reglas.
 - El ancho y el alto de una hoja son una estimación: alto de texto 24 dp, alto de botón 48 dp, 8 dp
-  por carácter y 16 dp de relleno (`apkc/preview.go:43-50`). La pantalla del modelo es 360×640 dp a
+  por carácter y 16 dp de relleno (`apkc-emulador/preview.go:43-50`). La pantalla del modelo es 360×640 dp a
   160 dpi.
 - `--layout` elige por nombre de recurso; si la actividad ejecutada llama a `setContentView`, manda
-  el id que la app escribe (`rutaDelLayoutDeLaActividad`, `apkc/preview.go:484`).
+  el id que la app escribe (`rutaDelLayoutDeLaActividad`, `apkc-emulador/preview.go:484`).
 - Un `android:onClick="metodo"` del layout se enlaza al inflar, como el framework
-  (`registraOnClickDeclarativo`, `apkc/previewinterprete.go:710`).
+  (`registraOnClickDeclarativo`, `apkc-emulador/previewinterprete.go:710`).
 
 ### 1.2 Ejecución Dalvik
 
 - Corre **`main` o `onCreate`** de la actividad lanzadora del manifiesto
-  (`ejecutaOnCreatePreparando`, `apkc/previewinterprete.go:521`), incluido el constructor `<init>`.
+  (`ejecutaOnCreatePreparando`, `apkc-emulador/previewinterprete.go:521`), incluido el constructor `<init>`.
 - `--pulsar` entrega clics **en orden, dentro de la misma ejecución**, hasta 32
-  (`pulsacionesMaximas`, `apkc/previewinterprete.go:47`). Un clic cuya vista no tiene oyente devuelve
+  (`pulsacionesMaximas`, `apkc-emulador/previewinterprete.go:47`). Un clic cuya vista no tiene oyente devuelve
   error con código 2. El estado que ve cada `onClick` incluye los clics anteriores, y repetir la
   misma lista reproduce la misma pantalla.
 - Stubs de framework reconocidos por nombre y firma (`intentaStub`,
-  `apkc/previewinterprete.go:1671`): `setContentView`, `findViewById`, `setOnClickListener`,
+  `apkc-emulador/previewinterprete.go:1671`): `setContentView`, `findViewById`, `setOnClickListener`,
   `setText`, `getText`, `append` (de `TextView` y de `StringBuilder`), `getString(id)`,
   `getId`, `setTag`/`getTag`, `setTitle`, `Log.*`, `print`/`println`, `String.valueOf`,
   `Integer.parseInt`, `charAt`, `length`, `isEmpty`, `equals`, `toString`.
 - Los métodos de `Activity` del ciclo de vida **solo se absorben como stubs** cuando el `invoke` los
-  resuelve contra `Landroid/app/Activity;` (`apkc/previewinterprete.go:1704`). Si la app **sobreescribe**
+  resuelve contra `Landroid/app/Activity;` (`apkc-emulador/previewinterprete.go:1704`). Si la app **sobreescribe**
   `onStart`, `onResume`, `finish`, etc., el intérprete **no los llama**: no hay ciclo de vida.
 - `startActivity`, `Intent(Context, Class)` y una pila de actividades existen desde E1 (§205). Una
   excepción de la segunda actividad no se propaga a la primera: su arranque se degrada a aviso y la
   primera reanuda; es una aproximación, no una ausencia.
 - Lo que no se emula se dice por su nombre y se devuelve el cero del tipo de retorno, sin romper el
-  modelo (`rechaza`, `apkc/previewinterprete.go:1659`): `Editable`/`Spannable`, `Html.fromHtml`, la
+  modelo (`rechaza`, `apkc-emulador/previewinterprete.go:1659`): `Editable`/`Spannable`, `Html.fromHtml`, la
   reflexión y `getString(id, args)` con formato.
 - Un método con tabla de excepciones (`triesSize > 0`) **sí se ejecuta**: el intérprete lee los
   `try_item` y la lista de handlers, busca el que cubre la unidad y reanuda en su `handler_pc` con
@@ -66,7 +66,7 @@ que se mide cada fase; nada de lo que sigue se da por bueno sin su comando.
   división entera por cero; sin handler, el error sale con el tipo y el mensaje. El `finally` y el
   multi-catch están sin medir y no se dan por hechos.
 - Límites: 200 000 pasos, 64 capturas, 24 avisos y 48 llamadas anidadas
-  (`apkc/previewinterprete.go:39-50`).
+  (`apkc-emulador/previewinterprete.go:39-50`).
 
 ### 1.3 Lo que la pestaña ya hace con ese modelo
 

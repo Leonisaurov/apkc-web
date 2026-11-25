@@ -692,7 +692,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
 - **El intérprete de `preview` se queda sin avisos y el modelo se acerca a la captura del cell
   (§289, §290 y §293)**: dos stubs en `apkc/previewinterprete.go` —`checkSelfPermission` devuelve
   `int32(0)` (`PERMISSION_GRANTED`) e `invalidate` el cero de `V` sin redibujar, porque
-  `pintaVistasPropias` (`apkc/previewdibujo.go:102-127`) corre el `onDraw` una sola vez con una
+  `pintaVistasPropias` (`apkc-emulador/previewdibujo.go:102-127`) corre el `onDraw` una sola vez con una
   instancia nueva— bajan de 1 a 0 los avisos en `chatbt` y `lienzo`, sin mover las cinco capturas
   (`Bluetooth listo - 0 vinculos - 2 mensajes`) ni las 17 operaciones (`fotograma 0`, `toques 0`).
   `--locale es` lee `values-es` y `--locale es-MX` prefiere `values-es-rMX`: `id/saludo` dice `Hola!`
@@ -849,3 +849,34 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   opt-in y apagado por defecto**; la licencia de las raíces (MPL 2.0 / Mozilla CA Certificate
   Policy) **no verificada localmente**, así que no se publica ni se hace `git push` a `apkc-studio`;
   sin gate, CI, CDP ni red en esta corrida.
+- §350: el intérprete sale del padre y vive en el submódulo `apkc-emulador/` sin cambiar una línea
+  del compilador ni de la página. El `subtree split` directo falló con
+  `could not rev-parse split hash a9092148… from commit ab4fd902…`; con `--ignore-joins` salió
+  `aa78f5fbda6dae426eaeb69ad5a24584ea5a17bd`, que se importó sin red y se podó con
+  `filter-branch --prune-empty` a **34 ficheros y 59 commits** en la rama `emulador-modulo`
+  (el puntero es `563e991 fix(preview): hereda el locale…`). `git rm 'apkc/preview*.go'` y
+  `submodule add` con `protocol.file.allow=always` dejaron el gitlink; el puntero de `studio` sigue
+  en `8788604081945ed58314d333fa5b06e97eb2b7b3` (`ahead 1`, sin empujar). Compilando los dos
+  árboles desde la misma ruta, `cmp` da salida vacía y ambos wasm tienen sha256
+  `a00e24effe90aff741a2ae63e5976985ed8dc88880073979bf5b3a707b9c9c43`; el JSON de
+  `node shim/navegador-sim.js … preview /app.apk` es idéntico al de antes (`nodos: 3`,
+  `pasos: 22`). Frontera: el wasm servido sigue en el checkout principal; la CI con
+  `submodules: recursive` fallará hasta que se autorice el push del submódulo y del gitlink;
+  deuda registrada, no hecha; sin gate, CDP, red ni publicación.
+- §351: el contrato es de fuentes gobernadas, no de import Go (los campos no exportados del
+  intérprete lo impiden). `sh tools/materializar-emulador.sh` → «materializados 34 ficheros
+  preview*.go» y el bucle `cmp` de los 34 no da salida; seis hooks cubren todos los build
+  (`entorno.sh:130-131,135,142,148,170`, `preview-local.sh:22-27`,
+  `preview-automatica.sh:32-40`) y nueve guiones de `banco/` compilan con la copia materializada.
+  Falsación: un byte cambiado en un clon da `cmp … differ: byte 121, line 4`, `rc=1`; tras
+  materializar, el bucle `cmp` da `rc=0`. Frontera: el vigilante en vivo no se corrió en esta
+  sesión; su cobertura se demostró leyendo el código y ejecutando el guion, no reconstruyendo el
+  servidor.
+- §352: la pestaña no cambia. Con los 34 ficheros materializados y Go 1.24.0,
+  `go test -run TestPreview -v .` → `ok github.com/ajinasokan/apkc 1.337s` y
+  `go test -count=1 ./...` → `ok github.com/ajinasokan/apkc 260.651s`; el wasm se construyó con
+  `GOOS=js GOARCH=wasm CGO_ENABLED=0` y el hospedador devolvió el mismo JSON del §350;
+  `cd studio && node prueba.js` → «prueba: todo en orden» (`fallos=0`, `prueba.js:6722`), 9/9
+  reglas contra salidas reales. Frontera: no se corrieron el gate, `prueba-pestana.js` ni
+  `prueba-sitio.js` (CDP), ni `surge`, ni `push`; `studio` sigue `ahead 1` y CI no puede clonar el
+  submódulo hasta el push autorizado. Nada se da por verde por analogía (regla 11).

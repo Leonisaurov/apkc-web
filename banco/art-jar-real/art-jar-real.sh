@@ -82,6 +82,7 @@ D8=${D8:-$(ls "$ANDROID_HOME"/build-tools/*/d8 2>/dev/null | sort -V | tail -1)}
 APKC=${APKC:-$CACHE/apkc}
 if [ ! -x "$APKC" ]; then
 	echo "compilando apkc en $APKC"
+	sh "$RAIZ/tools/materializar-emulador.sh" "$RAIZ"
 	( cd "$RAIZ/apkc" && CGO_ENABLED=0 go build -o "$APKC" . )
 fi
 

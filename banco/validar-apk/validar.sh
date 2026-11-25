@@ -44,6 +44,7 @@ falla() {
 APKC=${APKC:-$CACHE/apkc}
 if [ ! -x "$APKC" ]; then
 	echo "compilando apkc en $APKC"
+	sh "$RAIZ/tools/materializar-emulador.sh" "$RAIZ"
 	( cd "$RAIZ/apkc" && CGO_ENABLED=0 go build -o "$APKC" . )
 fi
 JAR=${APKC_ANDROID_JAR:-${ANDROID_JAR:-}}

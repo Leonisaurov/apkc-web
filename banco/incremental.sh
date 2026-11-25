@@ -28,6 +28,7 @@ export GOMAXPROCS=${GOMAXPROCS:-2}
 APKC=${APKC:-$TRABAJO/apkc}
 if [ ! -x "$APKC" ]; then
 	echo "compilando apkc en $APKC"
+	sh "$AQUI/tools/materializar-emulador.sh" "$AQUI"
 	( cd "$AQUI/apkc" && CGO_ENABLED=0 go build -o "$APKC" . )
 fi
 

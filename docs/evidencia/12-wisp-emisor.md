@@ -270,15 +270,15 @@ un proto que lleva una referencia —`Lcom/hola/Saludo;/suma(Lcom/hola/Saludo;)I
 **dentro del parámetro**, la clase sale truncada y la cola ya no empieza por `/`: la forma con referencia
 no se podía usar.
 
-**El arreglo.** `parteFirmaDeIntercambio` (`apkc/preview.go:490`) parte con la gramática del descriptor
+**El arreglo.** `parteFirmaDeIntercambio` (`apkc-emulador/preview.go:490`) parte con la gramática del descriptor
 DEX: exige que la firma empiece por `L`, cierra la clase en su **primer** `;` (`strings.IndexByte`) y lo
 que sigue es o nada —la clase entera—, o `/metodo` sin proto, o `/metodo(proto)retorno`. El proto admite
 referencias y arreglos porque sus `;` y sus `[` vienen después del que cerró la clase; el retorno se
-valida con `esTipoDeRetorno` (`apkc/preview.go:539`). `eventoDeIntercambio` (`apkc/preview.go:459`) solo
+valida con `esTipoDeRetorno` (`apkc-emulador/preview.go:539`). `eventoDeIntercambio` (`apkc-emulador/preview.go:459`) solo
 lee el dex y rellena el evento.
 
 **Las tres formas**, con el evento que deja cada una, en `TestLaFirmaDeIntercambioAceptaLasTresFormas`
-(`apkc/previewfirma_test.go:42`): `Lcom/hola/Saludo;` (clase entera), `Lcom/hola/Saludo;/suma` (método
+(`apkc-emulador/previewfirma_test.go:42`): `Lcom/hola/Saludo;` (clase entera), `Lcom/hola/Saludo;/suma` (método
 sin proto) y `Lcom/hola/Saludo;/suma(Lcom/hola/Saludo;)I` (método con proto). El mismo test comprueba que
 `([I[[Lcom/hola/Saludo;)V` se parte sin confundir el troceo y que siete firmas malas se rechazan: sin
 descriptor, descriptor sin `;`, `/` sin método, proto sin nombre, proto sin retorno, retorno que no es
@@ -314,15 +314,15 @@ si hay sobrecargas`). La forma `clase/metodo` del flag dejaba `Proto` vacío y `
 `descDeProto(ref.proto) != proto` con `proto` vacío, así que **nunca** encontraba el método: el nombre
 solo servía si además se escribía el proto.
 
-**El arreglo.** `metodoDeClase` (`apkc/previewhotswap.go:48`) filtra por nombre y trata el proto como
+**El arreglo.** `metodoDeClase` (`apkc-emulador/previewhotswap.go:48`) filtra por nombre y trata el proto como
 opcional. Tres desenlaces: sin candidatos, el error de siempre con el proto pedido; con **más de uno**,
 rechazo que enumera los protos vistos y pide el completo —`… pide el proto completo, como
 Saludo.valor()I`, con `strings.Join` de los descriptores—; con uno solo, se toma ese y el
 `metodoDalvik` lleva el `descDeProto(ref.proto)` **resuelto**, no el vacío del flag. Con el proto ya
-resuelto, la clave `nombre+proto` del intérprete (`apkc/previewinterprete.go:2700`) encuentra el método
+resuelto, la clave `nombre+proto` del intérprete (`apkc-emulador/previewinterprete.go:2700`) encuentra el método
 y el `invoke` del programa vivo se engancha al cuerpo nuevo.
 
-**La resolución por nombre.** `TestLaFirmaSinProtoResuelvePorNombre` (`apkc/previewfirma_test.go:193`)
+**La resolución por nombre.** `TestLaFirmaSinProtoResuelvePorNombre` (`apkc-emulador/previewfirma_test.go:193`)
 deja `valor()` en 102 tras dos `sube()`, intercambia con `Lcom/hola/Saludo;/valor` —sin proto— y
 comprueba que el resultado **dice** `()I` y que el programa responde 202: el nombre resolvió y el cuerpo
 nuevo se ejecutó sobre el mismo objeto, con su `n`.
@@ -596,7 +596,7 @@ clic del canvas que `§242` había destapado.
 `regs[pos]` sin mirar el marco: con `insSize` 1 y tres argumentos desbordaba el slice y el `recover`
 del intérprete lo disfrazaba de «dex malformado». Ahora `colocaArgumentos` cuenta las palabras y las
 compara con `insSize` y `registersSize` antes del bucle, y el fallo es un error de contrato de llamada
-con método, número de argumentos y palabras, sin pasar por el `recover` (`apkc/previewinterprete.go:2930`
+con método, número de argumentos y palabras, sin pasar por el `recover` (`apkc-emulador/previewinterprete.go:2930`
 y `:3003`); un `code_item` que escribe fuera del marco sigue siendo dex malformado. La asignación
 anidada y la ancha ya se cerraron en `§252` (`0936c32`) y no se re-midieron aquí. El tipo cualificado
 de `MainActivity.java:218`, `AlertDialog.Builder builder = new AlertDialog.Builder(this)`, se acepta

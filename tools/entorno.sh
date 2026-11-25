@@ -124,18 +124,28 @@ tcr_o_directo() {
   fi
 }
 
+# El emulador vive en el submódulo apkc-emulador/; sus fuentes se materializan en apkc/ antes de
+# cualquier compilación. Los cuatro puntos que compilan (test, wasm, gate y sitio/publicar) pasan
+# por aquí, así que ningún camino puede quedarse sin los 34 ficheros preview*.go.
+materializar_emulador() {
+  sh "$RAIZ/tools/materializar-emulador.sh" "$RAIZ"
+}
+
 compila_wasm() {
+  materializar_emulador
   ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$TMP/apkc-test.wasm" . )
   # La versión de Go y la suma de wasm_exec.js se fijan en un solo sitio; el cp lee de ahí.
   ( cd "$RAIZ/shim" && . "$RAIZ/tools/wasm-exec-hash.sh" && cp "$WASM_EXEC_ORIGEN" . )
 }
 
 construye_wasm() {
+  materializar_emulador
   ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build \
       -ldflags='-s -w' -o "$TMP/apkc-wasm.wasm" . )
 }
 
 construye_binarios() {
+  materializar_emulador
   ( cd "$RAIZ/apkc" && go build -o "$TMP/apkc-gate" . )
   construye_wasm
 }
@@ -157,6 +167,7 @@ tarea=${1:-doctor}
 
 case "$tarea" in
   test)
+    materializar_emulador
     ( cd "$RAIZ/apkc" && tcr_o_directo go test -count=1 ./... )
     ;;
   wasm)

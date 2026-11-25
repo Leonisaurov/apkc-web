@@ -89,7 +89,7 @@ orden 4 [--pulsar id/guardar] -> rc=0 filas=2 avisos=[el getCount de la lista 0x
 ```
 
 Causa confirmada: el `redibujar()` inicial pasa un `String[0]`; en
-`apkc/previewinterprete.go:4176`, `append([]any(nil), arr.datos...)` con cero datos devuelve `nil`,
+`apkc-emulador/previewinterprete.go:4176`, `append([]any(nil), arr.datos...)` con cero datos devuelve `nil`,
 así que `elementos` queda nulo y `cuentaDelAdaptador` cae en un `getCount` que solo existe como stub.
 `apkc/preview.go:1046` buscaba la lista solo por el id hexadecimal formateado.
 
