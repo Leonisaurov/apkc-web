@@ -2552,6 +2552,20 @@ func (n *nodoVista) colocarHorizontal() {
 		}
 		total += h.medAncho + h.margen.horizontal()
 	}
+	// Una fila que no cabe en su hueco se refluye en vez de desbordar: ningún hijo se poda,
+	// pero sus cajas y sus márgenes se encogen con el mismo factor (§336).
+	if total > interiorAncho && interiorAncho > 0 && len(n.Hijos) > 1 {
+		factor := float64(interiorAncho) / float64(total)
+		for _, h := range n.Hijos {
+			if h.estaGone() {
+				continue
+			}
+			h.medAncho = max(1, int(float64(h.medAncho)*factor))
+			h.margen.Izq = int(float64(h.margen.Izq) * factor)
+			h.margen.Der = int(float64(h.margen.Der) * factor)
+		}
+		total = interiorAncho
+	}
 	cursor := n.Rect.X + n.pad.Izq
 	switch horizontalDeGravity(n.gravityBits) {
 	case gravityDerecha:
