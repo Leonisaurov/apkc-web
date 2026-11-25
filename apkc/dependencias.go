@@ -310,19 +310,22 @@ func entradaDelZip(ruta, nombre string) ([]byte, error) {
 //
 // `lib` y `jni` son los dos layouts con los que viaja un `.so`: el viejo `lib/<abi>/` y el que
 // escribe el SDK, `jni/<abi>/`. Se extraen por separado y `nativosDeAars` los junta bajo el nombre
-// canónico del paquete, para que un AAR con el layout real no pierda sus nativos.
+// canónico del paquete, para que un AAR con el layout real no pierda sus nativos. `manifiesto`
+// es el `AndroidManifest.xml` extraído: el enlazador fusiona sus hijos con los del proyecto.
 type aarDelProyecto struct {
-	aar  string
-	isla string
-	res  string
-	lib  string
-	jni  string
+	aar        string
+	isla       string
+	res        string
+	lib        string
+	jni        string
+	manifiesto string
 }
 
 // versionDeExtraccionAar entra en el nombre de la carpeta extraída. Una carpeta de una versión
-// anterior del extractor no aporta lo mismo —los `jni/<abi>/*.so` se ignoraban—, así que no se
-// reutiliza: la marca `.extraido` sola no bastaría para saber con qué reglas se llenó.
-const versionDeExtraccionAar = "e2"
+// anterior del extractor no aporta lo mismo —los `jni/<abi>/*.so` se ignoraban y el manifiesto
+// no se extraía—, así que no se reutiliza: la marca `.extraido` sola no bastaría para saber con
+// qué reglas se llenó. `e2` solo extrajo recursos y nativos; `e3` añade el manifiesto.
+const versionDeExtraccionAar = "e3"
 
 // aarsExtraidos es la puerta de la mitad de recursos y nativos de las dependencias: recorre `jar/`,
 // y por cada `.aar` deja sus entradas `res/`, `lib/` y `jni/` en `build/aar/<sha1 de la ruta>-<crc>/`.
@@ -356,6 +359,9 @@ func aarsExtraidos(raiz string) ([]aarDelProyecto, error) {
 		}
 		if existeDirectorio(filepath.Join(base, "jni")) {
 			dependencia.jni = filepath.Join(base, "jni")
+		}
+		if exists(filepath.Join(base, "AndroidManifest.xml")) {
+			dependencia.manifiesto = filepath.Join(base, "AndroidManifest.xml")
 		}
 		salida = append(salida, dependencia)
 	}
@@ -444,9 +450,9 @@ func extraerAar(rutaAar, base string) error {
 }
 
 // rutaSeguraDelAar devuelve la ruta relativa de una entrada del AAR si aporta algo al paquete, o
-// vacío si es de las que no se extraen. Una entrada fuera de `res/`, `lib/` y `jni/` se ignora (el
-// manifiesto, `R.txt` y las clases tienen su propio camino); una que intente salir de la carpeta
-// es un error, no algo que se salte en silencio.
+// vacío si es de las que no se extraen. Se extraen `res/`, `lib/`, `jni/` y el manifiesto; `R.txt`
+// y las clases tienen su propio camino y no se fusionan. Una que intente salir de la carpeta es
+// un error, no algo que se salte en silencio.
 func rutaSeguraDelAar(nombre string) (string, error) {
 	if strings.Contains(nombre, "\\") {
 		return "", fmt.Errorf("la entrada %q del AAR usa separador de Windows", nombre)
@@ -455,7 +461,8 @@ func rutaSeguraDelAar(nombre string) (string, error) {
 	if limpio == "." || limpio == ".." || strings.HasPrefix(limpio, "../") || strings.HasPrefix(limpio, "/") {
 		return "", fmt.Errorf("la entrada %q del AAR sale de su carpeta", nombre)
 	}
-	if !strings.HasPrefix(limpio, "res/") && !strings.HasPrefix(limpio, "lib/") && !strings.HasPrefix(limpio, "jni/") {
+	if limpio != "AndroidManifest.xml" && !strings.HasPrefix(limpio, "res/") &&
+		!strings.HasPrefix(limpio, "lib/") && !strings.HasPrefix(limpio, "jni/") {
 		return "", nil
 	}
 	return limpio, nil

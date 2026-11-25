@@ -196,6 +196,12 @@ func fuentesDelProyecto(raiz string) (valores, layouts, ficheros []fuenteXML, ma
 	if err != nil {
 		return nil, nil, nil, manifiesto, fmt.Errorf("el proyecto no tiene AndroidManifest.xml: %w", err)
 	}
+	// Los hijos que aportan las islas y los AAR se fusionan aquí, con el proyecto por delante:
+	// el manifiesto que se enlaza es el resultante, no el fichero suelto del proyecto.
+	manifiesto, err = manifiestoConDependencias(raiz, manifiesto)
+	if err != nil {
+		return nil, nil, nil, manifiesto, err
+	}
 	// `<permission>` ya no se rechaza: el enlace escribe su Manifest.java (parrafo 102).
 
 	res := filepath.Join(raiz, "res")
@@ -334,6 +340,9 @@ func fuentesDeIslasDeDependencias(disco string) (valores, layouts, ficheros []fu
 			return nil, nil, nil, err
 		}
 		for _, tipo := range tipos {
+			if tipo.Name() == "AndroidManifest.xml" {
+				continue // la fusiona manifiestoConDependencias, no es una carpeta de recursos
+			}
 			if !tipo.IsDir() {
 				return nil, nil, nil, fmt.Errorf("res/%s/%s/%s no es una carpeta de recursos", carpetaDeps, isla.Name(), tipo.Name())
 			}

@@ -78,7 +78,9 @@ func aarConRecursosYNativos(t *testing.T, saludo string, so []byte) []byte {
 	// real para que la prueba mida lo que de verdad se suelta en `jar/`
 	return zipDeAar(t, map[string][]byte{
 		"AndroidManifest.xml": []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.hola.util"/>`),
-		"R.txt":               []byte("int string aar_saludo 0x0\nint layout aar_panel 0x0\n"),
+		// el campo fantasma solo vive en R.txt: si apareciera en la R del enlace, se habría
+		// fusionado el R.txt del AAR en vez de regenerar la tabla desde sus recursos
+		"R.txt": []byte("int string aar_saludo 0x0\nint layout aar_panel 0x0\nint string aar_fantasma 0x0\n"),
 		"classes.jar":         clases.Bytes(),
 		"res/values/aar_strings.xml": []byte(`<?xml version="1.0" encoding="utf-8"?>
 <resources>
@@ -270,10 +272,14 @@ public class Usa {
 	if !contieneEnArsc(t, "aar_panel") {
 		t.Fatal("el nombre del layout del AAR no está en la tabla")
 	}
+	rJava := leerRJava(t)
 	for _, quiero := range []string{"aar_panel", "aar_saludo"} {
-		if !strings.Contains(leerRJava(t), quiero) {
+		if !strings.Contains(rJava, quiero) {
 			t.Errorf("R.java no declara %q: el proyecto no puede compilar contra el AAR", quiero)
 		}
+	}
+	if strings.Contains(rJava, "aar_fantasma") {
+		t.Errorf("R.java declara aar_fantasma: se fusionó el R.txt del AAR en vez de regenerar la R del enlace")
 	}
 	layout, err := os.ReadFile(filepath.Join("build", "res", "layout", "aar_panel.xml"))
 	if err != nil {

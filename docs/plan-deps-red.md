@@ -272,10 +272,17 @@ por artefacto y tipo y escribe la salida como `res/<tipo>/x.xml` sin la isla; re
 fichero un recurso de fichero duplicado entre app y AAR, como el «duplicate value» de `aapt2`.
 `packagePlan` ya metía `lib/**`. El crítico `ses_df915d191ffetJ53F3oGQiKaI1` dio **APROBAR** sin
 hallazgos confirmados: atacó la ruta de salida, el duplicado, la entrada `lib/x86/libejemplo.so`, el
-rebuild incremental al cambiar el `.so` y la regresión de I3/I4/I5. Fronteras declaradas, no
-defectos: tipos de recurso no medidos (`drawable` XML/vectorial, `anim`, `font` y algunos `values`),
-dos AAR con la misma clave `values` (solo se detectan ficheros duplicados) y el `AndroidManifest.xml`
-y `R.txt` del AAR fuera. Evidencia: §216 de `docs/evidencia.md`.
+rebuild incremental al cambiar el `.so` y la regresión de I3/I4/I5. **Re-medido en esta sesión**:
+`cd apkc && tcr -c 2 -m 1536M -r 256M -- go test -count=1 -run
+'TestPreviewRecursosDeAarDrawableAnimYFont|TestPreviewVeElDrawableXmlDeLaDependencia|TestDedupeDeValuesPorClave|TestDedupeDeStyleablesPorClave'
+-v .` da cuatro `--- PASS` y `ok ... 1.246s`. Se cierran así, re-medidas aquí, las dos fronteras
+declaradas que ya tenían medición en §233 (tipos de recurso `drawable` XML, `anim`, `font` y `values`)
+y §256/§280 (dos AAR con la misma clave `values`/`styleable`). Sigue **viva** la frontera del
+`R.txt` del AAR: no se fusiona, porque `R.java` se regenera del enlace (medido con un campo
+fantasma que solo está en el `R.txt` del AAR). La del `AndroidManifest.xml` ya tiene código en F1
+y `TestManifiestoDeAar` en verde, pero su evidencia está reservada en §319 y la marca de
+extracción `e3` sigue **incierta** para I3/I4/I5: el test de rebuild no la demostró. Evidencia:
+§216 y la re-medición reservada en §318 de `docs/evidencia.md`.
 
 Criterios de abandono comunes: si el importador cubre el caso de uso real (traer
 una librería que el usuario ya tiene), las fases 3 y 4 mueren; si la cuota de
@@ -316,8 +323,11 @@ peticiones ajenas.
   `bundletool` (§229), los **puntos de unión** y `"" + x` (`eb680b3` y `2940e86`, §240) y la **UI del
 hot swap** (§249, `9a61a23`). Quedan abiertas las **Actions por tag**, pendientes de red
 (`.github/workflows/ENDURECER.md`).
-- Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`), con sus
-  fronteras de tipos de recurso, `values` duplicados entre AAR y manifiesto/`R.txt` fuera.
+- Fase K **aprobada en nativo** (`976b02e`, crítico `ses_df915d191ffetJ53F3oGQiKaI1`). Re-medida en
+  esta sesión con el comando del párrafo de Fase K (cuatro `--- PASS`, `ok`): cerradas, por re-medición
+  de §233/§256/§280, las fronteras de tipos de recurso y de `values` duplicados entre AAR; sigue viva
+  la del `R.txt`, que no se fusiona. La del manifiesto tiene código y test en F1, evidencia reservada
+  §319 y marca `e3` incierta para I3/I4/I5.
 - Opción A (importar desde disco u OPFS) es la vía.
 - Vendorizar un catálogo curado queda detrás.
 - WISP como módulo opcional opt-in en implementación (§254); el modo por defecto sigue sin

@@ -343,6 +343,8 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
+| §318 | Reservada a esta sesión (F0, re-medición de Fase K: recursos de AAR y dedupe de claves); el cuerpo lo escribe el documentador con la salida del test | (reservada) |
+| §319 | Reservada a esta sesión (F1, manifiesto del AAR y bump `e3`); el efecto del bump en I3/I4/I5 queda **incierto** hasta que lo demuestre un test de rebuild, y el cuerpo lo escribe el documentador | (reservada) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran

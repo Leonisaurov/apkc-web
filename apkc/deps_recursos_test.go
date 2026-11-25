@@ -9,6 +9,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/xml"
 	"io"
 	"os"
 	"path/filepath"
@@ -327,5 +328,114 @@ func TestRecursosDeFicheroRepetidos(t *testing.T) {
 	// y un drawable y un layout con el mismo nombre son tipos distintos
 	if err := recursosDeFicheroRepetidos([]fuenteXML{{nombre: "res/layout/main.xml"}}, []fuenteXML{{nombre: "res/drawable/main.png"}}); err != nil {
 		t.Errorf("un layout y un drawable con el mismo nombre se rechazaron: %v", err)
+	}
+}
+
+// manifiestoConHijos arma un AndroidManifest.xml con los hijos dados, para las pruebas de fusión.
+func manifiestoConHijos(paquete, dentro, fuera string) []byte {
+	return []byte(`<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="` + paquete + `">` +
+		fuera + `<application android:label="@string/app_name">` + dentro + `</application></manifest>`)
+}
+
+// TestManifiestoDeAar falsifica la prioridad invirtiendo el orden de lectura: el AAR que va
+// primero por nombre (`aaa.aar`) choca con el proyecto y con el AAR que va después (`zzz.aar`).
+// Si la fusión dependiera del orden, el primero o el último ganaría; tiene que ganar siempre
+// el proyecto, después la isla y, entre AAR, el de nombre anterior.
+func TestManifiestoDeAar(t *testing.T) {
+	proyectoManifiesto := manifiestoConHijos("com.ejemplo.proyecto",
+		`<activity android:name="com.ejemplo.Comun" android:label="@string/del_proyecto"/>`,
+		`<uses-feature android:name="del.proyecto"/>`)
+	islaManifiesto := manifiestoConHijos("com.ejemplo.isla",
+		`<activity android:name="com.ejemplo.Comun" android:label="@string/de_la_isla"/>`+
+			`<activity android:name="com.ejemplo.Compartido" android:label="@string/de_la_isla"/>`+
+			`<activity android:name="com.ejemplo.SoloIsla" android:label="@string/de_la_isla"/>`, "")
+	aarA := manifiestoConHijos("com.ejemplo.aaa",
+		`<activity android:name="com.ejemplo.Comun" android:label="@string/de_aaa"/>`+
+			`<activity android:name="com.ejemplo.Compartido" android:label="@string/de_aaa"/>`+
+			`<activity android:name="com.ejemplo.SoloAar" android:label="@string/de_aaa"/>`,
+		`<uses-feature android:name="solo.del.aaa"/>`)
+	aarZ := manifiestoConHijos("com.ejemplo.zzz",
+		`<activity android:name="com.ejemplo.Compartido" android:label="@string/de_zzz"/>`+
+			`<activity android:name="com.ejemplo.SoloAar" android:label="@string/de_zzz"/>`,
+		`<uses-feature android:name="solo.del.zzz"/>`)
+	dir := proyecto(t, map[string]string{
+		"AndroidManifest.xml": string(proyectoManifiesto),
+		"res/values/app.xml":  valuesMinimo,
+		"res/__deps/isla-manifiesto/AndroidManifest.xml": string(islaManifiesto),
+		"jar/aaa.aar": string(zipDeAar(t, map[string][]byte{
+			"AndroidManifest.xml": aarA,
+		})),
+		"jar/zzz.aar": string(zipDeAar(t, map[string][]byte{
+			"AndroidManifest.xml": aarZ,
+		})),
+	})
+
+	var manifiesto fuenteXML
+	var err error
+	avisos := capturarSalida(t, func() {
+		_, _, _, manifiesto, err = fuentesDelProyecto(dir)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(avisos, "ya lo aporta") {
+		t.Errorf("colisionaron tres fuentes y no hubo aviso LogW: %q", avisos)
+	}
+
+	contenido := string(manifiesto.contenido)
+	valorDe := func(nombre string) string {
+		i := strings.Index(contenido, `android:name="`+nombre+`"`)
+		if i < 0 {
+			return ""
+		}
+		if j := strings.Index(contenido[i:], "/>"); j >= 0 {
+			return contenido[i : i+j]
+		}
+		return contenido[i:]
+	}
+	// el proyecto gana aunque sus competidores se lean antes y después
+	if comun := valorDe("com.ejemplo.Comun"); !strings.Contains(comun, "del_proyecto") ||
+		strings.Contains(comun, "de_la_isla") || strings.Contains(comun, "de_aaa") {
+		t.Errorf("la actividad del proyecto no ganó: %q en %s", comun, contenido)
+	}
+	if n := strings.Count(contenido, "com.ejemplo.Comun"); n != 1 {
+		t.Errorf("la actividad repetida quedó %d veces: %s", n, contenido)
+	}
+	// la isla gana a los dos AAR, y entre AAR gana el de nombre anterior
+	if compartido := valorDe("com.ejemplo.Compartido"); !strings.Contains(compartido, "de_la_isla") {
+		t.Errorf("la isla no ganó a los AAR: %q", compartido)
+	}
+	if soloAar := valorDe("com.ejemplo.SoloAar"); !strings.Contains(soloAar, "de_aaa") || strings.Contains(soloAar, "de_zzz") {
+		t.Errorf("el primer AAR no ganó al segundo: %q", soloAar)
+	}
+	for _, quiero := range []string{"com.ejemplo.SoloIsla", "solo.del.aaa", "solo.del.zzz"} {
+		if !strings.Contains(contenido, quiero) {
+			t.Errorf("falta %q en el manifiesto fusionado: %s", quiero, contenido)
+		}
+	}
+	dec := xml.NewDecoder(strings.NewReader(contenido))
+	for {
+		if _, err := dec.Token(); err != nil {
+			if err.Error() != "EOF" {
+				t.Errorf("el manifiesto fusionado no es XML: %v\n%s", err, contenido)
+			}
+			break
+		}
+	}
+}
+
+// TestManifiestoDeAarRechazaTools comprueba que una directiva que este fork no modela se
+// rechaza por su nombre, en vez de escribir un manifiesto que diga algo que no se aplicó.
+func TestManifiestoDeAarRechazaTools(t *testing.T) {
+	dir := proyecto(t, map[string]string{
+		"AndroidManifest.xml": string(manifiestoConHijos("com.ejemplo.proyecto", "", "")),
+		"res/values/app.xml":  valuesMinimo,
+		"jar/tools.aar": string(zipDeAar(t, map[string][]byte{
+			"AndroidManifest.xml": []byte(`<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools" package="x"><application><activity android:name=".A" tools:node="remove"/></application></manifest>`),
+		})),
+	})
+	if _, _, _, _, err := fuentesDelProyecto(dir); err == nil || !strings.Contains(err.Error(), "tools:") {
+		t.Errorf("un tools: del AAR no se rechazó: %v", err)
 	}
 }
