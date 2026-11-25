@@ -798,8 +798,8 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `r1-incremental.json-bytes 35579`; `dex por clase: la vuelta caliente y el dexado completo son identicos`,
   `entradas: 80, con bytes distintos: 0`, `Verifies`, v1/v2/v3 `true` y `zipalign: correcto`, con el árbol
   limpio antes y después. Frontera: el shim no es OPFS; la capa wasm completa sigue con fallos ambientales
-  (§279 15/RC=1, §284 0/29/805, `docs/evidencia.md:15-24` 32/38), así que **no** se reclama capa wasm verde,
-  solo la prueba focal con jar montado; `REPETICIONES=1` deja vacías las medianas de tres repeticiones, que
+  (§279 15/RC=1, §365 0/871/30, `docs/evidencia.md:15-24` 32/38), así que **no** se reclama capa wasm verde,
+  solo la prueba focal con jar montado; la fase sigue en verificación hasta el gate final (regla 11); `REPETICIONES=1` deja vacías las medianas de tres repeticiones, que
   es artefacto del guion, no fallo; sin gate final, chromium, red ni commits.
 - §318: Fase K re-medida sobre el árbol final (F0): cuatro `--- PASS` (más subtests), `ok
   github.com/ajinasokan/apkc 1.372s`, 0 saltados, con el comando `tcr -c 2 -m 1536M -r 256M -- go

@@ -803,9 +803,7 @@ a `javac17Exigido`, y `0d8df36` movió ese test a `javaemisor_else_goto_paridad_
 porque su ayudante `compilaYDejaElDexDeJavac` vive en un fichero de paridad: sin eso el binario wasm
 no compilaba. Con el cambio, los tres tests pasan y `GOOS=js GOARCH=wasm go vet .` está limpio.
 
-**Lo que midió el builder (transferido).** La capa wasm pasa de 116 `SKIP` a 29, con `PASS`
-746 sin cambio y **2 `--- FAIL`**: los dos `multidex`, ya corregidos en `web` por `7f24a12`,
-y sin aborto. En nativo, `ok … 173.030s`, 871 `PASS`, 0 `FAIL` y 6 `SKIP` ajenos.
+La capa wasm se re-ejecutó con 0 `FAIL` / 871 `PASS` / 30 `SKIP` (§365), con los dos `multidex` ya corregidos en `web` por `7f24a12`; la fase sigue en verificación hasta el gate final (regla 11).
 
 **Veredicto de la crítica de A: APROBADA.** `ses_df1f421a6ffeyiBCvStOUCLWd2` aprobó `8d93ada`
 con 265 funciones comparadas en 43 pares y **0 aserciones perdidas ni cambiadas**; el
@@ -1991,3 +1989,21 @@ reproducido en `HEAD`, no se presenta como verde. `gofmt -l` está limpio en los
 (a nivel global lista cuatro ficheros preexistentes no tocados). El CDP sobre el árbol integrado con
 las variables completas queda pendiente de temperatura y autorización; sin CDP, chromium, gate ni
 commits por este `§`.
+
+### §365. La capa `wasm` se re-ejecuta sobre el árbol final
+
+Re-ejecución de la capa wasm sobre el árbol medido `2da3008`/`e97629c`. Comando literal:
+
+```sh
+tcr -c 2 -m 1536M -r 256M -t 15m -- sh tools/entorno.sh wasm
+```
+
+da `PASS` y **0 `--- FAIL`**. La corrida verbose da `871 --- PASS:` (798 de primer nivel y 73
+subtests), `0 --- FAIL:`, `30 --- SKIP:` y `901 === RUN`. Los recuentos literales son
+`grep -c -- '--- PASS:'` = 871 y, restringido a primer nivel con `^--- PASS:`, 798. Los logs quedan
+en `~/.cache/apkc-web/wasm-capa-verificacion/wasm-run1.log` y
+`~/.cache/apkc-web/wasm-capa-verificacion/wasm-verbose2.log`.
+
+Estas cifras sustituyen a las de `§284`, `docs/plan.md:48` y `docs/situacion.md:801`. No se corrió
+gate ni CDP, y la fase sigue en verificación hasta el gate final (regla 11): registrar esta medición
+no cierra ninguna fase.

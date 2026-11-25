@@ -6,13 +6,15 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§357` (329 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§365` (330 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
 la entrada, no su orden en el fichero.
 
-**Estado de la capa `wasm` (2026-11-23).** Las cifras `PASS` y `rc 0` de los primeros `§` —`§1`
+**Estado de la capa `wasm` (2026-11-23).**
+**Bloque histórico:** el estado medido de este árbol está en `§365`; lo que sigue se conserva tal como se publicó.
+Las cifras `PASS` y `rc 0` de los primeros `§` —`§1`
 (88 tests, `:47`), `§8` (`:217`, 98) y el recuento de `:444-445` (105)— **están desfasadas**: son el
 registro de cuando se midieron, no el estado de este árbol. Se dejan como se publicaron. Lo medido
 hoy por el QA de la capa `wasm`, con `TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm`, es que
@@ -360,6 +362,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §357 | Se retira el pin espejo del padre: `studio/apkc-emulador` es el único emulador, 34 `cmp`, suite Go, wasm (`pasos: 22`) y pestaña en orden | [25-un-solo-emulador.md](evidencia/25-un-solo-emulador.md) |
 | §354 | Apps reales en `~/Downloads`: los tres arrancan con `pasos:0` y una pantalla falsa; SHA de los cuatro APK | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §355 | Fase A: el lector acepta los dex reales sin tocar el escritor; los tres avanzan, pero aparece el opcode 0x1d del intérprete | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §365 | La capa `wasm` se re-ejecuta sobre el árbol final: 0 `FAIL`, 871 `PASS`, 30 `SKIP` (901 `=== RUN`), rc 0 | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
