@@ -30,15 +30,29 @@ while :; do
       corto=$(echo "$head_estable" | cut -c1-8)
       echo "[$(date -u +%FT%TZ)] HEAD $corto: reconstruyendo wasm" >> "$LOG"
       # El archive de apkc/ no incluye los preview*.go generados: el submódulo se extrae aparte,
-      # en el commit exacto que fija el gitlink de HEAD, y preview-local.sh los va a materializar.
-      subsha=$(git -C "$REPO" ls-tree "$head_estable" apkc-emulador | awk '{print $3}' 2>>"$LOG")
-      mkdir -p "$TEMPORAL/apkc-emulador"
+      # en el commit exacto que fijan los gitlinks de HEAD, y preview-local.sh los materializa.
+      # La propiedad git la tiene studio/: su gitlink anidado manda; si el HEAD es anterior al
+      # cambio de propietario, se cae al pin apkc-emulador del padre.
+      estudio_sha=$(git -C "$REPO" ls-tree "$head_estable" studio | awk '{print $3}' 2>>"$LOG")
+      subsha=""
+      if [ -n "$estudio_sha" ]; then
+        subsha=$(git -C "$REPO/studio" ls-tree "$estudio_sha" apkc-emulador | awk '{print $3}' 2>>"$LOG")
+      fi
+      if [ -n "$subsha" ]; then
+        origen_emulador=$REPO/studio/apkc-emulador
+        dir_emulador=$TEMPORAL/studio/apkc-emulador
+      else
+        subsha=$(git -C "$REPO" ls-tree "$head_estable" apkc-emulador | awk '{print $3}' 2>>"$LOG")
+        origen_emulador=$REPO/apkc-emulador
+        dir_emulador=$TEMPORAL/apkc-emulador
+      fi
+      mkdir -p "$dir_emulador"
       if git -C "$REPO" archive "$head_estable" apkc -o "$TEMPORAL/apkc.tar" 2>>"$LOG" \
          && tar -x -f "$TEMPORAL/apkc.tar" -C "$TEMPORAL" 2>>"$LOG" \
          && [ -n "$subsha" ] \
-         && git -C "$REPO/apkc-emulador" archive "$subsha" -o "$TEMPORAL/emulador.tar" 2>>"$LOG" \
-         && tar -x -f "$TEMPORAL/emulador.tar" -C "$TEMPORAL/apkc-emulador" 2>>"$LOG" \
-         && APKC_PREVIEW_WASM="$DEST" HOME="$HOME_DIR" \
+         && git -C "$origen_emulador" archive "$subsha" -o "$TEMPORAL/emulador.tar" 2>>"$LOG" \
+         && tar -x -f "$TEMPORAL/emulador.tar" -C "$dir_emulador" 2>>"$LOG" \
+         && APKC_PREVIEW_WASM="$DEST" APKC_EMULADOR_DIR="$dir_emulador" HOME="$HOME_DIR" \
             tcr -c 2 -m 2G -r 256M -- sh "$REPO/tools/preview-local.sh" "$TEMPORAL" >>"$LOG" 2>&1; then
         # Revalida HEAD tras el mv atomico: si hubo un commit durante el build, NO escribas
         # el estado (así el siguiente ciclo vuelve a construir ese HEAD) y sirve solo el nuevo.

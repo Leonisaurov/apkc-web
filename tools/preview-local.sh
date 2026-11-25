@@ -23,7 +23,7 @@ fi
 # $RAIZ) porque el vigilante llama a este guion con un árbol temporal que solo contiene apkc/.
 HERRAMIENTAS=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd)
 materializar=${APKC_MATERIALIZAR:-$HERRAMIENTAS/materializar-emulador.sh}
-SUBMODULO=${APKC_EMULADOR_DIR:-$RAIZ/apkc-emulador}
+SUBMODULO=${APKC_EMULADOR_DIR:-$RAIZ/studio/apkc-emulador}
 sh "$materializar" "$RAIZ" "$SUBMODULO"
 
 TEMPORAL=$DESTINO.tmp.$$

@@ -124,11 +124,13 @@ tcr_o_directo() {
   fi
 }
 
-# El emulador vive en el submódulo apkc-emulador/; sus fuentes se materializan en apkc/ antes de
-# cualquier compilación. Los cuatro puntos que compilan (test, wasm, gate y sitio/publicar) pasan
-# por aquí, así que ningún camino puede quedarse sin los 34 ficheros preview*.go.
+# El emulador vive en el submódulo apkc-emulador/ de studio/ (el padre guarda un pin espejo); sus
+# fuentes se materializan en apkc/ antes de cualquier compilación. Los cuatro puntos que compilan
+# (test, wasm, gate y sitio/publicar) pasan por aquí, así que ningún camino puede quedarse sin los
+# 34 ficheros preview*.go. APKC_EMULADOR_DIR permite apuntar a otro árbol (por ejemplo el del
+# vigilante, que trabaja en un temporal).
 materializar_emulador() {
-  sh "$RAIZ/tools/materializar-emulador.sh" "$RAIZ"
+  sh "$RAIZ/tools/materializar-emulador.sh" "$RAIZ" "${APKC_EMULADOR_DIR:-}"
 }
 
 compila_wasm() {
