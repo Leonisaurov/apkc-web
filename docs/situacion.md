@@ -899,7 +899,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
 - §366: cuarta APK real (`com.martinmimigames.simplefileexplorer_20.apk`, sha256 `fc6c9134…`,
    38.042 B), Java llano con un solo `classes.dex`, sin `.so` y sin opcode `0x1d`, con la actividad
    lanzadora (`MainActivity`) y el layout real `res/R5.xml` de 30 nodos. El `preview` del binario
-   `f241c54b…` (`vcs.revision=f59717b2c6c8dd8faa8844`, `vcs.modified=false`) da `pasos:162`,
+   `f241c54b…` (`vcs.revision=f59717b2c6c82f154332b7fd1958c8dd8faa8844`, `vcs.modified=false`) da `pasos:162`,
    12 avisos y `ejecucion.error` («se llamó a java.lang.Object.getClass sobre un objeto nulo»);
    `ejecucion.capturas` (`Grant`/`Deny`) son textos de `TextView.setText`, no capturas visuales.
    Frontera: línea base pre-corrección y anterior a Fase D; no se afirma que la app funciona y no se
