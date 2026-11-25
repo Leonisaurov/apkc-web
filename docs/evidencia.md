@@ -4,7 +4,7 @@ Todo lo de aquí se midió en este teléfono (Termux/Android aarch64, Chromium y
 Las mediciones del 2026-10-26 se hicieron contra `../apkc`; desde 2026-10-27 el código de la
 herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ../apkc` que aparecen
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
-Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
+Cada bloque lleva el comando que lo produce. Fecha de las mediciones originales: **2026-10-26**; las posteriores llevan su fecha en cada §.
 
 **Numeración de este registro.** Los encabezados van del `§1` al `§374` (344 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
