@@ -59,6 +59,24 @@ Ninguna casilla se marca «hecha» sin evidencia propia sobre el árbol final (r
 - Orden: **D4 → D5 → D6**, un agente por paso en cuanto se libere un hueco de los cuatro actuales.
   Ninguno se marca hecho sin su sonda, su `§` y su commit (regla 10 de `AGENTS.md`).
 
+### Reconciliación (F0, sin medición propia)
+
+Tabla de partida del frente `d2-d6-diagnostico` sobre `HEAD 4b723ae`, puntero del submódulo
+`704b409`. `git -c protocol.file.allow=always submodule update --init studio` pobló `studio/` en
+ese puntero. Todo lo de abajo está **en verificación**: es código o cifra leída, no una medición
+ejecutada sobre este árbol. Aquí no se registra ningún `§`.
+
+| Pieza | Dónde se leyó | Estado a la entrada |
+| --- | --- | --- |
+| D2, línea base | `docs/plan-diagnostico.md:31-36` (~15 ms suelto, ~30 ms con `R`, ~200 ms enlazando `res/`) | cifras de D1 transferidas, en verificación |
+| Marco cacheado | §232 en `docs/evidencia/11-emulador-check.md:1016-1045`; sonda en `apkc/marcocache_test.go:187` | caché implementada; sus medianas son de otra medición, en verificación |
+| I5, índice del jar | `docs/plan-incremental-web.md:306-361` | medido por debajo del criterio (82 ms de ahorro frente a 100 ms); se reutiliza como corrección, nunca como cifra de D2 |
+| D4, asignación cualificada | tests en `apkc/check_test.go:205-334`; resolución en `apkc/javaemisor.go:8526-8542`; paridad en `apkc/javaemisor_argumento_estatico_paridad_test.go:86` | código y tests presentes, sin `§` propio; en verificación |
+| Columna del parser | `apkc/check.go:42-103`, `apkc/javafuente.go:20-37`, `apkc/check_test.go:550-581` | los errores de token ya llevan columna; las sentencias siguen con solo línea; en verificación |
+| D5, overhead | `studio/diagnostico-vivo.js:203-259,287-325`; `studio/sonda-check.js:120-262`; `studio/hospedador.js:155-250` | sonda CDP, salto de pasadas limpias y una instancia por comando: sin medición sobre este árbol; en verificación |
+| D6, matriz Java/XML | `studio/autocompletado-datos.js`, `studio/xml-editor.js`, `studio/prueba.js`, `studio/prueba-pestana.js` | cobertura implementada, sin matriz medida ni `§`; en verificación |
+| Numeración | `docs/evidencia.md:357` en este árbol; resolución del orquestador en `:358` | `§327-328` son J5; este frente usa `§329`-`§333` y declara `§334+` libres |
+
 ### Deuda conocida dentro de D1
 
 - **Los errores del parser llevan línea pero no columna.** La columna se toma del token que abrió
