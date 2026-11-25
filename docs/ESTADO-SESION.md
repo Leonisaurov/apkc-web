@@ -10,9 +10,9 @@ Este fichero no es una medición nueva: es el índice operativo de lo que ya est
 Comandos ejecutados sobre `/home/leonisauro/Develop/Go/apkc-web` (padre) y sus submódulos:
 
 ```
-git rev-parse --short HEAD                  → 3a5f557 (al cortar; este commit es b038662, hoy ahead 1)
+git rev-parse --short HEAD                  → 3a5f557 (al cortar; desde entonces hay commits locales sin empujar; ver git status -sb)
 git status -sb                              → ## web...origin/web
-git rev-list --count @{u}..HEAD             → 0 (al cortar; hoy 1)
+git rev-list --count @{u}..HEAD             → 0 (al cortar; ver git status -sb para el recuento actual)
 git ls-tree HEAD studio                     → 160000 commit 4a17f84	studio
 git ls-tree HEAD apkc-emulador              → (vacío; el padre no guarda pin espejo, regla 14)
 git -C studio rev-parse --short HEAD        → 4a17f84
