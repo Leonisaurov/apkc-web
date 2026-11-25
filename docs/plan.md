@@ -73,7 +73,7 @@ comprobaciones` sobre el árbol reconciliado). No se porta WineDroid (GPL): impl
 | apps reales, Fase F (§363) | **en diseño**: el alcance de Compose y el modo teléfono en `studio/` siguen abiertos; no hay medición nueva que los cierre | `docs/plan-compatibilidad-apps-pausado.md` (Fase F, §363) |
 | apps reales, Fase G (§364) | **sin ejecutar**: fidelidad en navegador, comparación visual y publicación, sujetas a autorización expresa | `docs/plan-compatibilidad-apps-pausado.md` (Fase G, §364) |
 
-**Fuera de este cierre**: el gate final sobre el árbol integrado, la CI remota y la publicación. El push de §358 está ejecutado (en §358 padre y studio quedaron a cero con `@{u}`; el push final dejó el árbol sin commits pendientes (ver git status -sb)) y `apkc-studio.surge.sh` sigue sirviendo la build anterior, así que el sitio publicado no se cuenta como hecho.
+**Fuera de este cierre**: el gate final sobre el árbol integrado, la CI remota y la publicación. El push de §358 está ejecutado (en §358 padre y studio quedaron a cero con `@{u}`; el push final dejó el árbol sin commits pendientes en §358; el recuento actual de commits locales lo da `git status -sb` (regla 11)) y `apkc-studio.surge.sh` sigue sirviendo la build anterior, así que el sitio publicado no se cuenta como hecho.
 
 **Riesgos WISP** (auditoría de seguridad: veredicto **SEGURO**, modo por defecto con 0 sockets y
 `APKC_WISP_EXTERNO=1` como opt-in). (1) **Abierto, no bloqueante**: la allowlist sigue viviendo en

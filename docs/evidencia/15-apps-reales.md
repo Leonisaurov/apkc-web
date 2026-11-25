@@ -671,6 +671,7 @@ wc -l ~/.cache/apkc-web/fase-c-evidencia/fdroid-manifest.txt ~/.cache/apkc-web/f
 
 ```sh
 /home/leonisauro/.cache/apkc-web/fase-c/apkc-fase-c preview /home/leonisauro/Downloads/F-Droid.apk > ~/.cache/apkc-web/fase-c/fdroid-preview-final.json
+/home/leonisauro/.cache/apkc-web/fase-c/apkc-fase-c preview /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk > ~/.cache/apkc-web/fase-c/simplefileexplorer-preview-final.json
 ```
 `actividad=org.fdroid.MainActivity`, `layout=''`, **1 nodo** `FrameLayout` con texto «F-Droid»,
 aviso `sin-layout-xml:`; cero apariciones de `IconCalculatorActivity` y de `res/A1.xml` (las dos
@@ -701,7 +702,21 @@ cd apkc && go test -run 'DescubreTodosLosDexEnOrdenNumerico|ElMetodoEjecutadoEsD
 cd apkc && go test -count=1 ./...
 ```
 Cuatro `--- PASS`; `ok github.com/ajinasokan/apkc 210.695s`. `dexdump` fija las actividades en
-`classes2.dex` y `classes20.dex`, así que el criterio no se apoya en el primer dex.
+`classes2.dex` y `classes20.dex`, así que el criterio no se apoya en el primer dex:
+
+```sh
+mkdir -p /home/leonisauro/.cache/apkc-web/auditoria-docs
+/home/leonisauro/opt/android-sdk/build-tools/35.0.1/dexdump -f /home/leonisauro/Downloads/F-Droid.apk > /home/leonisauro/.cache/apkc-web/auditoria-docs/fdroid-dexdump-f.txt
+/home/leonisauro/opt/android-sdk/build-tools/35.0.1/dexdump -f /home/leonisauro/Downloads/termux-app_v0.118.3+github-debug_x86_64.apk > /home/leonisauro/.cache/apkc-web/auditoria-docs/termux-dexdump-f.txt
+grep -E "^Opened |Class descriptor  : '(Lorg/fdroid/MainActivity;|Lcom/termux/app/TermuxActivity;)'" /home/leonisauro/.cache/apkc-web/auditoria-docs/fdroid-dexdump-f.txt /home/leonisauro/.cache/apkc-web/auditoria-docs/termux-dexdump-f.txt | grep -B1 "Class descriptor"
+```
+```
+/home/leonisauro/.cache/apkc-web/auditoria-docs/fdroid-dexdump-f.txt:Opened '/home/leonisauro/Downloads/F-Droid.apk:classes2.dex', DEX version '037'
+/home/leonisauro/.cache/apkc-web/auditoria-docs/fdroid-dexdump-f.txt:  Class descriptor  : 'Lorg/fdroid/MainActivity;'
+--
+/home/leonisauro/.cache/apkc-web/auditoria-docs/termux-dexdump-f.txt:Opened '/home/leonisauro/Downloads/termux-app_v0.118.3+github-debug_x86_64.apk:classes20.dex', DEX version '037'
+/home/leonisauro/.cache/apkc-web/auditoria-docs/termux-dexdump-f.txt:  Class descriptor  : 'Lcom/termux/app/TermuxActivity;'
+```
 
 **Salidas.** Los JSON de la corrida están en `~/.cache/apkc-web/fase-b-evidencia/`
 (`F-Droid.json`, `newpipe.json`, `termux.json` y `simplefileexplorer.json`, con sus `.err`). NewPipe y
@@ -728,11 +743,21 @@ de nulo queda intacto.
 **Cuarto APK.** Salida en `~/.cache/apkc-web/fase-d-evidencia/preview-post.json`:
 
 ```sh
+/home/leonisauro/.cache/apkc-web/fase-d/apkc-post preview /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk > /home/leonisauro/.cache/apkc-web/fase-d-evidencia/preview-post.json
 sha256sum ~/.cache/apkc-web/apk-nuevo-baseline-final/preview.json ~/.cache/apkc-web/fase-d-evidencia/preview-post.json
 ```
 ```
 f207c0435930c3d4f5256ac68add74915651f10ec3bdd056d007df7f445741a7  /home/leonisauro/.cache/apkc-web/apk-nuevo-baseline-final/preview.json
 28a6e68a772c244eee1d9f5a48a4ddf3722f5e0067cd330ec867b8669268e8c3  /home/leonisauro/.cache/apkc-web/fase-d-evidencia/preview-post.json
+```
+```sh
+python3 -c "import json; d=json.load(open('/home/leonisauro/.cache/apkc-web/fase-d-evidencia/preview-post.json')); e=d['ejecucion']; print('pasos', e['pasos']); print('avisos', sum(1 for a in e['avisos'] if 'no está en el dex ni en los stubs' in a and not a.startswith('sin-layout-xml:'))); print('error', e.get('error')); print('nodos', d['nodos'])"
+```
+```
+pasos 1131
+avisos 0
+error None
+nodos 30
 ```
 `error=None`, avisos de la familia «no está en el dex ni en los stubs» **12 → 0**, `pasos` **162 → 1131**,
 `layout=res/R5.xml`, `nodos=30`. La suite da `ok github.com/ajinasokan/apkc 438.144s`:
@@ -786,7 +811,7 @@ descartó al fusionar.
 ```sh
 cd apkc && go test -count=1 ./...
 ```
-`ok github.com/ajinasokan/apkc 196.940s`, `rc 0`, 960 tests, 0 `FAIL`.
+`ok github.com/ajinasokan/apkc 196.940s`, `rc 0`, 0 `FAIL`. El recuento de funciones de test no se mide en este `§`: el comando imprime una línea `ok`.
 
 **Cinco JSON de la corrida integrada**, en `~/.cache/apkc-web/integracion/` (junto a
 `apkc-integracion`, los `.err` y `gotmp/`):
