@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§365` (330 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§366` (332 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -362,6 +362,8 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §357 | Se retira el pin espejo del padre: `studio/apkc-emulador` es el único emulador, 34 `cmp`, suite Go, wasm (`pasos: 22`) y pestaña en orden | [25-un-solo-emulador.md](evidencia/25-un-solo-emulador.md) |
 | §354 | Apps reales en `~/Downloads`: los tres arrancan con `pasos:0` y una pantalla falsa; SHA de los cuatro APK | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §355 | Fase A: el lector acepta los dex reales sin tocar el escritor; los tres avanzan, pero aparece el opcode 0x1d del intérprete | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §358 | El intérprete decodifica `monitor-enter`/`monitor-exit` (`0x1d`/`0x1e`): oráculo ART, paridad del escritor, corrida pareada de avisos y los tres APK avanzan sin `0x1d` | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §366 | Cuarta APK real (`com.martinmimigames.simplefileexplorer_20.apk`): línea base previa a Fase D, `pasos:162`, 12 avisos y `ejecucion.error`; `layout` real `res/R5.xml` de 30 nodos | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §365 | La capa `wasm` se re-ejecuta sobre el árbol final: 0 `FAIL`, 871 `PASS`, 30 `SKIP` (901 `=== RUN`), rc 0 | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
@@ -378,19 +380,19 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
 aquí; `§78` no existe y su hueco está explicado en el preámbulo. La tabla sigue el orden del fichero
 original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica; las filas
-añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`, `§356`, `§357`, `§365`) se sitúan en el bloque de su fichero, no en orden numérico.
+añadidas después (`§313`, `§314`, `§317`, `§348`, `§349`, `§350`, `§351`, `§352`, `§354`, `§355`, `§356`, `§357`, `§365`, `§358`, `§366`) se sitúan en el bloque de su fichero, no en orden numérico.
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
 `§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra),
 `§327-328` (J5), `§329-333` (diagnóstico) y `§340-347` (paneles). `§334-339` ya no está
 reservado: sus mediciones están escritas en este índice. `§348` ya no está reservado: su medición
 está escrita en este índice. `§349` ya no está reservado: su medición está escrita en este índice.
-`§350`, `§351`, `§352`, `§354`, `§355`, `§356` y `§357` ya no están libres: sus mediciones están escritas en este índice.
-`§353` sigue reservado a F5 como **reserva vacía, no como medición**: F5 está cerrado en `d22fe3a`/`36a69c0` con crítico APROBAR condicionado al gate (`docs/auditorias.md:30-33`) y no tiene `§` propio (`docs/evidencia/21-emulador-fiel.md` solo `§334-§339`). La etiqueta se libera solo al escribir esa medición con su comando; mientras tanto no se reutiliza, en particular Fase C de `docs/plan-compatibilidad-apps-pausado.md` pasa a `§359`. `§358` y siguientes ya no quedan libres: están asignadas como se detalla en la línea siguiente. `§313` ya no está reservado: su medición está escrita en este índice.
+`§350`, `§351`, `§352`, `§354`, `§355`, `§356`, `§357` y `§358` ya no están libres: sus mediciones están escritas en este índice.
+`§353` sigue reservado a F5 como **reserva vacía, no como medición**: F5 está cerrado en `d22fe3a`/`36a69c0` con crítico APROBAR condicionado al gate (`docs/auditorias.md:30-33`) y no tiene `§` propio (`docs/evidencia/21-emulador-fiel.md` solo `§334-§339`). La etiqueta se libera solo al escribir esa medición con su comando; mientras tanto no se reutiliza, en particular Fase C de `docs/plan-compatibilidad-apps-pausado.md` pasa a `§359`. `§359` y siguientes ya no quedan libres: están asignadas como se detalla en la línea siguiente; `§358` ya está medido y registrado en este índice. `§313` ya no está reservado: su medición está escrita en este índice.
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.
-Actualización de la numeración del plan de apps reales reanudado: `§358` opcode (en curso), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G, en ese orden; `§365` ya está medido en este índice. **`§366` queda reservado a la línea base del cuarto APK** (`com.martinmimigames.simplefileexplorer_20.apk`), sin medición publicada todavía: no se escribe fila en el índice ni cambia el recuento (330) hasta que se registre su medición con su comando.
+Actualización de la numeración del plan de apps reales reanudado: `§358` medido y registrado (opcode `0x1d`/`0x1e`), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G, en ese orden; `§365` ya está medido en este índice. **`§366` ya está medido**: línea base del cuarto APK (`com.martinmimigames.simplefileexplorer_20.apk`), anterior a Fase D, con su fila en el índice y el recuento en 332. Sus 12 avisos y su `ejecucion.error` son pre-corrección y no se fusionan con `§361`.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

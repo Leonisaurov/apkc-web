@@ -896,6 +896,14 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   nuevo compartido, `ArchTaskExecutor.getInstance usa el opcode 0x1d, que el intérprete MVP no
   decodifica`, y los layouts siguen siendo falsos; el bloqueo es del intérprete, no del lector. Sin
   gate, CDP, red ni publicación. Sostenido por `§355`.
+- §366: cuarta APK real (`com.martinmimigames.simplefileexplorer_20.apk`, sha256 `fc6c9134…`,
+   38.042 B), Java llano con un solo `classes.dex`, sin `.so` y sin opcode `0x1d`, con la actividad
+   lanzadora (`MainActivity`) y el layout real `res/R5.xml` de 30 nodos. El `preview` del binario
+   `f241c54b…` (`vcs.revision=f59717b2c6c8dd8faa8844`, `vcs.modified=false`) da `pasos:162`,
+   12 avisos y `ejecucion.error` («se llamó a java.lang.Object.getClass sobre un objeto nulo»);
+   `ejecucion.capturas` (`Grant`/`Deny`) son textos de `TextView.setText`, no capturas visuales.
+   Frontera: línea base pre-corrección y anterior a Fase D; no se afirma que la app funciona y no se
+   fusiona con `§361`. Sin gate, CDP, red ni publicación. Sostenido por `§366`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,
@@ -906,7 +914,10 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   byte a byte el compilado (`1c2f521b…`); los cinco checkouts de CI siguen con
   `submodules: recursive`. Frontera: `studio` queda `ahead 3` sin empujar, la CI remota no verá el
   gitlink anidado hasta que se autorice el push, el vigilante en vivo no se corrió (`incierto`) y
-  no hubo gate, CDP, red ni publicación. Sostenido por `§356`.
+  no hubo gate, CDP, red ni publicación. Sostenido por `§356`. Actualización (2026-11-25): el push
+  ya se ejecutó y el vigilante en vivo está medido (`head-construido` = HEAD, wasm servido
+  byte-idéntico, COOP/COEP y procesos vivos), con lo que esa frontera histórica de `§356` quedó
+  superada; no se reescribe la medición de `§352` ni la de `§356`.
 - §357: el usuario acota que solo existe un emulador, el de `studio/apkc-emulador`, y se retira el
    pin espejo del padre (`git rm -f apkc-emulador` y su sección de `.gitmodules`). La regla 14 del
    `AGENTS.md` ya no compara dos gitlinks: vigila solo `git -C studio rev-parse HEAD:apkc-emulador`
