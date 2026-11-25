@@ -542,3 +542,94 @@ visuales**; no se afirma que la app funciona, no se fusiona con `§361`.
 `docs/plan-compatibilidad-apps-pausado.md:37-40` (`plan-...:37-40`). Son dos criterios distintos:
 esta línea base no cumple ninguno de los dos y se deja como referencia previa a Fase D, sin
 atribuir a D ningún cambio todavía.
+
+---
+
+## 367. Quinta APK real: Libre Memory Game, línea base y clasificación fail-closed
+
+Medido en esta sesión (2026-11-25) sobre
+`/home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk`. Sin gate, CDP, chromium,
+red, `git push` ni publicación. El binario es
+`/home/leonisauro/.cache/apkc-web/bases-un-head/apkc`, no el `HEAD` actual ni el de `§366`; las
+salidas quedan en `/home/leonisauro/.cache/apkc-web/quinto-apk/`. Es una línea base nueva: no se
+fusiona con `§361` (Fase D) ni con `§366` (cuarta APK).
+
+**Identidad del APK y del binario.**
+
+```sh
+sha256sum /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk
+stat -c %s /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk
+```
+```
+df04986688906d73ad7680b9e2ffe00773e2e27ae3132169885c273642331236  /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk
+64773062
+```
+```sh
+go version -m /home/leonisauro/.cache/apkc-web/bases-un-head/apkc
+```
+Salida relevante: `vcs.revision=04456d27bc0b25ed7a78851dd9fca8047ac72d4d` y
+`vcs.modified=false`.
+
+**Manifiesto y ficheros.**
+
+```sh
+aapt2 dump badging /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk
+```
+Salida relevante: `name='org.quentin_bettoum.librememorygame' versionCode='9' versionName='1.2.0'`,
+`minSdkVersion:'24'`, `targetSdkVersion:'35'`,
+`launchable-activity: name='com.godot.game.GodotApp'`, `application-isGame` y
+`native-code: 'arm64-v8a' 'armeabi-v7a'`.
+
+```sh
+unzip -l /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk
+```
+Salida relevante: `classes.dex` 5.177.092 B; `lib/arm64-v8a/libgodot_android.so` 69.790.576 B;
+`lib/armeabi-v7a/libgodot_android.so` 75.199.404 B; `libc++_shared.so` ×2;
+`AndroidManifest.xml` 7.500 B y `resources.arsc` 58.776 B.
+
+```sh
+apkanalyzer manifest print /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk > /home/leonisauro/.cache/apkc-web/quinto-apk/manifest.xml
+grep -c AndroidContextProvider /home/leonisauro/.cache/apkc-web/quinto-apk/manifest.xml
+```
+`rc 0` y 141 líneas en `manifest.xml`. En `:42-65`, `GodotApp` con `MAIN` + `LAUNCHER`; en
+`:66-69`, `org.godotengine.library.version = 4.5.1.stable`; en `:132-135`,
+`rendering.method = gl_compatibility`. `grep -c AndroidContextProvider` da `0`.
+
+**`apkc preview`.**
+
+```sh
+time /home/leonisauro/.cache/apkc-web/bases-un-head/apkc preview /home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk > /home/leonisauro/.cache/apkc-web/quinto-apk/preview.json
+sha256sum /home/leonisauro/.cache/apkc-web/quinto-apk/preview.json
+stat -c %s /home/leonisauro/.cache/apkc-web/quinto-apk/preview.json
+```
+`rc 0`, `0m0.383s`, stderr `[apkc] finished in 175.945945ms`. `preview.json` tiene 2080 B y sha256
+`a46d1b5d9716cf7d23b87150f1ac656ee629569f102ef0c46e112064331c7bfd`. Campos extraídos del JSON:
+
+```
+paquete=org.quentin_bettoum.librememorygame
+version=1.2.0
+actividad=com.godot.game.GodotApp
+layout=res/layout/custom_dialog.xml
+nodos=2
+raiz.tipo=RelativeLayout
+aproximado=True
+ejecucion.metodo=onCreate
+ejecucion.pasos=333
+ejecucion.error=… en org.godotengine.godot.GodotActivity.<init>: … Intrinsics.createParameterIsNullExceptionMessage: se llamó a java.lang.Thread.getStackTrace sobre un objeto nulo
+```
+Los 5 avisos son todos de la familia «no está en el dex ni en los stubs»:
+`SavedStateRegistryController$Companion.create`, `SystemClock.uptimeMillis()J`,
+`Executors.newFixedThreadPool`, `Looper.getThread()Ljava/lang/Thread;` y
+`Thread.currentThread()Ljava/lang/Thread;`. Da `sin-layout-xml: 0` y no aparece
+`id/action_bar_title`. Los 2 nodos son `RelativeLayout` + `Button id/dialog_button` con
+`texto=' Ok '` (`0x7f07002e`).
+
+**Clasificación honesta y criterio falsable.** El emulador alcanza **solo el envoltorio Java**: la
+lógica del juego vive en `libgodot_android.so` (código nativo con render GL), que el intérprete
+Dalvik no ejecuta. Decir que «Libre Memory Game pasa» sería fingir cobertura. La medición se registra
+como **caso negativo / fail-closed**, con aserciones sobre la evidencia real: `rc 0`, `error` que
+contenga `Thread.getStackTrace sobre un objeto nulo`, `nodos=2`,
+`layout=res/layout/custom_dialog.xml`, 5 avisos de la familia y sin `id/action_bar_title`, con la
+etiqueta explícita «solo envoltorio, sin lógica Godot». Se refuta si al cambiar el envoltorio Java
+el JSON no cambia de forma reproducible, o si alguien presenta texto del juego sin ejecutar el
+`.so`. Sin gate, CDP, red ni publicación. Sostenido por `§367`.

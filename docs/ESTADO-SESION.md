@@ -98,6 +98,12 @@ y studio quedan con `rev-list --count @{u}..HEAD` a cero.
   cuarto APK; ninguna de las cuatro apps se da por funcionando y §366 no se fusiona con §361.
   Índice en `docs/evidencia.md:365-367`; fuentes en `docs/evidencia/15-apps-reales.md` y
   `docs/evidencia/14-banco-wisp-lienzo.md`.
+- **Quinta APK registrada como caso negativo (§367)**:
+  `org.quentin_bettoum.librememorygame_9.apk` (sha256 `df049866…`) queda en el corpus con `pasos:333`,
+  `nodos=2`, `layout=res/layout/custom_dialog.xml` y `ejecucion.error` con
+  `Thread.getStackTrace sobre un objeto nulo`; etiqueta «solo envoltorio, sin lógica Godot». No se da
+  por funcionando ni se cuenta como app cubierta. Índice en `docs/evidencia.md`; medición en
+  `docs/evidencia/15-apps-reales.md`.
 
 ## 3. En verificación o no hecho
 

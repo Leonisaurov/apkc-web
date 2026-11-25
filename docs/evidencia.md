@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de todas las mediciones: **2026-10-26**.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§366` (332 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§367` (333 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -364,6 +364,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §355 | Fase A: el lector acepta los dex reales sin tocar el escritor; los tres avanzan, pero aparece el opcode 0x1d del intérprete | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §358 | El intérprete decodifica `monitor-enter`/`monitor-exit` (`0x1d`/`0x1e`): oráculo ART, paridad del escritor, corrida pareada de avisos y los tres APK avanzan sin `0x1d` | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §366 | Cuarta APK real (`com.martinmimigames.simplefileexplorer_20.apk`): línea base previa a Fase D, `pasos:162`, 12 avisos y `ejecucion.error`; `layout` real `res/R5.xml` de 30 nodos | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §367 | Quinta APK real (`org.quentin_bettoum.librememorygame_9.apk`): caso negativo fail-closed, `pasos:333`, `nodos=2`, `layout=res/layout/custom_dialog.xml`, 5 avisos; solo envoltorio, sin lógica Godot | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §365 | La capa `wasm` se re-ejecuta sobre el árbol final: 0 `FAIL`, 871 `PASS`, 30 `SKIP` (901 `=== RUN`), rc 0 | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
@@ -392,7 +393,7 @@ está escrita en este índice. `§349` ya no está reservado: su medición está
 `§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.
-Actualización de la numeración del plan de apps reales reanudado: `§358` medido y registrado (opcode `0x1d`/`0x1e`), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G, en ese orden; `§365` ya está medido en este índice. **`§366` ya está medido**: línea base del cuarto APK (`com.martinmimigames.simplefileexplorer_20.apk`), anterior a Fase D, con su fila en el índice y el recuento en 332. Sus 12 avisos y su `ejecucion.error` son pre-corrección y no se fusionan con `§361`.
+Actualización de la numeración del plan de apps reales reanudado: `§358` medido y registrado (opcode `0x1d`/`0x1e`), `§359` Fase C, `§360` Fase B, `§361` Fase D, `§362` Fase E, `§363` Fase F y `§364` Fase G, en ese orden; `§365` ya está medido en este índice. **`§366` ya está medido**: línea base del cuarto APK (`com.martinmimigames.simplefileexplorer_20.apk`), anterior a Fase D, con su fila en el índice y el recuento en 332. Sus 12 avisos y su `ejecucion.error` son pre-corrección y no se fusionan con `§361`. **`§367` ya está medido**: quinta APK (`org.quentin_bettoum.librememorygame_9.apk`), caso negativo fail-closed con la etiqueta «solo envoltorio, sin lógica Godot», con su fila en el índice y el recuento en 333; no sustituye a `§366`, no se cuenta como app cubierta y no se fusiona con `§361`.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

@@ -904,6 +904,15 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
    `ejecucion.capturas` (`Grant`/`Deny`) son textos de `TextView.setText`, no capturas visuales.
    Frontera: línea base pre-corrección y anterior a Fase D; no se afirma que la app funciona y no se
    fusiona con `§361`. Sin gate, CDP, red ni publicación. Sostenido por `§366`.
+ - §367: quinta APK real (`org.quentin_bettoum.librememorygame_9.apk`, sha256 `df049866…`,
+    64.773.062 B), Godot 4.5.1 con la lógica en `libgodot_android.so` y dos ABI nativas. El `preview`
+    del binario `04456d27…` (`vcs.modified=false`) da `rc=0`, `pasos:333`, `nodos=2`,
+    `layout=res/layout/custom_dialog.xml` (`RelativeLayout` + `Button id/dialog_button` con texto
+    `' Ok '`) y un `ejecucion.error` con `Thread.getStackTrace sobre un objeto nulo`, con 5 avisos de
+    la familia «no está en el dex ni en los stubs» y sin `id/action_bar_title`. Clasificación
+    fail-closed: **solo envoltorio, sin lógica Godot**; no se cuenta como app cubierta ni sustituye a
+    las cuatro anteriores. Índice en `docs/evidencia.md`; medición en
+    `docs/evidencia/15-apps-reales.md`. Sin gate, CDP, red ni publicación. Sostenido por `§367`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,

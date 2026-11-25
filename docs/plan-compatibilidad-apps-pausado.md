@@ -79,6 +79,18 @@ dac55a0d17b1edf7e7286b48cfbd70c7c52fbb32a00af062c68830a437c47959  F-Droid.apk
 Tamaños: F-Droid 12 774 751 B; NewPipe 16 980 865 B; Termux arm 32 250 911 B; Termux x86_64
 35 189 933 B.
 
+**Quinta APK añadida al corpus (`§367`)**:
+`/home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk`, sha256
+`df04986688906d73ad7680b9e2ffe00773e2e27ae3132169885c273642331236`, 64.773.062 B; paquete
+`org.quentin_bettoum.librememorygame` 9 / 1.2.0, actividad `com.godot.game.GodotApp`, `minSdk 24`,
+`targetSdk 35`, `native-code` `arm64-v8a` y `armeabi-v7a`, con `libgodot_android.so` y
+`org.godotengine.library.version = 4.5.1.stable`. Clasificación **fail-closed / caso negativo**: el
+emulador alcanza solo el envoltorio Java (`pasos:333`, `nodos=2`, 5 avisos y `ejecucion.error` con
+`Thread.getStackTrace sobre un objeto nulo`); la lógica del juego está en el `.so` con render GL y el
+intérprete Dalvik no la ejecuta, así que se etiqueta «solo envoltorio, sin lógica Godot». No
+sustituye a ninguna de las cuatro APK anteriores y **no se cuenta como app cubierta**. Entra en el
+corpus como caso negativo de no regresión para las fases C/B/D/E/F/G; sus criterios no cambian.
+
 ### 1.2 Manifiesto (`aapt2 dump badging` / `apkanalyzer manifest print`)
 
 | app | package / versión | minSdk | targetSdk | compileSdk | native-code |
