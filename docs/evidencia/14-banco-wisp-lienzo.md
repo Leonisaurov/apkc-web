@@ -1,4 +1,4 @@
-# Evidencia — §274-§313
+# Evidencia — §274-§314
 
 ## 274. El banco no es verificable en este escritorio; su mitad local sí
 
@@ -1917,3 +1917,21 @@ falla igual en árbol limpio; no es atribuible a este cambio.
 
 **Frontera de `§313`.** No se corrió CDP ni gate: el timeline real en navegador y el reclamo del
 reporte «40» siguen abiertos. No se da por cerrado el `40`.
+
+## 314. Medición reproducible del incremental en wasm y nativo
+
+Medida el 2026-11-24 por el QA `ses_defb50083ffeZC38H50IiYFd2B` sobre el árbol integrado `718637c`.
+
+**Comandos.**
+
+```sh
+cd /home/leonisauro/Develop/Go/apkc-web
+PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH GOTMPDIR=/home/leonisauro/.cache/apkc-web/gotmp sh banco/incremental-wasm.sh
+REPETICIONES=1 PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH tcr -c 2 -m 2G -r 400M -- sh banco/incremental.sh
+```
+
+**Wasm.** `--- PASS: TestBuildDosVecesEnWasmMideEtapas (12.66s)`, `comparación entrada por entrada: 80 entradas, 0 con bytes distintos []`, cuatro builds con etapas: plain frío `aapt2 link 573ms / compile go 1.997s / dex go 814ms / package and sign go 277ms / total 3.782s`; plain caliente `108ms / 1.528s / 308ms / 123ms / 2.151s`, `1866 de 1875 code_item reutilizados`, `copied 76 entries`; inc frío `427ms / 1.891s / 641ms / 211ms / 3.297s` con `79 resource files changed: relinking`; inc caliente `compile go 1.903s / dex go 356ms / package and sign go 172ms / total 2.591s`, `1866 de 1875 reutilizados`. Sin `apkc devolvio 1`, `FAIL`, `error` ni `panic`.
+
+**Nativo.** `r1-plain-frio 993`, `r1-plain-caliente 555`, `r1-inc-frio 808`, `r1-inc-caliente 486`, `r1-incremental.json-bytes 35579`; `dex por clase: la vuelta caliente y el dexado completo son identicos`; `entradas: 80, con bytes distintos: 0`; `Verifies`, v1/v2/v3 `true`, `zipalign: correcto`. Árbol limpio antes y después.
+
+**Frontera de `§314`.** La medición 3 original usaba un parche que hoy está versionado en `shim/navegador-sim.js:285-307` y `shim/prueba-relink.js:14-134` (134 líneas); `/tmp/opencode/inc-web/` ya no existe. La capa wasm completa sigue con fallos ambientales (§279 15/RC=1, §284 0/29/805, `docs/evidencia.md:15-24` 32/38): **no** reclamar capa wasm verde, solo la prueba focal con jar montado. `REPETICIONES=1` deja vacías las medianas de tres repeticiones: es artefacto del guion, no fallo. El shim no es OPFS; sin gate final, chromium, red ni commits.

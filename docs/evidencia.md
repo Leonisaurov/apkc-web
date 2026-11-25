@@ -343,7 +343,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
-| §314 | **RESERVADA** — reserva de sesión del incremental wasm (I4/I5): `§311` fidelidad, `§312` Go en disco, `§313` bucle de sesión; aún sin cuerpo | — (sin medición) |
+| §314 | Medición reproducible del incremental en wasm y nativo | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §318 | Fase K re-medida sobre el árbol final: recursos de AAR y dedupe de claves | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §319 | Manifiesto del AAR: fusión de hijos, prioridad proyecto > isla > AAR y rechazo de `tools:` | [11-emulador-check.md](evidencia/11-emulador-check.md) |
 | §320 | DEPS empaquetado en el sitio: índice validado, versión del SW y cero peticiones ajenas, sin publicar | [09-editor-gate-sitio.md](evidencia/09-editor-gate-sitio.md) |
@@ -352,11 +352,12 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
 aquí; `§78` no existe y su hueco está explicado en el preámbulo. La tabla sigue el orden del fichero
 original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisión histórica; las filas
-añadidas después (`§313`, `§317`) se sitúan en el bloque de su fichero, no en orden numérico.
+añadidas después (`§313`, `§314`, `§317`) se sitúan en el bloque de su fichero, no en orden numérico.
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
-`§311` (fidelidad), `§314-316` (incremental), `§318-325` (dependencias e infra), `§326` (selector de
+`§311` (fidelidad), `§315-316` (incremental), `§318-325` (dependencias e infra), `§326` (selector de
 idioma) y `§327-328` (J5). `§329+` queda libre. `§313` ya no está reservado: su medición está escrita en este índice.
+`§314` ya no está reservado: su medición está escrita en este índice.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

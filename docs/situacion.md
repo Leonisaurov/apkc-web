@@ -786,6 +786,21 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   siguiente no. `TestIndiceDelJarSeReutilizaYSeInvalida` (`jarindice_test.go:151`, 416 frente a 414)
   falla igual en árbol limpio y no es de este cambio. Frontera: sin CDP ni gate; el timeline real en
   navegador y el reclamo del «40» siguen abiertos, no se da por cerrado el `40`.
+- §314: medición reproducible del incremental en wasm y nativo por el QA
+  `ses_defb50083ffeZC38H50IiYFd2B` sobre `718637c`. Wasm: `--- PASS: TestBuildDosVecesEnWasmMideEtapas (12.66s)`
+  y `comparación entrada por entrada: 80 entradas, 0 con bytes distintos []`; cuatro builds con etapas de
+  plain frío `aapt2 link 573ms / compile go 1.997s / dex go 814ms / package and sign go 277ms / total 3.782s`,
+  plain caliente `108ms / 1.528s / 308ms / 123ms / 2.151s`, con `1866 de 1875 code_item reutilizados` y
+  `copied 76 entries`; inc frío `427ms / 1.891s / 641ms / 211ms / 3.297s` con
+  `79 resource files changed: relinking`; inc caliente `compile go 1.903s / dex go 356ms / package and sign go 172ms / total 2.591s`,
+  con `1866 de 1875 reutilizados`. Sin `apkc devolvio 1`, `FAIL`, `error` ni `panic`. Nativo:
+  `r1-plain-frio 993`, `r1-plain-caliente 555`, `r1-inc-frio 808`, `r1-inc-caliente 486`,
+  `r1-incremental.json-bytes 35579`; `dex por clase: la vuelta caliente y el dexado completo son identicos`,
+  `entradas: 80, con bytes distintos: 0`, `Verifies`, v1/v2/v3 `true` y `zipalign: correcto`, con el árbol
+  limpio antes y después. Frontera: el shim no es OPFS; la capa wasm completa sigue con fallos ambientales
+  (§279 15/RC=1, §284 0/29/805, `docs/evidencia.md:15-24` 32/38), así que **no** se reclama capa wasm verde,
+  solo la prueba focal con jar montado; `REPETICIONES=1` deja vacías las medianas de tres repeticiones, que
+  es artefacto del guion, no fallo; sin gate final, chromium, red ni commits.
 - §318: Fase K re-medida sobre el árbol final (F0): cuatro `--- PASS` (más subtests), `ok
   github.com/ajinasokan/apkc 1.372s`, 0 saltados, con el comando `tcr -c 2 -m 1536M -r 256M -- go
   test -count=1 -run 'TestPreviewRecursosDeAarDrawableAnimYFont|TestPreviewVeElDrawableXmlDeLaDependencia|TestDedupeDeValuesPorClave|TestDedupeDeStyleablesPorClave' -v .`.
