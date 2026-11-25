@@ -9,6 +9,16 @@ DESTINO=${APKC_PREVIEW_WASM:-$HOME/.cache/apkc-web/preview/apkc.wasm}
 DIRECTORIO=$(dirname -- "$DESTINO")
 mkdir -p "$DIRECTORIO"
 
+# La toolchain fijada por §312: el vigilante no pasa por entorno.sh, así que hay que
+# anteponerla aquí; si no, se compilaría con el go del sistema (1.27.4-X:nodwarf5).
+GOROOT=${APKC_GOROOT:-$HOME/sdk/go1.24.0}
+if [ -x "$GOROOT/bin/go" ]; then
+  PATH=$GOROOT/bin:$PATH
+  export GOROOT PATH
+else
+  printf 'aviso: no hay toolchain go1.24.0 en %s; se usa la del PATH\n' "$GOROOT" >&2
+fi
+
 TEMPORAL=$DESTINO.tmp.$$
 GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -C "$RAIZ/apkc" -ldflags='-s -w' -o "$TEMPORAL" .
 mv -f "$TEMPORAL" "$DESTINO"
