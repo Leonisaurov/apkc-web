@@ -12,8 +12,10 @@ tcr -c 2 -m 1536M -r 256M -- go …
 ```
 
 **Frontera común.** No se corrió CDP, chromium, cell ni red: el plan condiciona esa parte (b) a
-Tctl ≤43 °C y autorización expresa, que hoy no se dieron. Por eso §337 y §338 tienen su mitad
-CDP **en verificación**, y el cierre no se da por «hecho» por analogía con §287/§288/§293/§295/§317.
+autorización expresa, que hoy no se dio; la medición original citaba además Tctl ≤43 °C, retirado
+como bloqueo el 2026-11-24 por decisión del usuario (`ESTADO-SESION.md` §6). Por eso §337 y §338
+tienen su mitad CDP **en verificación**, y el cierre no se da por «hecho» por analogía con
+§287/§288/§293/§295/§317.
 Tampoco se corrió gate ni publicación, y no se hizo `push`. La crítica final (`critico`) la lanza el
 orquestador al integrar; un subagente con `subagent * deny` no delega.
 

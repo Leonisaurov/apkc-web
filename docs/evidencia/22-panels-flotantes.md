@@ -62,7 +62,7 @@ y la segunda ronda dio `6/6`.
 
 **Frontera de `§346`.** No se corrió `getBoundingClientRect()` en `prueba-pestana.js` ni en
 `prueba-navegador.js`: ambas mediciones 1:1 del plan (`:46-55`) quedan **en verificación**, porque
-exigen chromium por CDP, Tctl ≤43 °C y autorización expresa, y hoy no hay ninguna de las tres. El
+exigían chromium por CDP, Tctl ≤43 °C y autorización expresa; hoy no hay chromium ni autorización. El
 z-order medido aquí es el del estado puro, el del fuente y el de la regla CSS; el orden visual
 final en la pestaña no se reclama. **Aclaración posterior (decisión del usuario, 2026-11-24):** la
 temperatura dejó de ser bloqueo; el motivo vigente para no correr CDP es la falta de autorización
@@ -95,8 +95,7 @@ reescribe `#codigo`, `estadoPestana` ni OPFS.
 `getBoundingClientRect()` de `prueba-pestana.js` y de `prueba-navegador.js` (plan `:46-55`), que
 necesita chromium por CDP con Tctl ≤43 °C y autorización expresa —el usuario retiró después la
 temperatura como bloqueo, así que hoy basta la falta de autorización para mantenerla en verificación—;
-(b) el oráculo visual de
-Droidloom; (c) `tools/entorno.sh gate` (incluido `studio/e2e.sh`); y (d) la publicación en
+(b) el oráculo visual de Droidloom; (c) `tools/entorno.sh gate` (incluido `studio/e2e.sh`); y (d) la publicación en
 `apkc-studio.surge.sh`. No se reclama cero peticiones fuera del origen, ni pestaña verificada, ni
 sitio publicado por analogía con el `node prueba.js` verde. Tampoco se ha actualizado el puntero
 del submódulo en el repo padre ni se ha hecho `push`; el orquestador lo integra.

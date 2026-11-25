@@ -142,7 +142,7 @@ Si este frente consume `§357`, el plan de apps pausadas se reanuda en `§358+`.
 ## 6. Decisiones del usuario que no se pueden perder
 
 - No medir temperatura como bloqueo. Los `§` que citan umbrales `Tctl` (p. ej.
-  `docs/evidencia/22-panels-flotantes.md:65,94`) conservan el texto histórico de la medición, pero
+  `docs/evidencia/22-panels-flotantes.md:65,96`) conservan el texto histórico de la medición, pero
   se aclaró al retomar que el motivo vigente para no correr CDP es solo la falta de autorización
   expresa; lo mismo dicen ahora `docs/situacion.md` (§348) y `docs/plan.md:66`.
 - No empujar sin autorización; la autorización posterior al push de todo fue ejecutada (padre y studio
