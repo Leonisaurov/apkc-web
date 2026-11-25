@@ -71,6 +71,11 @@ Actualización (filas del gestor, commit `69e798c`): el pin pasó a
 sobre `2a42a84` en `studio/apkc-emulador`, el gitlink de studio
 `a7e5ec847b934678aa3ab096a9d8cac077157555` y la guardia `git -C studio rev-parse HEAD:apkc-emulador`
 → `0c01986…`. La nota del lote Boolean/gestor queda como registro histórico fechado.
+Actualización (LayoutParams de Termux, commit `acc7d44`): el pin pasó a
+`c54e55114568b05947170a879f989e550b6766ee`, con el cherry-pick del mismo SHA del commit `0c17130`
+sobre `0c01986` en `studio/apkc-emulador`, el gitlink de studio
+`b54a0b4342356657ecafbdf3d7e19293a332a6dc` y la guardia `git -C studio rev-parse HEAD:apkc-emulador`
+→ `c54e551…`. La nota de las filas del gestor queda como registro histórico fechado.
 
 ## 2. Hecho y verificado (en su capa: node, Go y sitio empaquetado)
 
@@ -183,16 +188,17 @@ Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El pin vigente de la regla 14 es `0c01986d356c6eeb20a20809e5b96c74468d34ae`
-(`git -C studio rev-parse HEAD:apkc-emulador` → `0c01986…`, ejecutado y anotado en el apartado 1),
-vigente tras integrar las filas del gestor (`69e798c` en el padre, `a7e5ec8` como gitlink de
+El pin vigente de la regla 14 es `c54e55114568b05947170a879f989e550b6766ee`
+(`git -C studio rev-parse HEAD:apkc-emulador` → `c54e551…`, ejecutado y anotado en el apartado 1),
+vigente tras integrar los LayoutParams de Termux (`acc7d44` en el padre, `b54a0b43` como gitlink de
 studio). Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de
 §368 queda como registro histórico. Actualización (lote integrado, commit `1e1bb03`): el pin pasó a
 `6a207cd…`. Actualización (integración final, commit `688a7ad`): el pin pasó a `a83ebcd…`.
 Actualización (esquema de colores de Termux, commit `84a7b90`): el pin pasó a `bf7477e…`.
 Actualización (lote Boolean/gestor, commit `c179a0b`): el pin pasó a `2a42a84…`. Actualización (filas
-del gestor, commit `69e798c`): el pin pasó a `0c01986…`. Los pins `563e991`, `4117a8f`, `a2a6c29`,
-`c448442`, `6a207cd`, `ec842d4`, `a83ebcd`, `bf7477e` y `2a42a84` quedan como registros históricos
+del gestor, commit `69e798c`): el pin pasó a `0c01986…`. Actualización (LayoutParams de Termux,
+commit `acc7d44`): el pin pasó a `c54e551…`. Los pins `563e991`, `4117a8f`, `a2a6c29`, `c448442`,
+`6a207cd`, `ec842d4`, `a83ebcd`, `bf7477e`, `2a42a84` y `0c01986` quedan como registros históricos
 fechados.
 El gitlink anidado de `studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
 push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el

@@ -1342,3 +1342,60 @@ rutas de los JSON de esas cuatro corridas no se transmitieron en él y quedan pe
 **Frontera.** El gestor no se da por funcionando: solo se afirma que, con la ROM sembrada y esos tres
 pulsos, `id/list` muestra `fotos` y `leeme.txt`. El icono y la extensión de esas filas quedan sin
 resolver: `String.lastIndexOf` sigue abierto. Sin CDP, gate ni publicación.
+
+## 377. Termux: LayoutParams reales y frontera bindService
+
+Medido el 2026-11-25 sobre el árbol final, posterior a `§376`. Sobre el pin
+`0c01986d356c6eeb20a20809e5b96c74468d34ae` entró un cherry-pick nuevo en `studio/apkc-emulador`:
+`c54e55114568b05947170a879f989e550b6766ee`, del commit `0c17130`, aplicado sobre `0c01986`. El
+gitlink anidado de `studio` es `b54a0b4342356657ecafbdf3d7e19293a332a6dc` y el padre es
+`acc7d4483339b8d6e3b2dca5ce7113194736fa42`; la guardia de la regla 14 da
+`c54e55114568b05947170a879f989e550b6766ee`. El APK es el mismo cuya identidad queda fijada en `§354`
+(sha256 `89416397b70f9ff67a0044e8abe6ef82487cd48fcf543e2d23e02688cc541cf0`). Las cifras de este
+`§` son del informe del integrador, medidas sobre el árbol final y transcritas aquí sin re-medir.
+No se ha corrido gate, CDP ni publicación. Termux **no se da por funcionando**.
+
+### Comando, guardia y contrato de ficheros
+
+```sh
+git show --stat --oneline c54e55114568b05947170a879f989e550b6766ee
+git -C studio rev-parse HEAD:apkc-emulador
+git rev-parse --short HEAD
+git -C studio rev-parse --short HEAD
+go test -count=1 ./...
+git diff --check
+```
+
+`go test -count=1 ./...` → `ok … 196.481s`; 17 pruebas focales en PASS (el informe del integrador da
+el total sin desglosar sus nombres, que no se transcriben aquí). La materialización conserva los 34
+ficheros `preview*.go` byte a byte (regla 14), `git diff --check` da rc 0 y no aparece `DEPURACION`.
+
+### Termux antes y después
+
+El comando literal de la corrida final es:
+
+```sh
+apkc preview /home/leonisauro/Downloads/termux-app_v0.118.3+github-debug_armeabi-v7a.apk
+```
+
+La corrida escribe su JSON en `~/.cache/apkc-web/integracion-layout/termux.json`:
+
+| Corrida | Pasos | `ejecucion.error` |
+| --- | --- | --- |
+| Antes (`§372`) | 6599 | `setTerminalToolbarView`: se leyó `android.view.ViewGroup$LayoutParams.height` de un objeto nulo |
+| Árbol final (`§377`) | 6944 | `com.termux.app.TermuxActivity.onCreate: java.lang.RuntimeException: bindService() failed` |
+
+En la corrida final, `layout=res/layout/activity_termux.xml`, 13 nodos y 25 avisos
+(`avisos-recortados: 40`). El error anterior de `setTerminalToolbarView` desaparece. El aviso de
+`getLayoutParams` está recortado: no aparece entre los 25 visibles, así que no se da por medido; el
+cambio de error confirma que el stub se ejecutó, no que Termux funcione. No se transcriben aquí otros
+campos del JSON que el informe del integrador no entregó.
+
+### Las cuatro APK de control
+
+Las otras cuatro APK —F-Droid, NewPipe, Libre Memory Game y el gestor de tres pulsos— siguen
+byte-idénticas a `~/.cache/apkc-web/integracion-filas/*.json`. El cotejo se transcribe del informe del
+integrador.
+
+**Frontera.** Termux no se da por funcionando: `onCreate` termina en
+`java.lang.RuntimeException: bindService() failed`. Sin CDP, gate ni publicación.

@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de las mediciones originales: **2026-10-26**; las posteriores llevan su fecha en cada §.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§376` (346 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§377` (347 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -389,6 +389,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §374 | Primer relay WISP propio desplegado y verificado en remoto: VM Ubuntu 22.04.5 en `163.192.151.24`, SHA `0c7f334b…`, certificado LE hasta 2027-02-23, servicio `wispd.service` activo, handshake de 9 bytes y siete resultados, con la discrepancia `0x41`/`0x48` aceptada | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §375 | Boolean, opcode `0xd5` y primeras filas reales del gestor: cuatro cherry-picks sobre `bf7477e` (pin de entonces `2a42a84…`), suite `162.890s`, 11 focales PASS y 34 ficheros byte-idénticos; sin clic 1137→1330 pasos y 30→33 nodos, y las sondas de clic cambian de actividad hasta `Download` sin mostrar todavía `leeme.txt`; sin CDP, gate ni publicación | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §376 | Gestor de archivos: navegación y filas reales desde la ROM sembrada, con tres pulsos (cherry-pick `0c01986…` del commit `fd1e5ac` sobre `2a42a84`, gitlink de studio `a7e5ec8…`, padre `69e798c`, pin vigente `0c01986d356c6eeb20a20809e5b96c74468d34ae`): 3596 pasos, `error=None`, `layout=res/R5.xml` e `id/list` con `fotos` y `leeme.txt`, frente a 1330/33 sin pulsos; suite `197.304s`, 12 focales PASS, 34 ficheros byte-idénticos y `diff --check` rc 0; sin CDP, gate ni publicación | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §377 | Termux: LayoutParams reales y frontera `bindService` (cherry-pick `c54e55114568b05947170a879f989e550b6766ee` del commit `0c17130` sobre `0c01986`, gitlink de studio `b54a0b43…`, padre `acc7d44`, pin vigente `c54e551…`): 6944 pasos, 25 avisos (`avisos-recortados: 40`), `layout=res/layout/activity_termux.xml` y 13 nodos, con `bindService() failed` en lugar del `LayoutParams.height` nulo de los 6599 pasos anteriores; suite `196.481s`, 17 focales PASS, 34 ficheros byte-idénticos y `diff --check` rc 0; las otras cuatro APK byte-idénticas a `integracion-filas/`; sin CDP, gate ni publicación y sin afirmar que Termux funciona | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
@@ -410,6 +411,18 @@ Actualización de la numeración del plan de apps reales reanudado: `§358` medi
 **`§375` ya está medido**: lote Boolean/gestor integrado en `c179a0b` sobre el pin `bf7477e…`, con el pin de entonces `2a42a846a87df44d66178ca9000aabdc764d9a04`, suite `162.890s`, 11 focales PASS, 34 ficheros byte-idénticos y las cinco APK en `~/.cache/apkc-web/integracion-gestor-boolean/`; el gestor sin clic pasa a 1330 pasos y 33 nodos y las sondas de clic cambian de actividad hasta `Download` sin mostrar todavía `leeme.txt`. Tiene su fila en el índice y el recuento en 345; CDP, gate y publicación siguen fuera y ninguna APK se da por funcionando.
 
 **`§376` ya está medido**: navegación y filas reales del gestor desde la ROM sembrada, con el cherry-pick `0c01986d356c6eeb20a20809e5b96c74468d34ae` del commit `fd1e5ac` sobre `2a42a84`, gitlink de studio `a7e5ec847b934678aa3ab096a9d8cac077157555` y padre `69e798c`; pin vigente de la regla 14 `0c01986d356c6eeb20a20809e5b96c74468d34ae`, suite `197.304s`, 12 focales PASS, 34 ficheros byte-idénticos y `diff --check` rc 0. Con `--rom studio/apkc-emulador/rom.json`, el permiso `READ_EXTERNAL_STORAGE` y tres pulsos, el gestor da 3596 pasos, `error=None`, `layout=res/R5.xml` e `id/list` con `fotos` y `leeme.txt`, frente a 1330 pasos y 33 nodos sin pulsos; las cuatro APK de control siguen byte-idénticas a `integracion-gestor-boolean/`. Tiene su fila en el índice y el recuento en 346; CDP, gate y publicación siguen fuera, el gestor no se da por funcionando y el icono/extensión (`String.lastIndexOf`) queda sin resolver.
+
+**`§377` ya está medido**: LayoutParams reales y frontera `bindService` en Termux, con el cherry-pick
+`c54e55114568b05947170a879f989e550b6766ee` del commit `0c17130` sobre `0c01986`, gitlink de studio
+`b54a0b4342356657ecafbdf3d7e19293a332a6dc`, padre `acc7d4483339b8d6e3b2dca5ce7113194736fa42` y
+pin vigente de la regla 14 `c54e55114568b05947170a879f989e550b6766ee`; suite `196.481s`, 17 focales
+PASS, 34 ficheros byte-idénticos y `diff --check` rc 0. Sobre el árbol final, `apkc preview` del APK
+de Termux da 6944 pasos, 25 avisos (`avisos-recortados: 40`), `layout=res/layout/activity_termux.xml`
+y 13 nodos, con `com.termux.app.TermuxActivity.onCreate: java.lang.RuntimeException: bindService()
+failed`; el error anterior de `setTerminalToolbarView` (`LayoutParams.height` de un objeto nulo)
+desaparece, aunque el aviso de `getLayoutParams` está recortado y no aparece entre los 25 visibles.
+Las otras cuatro APK siguen byte-idénticas a `integracion-filas/`. Tiene su fila en el índice y el
+recuento en 347; CDP, gate y publicación siguen fuera y Termux no se da por funcionando.
 
 **Nota sobre el comando del preámbulo.** `sed -n '47p;217p;444,445p' docs/evidencia.md` (:33) cita
 números de línea del fichero antiguo de 14.501 líneas: hoy el equivalente es buscar `§1` (88 tests) y

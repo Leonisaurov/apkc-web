@@ -1013,6 +1013,16 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   byte-idénticas a `integracion-gestor-boolean/`. Sin CDP, gate ni publicación; el gestor no se da por
   funcionando y el icono/extensión (`String.lastIndexOf`) queda sin resolver.
   `docs/evidencia/15-apps-reales.md`.
+- §377: LayoutParams reales y frontera `bindService` en Termux (cherry-pick
+  `c54e55114568b05947170a879f989e550b6766ee` del commit `0c17130` sobre `0c01986`, integrado en
+  `acc7d44`, pin vigente `c54e551…`): sobre el árbol final, 6944 pasos, 25 avisos
+  (`avisos-recortados: 40`), `layout=res/layout/activity_termux.xml` y 13 nodos, con
+  `com.termux.app.TermuxActivity.onCreate: java.lang.RuntimeException: bindService() failed` en lugar
+  del `LayoutParams.height` nulo de `setTerminalToolbarView` (6599 pasos en `§372`); suite `196.481s`,
+  17 focales PASS y 34 ficheros byte-idénticos. El aviso de `getLayoutParams` está recortado y no
+  aparece entre los 25 visibles, aunque el cambio de error confirma que el stub se ejecutó. Las otras
+  cuatro APK siguen byte-idénticas a `integracion-filas/`. Sin CDP, gate ni publicación; Termux no se
+  da por funcionando. `docs/evidencia/15-apps-reales.md`.
 - §356: la propiedad git de `apkc-emulador` pasa al submódulo de `studio/` (gitlink `563e991`,
   commit `0f6d802`, URL https y rama `emulador-modulo`); el padre conserva su pin espejo y una
   guardia prohíbe que divergan. Un único resolvedor elige la fuente (`$2`, `APKC_EMULADOR_DIR`,
