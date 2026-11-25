@@ -116,6 +116,7 @@ jobs:
           APKC: ${{ runner.temp }}/apkc-gate
           APKC_WASM: ${{ runner.temp }}/apkc-wasm.wasm
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          EXIGIR_PESTANA: "1"
         run: |
           mkdir -p "$PREFIX/tmp"
           sh studio/e2e.sh

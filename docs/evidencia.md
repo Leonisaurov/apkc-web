@@ -344,6 +344,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §313 | Sesión viva de preview: una instancia, sin replay y sin error pegajoso | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §314 | Medición reproducible del incremental en wasm y nativo | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
+| §326 | Selector de idioma de la app en la pestaña | [01-hospedador-y-pestaña.md](evidencia/01-hospedador-y-pestaña.md) |
 | §334 | F0: el diff del §311 nunca integrado aplica limpio sobre `035744f` | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
 | §335 | F1: la lista de notas enseña N filas en la sesión viva, sin el aviso del `getCount` | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
 | §336 | F2: cinco botones dentro de 360 dp y no-intersección separada con huecos de 64 dp | [21-emulador-fiel.md](evidencia/21-emulador-fiel.md) |
@@ -364,10 +365,11 @@ original, donde `79`, `81`, `80` y `214`, `213` quedaron desordenados por decisi
 añadidas después (`§313`, `§314`, `§317`, `§348`) se sitúan en el bloque de su fichero, no en orden numérico.
 
 **Reservados en sesión.** Estas etiquetas están tomadas por trabajos en marcha y no se reutilizan:
-`§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra), `§326` (selector de
-idioma), `§327-328` (J5), `§329-333` (diagnóstico), `§334-339` (fidelidad) y `§340-347`
+`§311` (fidelidad), `§315-316` (incremental), `§321-325` (infra),
+`§327-328` (J5), `§329-333` (diagnóstico), `§334-339` (fidelidad) y `§340-347`
 (paneles). `§348` ya no está reservado: su medición está escrita en este índice. `§349+` queda
 libre. `§313` ya no está reservado: su medición está escrita en este índice.
+`§326` ya no está reservado: su medición está escrita en este índice.
 `§314` ya no está reservado: su medición está escrita en este índice.
 `§346` y `§347` ya no están libres: sus mediciones están escritas en este índice.
 

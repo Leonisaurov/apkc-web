@@ -1,4 +1,4 @@
-# Evidencia — §1-§12
+# Evidencia — §1-§12 y §326
 
 ## 1. El código puro de apkc corre en un hospedador con forma de navegador
 
@@ -284,4 +284,99 @@ del `iniciar()`, el motivo de un import fallido se guarda (lo cuenta el `sondeo`
 **Tamaño de lo que hay que bajar a la pestaña** (medida parcial de la fase 4.4): `apkc.wasm`
 9.458.093 bytes, más el `wasm_exec.js` del GOROOT. Sin `android.jar`, porque sin `javac` no hay nada
 que compilar todavía.
+
+## 326. Selector de idioma de la app en la pestaña
+
+§290 fijó el flag `--locale` del lado Go: lee `values-es` con `es` y prefiere `values-es-rMX` con
+`es-MX`. Aquí se mide el camino completo en la pestaña: un control elige entre `""`, `es` y `es-MX`,
+y `apkc preview` corre dentro de wasm sobre la **misma apk de OPFS**, sin recompilar ni reempaquetar.
+Solo cambian valores de texto; ids, rutas y drawables no cambian.
+
+**Comandos ejecutados sobre el árbol final** (Go 1.24.0 fijado, temporales en `$HOME/.cache/apkc-web`,
+pestaña en chromium real con `LD_LIBRARY_PATH` apuntando al `shimlib` de `libsimdutf.so.36`):
+
+```sh
+cd apkc && go test -run TestSesionHeredaElLocaleDelArranque -count=1 -v .
+cd studio && node --check previa-panel.js && node prueba.js
+cd apkc && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -o "$HOME/.cache/apkc-web/apkc-wasm.wasm" .
+APK_EJEMPLO=$(find "$HOME/.cache/apkc-web/tmp" -name app.apk -path '*traducido*' | head -1)
+cd studio && APKC_WASM="$HOME/.cache/apkc-web/apkc-wasm.wasm" APK_EJEMPLO="$APK_EJEMPLO" \
+  KS_EJEMPLO="$HOME/.android/debug.keystore" ANDROID_JAR="$HOME/opt/android-sdk/platforms/android-34/android.jar" \
+  STUDIO_SERVIDOR_PORT=8803 STUDIO_PORT=9347 CHROME_BIN=/usr/bin/chromium node prueba-pestana.js
+APK_FIXTURE=$(find "$HOME/.cache/apkc-web/tmp" -name app.apk -path '*traducido*' | head -1)
+cd studio && APK_FIXTURE="$APK_FIXTURE" CHROME_BIN=/usr/bin/chromium APKC_WASM= EXIGIR_PESTANA=1 sh e2e.sh
+```
+
+**Resultado de la punta Go** (el wrapper de sesión `js && wasm` no se compila en el test nativo, por
+eso el binario wasm se construye aparte):
+
+```text
+=== RUN   TestSesionHeredaElLocaleDelArranque
+--- PASS: TestSesionHeredaElLocaleDelArranque (0.02s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.021s
+```
+
+El test arma una apk con `string/saludo` en base/es/es-rMX y un `classes.dex` del Contador y llama
+directamente a `nuevaSesionPreview(apk, "", caso.locale)`: comprueba la **herencia del locale dentro
+de la sesión** — el valor queda en `s.locale` y `modeloConResultado()` lo reaplica en cada repintado
+—, entregando una orden `--pulsar id/pulsar` **sin** `--locale`. Exige `Hola!` al arrancar y tras el
+clic con `es`, `Hello!` sin locale y `Hola MX!` con `es-MX`. **No** exercise `previewSesion()` ni el
+`FlagSet` de `apkc/previewsesion_js.go:31,48`, que solo compila con `js && wasm`: este test nativo
+seguiría pasando aunque se revirtiera ese fichero. La cobertura del flag es la de las seis
+comprobaciones CDP de abajo, que arrancan `apkc preview --locale …` dentro de chromium
+(`$HOME/.cache/apkc-web/cdp-selector-idioma.log:254-259`).
+
+**Resultado de la punta node**: `prueba: todo en orden`. Falsifica siete casos de la whitelist
+(`""`, `es`, `es-MX` y `es-MX;id`, `EN`, `null`, `{}`), el contrato de dos argumentos de
+`argvDePrevia` y, leyendo las fuentes, que `e2e.sh` trae el guard activo y `gate.yml` fija
+`EXIGIR_PESTANA: "1"`.
+
+**Resultado CDP**: seis comprobaciones nuevas, todas `  ok`, y cero peticiones ajenas:
+
+```text
+  ok   idioma app: id/saludo Hola! con es
+  ok   idioma app: id/saludo Hello! sin locale
+  ok   idioma app: id/saludo Hola! con es-MX sin bloque es-rMX en la fixture
+  ok   idioma app: ids y drawables invariantes entre los tres idiomas
+  ok   idioma app: clic posterior mantiene el idioma con es
+  ok   idioma app: el idioma de la interfaz no cambia el de la app
+  ok   la pestaña no pide nada fuera de su origen (518 peticiones, 0 websockets) — 518 URLs, todas locales
+  ok   gate por defecto: cero WebSocket fuera del origen declarado — 0 websockets, todos locales
+```
+
+El valor de `es-MX` no se inventa: la apk de fixture de la plantilla `traducido` **no trae**
+`values-es-rMX`, así que cae a `values-es` y dice `Hola!`. El oráculo es el mismo que usa `e2e.sh`:
+
+```sh
+"$BUILD_TOOLS/aapt2" dump resources "$HOME/.cache/apkc-web/tmp/studio-e2e-traducido/com.hola.traducido/build/app.apk" | grep -A4 'string/saludo'
+```
+
+```text
+    resource 0x7f030001 string/saludo
+      () "Hello!"
+      (es) "Hola!"
+```
+
+La cobertura de `es-MX` con un bloque regional real queda medida en el test Go de arriba
+(`Hola MX!`) y en §290; esta medición CDP solo puede falsificar la caída a `values-es`. El clic
+posterior viaja por `argvDeOrden(paso, idSesion)` sin `--locale` y el `idSesion` no cambia; cambiar
+`#idioma-ui` a `en` no toca el idioma de la app. La corrida completa terminó en
+`246 comprobaciones bien, 3 mal`: los tres fallos son las comprobaciones D7 de navegación entre
+actividades, y las tres fallan igual sobre una copia prístina del submódulo en `704b409`
+(`240 comprobaciones bien, 3 mal`, mismatch idéntico). No son de este frente.
+
+**Resultado del caso negativo** (con `APK_FIXTURE` y `CHROME_BIN` satisfechos y `APKC_WASM` vacío):
+
+```text
+  FALLO: pestaña omitida: falta APKC_WASM
+e2e: 1 problemas
+```
+
+Sin la línea `e2e: todo en orden`. `EXIGIR_PESTANA=0` conserva el modo de depuración que omite la
+pestaña; el job `pesado` de CI fija `EXIGIR_PESTANA: "1"` y no puede publicar con un fallo así.
+
+Frontera: no se recompila la apk al cambiar idioma, no se toca `#idioma-ui`, no se mete `--locale`
+en `argvDeOrden`, no se publica el sitio y no se ejecuta el job de CI. Quedan fuera la barra de
+estado, el tema y la densidad de renderizado, las regiones compuestas y los idiomas no medidos en §290.
 
