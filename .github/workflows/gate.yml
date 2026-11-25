@@ -45,7 +45,9 @@ jobs:
           submodules: recursive
       - uses: actions/setup-go@v5  # TODO(sha): requiere red; gh api repos/actions/setup-go/git/ref/tags/v5 --jq .object.sha
         with:
-          go-version-file: apkc/go.mod
+          # Pin explícito: `go.mod` solo declara el mínimo (`go 1.24`) y dejaría que el runner
+          # cambiara de versión sin que este repo lo viera.
+          go-version: '1.24.0'
           cache-dependency-path: apkc/go.sum
       - uses: actions/setup-node@v4  # TODO(sha): requiere red; gh api repos/actions/setup-node/git/ref/tags/v4 --jq .object.sha
         with:
@@ -77,6 +79,9 @@ jobs:
         uses: browser-actions/setup-chrome@v1  # TODO(sha): requiere red; gh api repos/browser-actions/setup-chrome/git/ref/tags/v1 --jq .object.sha
         with:
           chrome-version: stable
+      - name: verificar la suma de wasm_exec.js
+        # Guion que aporta W2: se invoca desde la raíz, antes de copiar el fichero del GOROOT.
+        run: sh tools/wasm-exec-hash.sh
       - name: binarios de apkc (nativo y wasm)
         run: |
           mkdir -p "$RUNNER_TEMP/apkc-web-tmp"
@@ -138,6 +143,9 @@ jobs:
     needs: pesado
     runs-on: ubuntu-latest
     continue-on-error: true
+    # Canal entre jobs: el summary es por job y `verificar-informativos` no puede leerlo.
+    outputs:
+      marcador: ${{ steps.marcador.outputs.marcador }}
     permissions:
       contents: read
     steps:
@@ -156,7 +164,39 @@ jobs:
           name: sitio
           path: sitio
       - name: WebKit sobre el sitio publicado
-        run: node studio/prueba-webkit.js
+        id: webkit
+        shell: bash
+        run: |
+          set +e
+          node studio/prueba-webkit.js 2>&1 | tee "$RUNNER_TEMP/webkit.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+      - name: marcador informativo
+        id: marcador
+        if: always()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/webkit.log"
+          rc="${{ steps.webkit.outputs.rc }}"
+          if [ -z "$rc" ]; then rc=1; fi
+          if grep -q 'sin playwright' "$log" 2>/dev/null; then
+            resultado=omitido
+            comprobaciones=0
+          else
+            comprobaciones=$(grep -cE '^  (ok|FALLA) ' "$log" 2>/dev/null || true)
+            if [ -z "$comprobaciones" ]; then comprobaciones=0; fi
+            if grep -q 'todo en orden' "$log" 2>/dev/null; then
+              resultado=todo-en-orden
+            else
+              resultado=$(sed -n 's/^webkit: //p' "$log" 2>/dev/null | tail -1)
+              if [ -z "$resultado" ]; then resultado=sin-resultado; fi
+            fi
+          fi
+          marcador="webkit|resultado=$resultado|comprobaciones=$comprobaciones|rc=$rc"
+          echo "marcador=$marcador" >> "$GITHUB_OUTPUT"
+          echo "$marcador"
 
   # Safari real no se puede automatizar con Playwright: en macos-latest lo que se ejecuta es el
   # motor WebKit empaquetado por Playwright, que es el mismo motor pero no la app Safari. Por eso
@@ -167,6 +207,8 @@ jobs:
     runs-on: macos-latest
     continue-on-error: true
     timeout-minutes: 30
+    outputs:
+      marcador: ${{ steps.marcador.outputs.marcador }}
     permissions:
       contents: read
     steps:
@@ -185,11 +227,28 @@ jobs:
           npm install --no-save --no-package-lock playwright@latest
           npx playwright install webkit
       - name: identidad del motor (WebKit de Playwright o Safari real)
-        run: node tools/safari-info.mjs
+        id: safari_info
+        run: node tools/safari-info.mjs 2>&1 | tee "$RUNNER_TEMP/safari-info.log"
       - name: el sitio sobre WebKit en macOS
         env:
           SITIO_DIR: ${{ github.workspace }}/sitio
         run: node studio/prueba-webkit.js
+      - name: marcador informativo
+        id: marcador
+        if: always()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/safari-info.log"
+          ejecutable=$(sed -n 's/^ejecutable: //p' "$log" 2>/dev/null | tail -1)
+          if [ -z "$ejecutable" ]; then ejecutable=desconocido; fi
+          if grep -q '^de Playwright: si' "$log" 2>/dev/null; then
+            motor=playwright-webkit
+          else
+            motor=sin-identidad
+          fi
+          marcador="safari|motor=$motor|ejecutable=$ejecutable"
+          echo "marcador=$marcador" >> "$GITHUB_OUTPUT"
+          echo "$marcador"
       - name: por qué este job no bloquea
         if: failure()
         run: |
@@ -205,6 +264,8 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     timeout-minutes: 50
+    outputs:
+      marcador: ${{ steps.marcador.outputs.marcador }}
     permissions:
       contents: read
     steps:
@@ -213,7 +274,9 @@ jobs:
           submodules: recursive
       - uses: actions/setup-go@v5  # TODO(sha): requiere red; gh api repos/actions/setup-go/git/ref/tags/v5 --jq .object.sha
         with:
-          go-version-file: apkc/go.mod
+          # Pin explícito: `go.mod` solo declara el mínimo (`go 1.24`) y dejaría que el runner
+          # cambiara de versión sin que este repo lo viera.
+          go-version: '1.24.0'
           cache-dependency-path: apkc/go.sum
       - uses: actions/setup-java@v4  # TODO(sha): requiere red; gh api repos/actions/setup-java/git/ref/tags/v4 --jq .object.sha
         with:
@@ -260,14 +323,24 @@ jobs:
           [ "$listo" = "si" ]
           "$ANDROID_HOME/platform-tools/adb" shell getprop ro.build.version.sdk
       - name: banco ART (app_process64 y dexdump)
+        id: banco
         if: steps.kvm.outputs.kvm == 'si'
         env:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           # JAVA_HOME lo exporta actions/setup-java para los pasos siguientes; no se copia aquí.
           APKC: ${{ runner.temp }}/apkc-art
+        shell: bash
         run: |
+          set +e
           (cd apkc && go build -o "$RUNNER_TEMP/apkc-art" .)
-          sh banco/art.sh
+          rc=$?
+          if [ "$rc" -eq 0 ]; then
+            sh banco/art.sh
+            rc=$?
+          fi
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
       - name: subir el log del emulador si falla
         if: failure() && steps.kvm.outputs.kvm == 'si'
         uses: actions/upload-artifact@v4  # TODO(sha): requiere red; gh api repos/actions/upload-artifact/git/ref/tags/v4 --jq .object.sha
@@ -275,11 +348,89 @@ jobs:
           name: art-emulator-log
           path: ${{ runner.temp }}/emulator.log
           if-no-files-found: ignore
+      - name: marcador informativo
+        id: marcador
+        if: always()
+        shell: bash
+        run: |
+          kvm="${{ steps.kvm.outputs.kvm }}"
+          rc="${{ steps.banco.outputs.rc }}"
+          if [ "$kvm" != 'si' ]; then
+            marcador='art|kvm=no|omitido=si'
+          elif [ -z "$rc" ]; then
+            marcador='art|kvm=si|omitido=si'
+          elif [ "$rc" = '0' ]; then
+            marcador='art|kvm=si|banco=rc0'
+          else
+            marcador="art|kvm=si|banco=rc$rc|fallo=si"
+          fi
+          echo "marcador=$marcador" >> "$GITHUB_OUTPUT"
+          echo "$marcador"
       - name: por qué este job no bloquea
         if: failure()
         run: |
           echo "art: informativo. Falló el arranque con KVM, el SDK/emulador o el banco ART."
           echo "La firma y la página ya están verificadas por los jobs rapido y pesado; publicar no depende de art."
+
+  # Contrato de los jobs informativos: cada uno deja un marcador en sus propias salidas. Este job
+  # no exige que pasen (§181): solo que informen de qué ocurrió y que una omisión tenga causa.
+  # No tiene `continue-on-error`: un marcador ausente o una omisión sin causa sí es un fallo.
+  # `publicar` sigue dependiendo únicamente de `pesado`, así que esto no bloquea la release.
+  verificar-informativos:
+    needs: [webkit, safari, art]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: comprobar los marcadores
+        shell: bash
+        run: |
+          w="${{ needs.webkit.outputs.marcador }}"
+          s="${{ needs.safari.outputs.marcador }}"
+          a="${{ needs.art.outputs.marcador }}"
+          printf 'webkit: %s\n' "$w"
+          printf 'safari: %s\n' "$s"
+          printf 'art:    %s\n' "$a"
+          fallos=0
+          if [[ "$w" != webkit\|resultado=* ]]; then
+            echo "falta el marcador de webkit"
+            fallos=$((fallos+1))
+          else
+            for campo in '|resultado=' '|comprobaciones=' '|rc='; do
+              if [[ "$w" != *"$campo"* ]]; then
+                echo "al marcador de webkit le falta $campo"
+                fallos=$((fallos+1))
+              fi
+            done
+          fi
+          if [[ "$s" != safari\|motor=* ]]; then
+            echo "falta el marcador de safari"
+            fallos=$((fallos+1))
+          else
+            for campo in '|motor=' '|ejecutable='; do
+              if [[ "$s" != *"$campo"* ]]; then
+                echo "al marcador de safari le falta $campo"
+                fallos=$((fallos+1))
+              fi
+            done
+          fi
+          if [[ "$a" != art\|kvm=* ]]; then
+            echo "falta el marcador de art"
+            fallos=$((fallos+1))
+          elif [[ "$a" == *'|omitido=si'* ]]; then
+            if [[ "$a" != *'|kvm=no'* ]]; then
+              echo "art informa de una omisión sin causa (falta kvm=no)"
+              fallos=$((fallos+1))
+            fi
+          elif [[ "$a" != *'|banco=rc'* ]]; then
+            echo "art no informa del resultado del banco"
+            fallos=$((fallos+1))
+          fi
+          if [ "$fallos" -ne 0 ]; then
+            echo "$fallos problema(s) en el contrato de marcadores"
+          fi
+          [[ "$fallos" -eq 0 ]]
 
   # El release no puede saltarse el gate: si el pesado falla, este job no arranca. Publica el
   # sitio empaquetado como artefacto de la release; el host definitivo sigue sin decidirse.

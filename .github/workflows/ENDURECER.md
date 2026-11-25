@@ -18,10 +18,17 @@ Hecho, sin necesitar red:
   `__APKC_CSP__` sin sustituir sigue intacto (`tools/sitio.sh:141-144`).
 
 Pendiente por red: **ninguna `uses:` está fijada a un SHA**. No hay ningún SHA de action en la
-documentación local y esta sesión no tuvo red; adivinarlo sería peor que dejar la etiqueta visible.
-Cada `uses:` lleva ahora el comentario `# TODO(sha): requiere red; gh api repos/<owner>/<repo>/git/ref/tags/vN --jq .object.sha`.
+documentación local y esta sesión no tuvo autorización de red; adivinarlo sería peor que dejar la
+etiqueta visible. Cada `uses:` conserva su etiqueta y el comentario
+`# TODO(sha): requiere red; gh api repos/<owner>/<repo>/git/ref/tags/vN --jq .object.sha`.
 Para auditarlo, `grep -c "@v[0-9]" .github/workflows/*.yml` debe devolver exactamente las líneas
-marcadas con `TODO(sha)` (hoy, 30 en los tres `.yml`).
+marcadas con `TODO(sha)` (hoy, 30 en los tres `.yml`). **El pinning queda pendiente de autorización
+de red**: no se resuelve ningún SHA ni se afirma un run verde sin esa autorización.
+
+La política es pin, run y commit de la evidencia: primero se fija el SHA, después se corre el
+workflow y por último se commitea, en este fichero, la tupla `ref|tag|SHA|fecha|ID de run|log` de
+cada action. Sin esa tupla la fila sigue pendiente; un SHA copiado de otra fuente no sustituye al
+run propio.
 
 ## Fijar cada action por SHA
 
@@ -75,3 +82,12 @@ echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_
 
 Si algún día se sube de versión, la suma se vuelve a medir con `sha256sum` sobre el jar descargado
 y se actualiza aquí y en el workflow en el mismo cambio.
+
+## Entorno de compilación fijado
+
+- **Go**: los dos pasos `actions/setup-go` de `gate.yml` (jobs `pesado` y `art`) fijan
+  `go-version: '1.24.0'` en lugar de leer `apkc/go.mod`, que solo declara el mínimo `go 1.24`.
+  Así un cambio de patch del runner no cambia el binario sin que este repo lo vea.
+- **wasm_exec.js**: antes de copiarlo desde el GOROOT, `gate.yml` invoca
+  `sh tools/wasm-exec-hash.sh` desde la raíz. El guion lo aporta el frente W2; aquí solo se fija
+  el punto de llamada, que queda delante de la copia.
