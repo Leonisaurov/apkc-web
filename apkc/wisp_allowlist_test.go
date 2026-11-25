@@ -110,6 +110,37 @@ func TestAllowlistRelaysConocidos(t *testing.T) {
 	}
 }
 
+// TestRelayPropioAceptadoPorComparacionExacta cubre el relay propio ofrecido por
+// defecto en la página: valida tal cual, sin PermitirRelaysPersonalizados y sin
+// entrar en la lista de relays de terceros, y una variante de su URL se rechaza.
+func TestRelayPropioAceptadoPorComparacionExacta(t *testing.T) {
+	cfg := ConfigWISP{Habilitado: true, Relay: relayPropioWISP}
+	if err := cfg.Validar(); err != nil {
+		t.Fatalf("el relay propio %q fue rechazado: %v", relayPropioWISP, err)
+	}
+	if cfg.PermitirRelaysPersonalizados {
+		t.Fatal("el relay propio no debe exigir PermitirRelaysPersonalizados")
+	}
+	for _, relay := range RelaysWISP() {
+		if relay == relayPropioWISP {
+			t.Fatal("el relay propio no debe estar en la lista de relays de terceros")
+		}
+	}
+	// Estas variantes pasan la forma de la URL, pero no coinciden byte a byte con
+	// la constante: las rechaza la allowlist, no la comprobación de forma.
+	for _, variante := range []string{
+		"wss://wisp.dolci-vita.link:443/wisp/",
+		"wss://WISP.dolci-vita.link/wisp/",
+		"wss://wisp.dolci-vita.link/WISP/",
+		"wss://wisp.dolci-vita.link/wisp//",
+	} {
+		v := ConfigWISP{Habilitado: true, Relay: variante}
+		if err := v.Validar(); !errors.Is(err, ErrRelayNoAutorizado) {
+			t.Fatalf("la variante %q = %v, se esperaba ErrRelayNoAutorizado", variante, err)
+		}
+	}
+}
+
 // TestRelayAjenoRechazado es el negativo: un relay que no está entre los seis se
 // rechaza nombrando su host, y cambiar la ruta de uno conocido también lo saca.
 func TestRelayAjenoRechazado(t *testing.T) {

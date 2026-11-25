@@ -69,6 +69,13 @@ var relaysWISP = []string{
 	"wss://gointospace.app/wisp/",
 }
 
+// relayPropioWISP es el relay WISP propio del proyecto, ofrecido en la página como
+// opción configurada por defecto. No entra en relaysWISP, que sigue siendo la lista
+// de los seis relays de terceros, y el módulo continúa apagado hasta el opt-in:
+// mientras Habilitado sea false, esta URL no se usa en ninguna petición. Se acepta
+// por comparación exacta en validarRelayAutorizado, sin activar PermitirRelaysPersonalizados.
+const relayPropioWISP = "wss://wisp.dolci-vita.link/wisp/"
+
 // RelaysWISP devuelve una copia de la lista de relays conocidos.
 func RelaysWISP() []string {
 	return append([]string(nil), relaysWISP...)
@@ -374,12 +381,18 @@ func validarFormaRelay(u *url.URL, relay string) error {
 	return nil
 }
 
-// validarRelayAutorizado exige que la URL sea una de las verificadas, salvo que
-// el usuario haya activado `PermitirRelaysPersonalizados`. La comparación es por
-// URL canónica (esquema, autoridad y ruta), no por host suelto: cambiar la ruta
-// de un relay conocido también lo convierte en otro relay.
+// validarRelayAutorizado exige que la URL sea una de las verificadas o el relay
+// propio, salvo que el usuario haya activado `PermitirRelaysPersonalizados`. La
+// comparación con la lista es por URL canónica (esquema, autoridad y ruta), no por
+// host suelto: cambiar la ruta de un relay conocido también lo convierte en otro
+// relay. El relay propio se compara por igualdad exacta de la URL configurada.
 func (c ConfigWISP) validarRelayAutorizado(u *url.URL) error {
 	if c.PermitirRelaysPersonalizados {
+		return nil
+	}
+	// El relay propio no está en relaysWISP para no alterar la lista de terceros;
+	// se autoriza solo si la URL escrita coincide byte a byte con la constante.
+	if c.Relay == relayPropioWISP {
 		return nil
 	}
 	canonica := relayCanonico(u)
