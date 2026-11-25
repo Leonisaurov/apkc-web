@@ -156,7 +156,7 @@ aapt2 dump resources org.schabi.newpipe_1017.apk | grep -A4 'layout/activity_mai
 ```
 Termux conserva rutas legibles (`res/layout/activity_termux.xml`); tiene 137 layouts, 119 vectores,
 58 `anim`/`animator`, 19 `xml` y 2 `raw`. F-Droid **no tiene** `layout/main` ni `activity_main`: su
-pantalla es Compose: el `layout/main_tab_nearby` medido (`res/f_.xml`) no es la pantalla de esa
+interfaz es Compose. El `layout/main_tab_nearby` medido (`res/f_.xml`) no es la pantalla de esa
 actividad, y la identidad de la lanzadora sigue como hipótesis a confirmar en Fase C (§359).
 NewPipe sí tiene `layout/activity_main` (`res/v9.xml`); el `(land) res/El.xml` pertenece a
 `layout/activity_player_queue_control`, no a `activity_main`.

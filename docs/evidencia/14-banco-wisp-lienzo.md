@@ -1708,7 +1708,7 @@ ejecutó gate final, CI, publicación ni resolución contra un relay real.
 ## 299. El wasm vuelve a compilar, el corredor se centraliza y el gate falla sin `TypeError` en su log
 
 Medido el 2026-11-24 sobre `HEAD 0379182`. Cuatro frentes con evidencia de esta sesión: el binario
-wasm, la suite Go completa, el corredor de tareas y el gate autorizado que destapó el bloque `--inc`.
+wasm, la suite Go completa, el corredor de tareas y el gate autorizado (`e2e: 1 problemas`, sin `TypeError` en su log).
 
 ### El import huérfano de `net`
 
