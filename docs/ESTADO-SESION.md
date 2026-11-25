@@ -121,8 +121,7 @@ El pin y los rangos empujados están registrados en el apartado 1: el pin vigent
 `4117a8f`, subido en el mismo commit que el emulador, y los tres rangos (`origin/emulador-modulo`,
 `origin/emulador-sin-topes` y `origin/web`) quedaron con `rev-list --count @{u}..HEAD` a cero en su
 momento. `§358` está medido, registrado y cerrado: el opcode `0x1d`/`0x1e` dejó de bloquear los tres
-APK (`docs/evidencia.md:365`). Después de ese push hay commits documentales posteriores **sin
-empujar**; el recuento de `ahead` lo da `git status -sb` en el momento de la lectura (no se fija aquí
+APK (`docs/evidencia.md:365`). Tras el push final no hay commits documentales sin empujar; el recuento de `ahead` lo da `git status -sb` en el momento de la lectura (no se fija aquí
 una cifra, porque cambia con cada commit), y cualquier nuevo push necesita autorización expresa.
 
 El plan de apps pausadas sigue este orden: C `§359` → B `§360` → D `§361` → E `§362` → F `§363` →
