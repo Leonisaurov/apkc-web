@@ -25,7 +25,9 @@ set -eu
 
 RAIZ=$(CDPATH= cd -P -- "$(dirname -- "$0")/.." && pwd)
 
-# HOME del repo, no el del shell: apkc-web vive bajo <home>/Develop/Go/apkc-web.
+# HOME del repo, no el del shell: apkc-web vive bajo <home>/Develop/Go/apkc-web. Se guarda el HOME
+# real antes de reescribirlo porque la toolchain fijada de Go vive en <home-real>/sdk.
+HOME_REAL=$HOME
 HOME=${HOME_APKC_WEB:-$(CDPATH= cd -P -- "$RAIZ/../../.." && pwd)}
 if [ -z "${PREFIX:-}" ] || [ ! -d "${PREFIX:-/no-existe}" ]; then
   if [ -d /data/data/com.termux/files/usr ]; then
@@ -54,6 +56,19 @@ PATH_EXTRA=/usr/sbin:$PREFIX/bin
 [ -n "$BUILD_TOOLS" ] && PATH_EXTRA=$BUILD_TOOLS:$PATH_EXTRA
 PATH=$PATH_EXTRA:$PATH
 export PATH
+
+# go1.24.0 es la toolchain fijada por W2: la usan las compilaciones de apkc/ y, a través de
+# tools/wasm-exec-hash.sh, los tres cp de wasm_exec.js. No se toca el Go del sistema.
+GOROOT=${APKC_GOROOT:-$HOME_REAL/sdk/go1.24.0}
+if [ -x "$GOROOT/bin/go" ]; then
+  PATH=$GOROOT/bin:$PATH
+  # El verificador no debe depender del HOME reescrito en worktrees: comparte el mismo GOROOT.
+  APKC_GOROOT=$GOROOT
+  export GOROOT APKC_GOROOT PATH
+else
+  printf 'aviso: no hay toolchain go1.24.0 en %s; wasm-exec-hash.sh abortará\n' "$GOROOT" >&2
+fi
+unset HOME_REAL
 
 # Corredor de pruebas: el entorno del escritorio se fija aquí una sola vez. Los agentes
 # llaman a `tools/entorno.sh <tarea>` (o a `tools/correr.sh <tarea>`) y no tienen que
@@ -111,7 +126,8 @@ tcr_o_directo() {
 
 compila_wasm() {
   ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$TMP/apkc-test.wasm" . )
-  ( cd "$RAIZ/shim" && cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" . )
+  # La versión de Go y la suma de wasm_exec.js se fijan en un solo sitio; el cp lee de ahí.
+  ( cd "$RAIZ/shim" && . "$RAIZ/tools/wasm-exec-hash.sh" && cp "$WASM_EXEC_ORIGEN" . )
 }
 
 construye_wasm() {

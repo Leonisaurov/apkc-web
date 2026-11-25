@@ -340,6 +340,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §298 | Cierre del puente de reposo, lienzo, pista y descripciones | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §299 | El wasm vuelve a compilar, el corredor se centraliza y el gate destapa el bloque `--inc` | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 | §310 | ApkShare compila con `--compiler go --linker go` y con `--inc` en nativo y en el hospedador wasm | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
+| §312 | Go 1.24.0 fijado y wasm_exec.js verificado por hash | [14-banco-wisp-lienzo.md](evidencia/14-banco-wisp-lienzo.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran

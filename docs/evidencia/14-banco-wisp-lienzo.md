@@ -1,4 +1,4 @@
-# Evidencia — §274-§310
+# Evidencia — §274-§312
 
 ## 274. El banco no es verificable en este escritorio; su mitad local sí
 
@@ -1818,3 +1818,65 @@ the package did not change
 **Frontera de `§310`.** La pestaña real con chromium no se re-ejecutó (§285 es transferida), la suite
 Go completa y el gate no se corrieron aquí; `TestSondaHeredadaFuente` de §275 sigue sin verificar y
 es independiente.
+
+## 312. Go 1.24.0 fijado y wasm_exec.js verificado por hash
+
+Evidencia del builder `ses_df01b4e96ffeVMMLgugTKw2KyN`. El usuario autorizó instalar `go1.24.0`,
+quedarse en esa versión y documentarlo.
+
+**Instalación** (tarball oficial, sin sudo, sin tocar el Go del sistema):
+
+```sh
+curl -fsSL --max-time 300 https://go.dev/dl/go1.24.0.linux-amd64.tar.gz -o "$HOME/.cache/apkc-web/go1.24.0.linux-amd64.tar.gz"
+tar -C "$HOME/sdk" -xzf "$HOME/.cache/apkc-web/go1.24.0.linux-amd64.tar.gz"
+mv "$HOME/sdk/go" "$HOME/sdk/go1.24.0"
+```
+
+**Versión fijada.**
+
+```sh
+GOROOT="$HOME/sdk/go1.24.0" "$HOME/sdk/go1.24.0/bin/go" version
+```
+
+```text
+go version go1.24.0 linux/amd64
+```
+
+`go version` del sistema sigue `go1.27.4-X:nodwarf5`. No se borró nada.
+
+**Hash de `wasm_exec.js`.**
+
+```sh
+sha256sum "$HOME/sdk/go1.24.0/lib/wasm/wasm_exec.js"
+```
+
+```text
+0c949f4996f9a89698e4b5c586de32249c3b69b7baadb64d220073cc04acba14
+```
+
+Es byte-idéntico al del Go local (medido con ambos `sha256sum`), 16992 bytes.
+
+```sh
+sh tools/wasm-exec-hash.sh
+```
+
+```text
+wasm_exec: sha256 0c949f… (go go1.24.0) OK
+```
+
+rc 0; con versión ajena o JS modificado → rc 1.
+
+```sh
+sh tools/entorno.sh -- sh -c 'printf "GOROOT=%s\n" "$GOROOT"; go version'
+```
+
+```text
+GOROOT=/home/leonisauro/sdk/go1.24.0
+go version go1.24.0 linux/amd64
+```
+
+(el toolchain se antepone al PATH en `tools/entorno.sh:30,62-69`).
+
+**Decisión.** Permanecer en go1.24.0; no usar el Go del sistema para compilar el repo. Deudas abiertas,
+no verdes: `gate.yml:85` (W1 debe sustituir el `cp` directo por el verificador) y `studio/servidor.js`
+(cuarto sitio que sirve `wasm_exec.js` desde GOROOT). Sin gate, CI ni publicación.

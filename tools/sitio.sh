@@ -59,7 +59,9 @@ Path(sys.argv[3]).write_text(json.dumps({
     "gzSha256": hashlib.sha256(comprimido).hexdigest(),
 }))
 PY
-cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" "$DESTINO/wasm_exec.js"
+# La versión de Go y la suma de wasm_exec.js se fijan en un solo sitio; el cp lee de ahí.
+. "$AQUI/tools/wasm-exec-hash.sh"
+cp "$WASM_EXEC_ORIGEN" "$DESTINO/wasm_exec.js"
 [ -n "$CNAME" ] && printf '%s\n' "$CNAME" > "$DESTINO/CNAME"
 
 # Los hosts sin cabeceras (Surge) necesitan el service worker: se registra con una versión en la

@@ -8,7 +8,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
 
 | Ruta | Qué es | Cómo se comprueba |
 | --- | --- | --- |
-| `docs/evidencia.md` | índice de las 299 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
+| `docs/evidencia.md` | índice de las 300 mediciones; el texto íntegro está en `docs/evidencia/` | entrar por el índice al `§` |
 | `docs/situacion.md` | el recap de lo medido, bullet por bullet (movido desde este fichero el 2026-11-03); el original es el `§` que cada bullet cita | leerlo y comprobar que su `§` existe |
 | `docs/bloqueos.md` | qué existe y qué costaría sustituir `aapt2`, `javac`, `d8` | leerlo |
 | `docs/plan.md` | el plan detallado, con fases y criterios de abandono | leerlo |
@@ -125,6 +125,9 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
   asignaciones de entorno en `sh -c '...'`.
 - Comando pesado por `tcr` (`tcr -j 1 -q -- <cmd>`), jamás `-j$(nproc)`. Antes de algo caro:
   `free -m` y `df -h "$PREFIX"`.
+- **Go queda fijado en 1.24.0** (§312): `tools/entorno.sh` antepone `$HOME_REAL/sdk/go1.24.0/bin`
+  al PATH y `tools/wasm-exec-hash.sh` valida versión y SHA de `wasm_exec.js` antes de copiarlo. No
+  usar el Go del sistema (`go1.27.4-X:nodwarf5`) para compilar este repo; no borrar el toolchain fijado.
 - **El shell puede arrancar con `HOME=/home/leonisauro`**, que no tiene `Develop/` ni `Android/`; el repo
   y el SDK viven bajo `/data/data/com.termux/files/home`. Los guiones que usan `$HOME/Develop` o `../apkc`
   fallan con ENOENT. `tools/entorno.sh` fija `HOME`, `PREFIX`, `ANDROID_HOME` y `PATH`, y evita repetir
