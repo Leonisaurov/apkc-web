@@ -2732,9 +2732,9 @@ gestor-tres-pulsos paquete= com.martinmimigames.simplefileexplorer pasos= 3595 n
 Las cinco corridas llevan `aproximado=true`. Cuatro acaban en una frontera nueva con `error`; el
 gestor acaba sin error.
 
-### Deuda crítica: la suite completa no está verde
+### La suite completa, en verde sobre el árbol final
 
-**CONFIRMADO y pendiente de corrección.** La suite completa quedó en verde sobre el árbol final: `go test -count=1 ./...` con Go 1.24.0 dio `ok github.com/ajinasokan/apkc 193.678s` (`~/.cache/apkc-web/quita-os-servicios/`); la frontera inerte se conservó eliminando el fallback `os.Args` y no relajando `TestInertesSinCargaNativaNiRedEnElCodigo`
+La suite completa quedó en verde sobre el árbol final (`8156934e…`): `tcr -r 256M -q -- go test -count=1 ./...` con Go 1.24.0 dio `ok github.com/ajinasokan/apkc 195.144s`, ejecutado por el integrador. La frontera inerte se conservó eliminando el fallback `os.Args` y no relajando `TestInertesSinCargaNativaNiRedEnElCodigo`; el enganche `preview.go:1132` entrega el `*zip.Reader`. No hay deuda pendiente por `import "os"`.
 
 **Frontera.** Ninguna de las cinco apps se da por funcionando: todas llevan `aproximado=true` y
 cuatro acaban con `error`. Sin CDP no se afirma parecido visual alguno; los `.so` ARM quedan fuera
