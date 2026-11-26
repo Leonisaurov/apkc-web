@@ -2887,3 +2887,100 @@ se abre frente sobre ellas.
 **Frontera.** Ninguna de las cinco apps se da por funcionando: todas llevan `aproximado=true`. Sin
 CDP no se afirma parecido visual alguno; los `.so` ARM quedan fuera y las llamadas `System.load*`
 son inertes. Sin gate, CDP, red, `git push` ni publicación.
+
+## 395. Oráculo visual de Droidloom por display virtual
+
+Medido el 2026-11-26 en la sesión que lo ejecutó y transmitido al registro por el orquestador; aquí
+no se repite. Sin root, sin captura del escritorio, sin CDP, sin red, sin gate y sin publicación. El
+alcance son solo píxeles dentro del cell: no valida el paso DMA-BUF→Wayland
+(`protocol/droidloom-host-v1.md:18,341`).
+
+### Cell, ADB y el display 0
+
+Kernel `7.3.6-arch1-1`, `veth` cargado por el usuario, cell Droidloom `running` y ADB
+`10.177.0.2:5555` con `model:Droidloom`. El display 0 es `FLAG_SECURE`:
+
+```sh
+screencap -p
+```
+
+Salida registrada: PNG 1920×1080 de 10608 bytes, totalmente negro.
+
+### El display virtual
+
+Los comandos transmitidos, literales, y sus resultados:
+
+```sh
+cmd virtualdevice create-device oraculo
+create-display 1
+```
+```
+1
+2
+```
+
+El identificador de SurfaceFlinger es de 64 bits y se obtiene con:
+
+```sh
+dumpsys SurfaceFlinger --display-id
+```
+
+En esa corrida dio `11529215048583460199`; es volátil, así que no se fija como valor de referencia.
+
+La puesta en marcha exige `am force-stop` antes de `am start --display 2`; sin ese orden la tarea
+queda `NO_SURFACE`. La captura se toma con `exec-out screencap -p -d <ID_SF>` y produce un PNG
+960×640 RGBA con la interfaz real.
+
+### Lo que se vio en el oráculo
+
+F-Droid muestra cabecera, los iconos de Vynody, YooFree, PillMate, Hoverboard Remote, Héméra,
+Hadith Searcher y StepPony, «Recently updated» y la barra Discover/Search/My apps; al hacer tap
+abre la pestaña Search con sus chips. El lienzo muestra «fotograma 0/toques 0», siete círculos
+azules, seis rayos naranjas y un círculo verde; un tap lo lleva a «fotograma 1/toques 1».
+
+Termux y NewPipe abren y pintan en el oráculo. El gestor abre y pinta por `droidloomctl launch`
+(`Displayed ... +99ms`) pero pasa a `TO_BACK` a los ~7 s. ApkShare no abre: `VerifyError` en
+`FileProvider.buildPath`.
+
+### Límite
+
+Sin root, sin captura del escritorio y sin CDP. Lo medido son píxeles dentro del cell; no se afirma
+que las apps funcionen, ni que el resultado sea superponible al escritorio, ni que el puente
+DMA-BUF→Wayland esté validado (`protocol/droidloom-host-v1.md:18,341`).
+
+## 396. Verificación visual CDP y del fix de ApkShare en la pestaña
+
+Medido el 2026-11-26 en la sesión que lo ejecutó y transmitido al registro por el orquestador; no se
+repite aquí. El oráculo es CDP crudo con Node 26 (`WebSocket`) y chromium `--headless=new`, sin
+puppeteer, sobre `http://127.0.0.1:8801/` con COOP/COEP. La APK se inyecta en OPFS con
+`hospedador.escribir` como ArrayBuffer de bytes: con base64 el bug de tamaño daba `pasos=0`. Sin
+gate, red externa, publicación ni captura del escritorio.
+
+### Cuatro APK en la pestaña
+
+| APK | Layout | Nodos | Pasos | Lo pintado |
+| --- | --- | --- | --- | --- |
+| Gestor | `res/R5.xml` | 32 | 1330 (`onCreate`) | menú desplegado sin filas |
+| Termux | `activity_termux.xml` | 13 | 7418 | lienzo casi negro |
+| NewPipe | `res/v9.xml` | 6 | 3476 | rectángulo blanco y aviso `Stream.filter` |
+| ApkShare | `main.xml` | 5 | 153 | campo y botón, área vacía |
+
+Los modelos de la pestaña son los de `reconcilia-final/` en layout y nodos.
+
+### El fix de ApkShare tras el pin `6e85f44`
+
+Con el wasm servido `280a60f7…b7216b13`, ApkShare da 6 nodos:
+`id/apps.rect={x:0,y:64,ancho:360,alto:24}` e `id/label` = «Cargando paquetes. . .», texto visible
+en el canvas. El cuerpo sigue siendo un área gris casi vacía. Las capturas quedan en
+`~/.cache/apkc-web/cdp-visual/`.
+
+### Lienzo real frente al emulador
+
+Coinciden los colores `#12161e/#46beff/#ffb43c/#78f096/#f0f0f0`, los siete círculos más el verde,
+los seis rayos y el toque `0→1`. No coinciden el viewport, 960×640 frente al canvas 199×355 (escala
+0,555), ni la tipografía y la cabecera del cell: no es una imagen superponible.
+
+### Límite
+
+Sin gate, red externa, publicación ni captura del escritorio. No se afirma que las cuatro apps
+funcionen: el fix de ApkShare prueba el layout y el texto, no el cuerpo de la pantalla.
