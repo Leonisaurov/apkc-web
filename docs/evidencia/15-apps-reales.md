@@ -1519,8 +1519,11 @@ python3 /home/leonisauro/.cache/apkc-web/integracion-geometria/analiza.py
 
 La corrida del binario integrado sobre la ROM de este worktree da `rc 0` y
 `3595 None res/R5.xml 37` (pasos, `error`, `layout` y nodos). El analizador sobre los dos JSON
-archivados da la comparación siguiente; el par usado es el de `gestor-geometria/`, no el de
-`integracion-geometria/`.
+archivados da la comparación siguiente; el comando lee
+`~/.cache/apkc-web/integracion-general-f0/gestor-tres-pulsos.json` (antes) y
+`~/.cache/apkc-web/integracion-geometria/gestor-tres-pulsos.json` (después), y el par equivalente en
+`gestor-geometria/` es byte-idéntico a ambos (`sha256sum`: `6c9ca8e2d56165be4d6820b6423d5c2d0eeedf12e7302854f3aefa57dd6d9bd7` y
+`856b6a12ef96fcbb8156595ab069c982ba8ae3bcf1a9f5368647fe562b9ecb52`).
 
 ### Rect antes y después
 
