@@ -1498,3 +1498,76 @@ anterior a este commit, no un efecto del mismo.
 
 Ninguna APK se da por funcionando: las cuatro con error registrado en su JSON y el gestor sin
 pulsos sobre la ROM. Sin CDP, gate ni publicación.
+
+## 380. Reglas relativas del layout del gestor
+
+Medido el 2026-11-25. El commit `d8d09e84f6670af95061d1da73f09bfb56caaa55` se integra en
+`9783389`. Las cifras de este `§` son del informe del integrador, transcritas aquí sin re-medir el
+código; los rects se verifican sobre el par de artefactos archivados
+`~/.cache/apkc-web/gestor-geometria/gestor-despues.json` frente a
+`gestor-antes.json`. Los dos commits citados no están en los objetos de este worktree, así que su
+identidad queda pendiente de verificar allí. Sin CDP: son rects del JSON, no semejanza visual.
+
+### Comando reproducible
+
+El binario del árbol integrado y el guion del gestor con la ROM y los tres pulsos:
+
+```sh
+/home/leonisauro/.cache/apkc-web/integracion-geometria/apkc-integrado preview --rom studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk
+python3 /home/leonisauro/.cache/apkc-web/integracion-geometria/analiza.py
+```
+
+La corrida del binario integrado sobre la ROM de este worktree da `rc 0` y
+`3595 None res/R5.xml 37` (pasos, `error`, `layout` y nodos). El analizador sobre los dos JSON
+archivados da la comparación siguiente; el par usado es el de `gestor-geometria/`, no el de
+`integracion-geometria/`.
+
+### Rect antes y después
+
+| Campo | Antes (`gestor-antes.json`) | Después (`gestor-despues.json`) |
+| --- | --- | --- |
+| `id/menu_button` | x 0 | x 265 |
+| `id/title` | `(0, 0, 360, 30)` | `(80, 0, 185, 30)` |
+| `ScrollView` | `(0, 0, 360, 640)` | `(0, 68, 360, 572)` |
+
+Los seis valores son `x`, `y`, `ancho` y `alto` del `rect` de cada nodo. El analizador cuenta 29
+rects cambiados y siete paneles con `id` recolocados (`id/list`, `id/drive_list`, `id/menu_list`,
+`id/quick_selection`, `id/single_select_operation`, `id/select_operation` y `id/paste_operation`).
+Ningún nodo queda fuera de 360×640: ` == gestor: nodos fuera de 360x640 == 0`. El focal es
+`TestGeometriaReglasRelativasDelLayout`, en verde en `gestor-transitorias/tests.log:33`
+(`--- PASS: TestGeometriaReglasRelativasDelLayout (0.00s)`).
+
+### Frontera
+
+Son posiciones del modelo en el JSON, no una comprobación visual: sin CDP, gate ni publicación. El
+gestor no se da por funcionando.
+
+## 381. Colores del tema del gestor desde el APK
+
+Medido el 2026-11-25. El commit `19b5236d09d50387ac13ddd0580bf6f66cf77ae8` se integra en
+`ae9347d`. Se comparan `~/.cache/apkc-web/integracion-tema-setadd/despues-tema/gestor-tres-pulsos.json`
+frente a `~/.cache/apkc-web/integracion-geometria/gestor-tres-pulsos.json`. El commit citado no está
+en los objetos de este worktree, así que su identidad queda pendiente de verificar allí. No se afirma
+fidelidad cromática ni parecido visual: sin CDP.
+
+### Comando reproducible
+
+```sh
+/home/leonisauro/.cache/apkc-web/integracion-tema-setadd/apkc-integrado preview --rom studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk
+python3 /home/leonisauro/.cache/apkc-web/integracion-tema-setadd/compara.py /home/leonisauro/.cache/apkc-web/integracion-geometria /home/leonisauro/.cache/apkc-web/integracion-tema-setadd/despues-tema
+apkanalyzer manifest print /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk | grep theme
+```
+
+La corrida del binario integrado da `rc 0` y `3595 None 37` (pasos, `error` y nodos), y su JSON
+coincide campo a campo con `despues-tema/gestor-tres-pulsos.json`. El cotejo da `total campos
+cambiados = 45`, todos en `color` o `fondo`; el analizador no encuentra ninguna diferencia fuera de
+esos campos y de `rect`. En el modelo después: `fondo=#2c2c2c` en la raíz, `id/header` con
+`fondo=#3c3c3c`, `color=#ededed` en texto y `fondo=#5f5f5f` en botones. La última orden da
+`a:theme="@ref/0x7f050000"` (línea 29 de la salida), que sitúa el tema en el manifiesto del APK.
+El focal es `TestTemaColoresPropiosDelGestor`.
+
+### Frontera
+
+Los cuatro colores se leen del APK y se vuelcan al modelo del JSON; la barra se eligió por
+heurística geométrica, no semántica. Sin afirmar fidelidad cromática ni parecido visual, sin CDP,
+gate ni publicación. El gestor no se da por funcionando.
