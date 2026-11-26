@@ -132,7 +132,7 @@ simulado, no del wasm; las dos ejecuciones generaron cinco ficheros y terminaron
 
 **Fronteras de este §.** No se corrió gate, CDP, chromium, `prueba-pestana.js`,
 `prueba-sitio.js` ni publicación, y no se hizo red. Por tanto no se afirma nada sobre la pestaña
-real ni sobre el sitio publicado: lo medido aquí es el binario y su ejecución en el hospedador de
+real ni sobre el sitio publicado: lo registrado aquí, transferido de la auditoría, es el binario y su ejecución en el hospedador de
 Node. El wasm que sirve el vigilante sigue siendo el anterior hasta que el commit se integre en
 el checkout principal y el vigilante detecte el nuevo HEAD (procedencia: informe del builder,
 mensaje 13058 de la sesión citada).

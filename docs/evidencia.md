@@ -6,7 +6,7 @@ herramienta es un fork en `apkc/` de este repo (rama `web`), así que los `cd ..
 abajo son el recordatorio de cómo se obtuvo cada número, no la ruta de hoy.
 Cada bloque lleva el comando que lo produce. Fecha de las mediciones originales: **2026-10-26**; las posteriores llevan su fecha en cada §.
 
-**Numeración de este registro.** Los encabezados van del `§1` al `§388` (358 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
+**Numeración de este registro.** Los encabezados van del `§1` al `§392` (359 entradas en el índice), con los bloques `§334-339` y `§346-347` incorporados fuera de orden; la secuencia tiene un
 hueco y un desorden históricos: **no existe un `§78`** y, en la zona del 77 al 81, el `§80` se escribió
 después del `§81`; junto a los 212-215, el `§213` se escribió después del `§215`. Las cabeceras se
 dejan como se publicaron para no romper las citas cruzadas; el número del encabezado es la etiqueta de
@@ -401,6 +401,7 @@ TMPDIR=… GOTMPDIR=… tcr -- sh tools/entorno.sh wasm
 | §386 | Observadores vacíos y fusión de `getDeclaredMethods`: artefactos de `integracion-fusion/despues/`, seis commits auditados y 36 líneas `--- PASS` en el volcado de la fusión; F-Droid sigue en 1472 pasos con `Lifecycle.addObserver sobre un objeto nulo`; sin afirmar que las tres APK funcionen, sin gate, CDP, red ni publicación | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §387 | `getLifecycle` del registry existente para NewPipe: 26 PASS de la suite citados como procedencia y no re-medidos aquí; NewPipe pasa de 1472 a 2151 pasos con `layout=res/v9.xml` y 6 nodos, y aparece `getSavedStateProvider sobre un objeto nulo`; tres focales PASS; integración en curso con pin pendiente, sin gate, CDP, red ni publicación | [15-apps-reales.md](evidencia/15-apps-reales.md) |
 | §388 | Registry de saved state del dex para F-Droid, Godot y NewPipe: commit `31ce4566…` auditado APROBADO e integrado como `996ca07…` (pin `008394a…`, padre `83eddb4…`, guardia `e4eff86…`), suite `194.716s` y 41 focales (transmitidas, no verificadas localmente); F-Droid 2656 → 7272 (`ServiceLoader.iterator` sobre nulo), Godot 7229 → 7279 (`Lifecycle.addObserver` sobre nulo) y NewPipe 2151 → 3037 (`LocaleListCompat.forLanguageTags: array-length` sobre no-arreglo), con `aproximado=true` en los tres, `layout=''`/1 nodo en F-Droid y Godot y `res/v9.xml`/6 nodos en NewPipe; Termux 7072 y gestor 3595/32 nodos byte-idénticos (`cmp`); el avance se atribuye a `getSavedStateRegistry` y `datosDelMapa` con `LinkedHashMap`, **no** a `initSavedStateConDex`; no se afirma que F-Droid, Godot ni NewPipe funcionen, sin gate, CDP, red ni publicación | [15-apps-reales.md](evidencia/15-apps-reales.md) |
+| §392 | Construcción reproducible del wasm del preview: `-trimpath` en los tres puntos que compilan wasm; dos builds desde temporales distintos y dos caminos de auditoría dan la misma suma (`cmp` rc 0), prueba funcional en el hospedador de Node transferida de la auditoría, sin gate, CDP, red ni publicación | [26-wasm-reproducible.md](evidencia/26-wasm-reproducible.md) |
 
 **Excepciones.** Las dos únicas excepciones de la comprobación cruzada de `§` son `§0.x` y `§78`: los
 `§0.x` son secciones internas de `docs/plan-android-jar-propio.md:94,97,757,775,810` y no se numeran
