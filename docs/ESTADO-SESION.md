@@ -188,8 +188,8 @@ Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El pin vigente de la regla 14 es `3627870852d551d954c59039de25c6c4b89048c0`
-(`git -C studio rev-parse HEAD:apkc-emulador` → `3627870…`, ejecutado y anotado), vigente tras integrar el split de dos argumentos para NewPipe; `26cf94ae33a85da82b05d7fc60e30a0307643ea6`, `c0e60ca39ee746abb5350fe4d6533de683d7467f` y `9a6ec572fc72dcb374e692d094b627b1960c8efc` quedan como registros históricos fechados. Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de
+El pin vigente de la regla 14 es `bc4946ad599be3a986b4364b6d45a7c23ed7acd2`
+(`git -C studio rev-parse HEAD:apkc-emulador` → `bc4946a…`, ejecutado y anotado), vigente tras integrar `-trimpath`, Services y SplashScreen; `3627870852d551d954c59039de25c6c4b89048c0`, `26cf94ae33a85da82b05d7fc60e30a0307643ea6`, `c0e60ca39ee746abb5350fe4d6533de683d7467f` y `9a6ec572fc72dcb374e692d094b627b1960c8efc` quedan como registros históricos fechados. Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de
 §368 queda como registro histórico. Actualización (lote integrado, commit `1e1bb03`): el pin pasó a
 `6a207cd…`. Actualización (integración final, commit `688a7ad`): el pin pasó a `a83ebcd…`.
 Actualización (esquema de colores de Termux, commit `84a7b90`): el pin pasó a `bf7477e…`.
@@ -201,6 +201,7 @@ fechados.
 Actualización (getLifecycle, fecha 2026-11-26): el pin pasó a `83560681816604d0445ae365c506e453196fff41`, vigilado con la guardia de arriba; `c54e55114568b05947170a879f989e550b6766ee` queda como registro histórico fechado.
 Actualización (saved state, fecha 2026-11-26): el pin pasó a `996ca07ea35735234713faaa4fc9ee8388720d02`, vigilado con la guardia de arriba; `83560681816604d0445ae365c506e453196fff41` queda como registro histórico fechado.
 Actualización (mLifecycleRegistry, fecha 2026-11-26): el pin pasó a `9a6ec572fc72dcb374e692d094b627b1960c8efc`, vigilado con la guardia de arriba; `996ca07ea35735234713faaa4fc9ee8388720d02` queda como registro histórico fechado. Actualización (FragmentActivity/getSavedStateRegistry, fecha 2026-11-26): el pin pasó a `c0e60ca39ee746abb5350fe4d6533de683d7467f`, vigilado con la guardia de arriba; `9a6ec572fc72dcb374e692d094b627b1960c8efc` queda como registro histórico fechado. Actualización (desreferencia de recursos, fecha 2026-11-26): el pin pasó a `26cf94ae33a85da82b05d7fc60e30a0307643ea6`, vigilado con la guardia de arriba; `c0e60ca39ee746abb5350fe4d6533de683d7467f` queda como registro histórico fechado. Actualización (split de dos argumentos, fecha 2026-11-26): el pin pasó a `3627870852d551d954c59039de25c6c4b89048c0`, vigilado con la guardia de arriba; `26cf94ae33a85da82b05d7fc60e30a0307643ea6` queda como registro histórico fechado.
+Actualización (integración final de -trimpath, Services y SplashScreen, fecha 2026-11-26): el pin pasó a `bc4946ad599be3a986b4364b6d45a7c23ed7acd2`, vigilado con la guardia de arriba; `3627870852d551d954c59039de25c6c4b89048c0` queda como registro histórico fechado.
 El gitlink anidado de `studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
 push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el
 recuento de `ahead` lo da `git status -sb` al leer este fichero (antes del commit documental de

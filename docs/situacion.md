@@ -1005,7 +1005,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   Libre Memory Game siguen byte-idénticos a `integracion-color/` y Termux sin regresión (6599 pasos).
   Sin CDP, gate ni publicación; el gestor no se da por funcionando. `docs/evidencia/15-apps-reales.md`.
 - §376: filas reales del gestor desde la ROM sembrada (cherry-pick `0c01986…` del commit `fd1e5ac`
-  sobre `2a42a84`, integrado en `69e798c`, pin de entonces `0c01986d356c6eeb20a20809e5b96c74468d34ae`; pin vigente `3627870852d551d954c59039de25c6c4b89048c0` (`26cf94ae33a85da82b05d7fc60e30a0307643ea6`, `c0e60ca39ee746abb5350fe4d6533de683d7467f` y `9a6ec572fc72dcb374e692d094b627b1960c8efc` quedan como registros históricos fechados)):
+  sobre `2a42a84`, integrado en `69e798c`, pin de entonces `0c01986d356c6eeb20a20809e5b96c74468d34ae`; pin vigente `bc4946ad599be3a986b4364b6d45a7c23ed7acd2` (`3627870852d551d954c59039de25c6c4b89048c0`, `26cf94ae33a85da82b05d7fc60e30a0307643ea6`, `c0e60ca39ee746abb5350fe4d6533de683d7467f` y `9a6ec572fc72dcb374e692d094b627b1960c8efc` quedan como registros históricos fechados)):
   con `--rom studio/apkc-emulador/rom.json`, `--permiso android.permission.READ_EXTERNAL_STORAGE` y
   tres pulsos (`id/menu_quick_switch`, `id/drive_list:0`, `id/list:4`), 3596 pasos, `error=None`,
   `layout=res/R5.xml` e `id/list` con `fotos` y `leeme.txt`, frente a 1330/33 sin pulsos; suite
