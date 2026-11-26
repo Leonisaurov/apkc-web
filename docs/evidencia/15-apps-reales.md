@@ -1574,3 +1574,188 @@ El focal es `TestTemaColoresPropiosDelGestor`.
 Los cuatro colores se leen del APK y se vuelcan al modelo del JSON; la barra se eligió por
 heurística geométrica, no semántica. Sin afirmar fidelidad cromática ni parecido visual, sin CDP,
 gate ni publicación. El gestor no se da por funcionando.
+
+## 382. Iconos y visibilidad del gestor medidos desde el APK
+
+Medido el 2026-11-25, posterior a `§381`. El informe del integrador atribuye la señal a los commits
+`44ce67e` (emulador) y `b0ae4e3` (vista), integrados en `0c15357`, y las aserciones de
+`studio/prueba.js` a `e9e6862`. En este árbol se verifican `git rev-parse HEAD` →
+`0c153572864c81403d8050d5d6673b49dcee6346`, `git -C studio rev-parse HEAD` →
+`239ec270def579b387b02de7daf03b7c8735acfc` y la guardia de la regla 14
+`git -C studio rev-parse HEAD:apkc-emulador` → `b89691cf734005844ac757d8babe5fcebf693726`. Los tres
+SHAs cortos del informe que no son objetos de este árbol (`44ce67e`, `b0ae4e3`, `e9e6862`) se citan
+como procedencia, no como medición re-hecha aquí. Sin CDP, gate ni publicación; no se afirma
+parecido visual ni que los iconos se vean.
+
+### Comandos y artefactos
+
+```sh
+git rev-parse HEAD
+git -C studio rev-parse HEAD
+git -C studio rev-parse HEAD:apkc-emulador
+/home/leonisauro/.cache/apkc-web/fidelidad-iconos/apkc-fidelidad preview --rom /home/leonisauro/.local/share/opencode/worktree/c6f089/docs-registro2/studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk > /home/leonisauro/.cache/apkc-web/fidelidad-iconos/repro-registro2.json 2> /home/leonisauro/.cache/apkc-web/fidelidad-iconos/repro-registro2.err
+cmp /home/leonisauro/.cache/apkc-web/fidelidad-iconos/repro-registro2.json /home/leonisauro/.cache/apkc-web/fidelidad-iconos/gestor-tres-pulsos.json
+/home/leonisauro/.cache/apkc-web/integracion-lote2/apkc-lote2 preview --rom /home/leonisauro/.local/share/opencode/worktree/c6f089/docs-registro2/studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk > /home/leonisauro/.cache/apkc-web/integracion-lote2/repro-registro2.json 2> /home/leonisauro/.cache/apkc-web/integracion-lote2/repro-registro2.err
+cmp /home/leonisauro/.cache/apkc-web/integracion-lote2/repro-registro2.json /home/leonisauro/.cache/apkc-web/integracion-lote2/gestor-tres-pulsos.json
+sha256sum /home/leonisauro/.cache/apkc-web/fidelidad-iconos/gestor-tres-pulsos.json /home/leonisauro/.cache/apkc-web/integracion-lote2/gestor-tres-pulsos.json
+```
+
+Los dos `cmp` dan rc 0: las dos reproducciones son byte-idénticas a los artefactos
+`fidelidad-iconos/gestor-tres-pulsos.json` (`0ddd412306a235ff68df4f709cfb11ad5662fc389a80142e1a95f169b0cfa67c`)
+e `integracion-lote2/gestor-tres-pulsos.json`
+(`371f8fa26015bae4355ce7490b5adecabf3b5608fef1f3cbb7900c6f953eb273`). No se dice que ambos JSON
+sean iguales entre sí: solo lo son sus campos de interés.
+
+### Campos medidos
+
+```sh
+python3 - <<'PY'
+import json
+p='/home/leonisauro/.cache/apkc-web/fidelidad-iconos/gestor-tres-pulsos.json'
+d=json.load(open(p))
+def walk(n,acc):
+    acc.append(n)
+    for h in n.get('hijos',[]): walk(h,acc)
+    return acc
+ns=walk(d['raiz'],[])
+print('nodos', len(ns))
+for n in ns:
+    if 'visibilidad' in n or 'recurso' in n:
+        print({k:n[k] for k in ('id','texto','recurso','visibilidad','visible') if k in n})
+PY
+```
+
+Salida: `nodos 37`; `{'texto': 'fotos', 'recurso': '0x7f020003'}`,
+`{'texto': 'leeme.txt', 'recurso': '0x7f020002'}` y siete nodos con `visibilidad`: `'gone'` —
+`id/drive_list`, `id/menu_list`, `id/quick_selection`, `id/share_selected`,
+`id/single_select_operation`, `id/select_operation`, `id/paste_operation`. En los dos artefactos,
+`ejecucion.pasos` es 3595, `ejecucion.error` es `None`, `layout` es `res/R5.xml` y `nodos` es 37.
+Los rótulos `' <- '` y `' ||| '` siguen siendo **texto literal del APK**: `preview_test.go:1213-1218`
+falsifica que se conviertan en drawables, igual que `Loading...` y
+`cutting/copying/deleting files...`.
+
+### Focales
+
+```sh
+tcr go test -run 'TestRecursoDeFilaDelGestorSaleDelArsc|TestAnotaVisibilidadDeLaEjecucion' -v .
+node prueba.js
+```
+
+Los dos focales dan `--- PASS` en el materializado temporal
+(`~/.cache/apkc-web/registro-setadd/apkc/`, construido copiando `*.go`, `go.mod`, `go.sum` y
+`template/` de `apkc/` y los 34 `preview*.go` de `studio/apkc-emulador/`, como prescribe
+`tools/materializar-emulador.sh:34-44`). `node prueba.js`, corrido en `studio/`, termina con
+`prueba: todo en orden` e
+imprime avisos de omisión por falta de los APK de fixtures (`APKC_PREVIEW`, `APKC/APK_MENU`,
+`APKC/APK_TAREAS`) y un `incierto` sobre el hit-test real, que solo se podría jurar en chromium.
+
+| Dato | Estado y evidencia |
+| --- | --- |
+| 3595 pasos, `error=None`, `layout=res/R5.xml`, 37 nodos en los dos artefactos | CONFIRMADO; `cmp` rc 0 y el `python3` de arriba |
+| `fotos` → `0x7f020003`, `leeme.txt` → `0x7f020002`, siete paneles `visibilidad: gone` | CONFIRMADO; salida del `python3` de arriba |
+| Focales y `node prueba.js` | CONFIRMADO; `--- PASS` y `prueba: todo en orden` |
+| Ocho llamadas a `View.setVisibility` con valor 8 | incierto: es cifra del informe del integrador; en el JSON no hay campo que la reproduzca y `grep -n setVisibility /home/leonisauro/.cache/apkc-web/sfm-dexdump.txt` da siete líneas estáticas. No re-medida aquí. |
+
+**Frontera.** Se mide el modelo emitido por `apkc preview`: recurso de las dos filas y visibilidad de
+siete paneles. Sin CDP no se afirma que los iconos se vean ni que el resultado sea parecido al APK.
+
+## 383. Vistas transitorias del gestor descartadas por estado medido
+
+Medido el 2026-11-25, posterior a `§382`. El informe del integrador cita los commits `a086bf6` y
+`dc8a5cc` (emulador) y `da447ec` y `5af0d12` (vista), integrados en `0c15357`. En este árbol se
+verifican los objetos `a086bf6` y `dc8a5cc` en `studio/apkc-emulador` y `da447ec`, `5af0d12` en
+`studio`; el pin de la regla 14 es `b89691cf734005844ac757d8babe5fcebf693726`. Sin CDP, gate ni
+publicación.
+
+### Comando y artefacto
+
+```sh
+/home/leonisauro/.cache/apkc-web/integracion-transitorias/apkc preview --rom /home/leonisauro/.local/share/opencode/worktree/c6f089/docs-registro2/studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 /home/leonisauro/Downloads/com.martinmimigames.simplefileexplorer_20.apk > /home/leonisauro/.cache/apkc-web/integracion-transitorias/repro-registro2.json 2> /home/leonisauro/.cache/apkc-web/integracion-transitorias/repro-registro2.err
+cmp /home/leonisauro/.cache/apkc-web/integracion-transitorias/repro-registro2.json /home/leonisauro/.cache/apkc-web/integracion-transitorias/gestor-tres-pulsos.json
+python3 /home/leonisauro/.cache/apkc-web/integracion-transitorias/verificar.py /home/leonisauro/.cache/apkc-web/integracion-transitorias/gestor-tres-pulsos.json
+sha256sum /home/leonisauro/.cache/apkc-web/integracion-transitorias/gestor-tres-pulsos.json
+```
+
+El `cmp` da rc 0 (SHA `7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f`). El
+`verificar.py` imprime `nodos=32 pasos=3595 error=None layout='res/R5.xml' interacciones=3`,
+`id_list=1`, las dos filas con `recurso='0x7f020003'` y `'0x7f020002'`, y
+`transitorios_en_nodos=0 transitorios_en_capturas=6`.
+
+| Corrida | Nodos | `id/list` | `ejecucion` |
+| --- | --- | --- | --- |
+| Antes (`§382`) | 37 | 7 hijos: `Loading...`, `cutting/copying/deleting files...`, tres vacíos, `fotos`, `leeme.txt` | 3595 pasos, `error=None` |
+| Después | **32** | 2 hijos: `fotos`, `leeme.txt` | 3595 pasos, `error=None`, `res/R5.xml` |
+
+El recuento de los 32 nodos lleva `visible` presente en los 32; los siete paneles siguen con
+`visibilidad: gone`. Las seis cadenas transitorias **siguen en `ejecucion.capturas`**: son el registro
+de `TextView.setText`, no el árbol. No se borra cadena ninguna por su literal.
+
+### Focales y mecanismo
+
+```sh
+tcr go test -run 'TestVisibilidadMedidaDeVistaFalsaLosTransitorios|TestCampoVisibleEnElJSONDelNodo|TestRegistraRetiradasSobreviveAlRefresh' -v .
+```
+
+Los tres dan `--- PASS` (`ok github.com/ajinasokan/apkc 0.045s` en la corrida conjunta con los
+demás focales). `preview_test.go:1251-1276` fija la señal: retirada y `setVisibility` son estado
+medido; una vista legítima con el **mismo** texto `Loading...` se publica, y una puesta `gone` se
+descarta. `preview_test.go:1280-1298` comprueba que el campo `visible` viaja en el JSON del nodo, y
+`preview_test.go:1302-1314` que la retirada del id sintético `0x7ffffffe` sobrevive a una recreación
+de la vista. El mecanismo es `visible=false` propagado desde `View.setVisibility` y `removeAllViews`,
+no un filtro de cadenas: las claves de búsqueda de `verificar.py:26-29` son `Loading...`, `cutting` y
+`copying`.
+
+**Frontera.** Se afirma el recuento del modelo y la procedencia de la señal. Sin CDP no se dice que la
+lista dibujada muestre dos filas ni que la navegación esté terminada.
+
+## 384. `Set.add` sin duplicar elementos
+
+Medido el 2026-11-25, posterior a `§383`. El informe del integrador cita el commit `4b0af9e`
+(emulador), integrado en `ae9347d`; ambos son objetos verificables en este árbol (`git cat-file -t`
+da `commit`). El padre es `0c153572864c81403d8050d5d6673b49dcee6346`. Sin CDP, gate ni publicación.
+
+### Base byte-idéntica y campos sin cambio
+
+```sh
+sha256sum /home/leonisauro/.cache/apkc-web/setadd-general/gestor-tres-pulsos.json /home/leonisauro/.cache/apkc-web/integracion-general-f0/gestor-tres-pulsos.json /home/leonisauro/.cache/apkc-web/termux-audio/gestor-tres-pulsos.json
+cmp /home/leonisauro/.cache/apkc-web/setadd-general/gestor-tres-pulsos.json /home/leonisauro/.cache/apkc-web/integracion-general-f0/gestor-tres-pulsos.json
+python3 /home/leonisauro/.cache/apkc-web/integracion-tema-setadd/compara.py /home/leonisauro/.cache/apkc-web/integracion-tema-setadd/despues-tema /home/leonisauro/.cache/apkc-web/integracion-tema-setadd/despues-setadd
+```
+
+Los tres ficheros comparten
+`6c9ca8e2d56165be4d6820b6423d5c2d0eeedf12e7302854f3aefa57dd6d9bd7`; los dos `cmp` contra la base
+(`integracion-general-f0/` y `termux-audio/`) dan rc 0. `compara.py` dice `IGUAL` para los cinco
+JSON de `despues-tema` → `despues-setadd` y `total campos cambiados = 0`; el gestor de
+`despues-setadd` tiene 3595 pasos, 37 nodos, `error=None`, `layout=res/R5.xml`. En
+`setadd-general/termux.json`, `avisos-recortados: 41` aparece como aviso recortado: no se transcriben
+los avisos que faltan.
+
+### Falsación focal
+
+```sh
+go test -run TestSetAddDevuelveTrueSoloSiEsNuevo -v .
+```
+
+Ejecutado en el materializado temporal `~/.cache/apkc-web/registro-setadd/apkc/`, da:
+
+```
+=== RUN   TestSetAddDevuelveTrueSoloSiEsNuevo
+--- PASS: TestSetAddDevuelveTrueSoloSiEsNuevo (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.004s
+```
+
+`previewstubs_test.go:1013-1016` fija los tres casos sobre `add`: `type` → 1, `type` → 0,
+`otro` → 1, con tamaños 1, 1 y 2; es decir `1,0,1`. El mismo test comprueba después que `contains`
+lee el mismo respaldo (`previewstubs_test.go:1029-1040`).
+
+| Dato | Estado y evidencia |
+| --- | --- |
+| 3595 pasos, 37 nodos, `error=None`, cero campos cambiados | CONFIRMADO; `compara.py` y `sha256sum` de arriba |
+| `add` → `1,0,1` | CONFIRMADO; `--- PASS` y `previewstubs_test.go:1013-1016` |
+| `Set.add` eliminó el error `already registered ... NavKey` | incierto: sin sonda posterior; `~/.cache/apkc-web/condiciones-documentales.md:270` dice «no medido en esta sesión» |
+| Delta 6950/7072 pasos en Termux (`setadd-general/` frente a `despues-setadd/`) | medido en ambos JSON; divergencia entre frentes **sin causa atribuida** |
+
+**Frontera.** Se mide la semántica del stub y la ausencia de cambio en los JSON del lote. No se afirma
+que `Set.add` arreglara `NavKey` ni que Termux funcione: los dos frentes terminan en errores distintos
+y sin CDP no se da por cerrada la app.
