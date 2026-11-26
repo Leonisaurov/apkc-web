@@ -1005,7 +1005,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   Libre Memory Game siguen byte-idénticos a `integracion-color/` y Termux sin regresión (6599 pasos).
   Sin CDP, gate ni publicación; el gestor no se da por funcionando. `docs/evidencia/15-apps-reales.md`.
 - §376: filas reales del gestor desde la ROM sembrada (cherry-pick `0c01986…` del commit `fd1e5ac`
-  sobre `2a42a84`, integrado en `69e798c`, pin de entonces `0c01986d356c6eeb20a20809e5b96c74468d34ae`; pin vigente `996ca07ea35735234713faaa4fc9ee8388720d02`):
+  sobre `2a42a84`, integrado en `69e798c`, pin de entonces `0c01986d356c6eeb20a20809e5b96c74468d34ae`; pin vigente `9a6ec572fc72dcb374e692d094b627b1960c8efc`):
   con `--rom studio/apkc-emulador/rom.json`, `--permiso android.permission.READ_EXTERNAL_STORAGE` y
   tres pulsos (`id/menu_quick_switch`, `id/drive_list:0`, `id/list:4`), 3596 pasos, `error=None`,
   `layout=res/R5.xml` e `id/list` con `fotos` y `leeme.txt`, frente a 1330/33 sin pulsos; suite
@@ -1015,7 +1015,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `docs/evidencia/15-apps-reales.md`.
 - §377: LayoutParams reales y frontera `bindService` en Termux (cherry-pick
   `c54e55114568b05947170a879f989e550b6766ee` del commit `0c17130` sobre `0c01986`, integrado en
-  `acc7d44`, pin de entonces `c54e551…`; pin vigente `996ca07…`): sobre el árbol final, 6944 pasos, 25 avisos
+  `acc7d44`, pin de entonces `c54e551…`; pin vigente `9a6ec57…`): sobre el árbol final, 6944 pasos, 25 avisos
   (`avisos-recortados: 40`), `layout=res/layout/activity_termux.xml` y 13 nodos, con
   `com.termux.app.TermuxActivity.onCreate: java.lang.RuntimeException: bindService() failed` en lugar
   del `LayoutParams.height` nulo de `setTerminalToolbarView` (6599 pasos en `§372`); suite `196.481s`,
