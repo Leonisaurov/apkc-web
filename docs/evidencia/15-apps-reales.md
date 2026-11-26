@@ -2212,3 +2212,342 @@ línea base de `integracion-lote3-final/`.
 **Frontera.** No se afirma que F-Droid, Godot ni NewPipe funcionen: las tres nuevas fronteras se
 reportan sin forzar, con `aproximado=true`, y sin que cambie el `layout` propio de F-Droid y
 Godot. Sin gate, CDP, red ni publicación.
+
+## 389. Desreferencia de recursos para NewPipe
+
+Medido el 2026-11-26 sobre los artefactos de
+`/home/leonisauro/.cache/apkc-web/newpipe-referencia/` y la APK real
+`/home/leonisauro/Downloads/org.schabi.newpipe_1017.apk`. El commit auditado es `4bbfec9`
+(«fix(emulador): desreferencia referencias de recursos para NewPipe»), integrado en el checkout
+principal por otro frente con `split` ya en su base; el test de profundidad es `5e53ed5`
+(`TestReferenciaProfundidadMaximaConservaElError`). Los 21 focales PASS son cifra transmitida y
+no se re-mide aquí. Sin gate, CDP, red, `git push` ni publicación.
+
+### Pasos y frontera
+
+```sh
+python3 -c "
+import json
+r='/home/leonisauro/.cache/apkc-web/newpipe-referencia/'
+a=json.load(open(r+'antes-alineado-newpipe.json'))
+b=json.load(open(r+'final-newpipe.json'))
+for n,d in (('antes',a),('despues',b)):
+ e=d['ejecucion']['error']
+ print(n,d['ejecucion']['pasos'],repr(d.get('layout')),d.get('nodos'),'aproximado=',d.get('aproximado'))
+ print(' error:',e)
+ print(' getString(2131951849)=', 'getString(2131951849)' in e, 'la tabla no resuelve ese id como una cadena=', 'la tabla no resuelve ese id como una cadena' in e)
+"
+```
+```
+antes 3093 'res/v9.xml' 6 aproximado= True
+ error: en okio.Options$Companion.getSelectedThemeKey: getString(2131951849): la tabla no resuelve ese id como una cadena
+ getString(2131951849)= True la tabla no resuelve ese id como una cadena= True
+despues 3476 'res/v9.xml' 6 aproximado= True
+ error: en org.schabi.newpipe.util.ServiceHelper.getSelectedServiceId: en org.schabi.newpipe.util.ServiceHelper.getSelectedService: en us.shandian.giga.util.Utility.getService: se llamó a j$.util.stream.Stream.filter sobre un objeto nulo
+ getString(2131951849)= False la tabla no resuelve ese id como una cadena= False
+```
+
+NewPipe pasa de 3093 a 3476 pasos, con `layout=res/v9.xml` y 6 nodos. Desaparecen
+`getString(2131951849)` y `la tabla no resuelve ese id como una cadena`; aparece una frontera
+nueva, `Stream.filter sobre un objeto nulo`, desde `ServiceHelper.getSelectedServiceId`, sin
+forzar.
+
+### La cadena de recursos, según aapt2, no en los avisos
+
+El id del error se resuelve contra el `resources.arsc` de la APK con `aapt2`:
+
+```sh
+/home/leonisauro/opt/android-sdk/build-tools/35.0.1/aapt2 dump resources /home/leonisauro/Downloads/org.schabi.newpipe_1017.apk 2>/dev/null | grep -A 2 -E 'resource 0x7f1300e9 |resource 0x7f130050 '
+```
+```
+    resource 0x7f130050 string/auto_device_theme_key
+      () "auto_device_theme"
+    resource 0x7f130051 string/auto_device_theme_title
+--
+    resource 0x7f1300e9 string/default_theme_value
+      () @string/auto_device_theme_key
+    resource 0x7f1300ea string/default_video_format_key
+```
+
+O sea `0x7f1300e9` es `string/default_theme_value`, que apunta a `@string/auto_device_theme_key`,
+cuyo texto es `auto_device_theme`. **Esa cadena no aparece en los avisos de ninguna de las dos
+corridas**: se documenta como resolución de `aapt2`, no como texto observado en la vista previa.
+
+```sh
+python3 -c "
+import json
+for f in ('antes-alineado-newpipe.json','final-newpipe.json'):
+ s=json.dumps(json.load(open('/home/leonisauro/.cache/apkc-web/newpipe-referencia/'+f)),ensure_ascii=False)
+ print(f,'auto_device_theme=', 'auto_device_theme' in s)
+"
+```
+```
+antes-alineado-newpipe.json auto_device_theme= False
+final-newpipe.json auto_device_theme= False
+```
+
+### Control byte a byte
+
+```sh
+for n in fdroid gestor godot termux; do cmp /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/antes-$n.json /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/final-$n.json; echo "$n rc=$?"; done
+```
+```
+fdroid rc=0
+gestor rc=0
+godot rc=0
+termux rc=0
+```
+
+```sh
+sha256sum /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/antes-{fdroid,gestor,godot,termux}.json /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/final-{fdroid,gestor,godot,termux}.json
+```
+```
+dd58c20ec1955779f464a683e0fc97caedffd832f61beac099c162098e329adf  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/antes-fdroid.json
+7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/antes-gestor.json
+c144806b1214750cb2825c13776fa1db0c3ed1fac39d1ec9208ffddb899e9317  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/antes-godot.json
+b55eb52ebe5fa66237c16b372cdbf5c668ca9fd6a8b68e801ce0980b30efa925  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/antes-termux.json
+dd58c20ec1955779f464a683e0fc97caedffd832f61beac099c162098e329adf  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/final-fdroid.json
+7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/final-gestor.json
+c144806b1214750cb2825c13776fa1db0c3ed1fac39d1ec9208ffddb899e9317  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/final-godot.json
+b55eb52ebe5fa66237c16b372cdbf5c668ca9fd6a8b68e801ce0980b30efa925  /home/leonisauro/.cache/apkc-web/newpipe-referencia/regresion-alineada/final-termux.json
+```
+
+Las cuatro parejas comparten `sha256sum`, así que las copias son byte-idénticas a la línea base
+alineada.
+
+**Frontera.** No se afirma que NewPipe funcione: la corrida corta en una frontera nueva,
+`Stream.filter sobre un objeto nulo`, con `aproximado=true` y sin forzar. El pin final y los 21
+focales quedan pendientes del frente que los integra. Sin gate, CDP, red ni publicación.
+
+## 390. Tema sintético de SplashScreen para Godot
+
+Medido el 2026-11-26 sobre los artefactos de
+`/home/leonisauro/.cache/apkc-web/godot-tema-splash/` y la APK real
+`/home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk`. El commit auditado es
+`e633ae75a64d93456a6598c2b432f94379f4f301`, aún no integrado; el pin final queda pendiente.
+Cuatro controles byte-idénticos, verificados aquí. Sin gate, CDP, red, `git push` ni publicación.
+
+### Pasos y frontera
+
+```sh
+python3 -c "
+import json
+r='/home/leonisauro/.cache/apkc-web/godot-tema-splash/'
+a=json.load(open(r+'antes.json')); b=json.load(open(r+'despues.json'))
+for n,d in (('antes',a),('despues',b)):
+ e=d['ejecucion']['error']; av=' '.join(d['ejecucion']['avisos'])
+ print(n,d['ejecucion']['pasos'],repr(d.get('layout')),d.get('nodos'),'aproximado=',d.get('aproximado'))
+ print(' error:',e)
+ print(' resolveAttribute=', 'resolveAttribute' in e, 'aviso cero getTheme=', 'no está en el dex ni en los stubs: se devuelve el cero de Landroid/content/res/Resources\$Theme;' in av, 'tema-sintetico=', 'tema-sintetico: Activity.getTheme' in av)
+"
+```
+```
+antes 8980 '' 1 aproximado= True
+ error: en androidx.core.splashscreen.SplashScreen.installSplashScreen: en androidx.core.splashscreen.SplashScreen$Companion.installSplashScreen: en androidx.core.splashscreen.SplashScreen.access$install: en androidx.core.splashscreen.SplashScreen.install: en androidx.core.splashscreen.SplashScreen$Impl.install: se llamó a android.content.res.Resources$Theme.resolveAttribute sobre un objeto nulo
+ resolveAttribute= True aviso cero getTheme= True tema-sintetico= False
+despues 9159 '' 1 aproximado= True
+ error: en androidx.activity.EdgeToEdge.enable: en androidx.activity.EdgeToEdge.enable$default: en androidx.activity.EdgeToEdge.enable: se llamó a android.view.Window.getDecorView sobre un objeto nulo
+ resolveAttribute= False aviso cero getTheme= False tema-sintetico= True
+```
+
+Godot pasa de 8980 a 9159 pasos, con `layout=''` y 1 nodo. Desaparece
+`Resources$Theme.resolveAttribute sobre un objeto nulo` y el aviso del cero de `getTheme`; aparece
+`tema-sintetico: Activity.getTheme entrega un tema enlazado a la tabla del APK (aproximación)`.
+La nueva frontera es `Window.getDecorView sobre un objeto nulo`, en `EdgeToEdge.enable`, sin
+forzar. El JSON registra `avisos-recortados: 6`: los seis avisos recortados se citan como tales y
+no se reconstruye su texto.
+
+### Ids verificados con aapt2 y rastro retirado
+
+El volcado `aapt2` conservado deja escrito el atributo del tema:
+
+```sh
+grep -n 'windowSplashScreenBackground(0x7f030015)' /home/leonisauro/.cache/apkc-web/godot-tema-splash/aapt2.txt
+```
+```
+804:        windowSplashScreenBackground(0x7f030015)=?0x01010031
+```
+
+El id `0x01010031` es del framework y no tiene entrada propia en la tabla del APK:
+
+```sh
+grep -c 'resource 0x01010031 ' /home/leonisauro/.cache/apkc-web/godot-tema-splash/aapt2.txt
+```
+```
+0
+```
+
+Por eso `resolveAttribute` devuelve `false` y no se inventa ningún color; el valor `false` es lo
+registrado en el informe auditado y no se re-mide aquí. Los ids de la corrida instrumentada están
+en el rastro conservado:
+
+```sh
+sed -n '1,3p' /home/leonisauro/.cache/apkc-web/godot-tema-splash/debug.err
+```
+```
+DEPURACION resolveAttribute attr 2130903059 estilo 2131492873 recurso 2131361794 datos 106 tipo 3
+DEPURACION resolveAttribute attr 2130903057 estilo 2131492873 recurso 2131034144 datos 73729 tipo 5
+DEPURACION resolveAttribute attr 2130903054 estilo 2131492873 recurso 2131492872 datos 2131492872 tipo 1
+```
+
+Esa instrumentación está retirada del binario final: el rastro es un registro histórico y **no es
+re-medible**. Por lo tanto `resolveAttribute` sobre el APK real no se marca CONFIRMADO; solo se
+confirma que la cadena del error desaparece en `despues.json`. Las dos focales del tema quedan en
+el registro conservado:
+
+```sh
+tail -n 6 /home/leonisauro/.cache/apkc-web/godot-tema-splash/focales.log
+```
+```
+=== RUN   TestTemaSplash
+--- PASS: TestTemaSplash (0.00s)
+=== RUN   TestResolveAttribute
+--- PASS: TestResolveAttribute (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.043s
+```
+
+### Control byte a byte
+
+```sh
+for f in fdroid gestor-tres-pulsos newpipe termux; do cmp /home/leonisauro/.cache/apkc-web/godot-tema-splash/$f.json /home/leonisauro/.cache/apkc-web/integracion-savedstate/$f.json; echo "$f rc=$?"; done
+```
+```
+fdroid rc=0
+gestor-tres-pulsos rc=0
+newpipe rc=0
+termux rc=0
+```
+
+```sh
+sha256sum /home/leonisauro/.cache/apkc-web/godot-tema-splash/{fdroid,gestor-tres-pulsos,newpipe,termux}.json /home/leonisauro/.cache/apkc-web/integracion-savedstate/{fdroid,gestor-tres-pulsos,newpipe,termux}.json
+```
+```
+dd58c20ec1955779f464a683e0fc97caedffd832f61beac099c162098e329adf  /home/leonisauro/.cache/apkc-web/godot-tema-splash/fdroid.json
+7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f  /home/leonisauro/.cache/apkc-web/godot-tema-splash/gestor-tres-pulsos.json
+e4725ca1a9d61254cdbba48ddb10c91ef92f8545515948d309a53cc8ce60f948  /home/leonisauro/.cache/apkc-web/godot-tema-splash/newpipe.json
+b55eb52ebe5fa66237c16b372cdbf5c668ca9fd6a8b68e801ce0980b30efa925  /home/leonisauro/.cache/apkc-web/godot-tema-splash/termux.json
+dd58c20ec1955779f464a683e0fc97caedffd832f61beac099c162098e329adf  /home/leonisauro/.cache/apkc-web/integracion-savedstate/fdroid.json
+7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f  /home/leonisauro/.cache/apkc-web/integracion-savedstate/gestor-tres-pulsos.json
+e4725ca1a9d61254cdbba48ddb10c91ef92f8545515948d309a53cc8ce60f948  /home/leonisauro/.cache/apkc-web/integracion-savedstate/newpipe.json
+b55eb52ebe5fa66237c16b372cdbf5c668ca9fd6a8b68e801ce0980b30efa925  /home/leonisauro/.cache/apkc-web/integracion-savedstate/termux.json
+```
+
+Las cuatro parejas comparten `sha256sum` con la línea base de `integracion-savedstate/`.
+
+**Frontera.** No se afirma que el juego funcione: los `.so` ARM quedan fuera y las llamadas
+`System.load*` son inertes en la vista previa. La corrida corta en una frontera nueva, sin forzar,
+y sin CDP no se afirma parecido visual alguno. El pin final queda pendiente de la integración.
+Sin gate, CDP, red ni publicación.
+
+## 391. ServiceLoader desde META-INF/services para F-Droid
+
+Medido el 2026-11-26 sobre
+`/home/leonisauro/.cache/apkc-web/fdroid-serviceloader/fdroid.json` y la línea base
+`/home/leonisauro/.cache/apkc-web/integracion-savedstate/fdroid.json`, con la APK real
+`/home/leonisauro/Downloads/F-Droid.apk`. El commit auditado es
+`d163a028129150157645776dc09081b24e6cf296`, aún no integrado; el SHA final queda pendiente al
+cerrar. Los 17 focales PASS son cifra transmitida y no se re-mide aquí; cuatro controles
+byte-idénticos se verifican aquí. Sin gate, CDP, red, `git push` ni publicación.
+
+### Pasos y frontera
+
+```sh
+python3 -c "
+import json
+a='/home/leonisauro/.cache/apkc-web/integracion-savedstate/fdroid.json'
+b='/home/leonisauro/.cache/apkc-web/fdroid-serviceloader/fdroid.json'
+for n,p in (('antes',a),('despues',b)):
+ d=json.load(open(p)); e=d['ejecucion']['error']; av=' '.join(d['ejecucion']['avisos'])
+ print(n,d['ejecucion']['pasos'],repr(d.get('layout')),d.get('nodos'),'aproximado=',d.get('aproximado'))
+ print(' error:',e)
+ print(' ServiceLoader.iterator=', 'ServiceLoader.iterator' in e, 'aviso load cero=', 'no está en el dex ni en los stubs: se devuelve el cero de Ljava/util/ServiceLoader;' in av)
+"
+```
+```
+antes 7272 '' 1 aproximado= True
+ error: en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.bind: en org.slf4j.LoggerFactory.findServiceProviders: se llamó a java.util.ServiceLoader.iterator sobre un objeto nulo
+ ServiceLoader.iterator= True aviso load cero= True
+despues 7530 '' 1 aproximado= True
+ error: en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.versionSanityCheck: se llamó a java.lang.String.startsWith sobre un objeto nulo
+ ServiceLoader.iterator= False aviso load cero= False
+```
+
+F-Droid pasa de 7272 a 7530 pasos, con `layout=''` y 1 nodo. Desaparece
+`ServiceLoader.iterator sobre un objeto nulo` y el aviso `load … cero`. La nueva frontera es
+`String.startsWith sobre un objeto nulo`, en `versionSanityCheck`, sin forzar.
+
+### El proveedor sale del zip, no se fabrica
+
+El aviso de la corrida dice qué se entregó:
+
+```sh
+python3 -c "
+import json
+d=json.load(open('/home/leonisauro/.cache/apkc-web/fdroid-serviceloader/fdroid.json'))
+for a in d['ejecucion']['avisos']:
+ if 'ServiceLoader.load' in a: print(repr(a))
+"
+```
+```
+'ServiceLoader.load(org.slf4j.spi.SLF4JServiceProvider): 1 proveedor(es) leídos de META-INF/services; se entregan nombres, no instancias (aproximación)'
+```
+
+El nombre está escrito en la entrada real del APK:
+
+```sh
+unzip -p /home/leonisauro/Downloads/F-Droid.apk META-INF/services/org.slf4j.spi.SLF4JServiceProvider
+```
+```
+org.slf4j.impl.LoggerServiceProvider
+```
+
+Se entregan nombres, no instancias: el intérprete no fabrica un proveedor ausente del fichero.
+
+### Condición no negociable: probado solo en Node
+
+El código verificado lo dice literalmente:
+
+```sh
+grep -n 'En wasm no hay ficheros del hospedador\|Sin una APK accesible el mapa sigue vacío' /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/verif-apkc/previewinterprete.go
+```
+```
+4582:// En wasm no hay ficheros del hospedador: sin registro, el iterador sale vacío, que es la respuesta
+4647:// `apkc preview … app.apk` esa es la APK de la corrida. Sin una APK accesible el mapa sigue vacío,
+```
+
+La medición de arriba es del comando nativo de Node, en el que `os.Args` contiene la APK. En la
+pestaña, `cargaServiciosDelHost` no halla APK en `os.Args` y el iterador sale vacío para slf4j:
+**esto está probado solo en Node** y no se afirma para wasm.
+
+### Control byte a byte
+
+```sh
+for f in godot newpipe termux gestor-tres-pulsos; do cmp /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/$f.json /home/leonisauro/.cache/apkc-web/integracion-savedstate/$f.json; echo "$f rc=$?"; done
+```
+```
+godot rc=0
+newpipe rc=0
+termux rc=0
+gestor-tres-pulsos rc=0
+```
+
+```sh
+sha256sum /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/{godot,newpipe,termux,gestor-tres-pulsos}.json /home/leonisauro/.cache/apkc-web/integracion-savedstate/{godot,newpipe,termux,gestor-tres-pulsos}.json
+```
+```
+1c874f361460f09d2aa8ab365cd7138bef66e90ccc43ba599e4ff712b1bdf4d4  /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/godot.json
+e4725ca1a9d61254cdbba48ddb10c91ef92f8545515948d309a53cc8ce60f948  /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/newpipe.json
+b55eb52ebe5fa66237c16b372cdbf5c668ca9fd6a8b68e801ce0980b30efa925  /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/termux.json
+7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f  /home/leonisauro/.cache/apkc-web/fdroid-serviceloader/gestor-tres-pulsos.json
+1c874f361460f09d2aa8ab365cd7138bef66e90ccc43ba599e4ff712b1bdf4d4  /home/leonisauro/.cache/apkc-web/integracion-savedstate/godot.json
+e4725ca1a9d61254cdbba48ddb10c91ef92f8545515948d309a53cc8ce60f948  /home/leonisauro/.cache/apkc-web/integracion-savedstate/newpipe.json
+b55eb52ebe5fa66237c16b372cdbf5c668ca9fd6a8b68e801ce0980b30efa925  /home/leonisauro/.cache/apkc-web/integracion-savedstate/termux.json
+7ebb99a3f787d3c1cf44619a46e95bd52fb2a23eb575116817ae3fd5a7a3b31f  /home/leonisauro/.cache/apkc-web/integracion-savedstate/gestor-tres-pulsos.json
+```
+
+Las cuatro parejas comparten `sha256sum` con la línea base de `integracion-savedstate/`.
+
+**Frontera.** No se afirma que F-Droid funcione: la corrida corta en una frontera nueva, sin
+forzar. Solo Node ha medido el proveedor real; en la pestaña el iterador sale vacío. El SHA final
+queda pendiente de la integración. Sin gate, CDP, red ni publicación.
