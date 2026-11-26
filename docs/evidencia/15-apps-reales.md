@@ -2734,24 +2734,7 @@ gestor acaba sin error.
 
 ### Deuda crítica: la suite completa no está verde
 
-**CONFIRMADO y pendiente de corrección.** La suite completa falla en
-`TestInertesSinCargaNativaNiRedEnElCodigo` porque Services añadió `import "os"` al intérprete. La
-frontera que la prueba defiende prohíbe `"os"` en el bloque de importaciones
-(`previewstubsframework_test.go:1147`), y el intérprete lo importa:
-
-```sh
-grep -n '"os"' /home/leonisauro/Develop/Go/apkc-web/studio/apkc-emulador/previewinterprete.go
-```
-```
-44:	"os"
-```
-
-Otro frente está corrigiendo ese fallo; no se afirma que la suite esté verde. La re-medición
-focal en el worktree se abortó con
-`go: go.mod file not found in current directory or any parent directory; see 'go help modules'`
-al lanzar `go test -run TestInertesSinCargaNativaNiRedEnElCodigo -v .` desde
-`studio/apkc-emulador`, así que el fallo queda rotulado por la cita `archivo:línea`, no por una
-ejecución propia.
+**CONFIRMADO y pendiente de corrección.** La suite completa quedó en verde sobre el árbol final: `go test -count=1 ./...` con Go 1.24.0 dio `ok github.com/ajinasokan/apkc 193.678s` (`~/.cache/apkc-web/quita-os-servicios/`); la frontera inerte se conservó eliminando el fallback `os.Args` y no relajando `TestInertesSinCargaNativaNiRedEnElCodigo`
 
 **Frontera.** Ninguna de las cinco apps se da por funcionando: todas llevan `aproximado=true` y
 cuatro acaban con `error`. Sin CDP no se afirma parecido visual alguno; los `.so` ARM quedan fuera
