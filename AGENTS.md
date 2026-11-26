@@ -119,10 +119,10 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      no la prudencia de tokens.
 14. **El único emulador es el submódulo `studio/apkc-emulador` (§357).** El padre ya no guarda pin
     espejo: el gitlink anidado de `studio` apunta a
-    `26cf94ae33a85da82b05d7fc60e30a0307643ea6` y el `HEAD` de `studio` sigue siendo el
+    `3627870852d551d954c59039de25c6c4b89048c0` y el `HEAD` de `studio` sigue siendo el
     gitlink `HEAD:studio` del padre. Ejecuta la guardia al cerrar cada fase:
     `git -C studio rev-parse HEAD:apkc-emulador` debe dar
-    `26cf94ae33a85da82b05d7fc60e30a0307643ea6`; si no, es un fallo, no un aviso.
+    `3627870852d551d954c59039de25c6c4b89048c0`; si no, es un fallo, no un aviso.
     Nota (§358): el emulador subió y actualizó su gitlink en el mismo commit, así que el pin pasó de
     `563e991` a `4117a8f`; la guardia sigue siendo `git -C studio rev-parse HEAD:apkc-emulador`.
     Nota (§368, registro histórico fechado): al integrar C → B → D → E, el pin pasó a
@@ -144,7 +144,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
     como registro histórico fechado.
     Actualización (getLifecycle, fecha 2026-11-26): el pin pasó a `83560681816604d0445ae365c506e453196fff41`, vigilado con la guardia de arriba; `c54e55114568b05947170a879f989e550b6766ee` queda como registro histórico fechado.
     Actualización (saved state, fecha 2026-11-26): el pin pasó a `996ca07ea35735234713faaa4fc9ee8388720d02`, vigilado con la guardia de arriba; `83560681816604d0445ae365c506e453196fff41` queda como registro histórico fechado.
-    Actualización (mLifecycleRegistry, fecha 2026-11-26): el pin pasó a `9a6ec572fc72dcb374e692d094b627b1960c8efc`, vigilado con la guardia de arriba; `996ca07ea35735234713faaa4fc9ee8388720d02` queda como registro histórico fechado. Actualización (FragmentActivity/getSavedStateRegistry, fecha 2026-11-26): el pin pasó a `c0e60ca39ee746abb5350fe4d6533de683d7467f`, vigilado con la guardia de arriba; `9a6ec572fc72dcb374e692d094b627b1960c8efc` queda como registro histórico fechado. Actualización (desreferencia de recursos, fecha 2026-11-26): el pin pasó a `26cf94ae33a85da82b05d7fc60e30a0307643ea6`, vigilado con la guardia de arriba; `c0e60ca39ee746abb5350fe4d6533de683d7467f` queda como registro histórico fechado.
+    Actualización (mLifecycleRegistry, fecha 2026-11-26): el pin pasó a `9a6ec572fc72dcb374e692d094b627b1960c8efc`, vigilado con la guardia de arriba; `996ca07ea35735234713faaa4fc9ee8388720d02` queda como registro histórico fechado. Actualización (FragmentActivity/getSavedStateRegistry, fecha 2026-11-26): el pin pasó a `c0e60ca39ee746abb5350fe4d6533de683d7467f`, vigilado con la guardia de arriba; `9a6ec572fc72dcb374e692d094b627b1960c8efc` queda como registro histórico fechado. Actualización (desreferencia de recursos, fecha 2026-11-26): el pin pasó a `26cf94ae33a85da82b05d7fc60e30a0307643ea6`, vigilado con la guardia de arriba; `c0e60ca39ee746abb5350fe4d6533de683d7467f` queda como registro histórico fechado. Actualización (split de dos argumentos, fecha 2026-11-26): el pin pasó a `3627870852d551d954c59039de25c6c4b89048c0`, vigilado con la guardia de arriba; `26cf94ae33a85da82b05d7fc60e30a0307643ea6` queda como registro histórico fechado.
     Subir el emulador exige actualizar ese gitlink en el **mismo commit**. La fuente canónica la
     resuelve `tools/materializar-emulador.sh` (argumento, `APKC_EMULADOR_DIR`,
     `studio/apkc-emulador`) sin cambiar el contrato de 34 ficheros ni su `cmp` byte a byte.
