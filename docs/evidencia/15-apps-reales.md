@@ -1422,7 +1422,7 @@ git diff --check
 
 `git show --stat --oneline ed53d88` da `ed53d88 feat(emulador): integra queryBroadcastReceivers
 para Termux` y `studio | 2 +-`. La guarda de la regla 14 queda en `f6bc0ba`; el informe del
-integrador no entregó el gitlink de `studio` ni el padre del commit, El gitlink de `studio` en `ed53d88` es `d0df9e245117b413e3d1bd2f8f9a1db81812d1ed` (`git ls-tree ed53d88 studio`) y su padre es `d4d36cbce1647df1d18a11049a18f58e6f5eb2f0` (`git rev-parse ed53d88^`). `go test -count=1 ./...` → `ok … 162.481s`; 28 pruebas en PASS (el informe del
+integrador no entregó el gitlink de `studio` ni el padre del commit. El gitlink de `studio` en `ed53d88` es `d0df9e245117b413e3d1bd2f8f9a1db81812d1ed` (`git ls-tree ed53d88 studio`) y su padre es `d4d36cbce1647df1d18a11049a18f58e6f5eb2f0` (`git rev-parse ed53d88^`). `go test -count=1 ./...` → `ok … 162.481s`; 28 pruebas en PASS (el informe del
 integrador da el total sin desglosar sus nombres, que no se transcriben aquí). La
 materialización conserva los 34 ficheros `preview*.go` byte a byte (regla 14) y `git diff --check`
 da rc 0.
