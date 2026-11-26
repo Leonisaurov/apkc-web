@@ -1209,7 +1209,7 @@ git ls-tree HEAD studio
 
 Salida de las cuatro últimas órdenes: `2a42a846a87df44d66178ca9000aabdc764d9a04`, `c179a0b`,
 `a4d8f43` y `160000 commit a4d8f434988bf55391d5c647613e709e6199f82c	studio`. Es el pin de entonces de
-la regla 14; pin vigente `996ca07ea35735234713faaa4fc9ee8388720d02`; `bf7477e…` queda como registro histórico fechado.
+la regla 14; pin vigente `c0e60ca39ee746abb5350fe4d6533de683d7467f`; `996ca07ea35735234713faaa4fc9ee8388720d02`, `9a6ec572fc72dcb374e692d094b627b1960c8efc` y `bf7477e…` quedan como registros históricos fechados.
 
 ### Suite y contrato de ficheros
 
