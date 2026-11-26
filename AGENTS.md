@@ -119,10 +119,10 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
      no la prudencia de tokens.
 14. **El único emulador es el submódulo `studio/apkc-emulador` (§357).** El padre ya no guarda pin
     espejo: el gitlink anidado de `studio` apunta a
-    `c54e55114568b05947170a879f989e550b6766ee` y el `HEAD` de `studio` sigue siendo el
+    `83560681816604d0445ae365c506e453196fff41` y el `HEAD` de `studio` sigue siendo el
     gitlink `HEAD:studio` del padre. Ejecuta la guardia al cerrar cada fase:
     `git -C studio rev-parse HEAD:apkc-emulador` debe dar
-    `c54e55114568b05947170a879f989e550b6766ee`; si no, es un fallo, no un aviso.
+    `83560681816604d0445ae365c506e453196fff41`; si no, es un fallo, no un aviso.
     Nota (§358): el emulador subió y actualizó su gitlink en el mismo commit, así que el pin pasó de
     `563e991` a `4117a8f`; la guardia sigue siendo `git -C studio rev-parse HEAD:apkc-emulador`.
     Nota (§368, registro histórico fechado): al integrar C → B → D → E, el pin pasó a
@@ -142,6 +142,7 @@ página. Nada de aquí cambia `../apkc` salvo lo que la Fase 0 autorice expresam
     Actualización (LayoutParams de Termux, commit `acc7d44`): el pin pasó a
     `c54e55114568b05947170a879f989e550b6766ee`, vigilado con la guardia de arriba; `0c01986…` queda
     como registro histórico fechado.
+    Actualización (getLifecycle, fecha 2026-11-26): el pin pasó a `83560681816604d0445ae365c506e453196fff41`, vigilado con la guardia de arriba; `c54e55114568b05947170a879f989e550b6766ee` queda como registro histórico fechado.
     Subir el emulador exige actualizar ese gitlink en el **mismo commit**. La fuente canónica la
     resuelve `tools/materializar-emulador.sh` (argumento, `APKC_EMULADOR_DIR`,
     `studio/apkc-emulador`) sin cambiar el contrato de 34 ficheros ni su `cmp` byte a byte.
