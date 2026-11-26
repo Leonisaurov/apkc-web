@@ -1015,7 +1015,7 @@ por falta de red: `zipcheck.py` solo si el clon de `apkc-harness` está en `$APK
   `docs/evidencia/15-apps-reales.md`.
 - §377: LayoutParams reales y frontera `bindService` en Termux (cherry-pick
   `c54e55114568b05947170a879f989e550b6766ee` del commit `0c17130` sobre `0c01986`, integrado en
-  `acc7d44`, pin de entonces `c54e551…`; pin vigente `9a6ec57…`): sobre el árbol final, 6944 pasos, 25 avisos
+  `acc7d44`, pin de entonces `c54e551…`; pin de entonces `9a6ec57…`; pin vigente `8156934eb63d6e709d8a7f233be78634b981d015`): sobre el árbol final, 6944 pasos, 25 avisos
   (`avisos-recortados: 40`), `layout=res/layout/activity_termux.xml` y 13 nodos, con
   `com.termux.app.TermuxActivity.onCreate: java.lang.RuntimeException: bindService() failed` en lugar
   del `LayoutParams.height` nulo de `setTerminalToolbarView` (6599 pasos en `§372`); suite `196.481s`,
