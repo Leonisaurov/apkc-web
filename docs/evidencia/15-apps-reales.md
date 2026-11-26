@@ -1763,7 +1763,9 @@ y sin CDP no se da por cerrada la app.
 ## 385. ViewTreeObserver y builders de audio para Termux
 
 Medido el 2026-11-25 sobre el árbol integrado en
-`0c153572864c81403d8050d5d6673b49dcee6346`. Los cuatro commits auditados del submódulo
+`0c153572864c81403d8050d5d6673b49dcee6346`: las mediciones de 7072/7126/7130/7418 se hicieron
+sobre el árbol del frente; los cuatro stubs quedaron **ausentes** del pin `8156934e…` y se integraron
+después sobre `b7854d6…`, con verificación sobre el blob. Los cuatro commits auditados del submódulo
 `studio/apkc-emulador` son `76c60fb60b611cf7b3d8237f13a2240452249768` y
 `18baa472efeefbaa56496f278b6f1b8a93a92b2d` («ViewTreeObserver inerte para Termux»),
 `dcf10d01e303fb4ea7d6ffc8e59b69042a4049ff` («AudioAttributes.Builder inerte para Termux»),
@@ -2734,9 +2736,11 @@ gestor acaba sin error.
 
 ### La suite completa, en verde sobre el árbol final
 
-La suite completa quedó en verde sobre el árbol final (`8156934e…`): `tcr -r 256M -q -- go test -count=1 ./...` con Go 1.24.0 dio `ok github.com/ajinasokan/apkc 195.144s`, ejecutado por el integrador. La frontera inerte se conservó eliminando el fallback `os.Args` y no relajando `TestInertesSinCargaNativaNiRedEnElCodigo`; el enganche `preview.go:1132` entrega el `*zip.Reader`. No hay deuda pendiente por `import "os"`.
+La suite completa quedó en verde sobre el árbol final (`8156934e…`): `tcr -r 256M -q -- go test -count=1 ./...` con Go 1.24.0 dio `ok github.com/ajinasokan/apkc 195.144s`, ejecutado por el integrador; esa suite verde no revalidaba los cuatro stubs del §385, ausentes de ese pin, y la suite sobre el árbol que sí los contiene (`b7854d6…`) dio `ok github.com/ajinasokan/apkc 197.081s`. La frontera inerte se conservó eliminando el fallback `os.Args` y no relajando `TestInertesSinCargaNativaNiRedEnElCodigo`; el enganche `preview.go:1132` entrega el `*zip.Reader`. No hay deuda pendiente por `import "os"`.
 
 **Frontera.** Ninguna de las cinco apps se da por funcionando: todas llevan `aproximado=true` y
 cuatro acaban con `error`. Sin CDP no se afirma parecido visual alguno; los `.so` ARM quedan fuera
 y las llamadas `System.load*` son inertes. La medición de servicios corresponde al comando nativo
 de Node; en la pestaña el iterador sale vacío. Sin gate, CDP, red, `git push` ni publicación.
+
+Las seis familias (`ViewTreeObserver`, `AudioAttributes`, `SoundPool`, `AccessibilityManager`, `findInsertIndex` y `and-int/lit8` con `&0xff`) se integraron sobre `b7854d6…` y se verificaron en el blob del pin; `case "split"`=1, `temaSintetico`=3, `case "getLifecycle"`=1, `registraServiciosDelApk`=1, `cargaServiciosDelHost`=0. Termux 7418 pasos, `error=None`, `aproximado=true`: no se afirma arranque ni audio real.
