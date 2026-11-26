@@ -2057,3 +2057,158 @@ ok  	github.com/ajinasokan/apkc	0.004s
 **Frontera.** No se afirma que NewPipe funcione: la corrida corta en una frontera nueva,
 `SavedStateRegistry.getSavedStateProvider sobre un objeto nulo`. El pin final queda pendiente
 de la integración en curso. Sin CDP, gate ni publicación.
+
+## 388. Registry de saved state del dex para F-Droid, Godot y NewPipe
+
+Medido el 2026-11-25 sobre los artefactos de
+`~/.cache/apkc-web/integracion-savedstate/` y `~/.cache/apkc-web/savedstate-registry/`, con las
+cinco APK reales de `~/Downloads/`. El commit auditado es
+`31ce4566eb0d86d941830f7bdb5ad34b94ff1861` (informe APROBADO), integrado en el submódulo como
+`996ca07ea35735234713faaa4fc9ee8388720d02`; pin `008394a…`, padre `83eddb4…`, guardia
+`e4eff86…`. Suite `194.716s` y 41 focales PASS, cifras de la corrida de integración transmitidas
+y no re-medidas aquí. Sin gate, CDP, red, `git push` ni publicación.
+
+### Cómo se reproducen las cinco corridas
+
+```sh
+O=/home/leonisauro/.cache/apkc-web/integracion-savedstate
+D=/home/leonisauro/Downloads
+$O/apkc preview $D/F-Droid.apk > $O/fdroid.json 2> $O/fdroid.err
+$O/apkc preview $D/org.quentin_bettoum.librememorygame_9.apk > $O/godot.json 2> $O/godot.err
+$O/apkc preview $D/org.schabi.newpipe_1017.apk > $O/newpipe.json 2> $O/newpipe.err
+$O/apkc preview $D/termux-app_v0.118.3+github-debug_armeabi-v7a.apk > $O/termux.json 2> $O/termux.err
+$O/apkc preview --rom studio/apkc-emulador/rom.json --permiso android.permission.READ_EXTERNAL_STORAGE --pulsar id/menu_quick_switch --pulsar id/drive_list:0 --pulsar id/list:4 $D/com.martinmimigames.simplefileexplorer_20.apk > $O/gestor-tres-pulsos.json 2> $O/gestor-tres-pulsos.err
+```
+
+### Pasos y fronteras
+
+```sh
+python3 -c "
+import json
+a='/home/leonisauro/.cache/apkc-web/savedstate-registry/'
+b='/home/leonisauro/.cache/apkc-web/integracion-savedstate/'
+for n in ('fdroid','godot','newpipe','termux','gestor-tres-pulsos'):
+ x=json.load(open(a+'antes-'+n+'.json')); y=json.load(open(b+n+'.json'))
+ print(n, x['ejecucion']['pasos'], '->', y['ejecucion']['pasos'], repr(y.get('layout')), y.get('nodos'), 'aproximado=', y.get('aproximado'))
+ print('  antes:', x['ejecucion'].get('error'))
+ print('  despues:', y['ejecucion'].get('error'))
+"
+```
+```
+fdroid 2656 -> 7272 '' 1 aproximado= True
+  antes: en org.fdroid.Hilt_MainActivity.<init>: en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.SavedStateHandleSupport.enableSavedStateHandles: en androidx.savedstate.SavedStateRegistry.getSavedStateProvider: en androidx.savedstate.internal.SavedStateRegistryImpl.getSavedStateProvider: se llamó a java.util.Set.iterator sobre un objeto nulo
+  despues: en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.bind: en org.slf4j.LoggerFactory.findServiceProviders: se llamó a java.util.ServiceLoader.iterator sobre un objeto nulo
+godot 7229 -> 7279 '' 1 aproximado= True
+  antes: en org.godotengine.godot.GodotActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.SavedStateHandleSupport.enableSavedStateHandles: se llamó a androidx.savedstate.SavedStateRegistry.registerSavedStateProvider sobre un objeto nulo
+  despues: en org.godotengine.godot.GodotActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.SavedStateHandleSupport.enableSavedStateHandles: se llamó a androidx.lifecycle.Lifecycle.addObserver sobre un objeto nulo
+newpipe 2151 -> 3037 'res/v9.xml' 6 aproximado= True
+  antes: en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.ViewModelKt.enableSavedStateHandles: se llamó a androidx.savedstate.SavedStateRegistry.getSavedStateProvider sobre un objeto nulo
+  despues: en androidx.core.os.LocaleListCompat.forLanguageTags: array-length sobre un registro que no es arreglo
+termux 7072 -> 7072 'res/layout/activity_termux.xml' 13 aproximado= True
+  antes: en com.termux.app.TermuxActivity.addTermuxActivityRootViewGlobalLayoutListener: se llamó a android.view.ViewTreeObserver.addOnGlobalLayoutListener sobre un objeto nulo
+  despues: en com.termux.app.TermuxActivity.addTermuxActivityRootViewGlobalLayoutListener: se llamó a android.view.ViewTreeObserver.addOnGlobalLayoutListener sobre un objeto nulo
+gestor-tres-pulsos 3595 -> 3595 'res/R5.xml' 32 aproximado= True
+  antes: None
+  despues: None
+```
+
+F-Droid pasa de 2656 a 7272 pasos y corta en `ServiceLoader.iterator` sobre un objeto nulo,
+desde `LoggerFactory.findServiceProviders`; Godot de 7229 a 7279 con `Lifecycle.addObserver`
+sobre un objeto nulo; NewPipe de 2151 a 3037 con `LocaleListCompat.forLanguageTags`:
+`array-length` sobre un registro que no es arreglo. Los tres dan `aproximado=true`; F-Droid y
+Godot tienen `layout=''` y 1 nodo, y NewPipe `res/v9.xml` y 6 nodos. Termux sigue en 7072 y el
+gestor en 3595 pasos y 32 nodos, sin error.
+
+### Cadenas que desaparecen
+
+```sh
+python3 -c "
+import json
+a='/home/leonisauro/.cache/apkc-web/savedstate-registry/'
+b='/home/leonisauro/.cache/apkc-web/integracion-savedstate/'
+for n in ('fdroid','godot','newpipe'):
+ x=json.dumps(json.load(open(a+'antes-'+n+'.json')),ensure_ascii=False)
+ y=json.dumps(json.load(open(b+n+'.json')),ensure_ascii=False)
+ for c in ('getSavedStateProvider','registerSavedStateProvider','Set.iterator','sin cuerpo','Ljava/util/Set;'):
+  print(n,c,'antes=',c in x,'despues=',c in y)
+"
+```
+```
+fdroid getSavedStateProvider antes= True despues= False
+fdroid registerSavedStateProvider antes= False despues= False
+fdroid Set.iterator antes= True despues= False
+fdroid sin cuerpo antes= False despues= False
+fdroid Ljava/util/Set; antes= True despues= False
+godot getSavedStateProvider antes= False despues= False
+godot registerSavedStateProvider antes= True despues= False
+godot Set.iterator antes= False despues= False
+godot sin cuerpo antes= False despues= False
+godot Ljava/util/Set; antes= False despues= False
+newpipe getSavedStateProvider antes= True despues= False
+newpipe registerSavedStateProvider antes= False despues= False
+newpipe Set.iterator antes= False despues= False
+newpipe sin cuerpo antes= False despues= False
+newpipe Ljava/util/Set; antes= False despues= False
+```
+
+Desaparecen `getSavedStateProvider`, `registerSavedStateProvider`, `Set.iterator sobre un objeto
+nulo`, `getSavedStateRegistry no tiene cuerpo` y `entrySet … Ljava/util/Set;`. El cotejo sobre
+los JSON confirma las cuatro cadenas que en ellos aparecen (`getSavedStateProvider`,
+`registerSavedStateProvider`, `Set.iterator` y `Ljava/util/Set;`);
+`getSavedStateRegistry no tiene cuerpo` se recoge como procedencia de la auditoría, no re-medida
+aquí.
+
+### Atribución: el getter y el mapa, no la rama del dex
+
+El avance se atribuye al getter `getSavedStateRegistry` y a `datosDelMapa` aceptando
+`LinkedHashMap`, en `previewinterprete.go:4706-4713` y `:7167-7183` del submódulo; se comprueba
+con:
+
+```sh
+sed -n '4706,4713p;7170,7183p' studio/apkc-emulador/previewinterprete.go
+```
+```
+	if datos, ok := obj.campos["mapa.datos"].(map[string]any); ok {
+		return datos
+	}
+	// `SavedStateRegistryImpl.<init>` guarda un LinkedHashMap en `keyToProviders` (confirmado con
+	// dexdump sobre los dex de F-Droid y NewPipe). Sin reconocerlo, `entrySet` caía al cero de
+	// Ljava/util/Set; y el `Set.iterator` siguiente reventaba. Se modela vacío, sin inventar claves.
+	if strings.HasSuffix(obj.clase, "Ljava/util/HashMap;") ||
+		strings.HasSuffix(obj.clase, "Ljava/util/LinkedHashMap;") ||
+	case "getSavedStateRegistry":
+		// `SavedStateRegistryOwner.getSavedStateRegistry()` se declara en el dex sin cuerpo: la
+		// actividad ya guarda el controlador que el propio dex construyó, con el
+		// `savedStateRegistry` escrito por su `<init>`. Se devuelve ESA referencia, sin fabricar un
+		// registry ni un proveedor. El aviso dice que es una aproximación porque la vista previa no
+		// ejecuta el getter del framework. Sin el campo el stub no casa y el cero llega al
+		// `getSavedStateProvider` siguiente, que corta con receptor nulo.
+		if stubsFrameworkActivos && len(vals) == 0 && obj != nil &&
+			proto == "()Landroidx/savedstate/SavedStateRegistry;" &&
+			es("Landroidx/savedstate/SavedStateRegistryOwner;", "Landroidx/activity/ComponentActivity;") {
+			if registry := registryDelOwnerSavedState(obj); registry != nil {
+				m.avisa("SavedStateRegistryOwner.getSavedStateRegistry: se devuelve el SavedStateRegistry que el dex construyó en el controlador (aproximación)")
+				return registry, true, nil
+			}
+```
+
+**Condición de atribución (no negociable).** El avance viene del getter `getSavedStateRegistry`
+y de `datosDelMapa` aceptando `LinkedHashMap` (`previewinterprete.go:4706-4713`, `:7167-7183`),
+**no** de `initSavedStateConDex`: esa rama no se ejercitó en las cinco corridas. La función
+`initSavedStateConDex` existe en `previewinterprete.go:4736` y se llama en `:4766` y `:7030`, pero
+ninguna de las cinco fronteras medidas pasa por ella.
+
+### Control byte a byte
+
+```sh
+cmp /home/leonisauro/.cache/apkc-web/integracion-savedstate/termux.json /home/leonisauro/.cache/apkc-web/integracion-lote3-final/termux.json
+cmp /home/leonisauro/.cache/apkc-web/integracion-savedstate/gestor-tres-pulsos.json /home/leonisauro/.cache/apkc-web/integracion-lote3-final/gestor-tres-pulsos.json
+```
+```
+rc=0 y sin salida en los dos: Termux 7072 y gestor 3595 pasos y 32 nodos, byte-idénticos a la
+línea base de `integracion-lote3-final/`.
+```
+
+**Frontera.** No se afirma que F-Droid, Godot ni NewPipe funcionen: las tres nuevas fronteras se
+reportan sin forzar, con `aproximado=true`, y sin que cambie el `layout` propio de F-Droid y
+Godot. Sin gate, CDP, red ni publicación.
