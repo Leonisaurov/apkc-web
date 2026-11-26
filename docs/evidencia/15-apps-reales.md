@@ -2551,3 +2551,209 @@ Las cuatro parejas comparten `sha256sum` con la línea base de `integracion-save
 **Frontera.** No se afirma que F-Droid funcione: la corrida corta en una frontera nueva, sin
 forzar. Solo Node ha medido el proveedor real; en la pestaña el iterador sale vacío. El SHA final
 queda pendiente de la integración. Sin gate, CDP, red ni publicación.
+
+## 393. Integración final: trimpath, servicios y tema de splash
+
+Medido el 2026-11-26 sobre los artefactos de
+`/home/leonisauro/.cache/apkc-web/integracion-final/` y los registros conservados de
+`/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/`,
+`/home/leonisauro/.cache/apkc-web/godot-tema-splash/` y
+`/home/leonisauro/.cache/apkc-web/fdroid-serviceloader/`, con las APK reales
+`/home/leonisauro/Downloads/F-Droid.apk` y
+`/home/leonisauro/Downloads/org.quentin_bettoum.librememorygame_9.apk`. Los cambios entraron con
+`03e2ece` (trimpath) y los gitlinks `d2f9102` y `26282d9`; servicios y splash quedaron dentro del
+emulador. Los dos builds del mismo árbol desde temporales distintos, la prueba funcional en el
+hospedador de Node y las cinco corridas finales se verifican aquí. La ejecución instrumentada de
+`resolveAttribute` y las cifras de focales transmitidas por los frentes previos no se re-miden.
+Sin gate, CDP, red, `git push` ni publicación.
+
+### Trimpath: dos temporales, la misma suma
+
+```sh
+grep -n 'materializados\|89f8738e\|rc node create\|ficheros en la memoria' /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log
+```
+```
+5:materializados 34 ficheros preview*.go de /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/studio/apkc-emulador en /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc
+6:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc.wasm
+7:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc.wasm
+10:materializados 34 ficheros preview*.go de /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/studio/apkc-emulador en /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc
+11:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc.wasm
+12:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc.wasm
+15:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc.wasm
+16:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc.wasm
+23:--- ficheros en la memoria simulada: 5
+29:rc node create = 0
+```
+
+Los builds desde los temporales `A/` y `B/` comparten la suma SHA-256
+`89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b`. El hospedador de Node acabó
+`create` con `rc node create = 0` y cinco ficheros en la memoria simulada. La corrida anterior,
+sobre otro árbol, da una suma distinta con la misma cuenta de ficheros materializados:
+
+```sh
+grep -n 'materializados\|89f8738e\|ffa03ac5' /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log
+```
+```
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:5:materializados 34 ficheros preview*.go de /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/studio/apkc-emulador en /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:6:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc.wasm
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:7:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc.wasm
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:10:materializados 34 ficheros preview*.go de /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/studio/apkc-emulador en /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:11:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc.wasm
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:12:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc.wasm
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:15:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/A/apkc.wasm
+/home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/resultado.log:16:89f8738e2b35a555b64b2072c0dad3aff725a92177d4b26d4f292e2a3968007b  /home/leonisauro/.cache/apkc-web/prep-trimpath-remedida/trimpath-remedida.HyGYev/B/apkc.wasm
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:5:materializados 34 ficheros preview*.go de /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/A/studio/apkc-emulador en /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/A/apkc
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:6:ffa03ac56f6c23906febf24a16a8dd6a9113853dab3a972b44ff5309412d2dd0  /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/A/apkc.wasm
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:7:ffa03ac56f6c23906febf24a16a8dd6a9113853dab3a972b44ff5309412d2dd0  /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/A/apkc.wasm
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:10:materializados 34 ficheros preview*.go de /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/B/studio/apkc-emulador en /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/B/apkc
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:11:ffa03ac56f6c23906febf24a16a8dd6a9113853dab3a972b44ff5309412d2dd0  /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/B/apkc.wasm
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:12:ffa03ac56f6c23906febf24a16a8dd6a9113853dab3a972b44ff5309412d2dd0  /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/B/apkc.wasm
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:15:ffa03ac56f6c23906febf24a16a8dd6a9113853dab3a972b44ff5309412d2dd0  /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/A/apkc.wasm
+/home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/resultado.log:16:ffa03ac56f6c23906febf24a16a8dd6a9113853dab3a972b44ff5309412d2dd0  /home/leonisauro/.cache/apkc-web/trimpath-verif.HBmrDG/B/apkc.wasm
+```
+
+La diferencia de suma entre corridas se atribuye a los 34 ficheros `preview*.go` materializados,
+no al flag `-trimpath`: las dos anotan la misma cuenta de materialización y el flag es el mismo en
+los dos puntos de compilación. La atribución es la registrada por la integración y no se re-mide
+aquí.
+
+### Servicios: el proveedor sale del zip
+
+```sh
+grep -n 'registraServiciosDeLaAPKEnPreview' /home/leonisauro/Develop/Go/apkc-web/studio/apkc-emulador/preview.go
+```
+```
+1132:	registraServiciosDeLaAPKEnPreview(zr)
+```
+
+```sh
+grep -n 'func registraServiciosDeLaAPKEnPreview' /home/leonisauro/Develop/Go/apkc-web/studio/apkc-emulador/previewinterprete.go
+```
+```
+4669:func registraServiciosDeLaAPKEnPreview(zr *zip.Reader) {
+```
+
+El envoltorio recibe el lector del zip ya abierto. El nombre que entrega está escrito en la
+entrada real de la APK:
+
+```sh
+unzip -p /home/leonisauro/Downloads/F-Droid.apk META-INF/services/org.slf4j.spi.SLF4JServiceProvider
+```
+```
+org.slf4j.impl.LoggerServiceProvider
+```
+
+Se entregan nombres, no instancias. Con la línea base y la corrida final:
+
+```sh
+python3 -c "
+import json
+pares=(('fdroid','/home/leonisauro/.cache/apkc-web/integracion-savedstate/fdroid.json','/home/leonisauro/.cache/apkc-web/integracion-final/fdroid.json'),('godot','/home/leonisauro/.cache/apkc-web/godot-tema-splash/antes.json','/home/leonisauro/.cache/apkc-web/integracion-final/godot.json'))
+for n,a,b in pares:
+ x=json.load(open(a)); y=json.load(open(b))
+ print(n,'antes',x['ejecucion']['pasos'],'despues',y['ejecucion']['pasos'])
+ print(' antes error:',x['ejecucion'].get('error'))
+ print(' despues error:',y['ejecucion'].get('error'))
+"
+```
+```
+fdroid antes 7272 despues 7530
+ antes error: en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.bind: en org.slf4j.LoggerFactory.findServiceProviders: se llamó a java.util.ServiceLoader.iterator sobre un objeto nulo
+ despues error: en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.versionSanityCheck: se llamó a java.lang.String.startsWith sobre un objeto nulo
+godot antes 8980 despues 9159
+ antes error: en androidx.core.splashscreen.SplashScreen.installSplashScreen: en androidx.core.splashscreen.SplashScreen$Companion.installSplashScreen: en androidx.core.splashscreen.SplashScreen.access$install: en androidx.core.splashscreen.SplashScreen.install: en androidx.core.splashscreen.SplashScreen$Impl.install: se llamó a android.content.res.Resources$Theme.resolveAttribute sobre un objeto nulo
+ despues error: en androidx.activity.EdgeToEdge.enable: en androidx.activity.EdgeToEdge.enable$default: en androidx.activity.EdgeToEdge.enable: se llamó a android.view.Window.getDecorView sobre un objeto nulo
+```
+
+En F-Droid desaparece `ServiceLoader.iterator sobre un objeto nulo` y aparece la nueva frontera
+`String.startsWith sobre un objeto nulo` en `versionSanityCheck`, sin forzar. En Godot desaparece
+`Resources$Theme.resolveAttribute sobre un objeto nulo` y aparece la nueva frontera
+`Window.getDecorView sobre un objeto nulo` en `EdgeToEdge.enable`, sin forzar.
+
+### Splash: id de framework, sin color inventado
+
+El volcado `aapt2` conservado deja escrito el atributo del tema y la ausencia de entrada propia:
+
+```sh
+grep -n 'windowSplashScreenBackground(0x7f030015)' /home/leonisauro/.cache/apkc-web/godot-tema-splash/aapt2.txt
+```
+```
+804:        windowSplashScreenBackground(0x7f030015)=?0x01010031
+```
+
+```sh
+grep -c 'resource 0x01010031 ' /home/leonisauro/.cache/apkc-web/godot-tema-splash/aapt2.txt
+```
+```
+0
+```
+
+El id `0x01010031` es del framework, no tiene entrada en la tabla del APK; `resolveAttribute`
+devuelve `false` y no se inventa ningún color. El tema sintético y su aviso están en el intérprete:
+
+```sh
+grep -n 'func (m \*maquinaDalvik) temaSintetico\|tema-sintetico: Activity.getTheme' /home/leonisauro/Develop/Go/apkc-web/studio/apkc-emulador/previewinterprete.go
+```
+```
+4787:func (m *maquinaDalvik) temaSintetico(act *objetoDalvik) *objetoDalvik {
+5705:			m.avisa("tema-sintetico: Activity.getTheme entrega un tema enlazado a la tabla del APK (aproximación)")
+```
+
+Los ids de la corrida instrumentada están en el rastro conservado, pero esa instrumentación está
+retirada del binario final: `resolveAttribute` sobre la APK real **no es re-medible** y no se marca
+CONFIRMADO. Solo se confirma, con el par anterior, que la cadena `resolveAttribute sobre un objeto
+nulo` desaparece en la corrida final.
+
+### Las cinco APK finales
+
+```sh
+python3 -c "
+import json
+base='/home/leonisauro/.cache/apkc-web/integracion-final/'
+for n in ('fdroid','newpipe','godot','termux','gestor-tres-pulsos'):
+ d=json.load(open(base+n+'.json'))
+ print(n, 'paquete=',d['paquete'], 'pasos=',d['ejecucion']['pasos'], 'nodos=',d['nodos'], 'aproximado=',d['aproximado'])
+ print(' error:', d['ejecucion'].get('error'))
+"
+```
+```
+fdroid paquete= org.fdroid.fdroid pasos= 7530 nodos= 1 aproximado= True
+ error: en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.versionSanityCheck: se llamó a java.lang.String.startsWith sobre un objeto nulo
+newpipe paquete= org.schabi.newpipe pasos= 3476 nodos= 6 aproximado= True
+ error: en org.schabi.newpipe.util.ServiceHelper.getSelectedServiceId: en org.schabi.newpipe.util.ServiceHelper.getSelectedService: en us.shandian.giga.util.Utility.getService: se llamó a j$.util.stream.Stream.filter sobre un objeto nulo
+godot paquete= org.quentin_bettoum.librememorygame pasos= 9159 nodos= 1 aproximado= True
+ error: en androidx.activity.EdgeToEdge.enable: en androidx.activity.EdgeToEdge.enable$default: en androidx.activity.EdgeToEdge.enable: se llamó a android.view.Window.getDecorView sobre un objeto nulo
+termux paquete= com.termux pasos= 7072 nodos= 13 aproximado= True
+ error: en com.termux.app.TermuxActivity.addTermuxActivityRootViewGlobalLayoutListener: se llamó a android.view.ViewTreeObserver.addOnGlobalLayoutListener sobre un objeto nulo
+gestor-tres-pulsos paquete= com.martinmimigames.simplefileexplorer pasos= 3595 nodos= 32 aproximado= True
+ error: None
+```
+
+Las cinco corridas llevan `aproximado=true`. Cuatro acaban en una frontera nueva con `error`; el
+gestor acaba sin error.
+
+### Deuda crítica: la suite completa no está verde
+
+**CONFIRMADO y pendiente de corrección.** La suite completa falla en
+`TestInertesSinCargaNativaNiRedEnElCodigo` porque Services añadió `import "os"` al intérprete. La
+frontera que la prueba defiende prohíbe `"os"` en el bloque de importaciones
+(`previewstubsframework_test.go:1147`), y el intérprete lo importa:
+
+```sh
+grep -n '"os"' /home/leonisauro/Develop/Go/apkc-web/studio/apkc-emulador/previewinterprete.go
+```
+```
+44:	"os"
+```
+
+Otro frente está corrigiendo ese fallo; no se afirma que la suite esté verde. La re-medición
+focal en el worktree se abortó con
+`go: go.mod file not found in current directory or any parent directory; see 'go help modules'`
+al lanzar `go test -run TestInertesSinCargaNativaNiRedEnElCodigo -v .` desde
+`studio/apkc-emulador`, así que el fallo queda rotulado por la cita `archivo:línea`, no por una
+ejecución propia.
+
+**Frontera.** Ninguna de las cinco apps se da por funcionando: todas llevan `aproximado=true` y
+cuatro acaban con `error`. Sin CDP no se afirma parecido visual alguno; los `.so` ARM quedan fuera
+y las llamadas `System.load*` son inertes. La medición de servicios corresponde al comando nativo
+de Node; en la pestaña el iterador sale vacío. Sin gate, CDP, red, `git push` ni publicación.
