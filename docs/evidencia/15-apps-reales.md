@@ -1399,3 +1399,103 @@ integrador.
 
 **Frontera.** Termux no se da por funcionando: `onCreate` termina en
 `java.lang.RuntimeException: bindService() failed`. Sin CDP, gate ni publicación.
+
+## 378. Termux: integración de `queryBroadcastReceivers` y aviso recortado
+
+Medido el 2026-11-25 sobre el árbol final, posterior a `§377`. La integración `ed53d88`
+(`feat(emulador): integra queryBroadcastReceivers para Termux`) deja el pin de la regla 14 en
+`f6bc0ba`. El APK es el mismo cuya identidad queda fijada en `§354` (sha256
+`89416397b70f9ff67a0044e8abe6ef82487cd48fcf543e2d23e02688cc541cf0`). Las cifras de este
+`§` son del informe del integrador, medidas sobre el árbol final y transcritas aquí sin re-medir.
+No se ha corrido gate, CDP ni publicación. Termux **no se da por funcionando**.
+
+### Comando, guardia y contrato de ficheros
+
+```sh
+git show --stat --oneline ed53d88
+git -C studio rev-parse HEAD:apkc-emulador
+git rev-parse --short HEAD
+git -C studio rev-parse --short HEAD
+go test -count=1 ./...
+git diff --check
+```
+
+`git show --stat --oneline ed53d88` da `ed53d88 feat(emulador): integra queryBroadcastReceivers
+para Termux` y `studio | 2 +-`. La guarda de la regla 14 queda en `f6bc0ba`; el informe del
+integrador no entregó el gitlink de `studio` ni el padre del commit, que quedan pendientes de
+archivar. `go test -count=1 ./...` → `ok … 162.481s`; 28 pruebas en PASS (el informe del
+integrador da el total sin desglosar sus nombres, que no se transcriben aquí). La
+materialización conserva los 34 ficheros `preview*.go` byte a byte (regla 14) y `git diff --check`
+da rc 0.
+
+### Termux antes y después
+
+El comando literal de la corrida final es:
+
+```sh
+apkc preview /home/leonisauro/Downloads/termux-app_v0.118.3+github-debug_armeabi-v7a.apk
+```
+
+La corrida escribe su JSON en `~/.cache/apkc-web/integracion-broadcast/termux.json`:
+
+| Corrida | Pasos | `ejecucion.error` |
+| --- | --- | --- |
+| Antes (`§377`) | 6950 | `en com.termux.shared.termux.TermuxUtils.sendTermuxOpenedBroadcast: se llamó a java.util.List.iterator sobre un objeto nulo` |
+| Árbol final (`§378`) | 7072 | `en com.termux.app.TermuxActivity.addTermuxActivityRootViewGlobalLayoutListener: se llamó a android.view.ViewTreeObserver.addOnGlobalLayoutListener sobre un objeto nulo` |
+
+En la corrida final, `layout=res/layout/activity_termux.xml`, 13 nodos y 25 avisos
+(`avisos-recortados: 42`). `List.iterator` desaparece del error y lo sustituye
+`addOnGlobalLayoutListener` sobre un objeto nulo: eso no implica que Termux arranque. El aviso
+`queryBroadcastReceivers-inerte` está recortado, fuera de los 25 visibles, así que no se da por
+medido: la preview no avisa al usuario de que ese aviso existe. No se transcriben aquí otros
+campos del JSON que el informe del integrador no entregó.
+
+### Frontera
+
+Termux no se da por funcionando: `onCreate` termina en
+`en com.termux.app.TermuxActivity.addTermuxActivityRootViewGlobalLayoutListener: se llamó a
+android.view.ViewTreeObserver.addOnGlobalLayoutListener sobre un objeto nulo`. Sin CDP, gate
+ni publicación.
+
+## 379. `and-int/lit8` y `System.arraycopy`: correcciones generales sobre `90d77d7`
+
+Medido el 2026-11-25 sobre el árbol final, posterior a `§378`. El commit
+`e0f2f8a6dffa6284a50955c29119be30950fe341` se integra en `90d77d7` y deja el pin de la regla 14
+en `d722e47`. Las cifras de este `§` son del informe del integrador, medidas sobre el árbol final
+y transcritas aquí sin re-medir. No se ha corrido gate, CDP ni publicación. Ninguna APK se da
+por funcionando.
+
+### Comandos y contrato de ficheros
+
+Desde `apkc/`, el comando focal es:
+
+```sh
+go test -count=1 -run 'TestAndIntLit8LeeElRegistroDeUnByte|TestArraycopyCopiaYRango' -v .
+```
+
+El informe del integrador da 29 pruebas en PASS y la suite en `211.672s`; no desglosa los
+nombres de las pruebas ni entrega la salida literal del comando de la suite completa, que
+quedan pendientes de archivar. `git diff --check` da rc 0.
+
+### Las cinco APK
+
+Las cinco corridas escriben su JSON en `~/.cache/apkc-web/integracion-general-f0/`:
+
+| APK | `paquete` | Pasos |
+| --- | --- | --- |
+| Termux | `com.termux` | 7072 |
+| NewPipe | `org.schabi.newpipe` | 517 |
+| Gestor de archivos | `com.martinmimigames.simplefileexplorer` | 3595 |
+| F-Droid | `org.fdroid.fdroid` | 758 |
+| Godot | `org.quentin_bettoum.librememorygame` | 1688 |
+
+El JSON de Termux de esta corrida es idéntico al de `integracion-broadcast/termux.json` (`§378`)
+en pasos, error, avisos y raíz; difiere solo en `avisos-recortados` (41 frente a 42). No se dice
+que sea byte-idéntico: el cotejo se transcribe del informe del integrador y cubre solo esos
+campos. La divergencia con el build de 6950 pasos de `integracion-bindservice/termux.json` es
+anterior a este commit, no un efecto del mismo.
+
+### Frontera
+
+Ninguna APK se da por funcionando: las cuatro con error registrado en su JSON y el gestor sin
+pulsos sobre la ROM. Sin CDP, gate ni publicación.
