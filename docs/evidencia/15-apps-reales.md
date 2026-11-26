@@ -1759,3 +1759,301 @@ lee el mismo respaldo (`previewstubs_test.go:1029-1040`).
 **Frontera.** Se mide la semántica del stub y la ausencia de cambio en los JSON del lote. No se afirma
 que `Set.add` arreglara `NavKey` ni que Termux funcione: los dos frentes terminan en errores distintos
 y sin CDP no se da por cerrada la app.
+
+## 385. ViewTreeObserver y builders de audio para Termux
+
+Medido el 2026-11-25 sobre el árbol integrado en
+`0c153572864c81403d8050d5d6673b49dcee6346`. Los cuatro commits auditados del submódulo
+`studio/apkc-emulador` son `76c60fb60b611cf7b3d8237f13a2240452249768` y
+`18baa472efeefbaa56496f278b6f1b8a93a92b2d` («ViewTreeObserver inerte para Termux»),
+`dcf10d01e303fb4ea7d6ffc8e59b69042a4049ff` («AudioAttributes.Builder inerte para Termux»),
+`fe5363691f1de796fd9dc2231342bcb231790879` («SoundPool.Builder inerte para Termux») y
+`1eae1669aacdf4f9c0220437888aaffad5b6f715` («AccessibilityManager inerte para Termux»).
+Sin gate, CDP, red, `git push` ni publicación.
+
+### Pasos y retirada de los tres métodos del error
+
+```sh
+python3 -c "
+import json
+r=[('base','/home/leonisauro/.cache/apkc-web/termux-viewtree/base-termux.json'),('viewtree','/home/leonisauro/.cache/apkc-web/termux-viewtree/termux.json'),('audio','/home/leonisauro/.cache/apkc-web/termux-audio/termux.json'),('soundpool','/home/leonisauro/.cache/apkc-web/termux-soundpool/termux.json'),('accesibilidad','/home/leonisauro/.cache/apkc-web/termux-accesibilidad/termux-despues.json')]
+for n,p in r:
+ e=json.load(open(p))['ejecucion']; s=e.get('error','')
+ print(n,e.get('pasos'),'addOnGlobalLayoutListener=', 'addOnGlobalLayoutListener' in s,'setUsage=', 'setUsage' in s,'setAudioAttributes=', 'setAudioAttributes' in s)
+"
+```
+```
+base 7072 addOnGlobalLayoutListener= True setUsage= False setAudioAttributes= False
+viewtree 7126 addOnGlobalLayoutListener= False setUsage= True setAudioAttributes= False
+audio 7130 addOnGlobalLayoutListener= False setUsage= False setAudioAttributes= True
+soundpool 7418 addOnGlobalLayoutListener= False setUsage= False setAudioAttributes= False
+accesibilidad 7418 addOnGlobalLayoutListener= False setUsage= False setAudioAttributes= False
+```
+
+Los errores que se retiran, literales y en el mismo orden:
+
+```sh
+python3 -c "
+import json
+for n,p in [('base','/home/leonisauro/.cache/apkc-web/termux-viewtree/base-termux.json'),('viewtree','/home/leonisauro/.cache/apkc-web/termux-viewtree/termux.json'),('audio','/home/leonisauro/.cache/apkc-web/termux-audio/termux.json')]:
+ print(n,json.load(open(p))['ejecucion'].get('error',''))
+"
+```
+```
+base en com.termux.app.TermuxActivity.addTermuxActivityRootViewGlobalLayoutListener: se llamó a android.view.ViewTreeObserver.addOnGlobalLayoutListener sobre un objeto nulo
+viewtree en com.termux.app.terminal.TermuxTerminalSessionClient.onResume: en com.termux.app.terminal.TermuxTerminalSessionClient.getBellSoundPool: se llamó a android.media.AudioAttributes$Builder.setUsage sobre un objeto nulo
+audio en com.termux.app.terminal.TermuxTerminalSessionClient.onResume: en com.termux.app.terminal.TermuxTerminalSessionClient.getBellSoundPool: se llamó a android.media.SoundPool$Builder.setAudioAttributes sobre un objeto nulo
+```
+
+`ejecucion.error` queda vacío en `soundpool` y en `accesibilidad`. La cuenta es
+7072 → 7126 → 7130 → 7418 → 7418. El contrato de las cinco corridas y los avisos, que están
+recortados y por eso no se citan como visibles:
+
+```sh
+python3 -c "
+import json
+r=[('base','/home/leonisauro/.cache/apkc-web/termux-viewtree/base-termux.json'),('viewtree','/home/leonisauro/.cache/apkc-web/termux-viewtree/termux.json'),('audio','/home/leonisauro/.cache/apkc-web/termux-audio/termux.json'),('soundpool','/home/leonisauro/.cache/apkc-web/termux-soundpool/termux.json'),('accesibilidad','/home/leonisauro/.cache/apkc-web/termux-accesibilidad/termux-despues.json')]
+for n,p in r:
+ d=json.load(open(p))
+ print(n,'layout=',d.get('layout'),'nodos=',d.get('nodos'),'aproximado=',d.get('aproximado'),[a for a in d['ejecucion']['avisos'] if a.startswith('avisos-recortados')])
+"
+```
+```
+base layout= res/layout/activity_termux.xml nodos= 13 aproximado= True ['avisos-recortados: 42']
+viewtree layout= res/layout/activity_termux.xml nodos= 13 aproximado= True ['avisos-recortados: 47']
+audio layout= res/layout/activity_termux.xml nodos= 13 aproximado= True ['avisos-recortados: 49']
+soundpool layout= res/layout/activity_termux.xml nodos= 13 aproximado= True ['avisos-recortados: 54']
+accesibilidad layout= res/layout/activity_termux.xml nodos= 13 aproximado= True ['avisos-recortados: 54']
+```
+
+### El nodo `TerminalView`
+
+El nodo `com.termux.view.TerminalView` deja de traer una frontera y pasa a una operación de
+color. La cuenta de fronteras en el dibujo y su contenido:
+
+```sh
+python3 -c "
+import json
+for n,p in [('base','/home/leonisauro/.cache/apkc-web/termux-viewtree/base-termux.json'),('accesibilidad','/home/leonisauro/.cache/apkc-web/termux-accesibilidad/termux-despues.json')]:
+ d=json.load(open(p)); fs=[]; ops=[]
+ def walk(x):
+  if isinstance(x,dict):
+   if 'dibujo' in x:
+    if 'frontera' in x['dibujo']: fs.append(x['dibujo']['frontera'])
+    if 'operaciones' in x['dibujo']: ops.append(x['dibujo']['operaciones'])
+   for v in x.values(): walk(v)
+  elif isinstance(x,list):
+   for v in x: walk(v)
+ walk(d['raiz']); print(n,'fronteras=',len(fs),'operaciones=',ops); print(' ',fs)
+"
+```
+```
+base fronteras= 1 operaciones= []
+  ['no se pudo construir la vista com.termux.view.TerminalView: se llamó a android.view.accessibility.AccessibilityManager.isEnabled sobre un objeto nulo']
+accesibilidad fronteras= 0 operaciones= [[{'operacion': 'color', 'color': '#000000'}]]
+  []
+```
+
+El color no es inventado: sale del `onDraw` del dex, en `classes14.dump:21712`, que se cita con
+su comando:
+
+```sh
+sed -n '21712p' /home/leonisauro/.cache/apkc-web/termux-accesibilidad/classes14.dump
+```
+```
+0141dc: 1500 00ff                              |0004: const/high16 v0, #int -16777216 // #ff00
+```
+
+### Tests focales
+
+Los quince tests `TestViewTreeObserver*`, `TestAudioAttributes*`, `TestSoundPool*` y
+`TestAccesibilidad*` están en `termux-accesibilidad/studio/apkc-emulador/previewstubsframework_test.go`
+y se ejecutaron desde `<wt>/apkc`:
+
+```sh
+GOTMPDIR=/home/leonisauro/.cache/apkc-web/termux-accesibilidad/gotmp PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH /home/leonisauro/.local/bin/tcr go test -count=1 -v -run '^(TestViewTreeObserverNoNuloLigadoALaVista|TestViewTreeObserverListenerInerteConAviso|TestViewTreeObserverReceptorNuloSigueCortando|TestAudioAttributesBuilderNoNulo|TestAudioAttributesSetterInerteConAviso|TestAudioAttributesReceptorNuloSigueCortando|TestAudioAttributesBuildNoNulo|TestSoundPoolBuilderNoNulo|TestSoundPoolSetterInerteConAviso|TestSoundPoolReceptorNuloSigueCortando|TestSoundPoolBuildNoNulo|TestAccesibilidadServicioNoNulo|TestAccesibilidadIsEnabledCero|TestAccesibilidadOtroServicioCaeAlCero|TestAccesibilidadReceptorNuloSigueCortando)$' . > /home/leonisauro/.cache/apkc-web/termux-accesibilidad/tests-focales.out 2>&1
+```
+```
+rc=0
+15
+--- PASS: TestAccesibilidadReceptorNuloSigueCortando (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.005s
+```
+
+**Frontera.** No se afirma que Termux arranque ni que haya audio. Lo medido es que cuatro
+métodos desaparecen del error y que el dibujo del nodo deja de tener frontera; los avisos están
+recortados (47, 49 y 54) y no se citan como visibles. Sin CDP, gate ni publicación.
+
+## 386. Observadores vacíos y fusión de `getDeclaredMethods`
+
+Medido el 2026-11-25 sobre los artefactos de
+`~/.cache/apkc-web/integracion-fusion/despues/`. Los commits auditados del submódulo
+`studio/apkc-emulador` son `7c5ae7042f03acb94ca9fac5e805e99190aef511` y
+`ebec52877e863583958a8cb5bd935dce75330a03` (arreglos vacíos),
+`8db2ce405979c495035b8eedc1101137a2e2fdeb` y
+`74d2ab64bb37f534c3a8da5f259619f05325ecfb` (`forName` y `getDeclaredMethods`), y la fusión
+`5c78985931eeb3c84b10f0f5a4946f5cc2a23585` y
+`aaa9bf2fbb0978446e8878e9af22bab1d63e9de1` (`getDeclaredMethods` del observador y la
+reflexión). Sin gate, CDP, red, `git push` ni publicación.
+
+### Pasos de las tres APK
+
+```sh
+python3 -c "
+import json
+pares=[('fdroid','/home/leonisauro/.cache/apkc-web/integracion-lote2/fdroid.json','/home/leonisauro/.cache/apkc-web/integracion-fusion/despues/fdroid.json'),('librememorygame','/home/leonisauro/.cache/apkc-web/integracion-lote2/librememorygame.json','/home/leonisauro/.cache/apkc-web/integracion-fusion/despues/librememorygame.json'),('newpipe','/home/leonisauro/.cache/apkc-web/integracion-lote2/newpipe.json','/home/leonisauro/.cache/apkc-web/integracion-fusion/despues/newpipe.json')]
+for n,a,b in pares:
+ da=json.load(open(a)); db=json.load(open(b))
+ print(n,'antes',da['ejecucion']['pasos'],'despues',db['ejecucion']['pasos'],'layout',repr(db.get('layout')),'nodos',db.get('nodos'))
+"
+```
+```
+fdroid antes 758 despues 2656 layout '' nodos 1
+librememorygame antes 1688 despues 7229 layout '' nodos 1
+newpipe antes 517 despues 1472 layout 'res/v9.xml' nodos 6
+```
+
+Los errores completos de F-Droid y Godot están en
+`~/.cache/apkc-web/condiciones-documentales.md:15` y `:25`; sus longitudes y el cotejo de las
+dos frases se reproducen con:
+
+```sh
+python3 -c "
+import json
+for n in ('fdroid','librememorygame'):
+ p='/home/leonisauro/.cache/apkc-web/integracion-fusion/despues/'+n+'.json'
+ e=json.load(open(p))['ejecucion']['error']
+ print(n,'len',len(e)); print(e)
+"
+```
+```
+fdroid len 457
+en org.fdroid.Hilt_MainActivity.<init>: en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.SavedStateHandleSupport.enableSavedStateHandles: en androidx.savedstate.SavedStateRegistry.getSavedStateProvider: en androidx.savedstate.internal.SavedStateRegistryImpl.getSavedStateProvider: se llamó a java.util.Set.iterator sobre un objeto nulo
+librememorygame len 312
+en org.godotengine.godot.GodotActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.SavedStateHandleSupport.enableSavedStateHandles: se llamó a androidx.savedstate.SavedStateRegistry.registerSavedStateProvider sobre un objeto nulo
+```
+
+### La progresión de NewPipe
+
+```sh
+python3 -c "
+import json
+for k,p in [('antes-lote2','/home/leonisauro/.cache/apkc-web/integracion-lote2/newpipe.json'),('arrays-post-previo','/home/leonisauro/.cache/apkc-web/newpipe-arrays/post/newpipe.json'),('fusion','/home/leonisauro/.cache/apkc-web/integracion-fusion/despues/newpipe.json')]:
+ d=json.load(open(p)); print('===',k,d['ejecucion'].get('pasos')); print(d['ejecucion'].get('error',''))
+"
+```
+```
+=== antes-lote2 517
+en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.LifecycleRegistry.addObserver: en androidx.lifecycle.DefaultLifecycleObserverAdapter.<init>: en androidx.lifecycle.ClassesInfoCache.createInfo: array-length sobre un registro que no es arreglo
+=== arrays-post-previo 981
+en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.LifecycleRegistry.addObserver: en androidx.collection.MutableScatterMap.set: en androidx.collection.MutableScatterMap.findInsertIndex: el registro guarda *main.objetoDalvik y se esperaba un entero
+=== fusion 1472
+en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.savedstate.internal.SavedStateRegistryImpl.performAttach: en androidx.work.Worker$$ExternalSyntheticLambda0.invoke: se llamó a androidx.lifecycle.Lifecycle.addObserver sobre un objeto nulo
+```
+
+El paso intermedio de 981 es una medición previa (`newpipe-arrays/post/newpipe.json`), no una
+medición propia de este apartado; el avance que lo produjo se atribuye ya al commit
+`d722e4731d651d8e0a26feab4b3ad5df830bcddb` (`and-int/lit8` de un byte). La cifra propia de
+este apartado es 1472 pasos y la frontera `Lifecycle.addObserver sobre un objeto nulo`.
+
+### Tests y fusión
+
+Los siete tests de los tres frentes se listan en
+`~/.cache/apkc-web/condiciones-documentales.md:68` y se ejecutaron allí mismo; el focal de
+arreglos vacíos es `TestClasesReflexionDevuelvenArregloVacio`, con sus dos subtests `getInterfaces`
+y `getDeclaredMethods`. El volcado de la fusión conserva 36 líneas `--- PASS`:
+
+```sh
+grep -c -- '--- PASS' /home/leonisauro/.cache/apkc-web/fdroid-lifecycle/tests-focales.txt
+```
+```
+36
+```
+
+Tras la fusión, cada método tiene un solo `case`:
+
+```sh
+f=/home/leonisauro/.local/share/opencode/worktree/c6f089/docs-registro2/studio/apkc-emulador/previewinterprete.go; grep -c 'case "getDeclaredMethods":' "$f"; grep -c 'case "getInterfaces":' "$f"
+```
+```
+1
+1
+```
+
+**Frontera.** No se afirma que F-Droid, Godot ni NewPipe funcionen: las tres siguen cortando
+en una llamada sobre un objeto nulo. Sin gate, CDP ni publicación.
+
+## 387. `getLifecycle` del registry existente para NewPipe
+
+Medido el 2026-11-25. El commit auditado es
+`ae218b592f4ccef22587a1eefa9d433572267646` («getLifecycle del registry existente para
+NewPipe»); el informe de aprobación da 26 PASS con la suite desde `<wt>/apkc`, cifra
+transmitida que no se re-mide aquí. La integración sigue en curso en el checkout principal:
+el pin final se fija al cerrar. Sin gate, CDP, red, `git push` ni publicación.
+
+### Pasos y cambio de frontera
+
+```sh
+python3 -c "
+import json
+for n,p in [('fusion','/home/leonisauro/.cache/apkc-web/integracion-fusion/despues/newpipe.json'),('getlifecycle','/home/leonisauro/.cache/apkc-web/newpipe-getlifecycle/newpipe.json'),('lote3','/home/leonisauro/.cache/apkc-web/integracion-lote3/newpipe.json')]:
+ d=json.load(open(p)); e=d['ejecucion']['error']
+ print(n,d['ejecucion']['pasos'],repr(d.get('layout')),d.get('nodos'),'addObserver=', 'Lifecycle.addObserver' in e,'getSavedStateProvider=', 'getSavedStateProvider' in e)
+ print(' ',e)
+"
+```
+```
+fusion 1472 'res/v9.xml' 6 addObserver= True getSavedStateProvider= False
+  en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.savedstate.internal.SavedStateRegistryImpl.performAttach: en androidx.work.Worker$$ExternalSyntheticLambda0.invoke: se llamó a androidx.lifecycle.Lifecycle.addObserver sobre un objeto nulo
+getlifecycle 2151 'res/v9.xml' 6 addObserver= False getSavedStateProvider= True
+  en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.ViewModelKt.enableSavedStateHandles: se llamó a androidx.savedstate.SavedStateRegistry.getSavedStateProvider sobre un objeto nulo
+lote3 2151 'res/v9.xml' 6 addObserver= False getSavedStateProvider= True
+  en androidx.appcompat.app.AppCompatActivity.<init>: en androidx.fragment.app.FragmentActivity.<init>: en androidx.activity.ComponentActivity.<init>: en androidx.lifecycle.ViewModelKt.enableSavedStateHandles: se llamó a androidx.savedstate.SavedStateRegistry.getSavedStateProvider sobre un objeto nulo
+```
+
+NewPipe pasa de 1472 a 2151 pasos, con `layout=res/v9.xml` y 6 nodos. Desaparece
+`addObserver sobre un objeto nulo` y aparece una frontera nueva:
+`SavedStateRegistry.getSavedStateProvider sobre un objeto nulo`, desde
+`ViewModelKt.enableSavedStateHandles`.
+
+### El stub no sintetiza observadores
+
+El cambio devuelve la referencia que el propio dex guardó en el campo de la actividad; no crea
+un `LifecycleRegistry` ni un observador nuevos. Se comprueba en el diff del commit:
+
+```sh
+git -C /home/leonisauro/.local/share/opencode/worktree/c6f089/docs-registro2/studio/apkc-emulador show ae218b5 -- previewinterprete.go | grep -A 12 '^+	case "getLifecycle"'
+```
+```
++	case "getLifecycle":
++		// `LifecycleOwner.getLifecycle()` caía al cero del tipo: el invoke se declara en la interfaz
++		// (o en `SavedStateRegistryOwner` tras el `check-cast` que sobrescribe la clase concreta) y
++		// el receptor es la actividad. Ésa ya tiene en su campo el `LifecycleRegistry` que el propio
++		// dex construyó, así que se devuelve ESA referencia, sin fabricar un objeto ni un
++		// observador: el `addObserver` posterior recibe el registry real. Aviso explícito de
++		// aproximación porque la vista previa no ejecuta el getter del framework. Sin el campo el
++		// stub no casa y la cadena corta en el guardián de receptor nulo de `invoca`.
++		if len(vals) == 0 && obj != nil &&
++			es("Landroidx/lifecycle/LifecycleOwner;", "Landroidx/savedstate/SavedStateRegistryOwner;") {
++			if registry := obj.campos["Landroidx/core/app/ComponentActivity;.lifecycleRegistry"]; registry != nil {
+```
+
+### Tests focales
+
+Los tres tests del commit se reejecutaron desde `newpipe-getlifecycle/apkc`:
+
+```sh
+GOTMPDIR=/home/leonisauro/.cache/apkc-web/newpipe-getlifecycle/gotmp PATH=/home/leonisauro/sdk/go1.24.0/bin:$PATH /home/leonisauro/.local/bin/tcr go test -count=1 -v -run '^(TestGetLifecycleDevuelveElRegistryDelDex|TestGetLifecycleConStubsApagadosReapareceElError|TestGetLifecycleReceptorSinCampoSigueCortando)$' . > /home/leonisauro/.cache/apkc-web/newpipe-getlifecycle/tests-getlifecycle.out 2>&1
+```
+```
+rc=0
+3
+--- PASS: TestGetLifecycleReceptorSinCampoSigueCortando (0.00s)
+PASS
+ok  	github.com/ajinasokan/apkc	0.004s
+```
+
+**Frontera.** No se afirma que NewPipe funcione: la corrida corta en una frontera nueva,
+`SavedStateRegistry.getSavedStateProvider sobre un objeto nulo`. El pin final queda pendiente
+de la integración en curso. Sin CDP, gate ni publicación.
