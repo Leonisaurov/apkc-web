@@ -135,7 +135,7 @@ materializar_emulador() {
 
 compila_wasm() {
   materializar_emulador
-  ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -o "$TMP/apkc-test.wasm" . )
+  ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go test -c -trimpath -o "$TMP/apkc-test.wasm" . )
   # La versión de Go y la suma de wasm_exec.js se fijan en un solo sitio; el cp lee de ahí.
   ( cd "$RAIZ/shim" && . "$RAIZ/tools/wasm-exec-hash.sh" && cp "$WASM_EXEC_ORIGEN" . )
 }
@@ -143,7 +143,7 @@ compila_wasm() {
 construye_wasm() {
   materializar_emulador
   ( cd "$RAIZ/apkc" && GOOS=js GOARCH=wasm CGO_ENABLED=0 go build \
-      -ldflags='-s -w' -o "$TMP/apkc-wasm.wasm" . )
+      -trimpath -ldflags='-s -w' -o "$TMP/apkc-wasm.wasm" . )
 }
 
 construye_binarios() {

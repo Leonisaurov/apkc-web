@@ -27,6 +27,6 @@ SUBMODULO=${APKC_EMULADOR_DIR:-$RAIZ/studio/apkc-emulador}
 sh "$materializar" "$RAIZ" "$SUBMODULO"
 
 TEMPORAL=$DESTINO.tmp.$$
-GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -C "$RAIZ/apkc" -ldflags='-s -w' -o "$TEMPORAL" .
+GOOS=js GOARCH=wasm CGO_ENABLED=0 go build -C "$RAIZ/apkc" -trimpath -ldflags='-s -w' -o "$TEMPORAL" .
 mv -f "$TEMPORAL" "$DESTINO"
 sha256sum "$DESTINO"
