@@ -2744,3 +2744,146 @@ y las llamadas `System.load*` son inertes. La medición de servicios corresponde
 de Node; en la pestaña el iterador sale vacío. Sin gate, CDP, red, `git push` ni publicación.
 
 Las seis familias (`ViewTreeObserver`, `AudioAttributes`, `SoundPool`, `AccessibilityManager`, `findInsertIndex` y `and-int/lit8` con `&0xff`) se integraron sobre `b7854d6…` y se verificaron en el blob del pin; `case "split"`=1, `temaSintetico`=3, `case "getLifecycle"`=1, `registraServiciosDelApk`=1 (definición, `grep -c '^func registraServiciosDelApk'`; 4 ocurrencias en total), `cargaServiciosDelHost`=0. Termux 7418 pasos, `error=None`, `aproximado=true`: no se afirma arranque ni audio real.
+
+## 394. Seis familias ausentes del pin canónico: reconciliación
+
+Medido el 2026-11-26 sobre el pin `b7854d6…` del submódulo `studio/apkc-emulador`, los diffs
+conservados en `/home/leonisauro/.cache/apkc-web/reconcilia-final/` y las cinco corridas de esa
+misma carpeta. Se registran la ausencia de las seis familias en el pin anterior `8156934e…`, la
+reconciliación de tres frentes y el estado verificado del blob final. La suite completa y las
+focales se citan como transmitidas por el integrador y no se re-miden aquí; sin gate, CDP, red,
+`git push` ni publicación.
+
+### El pin anterior no las contenía
+
+```sh
+git -C studio/apkc-emulador show 8156934e:previewinterprete.go | grep -oiE 'viewtreeobserver|audioattributes|setusage|soundpool|accessibilitymanager|findInsertIndex|shr-int/lit8'
+```
+```
+(sin salida; rc 1)
+```
+
+Los cuatro SHAs del §385 no existen como objetos en el repo canónico:
+
+```sh
+git -C studio/apkc-emulador cat-file -t 18baa472efeefbaa56496f278b6f1b8a93a92b2d
+git -C studio/apkc-emulador cat-file -t dcf10d01e303fb4ea7d6ffc8e59b69042a4049ff
+git -C studio/apkc-emulador cat-file -t fe5363691f1de796fd9dc2231342bcb231790879
+git -C studio/apkc-emulador cat-file -t 1eae1669aacdf4f9c0220437888aaffad5b6f715
+```
+```
+fatal: git cat-file: could not get object info
+fatal: git cat-file: could not get object info
+fatal: git cat-file: could not get object info
+fatal: git cat-file: could not get object info
+```
+
+### Tres frentes reconciliados
+
+Los diffs conservados se aplicaron con `git apply --3way` sobre `8156934e…`; la aplicación y la
+conservación de las zonas del pin son las registradas por el integrador. Aquí se mide el estado del
+blob resultante, no el acto de aplicar. El recuento de inserciones de los diffs conservados es:
+
+```sh
+git apply --stat /home/leonisauro/.cache/apkc-web/reconcilia-final/01-vt-audio.diff /home/leonisauro/.cache/apkc-web/reconcilia-final/02-scatter.diff /home/leonisauro/.cache/apkc-web/reconcilia-final/03-sp-access.diff
+```
+```
+ previewinterprete.go          |   78 ++++++++++++++++
+ previewstubsframework_test.go |  204 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 282 insertions(+)
+ previewinterprete.go          |    6 +
+ 1 file changed, 6 insertions(+)
+ previewinterprete.go          |  148 ++++++++++++++
+ previewstubsframework_test.go |  424 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 569 insertions(+), 3 deletions(-)
+```
+
+El frente que aportó `scatter` y `lit8` se registra con +45 inserciones en el trabajo previo; el
+diff conservado `02-scatter.diff` solo reproduce 6. La cifra 45 queda como procedencia transmitida,
+no como medición de este registro.
+
+### El blob del pin final
+
+```sh
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -oiE 'viewtreeobserver|audioattributes|setusage|soundpool|accessibilitymanager|findInsertIndex' | sort | uniq -ci
+```
+```
+      4 AccessibilityManager
+     16 AudioAttributes
+      2 findInsertIndex
+      2 setUsage
+     18 SoundPool
+     11 viewTreeObserver
+```
+
+```sh
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c 'case "split"'
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c 'temaSintetico'
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c 'case "getLifecycle"'
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c '^func registraServiciosDelApk'
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c 'cargaServiciosDelHost'
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c 'case "getInterfaces"'
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -c 'case "getDeclaredMethods"'
+```
+```
+1
+3
+1
+1
+0
+1
+1
+```
+
+`registraServiciosDelApk` se cuenta como definición (`^func`); el literal aparece 4 veces en el
+blob (dos comentarios, la definición y una llamada). Las zonas del pin (`split`, tema,
+`getLifecycle`, servicios, `getTheme`, saved state) siguen presentes y `getInterfaces` y
+`getDeclaredMethods` no se duplican. La rama `lit8` con `&0xff` está en la línea 4080:
+
+```sh
+git -C studio/apkc-emulador show b7854d6:previewinterprete.go | grep -n 'enteraLit(op-0xd8'
+```
+```
+4080:				v, err := enteraLit(op-0xd8, regs[int(w)&0xff], lit)
+```
+
+### Suite y focales, transmitidas
+
+```sh
+tcr -r 256M -q -- go test -count=1 ./...
+```
+```
+ok github.com/ajinasokan/apkc 197.081s
+```
+
+Con Go 1.24.0 y JDK 17 sobre `b7854d6…`, ejecutado por el integrador; 15 focales PASS. No se
+re-miden aquí: este registro solo documenta el comando y la salida recibidos.
+
+### Las cinco APK de la reconciliación
+
+```sh
+python3 -c "
+import json
+base='/home/leonisauro/.cache/apkc-web/reconcilia-final/'
+for n in ('termux','fdroid','newpipe','godot','gestor-tres-pulsos'):
+ d=json.load(open(base+n+'.json'))
+ print(n,'pasos=',d['ejecucion']['pasos'],'nodos=',d['nodos'],'aproximado=',d['aproximado'],'error=',d['ejecucion'].get('error'))
+"
+```
+```
+termux pasos= 7418 nodos= 13 aproximado= True error= None
+fdroid pasos= 7530 nodos= 1 aproximado= True error= en mu.KotlinLogging.logger: en org.slf4j.LoggerFactory.getLogger: en org.slf4j.LoggerFactory.getILoggerFactory: en org.slf4j.LoggerFactory.getProvider: en org.slf4j.LoggerFactory.performInitialization: en org.slf4j.LoggerFactory.versionSanityCheck: se llamó a java.lang.String.startsWith sobre un objeto nulo
+newpipe pasos= 3476 nodos= 6 aproximado= True error= en org.schabi.newpipe.util.ServiceHelper.getSelectedServiceId: en org.schabi.newpipe.util.ServiceHelper.getSelectedService: en us.shandian.giga.util.Utility.getService: se llamó a j$.util.stream.Stream.filter sobre un objeto nulo
+godot pasos= 9159 nodos= 1 aproximado= True error= en androidx.activity.EdgeToEdge.enable: en androidx.activity.EdgeToEdge.enable$default: en androidx.activity.EdgeToEdge.enable: se llamó a android.view.Window.getDecorView sobre un objeto nulo
+gestor-tres-pulsos pasos= 3595 nodos= 32 aproximado= True error= None
+```
+
+Termux acaba sin error con 13 nodos: los objetos de las seis familias son inertes y llevan aviso
+de aproximación, así que no se afirma arranque ni audio real. `Stream.filter` en
+`ServiceHelper.getSelectedService` (NewPipe) y `Window.getDecorView` en `EdgeToEdge.enable` (Godot)
+quedan como fronteras abiertas, no forzadas: sin evidencia de que no se pinte pantalla inventada no
+se abre frente sobre ellas.
+
+**Frontera.** Ninguna de las cinco apps se da por funcionando: todas llevan `aproximado=true`. Sin
+CDP no se afirma parecido visual alguno; los `.so` ARM quedan fuera y las llamadas `System.load*`
+son inertes. Sin gate, CDP, red, `git push` ni publicación.
