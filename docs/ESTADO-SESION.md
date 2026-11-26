@@ -188,8 +188,8 @@ Go/node y en verificación CDP/gate; la suite integrada está en verde (`196.940
 `§363`): son el trabajo abierto ahora, no un resultado medido, y no se registra aquí ninguna cifra
 suya. Fase G (`§364`, fidelidad en navegador y publicación) sigue sin ejecutar.
 
-El pin vigente de la regla 14 es `83560681816604d0445ae365c506e453196fff41`
-(`git -C studio rev-parse HEAD:apkc-emulador` → `83560681…`, ejecutado y anotado), vigente tras integrar getLifecycle. Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de
+El pin vigente de la regla 14 es `996ca07ea35735234713faaa4fc9ee8388720d02`
+(`git -C studio rev-parse HEAD:apkc-emulador` → `996ca07…`, ejecutado y anotado), vigente tras integrar saved state. Actualización (familia de red, commit `3dbf574`): el pin pasó a `c448442…`; la nota de
 §368 queda como registro histórico. Actualización (lote integrado, commit `1e1bb03`): el pin pasó a
 `6a207cd…`. Actualización (integración final, commit `688a7ad`): el pin pasó a `a83ebcd…`.
 Actualización (esquema de colores de Termux, commit `84a7b90`): el pin pasó a `bf7477e…`.
@@ -199,6 +199,7 @@ commit `acc7d44`): el pin pasó a `c54e551…`. Los pins `563e991`, `4117a8f`, `
 `6a207cd`, `ec842d4`, `a83ebcd`, `bf7477e`, `2a42a84` y `0c01986` quedan como registros históricos
 fechados.
 Actualización (getLifecycle, fecha 2026-11-26): el pin pasó a `83560681816604d0445ae365c506e453196fff41`, vigilado con la guardia de arriba; `c54e55114568b05947170a879f989e550b6766ee` queda como registro histórico fechado.
+Actualización (saved state, fecha 2026-11-26): el pin pasó a `996ca07ea35735234713faaa4fc9ee8388720d02`, vigilado con la guardia de arriba; `83560681816604d0445ae365c506e453196fff41` queda como registro histórico fechado.
 El gitlink anidado de `studio` es el único sitio donde vive; el padre no guarda pin espejo. Los tres rangos empujados en §358 quedan como registro del
 push anterior. En esta sesión **no hay push**: cualquier push necesita autorización expresa, y el
 recuento de `ahead` lo da `git status -sb` al leer este fichero (antes del commit documental de
