@@ -2938,8 +2938,11 @@ Hadith Searcher y StepPony, «Recently updated» y la barra Discover/Search/My a
 abre la pestaña Search con sus chips. El lienzo muestra «fotograma 0/toques 0», siete círculos
 azules, seis rayos naranjas y un círculo verde; un tap lo lleva a «fotograma 1/toques 1».
 
-Termux y NewPipe abren y pintan en el oráculo. El gestor abre y pinta por `droidloomctl launch`
-(`Displayed ... +99ms`) pero pasa a `TO_BACK` a los ~7 s. ApkShare no abre: `VerifyError` en
+Termux y NewPipe abren y pintan en el oráculo. El gestor **abre por `droidloomctl launch`** (`Displayed ... +99ms` en una corrida), pero su
+captura es problemática: el fotograma obtenido es byte-idéntico a `lienzo-tras-toque.png`
+(`19b28aa6…`), la tarea pasa a `TO_BACK` a los ~7 s y un relanzamiento posterior expiró con
+`framework response deadline expired` (120 s) y `FATAL EXCEPTION ... MainActivity.onCreate(SourceFile:6)`
+por `NullPointerException`. **No se afirma que pinte** ni se entrega una captura del gestor. ApkShare no abre: `VerifyError` en
 `FileProvider.buildPath`.
 
 ### Límite
